@@ -228,6 +228,15 @@ flowchart LR
 5. Marketing Calibration（`marketing_calibration_runs`）：确定性发现 successful/failure patterns（成功率、平均实际 ROAS/CTR、error_type 分布、实验负向指标），生成 `proposed` 提案；**禁止自动修改营销规则**，必须人工 approve / reject。
 6. 事件集成：所有写入均走 `event_log`（marketing.campaign_evaluation.recorded / marketing.creative_analysis.recorded / marketing.knowledge.created / marketing.calibration_run_*），trace_id 贯穿审计链。
 
+**客户学习闭环（M3.4 已落地：从数据层升级为可学习认知层）**
+
+1. Customer Evaluation（`customer_ai_evaluations`）：预测行为（reorder / churn 等 decision + confidence）与真实行为对比，确定性分类 success / failure + error_type（decision_mismatch / other），只追加，供校准使用。
+2. Customer Pattern Mining（`customer_pattern_runs`）：确定性模式挖掘（purchase / segment / bundle / churn / pain 五类），基于客户档案、评估、交互与退款聚合，输出 pattern + 启发式 confidence（0.1/样本，上限 0.9）。
+3. Customer Knowledge Memory：`customer_knowledge_entries` 扩展 entry_type（新增 churn_pattern / bundle_pattern / pain_pattern，保留 M3.3 五类兼容历史数据）。
+4. Customer Calibration（`customer_calibration_runs`）：evaluation → pattern extraction → proposal → approve/reject；**禁止自动修改业务规则**，人工审批仅记录决策。
+5. Cross-Domain Context Builder（`customer_context`）：组合 customer + orders（按 customer_reference_id 关联）+ interactions + reviews + refunds + marketing_data（campaigns）+ product_data（products）+ knowledge + evaluations，全部 JSON-safe，供未来 Customer Agent 使用。
+6. 事件集成：所有写入均走 `event_log`（customer.evaluation_recorded / customer.pattern_run_completed / customer.calibration_run_*），trace_id 贯穿审计链。
+
 **客户智能数据层（M3.3 已落地：用户认知基础，暂不开发 Customer Agent）**
 
 1. Customer Profile（`customer_profiles`）：只存非识别引用 `customer_reference_id` 与市场/行为字段（country / language / segment / tags / 订单数 / 总营收），**禁止存储姓名/邮箱/地址/电话等 PII**；`(workspace_id, customer_reference_id)` 唯一。
@@ -478,6 +487,17 @@ flowchart LR
 | `refund_cases` | 退款智能 | order_id/product_id(fk), reason, category, amount(numeric), resolution | 金额 Decimal；按 category 聚合统计 |
 | `customer_knowledge_entries` | 客户知识记忆 | customer_id/product_id(fk), category, entry_type(purchase/pain/segment/refund/loyalty_pattern), title, content, tags, source, confidence | 支持 category/customer/product 查询 |
 
+
+### 3.12 M3.4 客户学习闭环落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `customer_ai_evaluations` | 行为预测评估（只追加） | customer_id(fk), prediction, actual_behavior, accuracy, prediction_result(success/failure/unknown), error_type, confidence, confidence_bucket, success_flag, metric_snapshot(jsonb) | 确定性分类；评估时自动计算 |
+| `customer_pattern_runs` | 模式挖掘审计 | customer_id(fk), pattern_type(purchase/segment/bundle/churn/pain), input_snapshot, output_pattern(jsonb), confidence, sample_size, status | 确定性聚合；启发式置信度 |
+| `customer_calibration_runs` | 客户校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
+| `orders`（扩展） | 跨域客户关联 | 新增 customer_reference_id(128, 可空, 索引) | 按非 PII 引用关联客户档案 |
+| `refund_cases`（扩展） | 跨域客户关联 | 新增 customer_id(fk customer_profiles, 可空, 索引) | 退款直接关联客户档案 |
+
 ## 9. 变更记录
 
 
@@ -487,6 +507,8 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.12 | 2026-08-11 | M3.4 客户学习闭环：customer_ai_evaluations（行为预测 vs 真实行为 + 确定性分类）、customer_pattern_runs（purchase/segment/bundle/churn/pain 模式挖掘）、customer_knowledge_entries 扩展（churn/bundle/pain_pattern）、customer_calibration_runs（proposed → 人工审批，禁止自动改规则）、Cross-Domain Context Builder（customer + orders/reviews/refunds/marketing/product/knowledge）；orders 与 refund_cases 增加非 PII 客户关联列；全部事件集成 + trace_id |
 
 | v0.11 | 2026-08-11 | M3.3 客户智能数据层：customer_profiles（非 PII + 唯一引用）、customer_interactions（email/chat/review/social，content 不可变 + PII 拦截）、product_reviews、refund_cases（按 category 聚合统计）、customer_knowledge_entries（五类模式）；全部事件集成 + trace_id；不开发 Customer Agent、不自动客服 |
 

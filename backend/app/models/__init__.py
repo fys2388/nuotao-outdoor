@@ -8,6 +8,11 @@ from app.models.customer import (
     ProductReview,
     RefundCase,
 )
+from app.models.customer_learning import (
+    CustomerAiEvaluation,
+    CustomerCalibrationRun,
+    CustomerPatternRun,
+)
 from app.models.event import EventLog
 from app.models.marketing import (
     Campaign,
@@ -56,6 +61,9 @@ __all__ = [
     "CustomerProfile",
     "ProductReview",
     "RefundCase",
+    "CustomerAiEvaluation",
+    "CustomerCalibrationRun",
+    "CustomerPatternRun",
     "CampaignAiEvaluation",
     "CreativeAnalysisRun",
     "MarketingCalibrationRun",

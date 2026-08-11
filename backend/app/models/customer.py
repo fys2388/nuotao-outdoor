@@ -32,6 +32,9 @@ CUSTOMER_ENTRY_TYPES: tuple[str, ...] = (
     "segment_pattern",
     "refund_pattern",
     "loyalty_pattern",
+    "churn_pattern",
+    "bundle_pattern",
+    "pain_pattern",
 )
 
 # Interaction channels (Phase 1).
@@ -157,6 +160,12 @@ class RefundCase(Base, TimestampMixin, WorkspaceMixin):
     order_id: Mapped[Uuid | None] = mapped_column(
         Uuid,
         ForeignKey("orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    customer_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("customer_profiles.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

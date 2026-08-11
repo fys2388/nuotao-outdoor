@@ -379,3 +379,37 @@ curl "http://localhost:8000/api/v1/customer-knowledge-entries?entry_type=pain_po
 
 - 所有写入均走 `event_log`（`customer.profile_*` / `customer.interaction_*` / `customer.review_*` / `customer.refund_*` / `customer.knowledge_created`），trace_id 贯穿审计链。
 - 边界：不开发 Customer Agent、不自动客服；PII 策略为“非必要不存储 + 自由字段键拦截”。
+
+### 8.9 客户学习闭环（M3.4）
+
+```bash
+# 行为预测评估：自动分类 success/failure + error_type；只追加
+curl -X POST http://localhost:8000/api/v1/customer-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"<uuid>","prediction":{"decision":"reorder","confidence":0.75},"actual_behavior":{"decision":"reorder"},"human_rating":5}'
+curl "http://localhost:8000/api/v1/customer-evaluations?customer_id=<uuid>"
+
+# 模式挖掘（purchase/segment/bundle/churn/pain；确定性聚合 + 启发式置信度）
+curl -X POST http://localhost:8000/api/v1/customer-pattern-runs \
+  -H "Content-Type: application/json" -d '{"pattern_type":"purchase_pattern"}'
+curl -X POST http://localhost:8000/api/v1/customer-pattern-runs \
+  -H "Content-Type: application/json" -d '{"pattern_type":"churn_pattern"}'
+curl "http://localhost:8000/api/v1/customer-pattern-runs?pattern_type=pain_pattern"
+
+# 知识记忆扩展类型（churn/bundle/pain_pattern，兼容 M3.3 五类）
+curl -X POST http://localhost:8000/api/v1/customer-knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"<uuid>","entry_type":"churn_pattern","category":"trekking-chair","title":"Churn after 60d","content":"Repeat customers churn when no follow-up offer arrives.","confidence":0.8}'
+
+# 客户校准：发现成功/失败模式（proposed -> 人工审批；禁止自动改规则）
+curl -X POST http://localhost:8000/api/v1/customer-calibration/runs
+curl "http://localhost:8000/api/v1/customer-calibration/runs?status=proposed"
+curl -X POST http://localhost:8000/api/v1/customer-calibration/runs/<run-uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"ok"}'
+
+# 跨域客户上下文：customer + orders/reviews/refunds/marketing/product/knowledge
+curl "http://localhost:8000/api/v1/customer-context/<customer-uuid>"
+```
+
+- 所有写入均走 `event_log`（`customer.evaluation_recorded` / `customer.pattern_run_completed` / `customer.calibration_run_*`），trace_id 贯穿审计链。
+- 边界：不开发 Customer Agent、不自动客服、不自动修改业务规则；校准只产出提案，人工审批后才生效。

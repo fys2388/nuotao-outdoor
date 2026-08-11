@@ -561,9 +561,16 @@ async def create_refund(
     await _ensure_product(
         session, workspace_id=workspace_id, product_id=data.product_id
     )
+    if data.customer_id is not None:
+        profile = await _load_profile(
+            session, workspace_id=workspace_id, profile_id=data.customer_id
+        )
+        if profile is None:
+            raise CustomerError("customer profile not found")
     refund = RefundCase(
         workspace_id=workspace_id,
         order_id=data.order_id,
+        customer_id=data.customer_id,
         product_id=data.product_id,
         reason=data.reason,
         category=data.category,

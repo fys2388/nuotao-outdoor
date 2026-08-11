@@ -39,6 +39,10 @@ class Order(Base, TimestampMixin, WorkspaceMixin):
     country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     payment_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="woocommerce")
+    # Non-PII link to customer_profiles.customer_reference_id (M3.4).
+    customer_reference_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
+    )
 
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     shipping_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)

@@ -17,6 +17,9 @@ CUSTOMER_ENTRY_TYPES = (
     "segment_pattern",
     "refund_pattern",
     "loyalty_pattern",
+    "churn_pattern",
+    "bundle_pattern",
+    "pain_pattern",
 )
 INTERACTION_CHANNELS = ("email", "chat", "review", "social", "other")
 SENTIMENTS = ("positive", "neutral", "negative", "unknown")
@@ -153,6 +156,7 @@ class RefundCreate(BaseModel):
     """Create a refund/return case."""
 
     order_id: UUID | None = None
+    customer_id: UUID | None = None
     product_id: UUID | None = None
     reason: str = Field(min_length=1, max_length=500)
     category: Literal[
@@ -181,6 +185,7 @@ class RefundOut(BaseModel):
     id: UUID
     workspace_id: UUID
     order_id: UUID | None
+    customer_id: UUID | None
     product_id: UUID | None
     reason: str
     category: str
@@ -211,6 +216,9 @@ class CustomerKnowledgeCreate(BaseModel):
         "segment_pattern",
         "refund_pattern",
         "loyalty_pattern",
+        "churn_pattern",
+        "bundle_pattern",
+        "pain_pattern",
     ]
     title: str = Field(min_length=1, max_length=255)
     content: str = Field(min_length=1, max_length=4000)
