@@ -40,6 +40,20 @@ class Settings(BaseSettings):
     payment_fee_rate: Decimal = Decimal("0.029")
     payment_fee_fixed: Decimal = Decimal("0.30")
 
+    # --- LLM Gateway (M2.2): multi-provider, vendor lock-in avoided ---------
+    # Primary provider drives default routing; the fallback is used when the
+    # primary is unreachable (network / 5xx / rate limit), never on auth errors.
+    llm_provider: str = "openai"  # openai | deepseek
+    llm_fallback_provider: str = "deepseek"
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_default_model: str = "gpt-4o-mini"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_default_model: str = "deepseek-chat"
+    llm_timeout_seconds: float = 60.0
+    llm_max_tokens: int = 1500
+
     @property
     def is_production(self) -> bool:
         """Return True when running in a production environment."""

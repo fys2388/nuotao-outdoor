@@ -199,3 +199,45 @@ curl "http://localhost:8000/api/v1/products/<product-uuid>/experiments"
   + packaging + tax_estimate + handling`；未显式提供国际运费时回退 `first_leg + last_leg`。
 - 成本/候选/证据/实验均带 `workspace_id / version / trace_id`；重复录入成本快照版本自动 `v1 -> v2`，只追加不覆盖。
 - 实验完成时自动计算 `calibration`（预测 vs 实际的数值差，如 roas / 转化率 / 评分差）。
+
+### 8.4 产品分析师 AI 层（M2.2）
+
+**环境变量（LLM Gateway）**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` | 主供应商（openai / deepseek） |
+| `LLM_FALLBACK_PROVIDER` | `deepseek` | 故障降级供应商 |
+| `OPENAI_API_KEY` | 空 | OpenAI API Key（生产必填） |
+| `OPENAI_BASE_URL` / `OPENAI_DEFAULT_MODEL` | 官方地址 / `gpt-4o-mini` | 可指向兼容端点 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek API Key |
+| `DEEPSEEK_BASE_URL` / `DEEPSEEK_DEFAULT_MODEL` | 官方地址 / `deepseek-chat` | DeepSeek 配置 |
+
+**常用接口**
+
+```bash
+# 运行产品分析（Agent：分析 + 提案，不执行任何动作）
+curl -X POST http://localhost:8000/api/v1/agents/product-analyst/analyze/<product-uuid>
+
+# 查看某产品的 AI 分析运行记录
+curl "http://localhost:8000/api/v1/agents/product-analyst/runs/<product-uuid>"
+
+# 记录 AI 预测评估（prediction vs actual，自动计算差值 + 人工评分）
+curl -X POST http://localhost:8000/api/v1/ai-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"product_id":"<product-uuid>","analysis_run_id":"<run-uuid>","actual_result":{"decision":"test","test_plan.kpis.roas":2.5},"human_rating":4}'
+curl "http://localhost:8000/api/v1/ai-evaluations?product_id=<product-uuid>"
+
+# Prompt 注册表管理（prompt 存数据库，禁止硬编码）
+curl -X POST http://localhost:8000/api/v1/prompts \
+  -H "Content-Type: application/json" \
+  -d '{"prompt_id":"PRODUCT_ANALYST","name":"PRODUCT_ANALYST","version":"v2","template":"...{context_json}...{output_schema}","variables":["context_json","output_schema"],"status":"active"}'
+curl "http://localhost:8000/api/v1/prompts?name=PRODUCT_ANALYST"
+```
+
+**校验与门禁**
+
+- 结构化输出：`decision ∈ {test, hold, reject}`、`confidence ∈ [0, 1]`、pricing/test_plan 字段范围校验；失败按 failed 运行审计落库，不产生提案。
+- 业务门禁（PROFIT-003）：成本 `UNKNOWN` 时禁止 `test` 决策且置信度 ≤ 0.5。
+- 硬规则否决（PRODUCT 域）：校验通过后若硬规则未通过，提案强制降级为 `reject` 并记录原因。
+- Agent 权限：只读产品数据；仅写 `product_analysis_runs` + pending 决策提案；无 approve / publish / purchase 能力。

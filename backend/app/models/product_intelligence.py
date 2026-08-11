@@ -270,7 +270,46 @@ class ProductScoreEvidence(Base, CreatedAtMixin, WorkspaceMixin):
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ProductAiEvaluation(Base, CreatedAtMixin, WorkspaceMixin):
+    """Evaluation of an AI prediction against actual results (M2.2).
+
+    Links back to the originating analysis run and/or experiment; stores the
+    prediction snapshot, the measured actuals, computed accuracy deltas and an
+    optional human rating (1-5). Rows are append-only so the calibration
+    history is preserved.
+    """
+
+    __tablename__ = "product_ai_evaluations"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    analysis_run_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("product_analysis_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    experiment_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("product_experiments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    accuracy: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    human_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
+
     """Product testing loop: prediction -> experiment -> actual_result.
 
     ``prediction`` holds what the intelligence layer expected (score, decision,

@@ -203,7 +203,17 @@ flowchart LR
 3. 评分证据（`product_score_evidences`）：每个评分维度一行（score / source / evidence / confidence），使评分可解释、可审计；证据来源标注 `landed-cost-model-v1 / logistics-heuristic-v1 / pending-llm`，LLM 接入后升级为模型证据。
 4. 测试闭环（`product_experiments`）：`proposed → active → completed`，保存 prediction / experiment / actual_result，完成时自动计算 calibration（预测 vs 实际差值），用于评分模型校准。
 
+**产品分析师 AI 层（M2.2 已落地：第一个 AI 产品分析能力）**
+
+1. LLM Gateway：统一模型入口（OpenAI 主 / DeepSeek 备，自动降级），返回 provider / model / tokens / cost / latency / trace_id；业务代码禁止直连模型。成本按 token 单价估算（仅预算用途）。
+2. Prompt Registry：prompt 存数据库（`prompts` 表，name+version 唯一，active 版本生效），模板用 `{variable}` 占位并声明 variables，禁止硬编码。
+3. Product Context Builder：`product_id` → 完整 JSON 上下文（product / cost / landed cost / supplier candidates / scores / evidence / rules / experiments），全部 JSON-safe。
+4. Product Analyst Agent v1：Context → Prompt → LLM Gateway → Structured Output（decision/confidence/market_reasoning/risks/pricing/test_plan）→ Schema + 业务门禁校验（PROFIT-003：成本 UNKNOWN 禁止 test 决策且置信度 ≤ 0.5；硬规则否决强制降级 reject）→ 审计落库。
+5. 权限边界：Agent 只读产品数据，只写 `product_analysis_runs` 与 pending 决策提案；无权 approve / publish / purchase。
+6. AI Evaluation（`product_ai_evaluations`）：prediction vs actual 确定性差值 + 人工评分，为评分模型校准提供数据闭环。
+
 **订单履约流程（AI 供应链经理）**
+
 
 
 
@@ -387,13 +397,23 @@ flowchart LR
 
 > 成本口径扩展（`product_cost` / `product_cost_snapshots`）：新增 `international_shipping / packaging / tax_estimate / handling / total_landed_cost / version`；`purchase_price` 重命名为 `purchase_cost`；重复录入版本自动递增，快照只追加不覆盖。
 
+### 3.7 M2.2 AI 分析层落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `prompts` | Prompt 版本注册表 | prompt_id, name, version, template, variables(jsonb), status(active/inactive), description, trace_id | 唯一 (workspace_id, name, version)；模板禁止硬编码，全部走注册表 |
+| `product_ai_evaluations` | AI 预测评估 | product_id, analysis_run_id, experiment_id, prediction(jsonb), actual_result(jsonb), accuracy(jsonb), human_rating(1-5), notes, trace_id | 只追加；accuracy 为确定性差值（含嵌套扁平化 dotted keys） |
+
 ## 9. 变更记录
+
 
 
 
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.7 | 2026-08-11 | M2.2 产品分析师 AI 层：LLM Gateway（OpenAI 主/DeepSeek 备 + 统一返回 + 成本估算）、Prompt Registry（版本管理 + 种子 v1）、Product Context Builder、Product Analyst Agent v1（Structured Output + 校验 + 审计 + 权限边界）、product_ai_evaluations（预测 vs 实际校准）；不执行任何商业动作 |
 
 | v0.6 | 2026-08-11 | M2.1.5 产品智能数据完整性：落地成本模型（total_landed_cost + 分量字段、成本版本 v1→v2）、供应商候选（一产品多候选）、评分证据（每维度 score/source/evidence/confidence）、产品测试闭环（proposed→active→completed + calibration）；接入 LLM Gateway 前的数据基础 |
 
