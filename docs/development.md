@@ -1,0 +1,92 @@
+# 开发启动文档（Development Guide）
+
+适用于 M0 工程基座。规划与决策文档见 `docs/` 其他文件。
+
+## 1. 前置条件
+
+| 工具 | 版本 | 说明 |
+|---|---|---|
+| Python | >= 3.12 | 后端运行时（AGENTS.md 技术基线） |
+| Docker + Compose | 任意较新版本 | 一键启动基础设施（postgres/redis/backend） |
+| Node.js（可选） | >= 20 | 前端占位工程，M1 正式搭建 |
+
+> 未安装 Docker 时：可用本机 PostgreSQL 16 + Redis 7 代替，或仅运行不依赖外部服务的测试。
+
+## 2. 环境配置
+
+```bash
+cp .env.example .env
+```
+
+- 后端 `Settings`（`backend/app/core/config.py`）从环境变量或 `.env`（当前目录或其父目录）读取配置。
+- 所有密钥只放 `.env` / Secrets，禁止提交仓库（见 `.gitignore`）。
+
+## 3. 方式 A：Docker Compose（推荐）
+
+```bash
+docker compose up --build
+```
+
+- 服务：`postgres:16-alpine`、`redis:7-alpine`、`backend`（自动执行 `alembic upgrade head` 后启动 uvicorn）。
+- 验证：`curl http://localhost:8000/api/v1/healthz` 返回 `{"status":"ok"}`。
+- 日志：`docker compose logs -f backend`。
+- 停止：`docker compose down`（保留数据卷）；彻底清理：`docker compose down -v`。
+
+## 4. 方式 B：本地 venv 开发
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # Windows
+pip install -e ".[dev]"
+```
+
+启动基础设施（若已安装 Docker，仅启动依赖）：
+
+```bash
+docker compose up -d postgres redis
+```
+
+执行迁移并启动服务：
+
+```bash
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
+```
+
+## 5. 数据库迁移（Alembic）
+
+```bash
+cd backend
+alembic upgrade head        # 应用所有迁移
+alembic downgrade -1        # 回退一步
+alembic revision --autogenerate -m "describe change"   # 基于模型自动生成（M1 起使用）
+alembic history            # 查看迁移历史
+```
+
+- `alembic/env.py` 已接入应用配置（`DATABASE_URL`）与 `Base.metadata`。
+- M0 基线迁移（`0001_baseline`）不建业务表；领域表随 M1 领域模型加入。
+- 迁移文件必须在 PR 中评审；禁止直接手工改库。
+
+## 6. 测试
+
+```bash
+cd backend
+pytest                 # 单元/接口测试（含健康检查依赖降级用例）
+ruff check .           # 代码规范
+```
+
+- 测试策略分层见 `tests/README.md`；M0 测试不依赖外部服务（使用依赖覆盖）。
+- CI（`.github/workflows/ci.yml`）：push/PR 自动执行 ruff + pytest。
+
+## 7. 常用脚本速查
+
+| 操作 | 命令 |
+|---|---|
+| 启动后端（本地） | `uvicorn app.main:app --reload` |
+| 查看 OpenAPI | `http://localhost:8000/docs` |
+| 存活探针 | `GET /api/v1/healthz` |
+| 就绪探针 | `GET /api/v1/readyz` |
+| 运行全部测试 | `pytest` |
+| 代码检查 | `ruff check .` |
+| 自动修复 | `ruff check . --fix` |
