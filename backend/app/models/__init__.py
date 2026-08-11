@@ -2,6 +2,12 @@
 
 from app.models.agent import AiAgentRun
 from app.models.event import EventLog
+from app.models.marketing import (
+    Campaign,
+    CreativeAsset,
+    CustomerFeedback,
+    MarketingExperiment,
+)
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
@@ -28,6 +34,10 @@ __all__ = [
     "Order",
     "OrderItem",
     "EventLog",
+    "Campaign",
+    "CreativeAsset",
+    "CustomerFeedback",
+    "MarketingExperiment",
     "Product",
     "ProductCost",
     "ConfidenceCalibration",

@@ -219,6 +219,14 @@ flowchart LR
 3. Score Model Calibration：`score_calibration_runs` 从历史实验 + AI 预测 + 实际结果确定性地生成六维权重调整建议；**禁止自动修改规则**，必须 `proposed → 人工审批 → 版本更新`（审批仅记录决策与建议权重，规则表与评分代码永不被自动改动）。
 4. Product Knowledge Memory：`product_knowledge_entries` 沉淀 success/failure 模式与品类洞察，支持按 category/product 查询，供未来 Agent 以经验证据为推理依据。
 
+**营销智能数据层（M3.1 已落地：DTC 增长数据基础）**
+
+1. 营销域（`campaigns`）：记录外部平台广告活动（meta / google / tiktok / pinterest），`(workspace_id, platform, campaign_id)` 唯一；服务层确定性派生 ctr / cpc / roas / roi（Decimal），只采集数据，不执行任何广告动作。
+2. 创意素材域（`creative_assets`）：结构化保存 hook / angle / copy / 平台与素材类型，`performance_snapshot` 留存表现快照，供未来 Growth Agent 学习“什么内容有效”。
+3. 客户反馈域（`customer_feedback`）：review / support / social 等来源的反馈**只追加**（content 不可变），带 sentiment / issue_type / rating 分类，供未来 Customer Agent 路由与学习。
+4. 营销实验（`marketing_experiments`）：A/B 提案生命周期 `proposed → active → completed`，完成时确定性计算 B−A deltas（calibration）；仅记录结果与提案，不自动投放。
+5. 事件集成：所有 campaign / creative / feedback / experiment 的创建、更新、删除与状态转换均写入 `event_log`，trace_id 贯穿审计链。
+
 **订单履约流程（AI 供应链经理）**
 
 
@@ -421,6 +429,16 @@ flowchart LR
 | `score_calibration_runs` | 评分权重校准提案 | status(proposed/approved/rejected), model_version, current_weights, suggested_weights, input_snapshot, metrics, sample_size, rationale, approved_by/at | 状态机：proposed → approved/rejected；禁止自动改规则 |
 | `product_knowledge_entries` | 产品知识记忆 | product_id, category, entry_type(success_pattern/failure_pattern/category_insight), title, content, tags, source | 支持 category/product 查询 |
 
+
+### 3.9 M3.1 营销智能落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `campaigns` | 广告活动（外部平台） | platform, campaign_id, product_id(fk), budget, spend, impressions, clicks, ctr, cpc, conversion, revenue, roas, currency, status | 唯一 (workspace_id, platform, campaign_id)；派生指标可空、服务层确定性计算 |
+| `creative_assets` | 创意素材 | product_id(fk), platform, asset_type, reference, hook, angle, copy, performance_snapshot(jsonb), status | 结构化定位字段，为 Growth Agent 提供学习数据 |
+| `customer_feedback` | 客户反馈（只追加） | product_id(fk), source, content, sentiment, issue_type, rating, metadata(jsonb) | content 不可变；无 updated_at；仅分类字段可更新 |
+| `marketing_experiments` | 营销 A/B 实验 | product_id(fk), hypothesis, status(proposed/active/completed), variant_a/b(jsonb), result(jsonb), calibration(jsonb) | 状态机 proposed → active → completed；完成时自动算 B−A deltas |
+
 ## 9. 变更记录
 
 
@@ -430,6 +448,8 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.9 | 2026-08-11 | M3.1 营销智能数据层：campaigns / creative_assets / customer_feedback / marketing_experiments 四域落地，全部写入 event_log（campaign.* / creative.* / feedback.* / marketing_experiment.*）、派生指标（ctr/cpc/roas/roi）与 ROI 计算、实验生命周期 + A/B 校准（B−A deltas）、工作区数据隔离；不执行任何营销动作 |
 
 | v0.8 | 2026-08-11 | M2.3 学习闭环：评估结果分类（prediction_result/error_type/confidence_bucket/success_flag/metric_snapshot）、置信度校准报告（confidence_calibration）、评分权重校准提案（score_calibration_runs，proposed→审批→版本更新，禁止自动改规则）、产品知识记忆（product_knowledge_entries）；顺带修复实验 targets 的 Decimal JSON 序列化 |
 

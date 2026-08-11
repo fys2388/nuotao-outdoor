@@ -271,3 +271,39 @@ curl "http://localhost:8000/api/v1/knowledge-entries?category=headlamp&entry_typ
 - `confidence_bucket`：LOW < 0.5；MEDIUM 0.5–0.7；HIGH > 0.7。
 - `error_type`：failure 时分类为 decision_mismatch / metric_miss / margin_miss / other。
 - 评分权重建议：六维证据置信度与实验成功的相关性（成功率高的维度加权上调后归一化至 1.00）；样本 < 3 时建议保持原权重。
+
+### 8.6 营销智能（M3.1）
+
+```bash
+# 广告活动：自动派生 ctr/cpc/roas 并返回 roi；同 (workspace, platform, campaign_id) 幂等冲突返回 409
+curl -X POST http://localhost:8000/api/v1/campaigns \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"meta","campaign_id":"c-001","name":"US launch","budget":"500.00","spend":"100.00","impressions":10000,"clicks":400,"conversion":20,"revenue":"240.00"}'
+curl "http://localhost:8000/api/v1/campaigns?platform=meta&status=active"
+curl -X PUT http://localhost:8000/api/v1/campaigns/<uuid> \
+  -H "Content-Type: application/json" -d '{"spend":"200.00","revenue":"600.00"}'
+
+# 创意素材（hook/angle/copy 结构化保存，供未来 Growth Agent 学习）
+curl -X POST http://localhost:8000/api/v1/creatives \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"meta","asset_type":"video","hook":"Lightest trekking chair","copy":"Carry less. Hike further.","status":"active"}'
+
+# 客户反馈（content 不可变；支持 product_id/source/sentiment 过滤）
+curl -X POST http://localhost:8000/api/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"source":"review","content":"Great quality for the price.","sentiment":"positive","rating":5}'
+curl "http://localhost:8000/api/v1/feedback?sentiment=negative&source=support"
+
+# 营销 A/B 实验生命周期：proposed -> active -> completed（完成时自动算 B-A deltas）
+curl -X POST http://localhost:8000/api/v1/marketing-experiments \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Hook A/B","hypothesis":"Weight hook wins","variant_a":{"ctr":0.02},"variant_b":{"ctr":0.04}}'
+curl -X POST http://localhost:8000/api/v1/marketing-experiments/<uuid>/start \
+  -H "Content-Type: application/json" -d '{"variant_a":{"ctr":0.02},"variant_b":{"ctr":0.04}}'
+curl -X POST http://localhost:8000/api/v1/marketing-experiments/<uuid>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"variant_a_result":{"ctr":0.02,"roas":1.8},"variant_b_result":{"ctr":0.04,"roas":2.4},"winner":"variant_b"}'
+```
+
+- 所有写入均走 `event_log`（`campaign.*` / `creative.*` / `feedback.*` / `marketing_experiment.*`），trace_id 贯穿审计链。
+- 数据隔离：`X-Workspace-Id` 请求头隔离各市场数据；金额一律 Decimal。
