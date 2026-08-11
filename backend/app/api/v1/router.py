@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     health,
     knowledge,
     marketing,
+    marketing_learning,
     orders,
     product_intelligence,
     products,
@@ -32,3 +33,4 @@ api_router.include_router(prompts.router)
 api_router.include_router(calibration.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(marketing.router)
+api_router.include_router(marketing_learning.router)

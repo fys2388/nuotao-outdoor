@@ -307,3 +307,38 @@ curl -X POST http://localhost:8000/api/v1/marketing-experiments/<uuid>/complete 
 
 - 所有写入均走 `event_log`（`campaign.*` / `creative.*` / `feedback.*` / `marketing_experiment.*`），trace_id 贯穿审计链。
 - 数据隔离：`X-Workspace-Id` 请求头隔离各市场数据；金额一律 Decimal。
+
+### 8.7 营销学习闭环（M3.2）
+
+```bash
+# 广告预测评估：自动分类 success/failure + error_type；只追加
+curl -X POST http://localhost:8000/api/v1/marketing-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"campaign_id":"<uuid>","prediction":{"decision":"scale","roas":"2.0","confidence":0.8},"actual_result":{"decision":"scale","roas":"2.5"},"human_rating":4}'
+curl "http://localhost:8000/api/v1/marketing-evaluations?campaign_id=<uuid>"
+
+# 创意分析审计（input/output/performance_result + model_version）
+curl -X POST http://localhost:8000/api/v1/creative-analysis-runs \
+  -H "Content-Type: application/json" \
+  -d '{"creative_id":"<uuid>","input_snapshot":{"hook":"Lightest chair"},"analysis_output":{"suggested_angle":"weight"},"performance_result":{"ctr":0.03},"model_version":"creative-insight-v1"}'
+
+# 营销知识记忆（creative/copy/audience/offer/failure_pattern）
+curl -X POST http://localhost:8000/api/v1/marketing-knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"campaign_id":"<uuid>","entry_type":"creative_pattern","category":"trekking-chair","title":"Weight hook wins","content":"Weight hooks beat price hooks on CTR.","confidence":0.85}'
+curl "http://localhost:8000/api/v1/marketing-knowledge-entries?entry_type=creative_pattern&category=trekking-chair"
+
+# Growth Context Builder：campaign -> 完整营销上下文（JSON）
+curl "http://localhost:8000/api/v1/marketing-context/<campaign-uuid>"
+
+# 营销校准：发现成功/失败模式（proposed -> 人工审批；禁止自动改规则）
+curl -X POST http://localhost:8000/api/v1/marketing-calibration/runs
+curl "http://localhost:8000/api/v1/marketing-calibration/runs?status=proposed"
+curl -X POST http://localhost:8000/api/v1/marketing-calibration/runs/<run-uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"ok"}'
+curl -X POST http://localhost:8000/api/v1/marketing-calibration/runs/<run-uuid>/reject \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"not now"}'
+```
+
+- 所有写入均走 `event_log`（`marketing.campaign_evaluation.recorded` / `marketing.creative_analysis.recorded` / `marketing.knowledge.created` / `marketing.calibration_run_*`），trace_id 贯穿审计链。
+- 边界：不开发 Growth Agent、不接真实广告平台 API、不自动投放广告；校准只产出提案，人工审批后才生效。

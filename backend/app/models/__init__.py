@@ -8,6 +8,12 @@ from app.models.marketing import (
     CustomerFeedback,
     MarketingExperiment,
 )
+from app.models.marketing_learning import (
+    CampaignAiEvaluation,
+    CreativeAnalysisRun,
+    MarketingCalibrationRun,
+    MarketingKnowledgeEntry,
+)
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
@@ -38,6 +44,10 @@ __all__ = [
     "CreativeAsset",
     "CustomerFeedback",
     "MarketingExperiment",
+    "CampaignAiEvaluation",
+    "CreativeAnalysisRun",
+    "MarketingCalibrationRun",
+    "MarketingKnowledgeEntry",
     "Product",
     "ProductCost",
     "ConfidenceCalibration",

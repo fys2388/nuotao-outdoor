@@ -219,6 +219,15 @@ flowchart LR
 3. Score Model Calibration：`score_calibration_runs` 从历史实验 + AI 预测 + 实际结果确定性地生成六维权重调整建议；**禁止自动修改规则**，必须 `proposed → 人工审批 → 版本更新`（审批仅记录决策与建议权重，规则表与评分代码永不被自动改动）。
 4. Product Knowledge Memory：`product_knowledge_entries` 沉淀 success/failure 模式与品类洞察，支持按 category/product 查询，供未来 Agent 以经验证据为推理依据。
 
+**营销学习闭环（M3.2 已落地：从数据记录升级为可学习系统）**
+
+1. Campaign Evaluation（`campaign_ai_evaluations`）：每次预测（decision/roas/confidence）与实测结果对比，确定性分类 success / failure + error_type（decision_mismatch / metric_miss / other），只追加，供校准使用。
+2. Creative Intelligence（`creative_analysis_runs`）：每次创意分析落审计行（input_snapshot / analysis_output / performance_result / model_version），为创意学习积累数据。
+3. Marketing Knowledge Memory（`marketing_knowledge_entries`）：五类模式（creative_pattern / copy_pattern / audience_pattern / offer_pattern / failure_pattern），支持按 category / campaign / creative 查询。
+4. Growth Context Builder：`campaign_id` → 完整 JSON 上下文（campaign + creatives + experiments + feedback + evaluations + knowledge），全部 JSON-safe，供未来 Growth Agent 使用。
+5. Marketing Calibration（`marketing_calibration_runs`）：确定性发现 successful/failure patterns（成功率、平均实际 ROAS/CTR、error_type 分布、实验负向指标），生成 `proposed` 提案；**禁止自动修改营销规则**，必须人工 approve / reject。
+6. 事件集成：所有写入均走 `event_log`（marketing.campaign_evaluation.recorded / marketing.creative_analysis.recorded / marketing.knowledge.created / marketing.calibration_run_*），trace_id 贯穿审计链。
+
 **营销智能数据层（M3.1 已落地：DTC 增长数据基础）**
 
 1. 营销域（`campaigns`）：记录外部平台广告活动（meta / google / tiktok / pinterest），`(workspace_id, platform, campaign_id)` 唯一；服务层确定性派生 ctr / cpc / roas / roi（Decimal），只采集数据，不执行任何广告动作。
@@ -439,6 +448,16 @@ flowchart LR
 | `customer_feedback` | 客户反馈（只追加） | product_id(fk), source, content, sentiment, issue_type, rating, metadata(jsonb) | content 不可变；无 updated_at；仅分类字段可更新 |
 | `marketing_experiments` | 营销 A/B 实验 | product_id(fk), hypothesis, status(proposed/active/completed), variant_a/b(jsonb), result(jsonb), calibration(jsonb) | 状态机 proposed → active → completed；完成时自动算 B−A deltas |
 
+
+### 3.10 M3.2 营销学习闭环落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `campaign_ai_evaluations` | 广告预测评估（只追加） | campaign_id(fk), prediction, actual_result, accuracy, prediction_result(success/failure/unknown), error_type, confidence, confidence_bucket(LOW/MEDIUM/HIGH), success_flag, metric_snapshot(jsonb) | 确定性分类；评估时自动计算 |
+| `creative_analysis_runs` | 创意分析审计 | creative_id(fk), input_snapshot, analysis_output, performance_result, model_version, status | 每次分析一行，供创意学习 |
+| `marketing_knowledge_entries` | 营销知识记忆 | campaign_id/creative_id(fk), category, entry_type(creative/copy/audience/offer/failure_pattern), title, content, tags, source, confidence | 支持 category/campaign/creative 查询 |
+| `marketing_calibration_runs` | 营销校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
+
 ## 9. 变更记录
 
 
@@ -448,6 +467,8 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.10 | 2026-08-11 | M3.2 营销学习闭环：campaign_ai_evaluations（预测 vs 实测 + 确定性分类）、creative_analysis_runs（创意分析审计）、marketing_knowledge_entries（五类模式记忆）、Growth Context Builder（campaign → 完整营销上下文）、marketing_calibration_runs（成功/失败模式发现，proposed → 人工审批，禁止自动改规则）；全部事件集成 + trace_id |
 
 | v0.9 | 2026-08-11 | M3.1 营销智能数据层：campaigns / creative_assets / customer_feedback / marketing_experiments 四域落地，全部写入 event_log（campaign.* / creative.* / feedback.* / marketing_experiment.*）、派生指标（ctr/cpc/roas/roi）与 ROI 计算、实验生命周期 + A/B 校准（B−A deltas）、工作区数据隔离；不执行任何营销动作 |
 
