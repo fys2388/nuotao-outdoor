@@ -54,6 +54,13 @@ from app.models.supply_chain import (
     SupplierProfile,
     SupplyChainKnowledgeEntry,
 )
+from app.models.supply_chain_learning import (
+    LogisticsAiEvaluation,
+    LogisticsPatternRun,
+    SupplierAiEvaluation,
+    SupplierPatternRun,
+    SupplyChainCalibrationRun,
+)
 from app.models.workspace import Workspace
 
 __all__ = [
@@ -102,5 +109,10 @@ __all__ = [
     "ShipmentRecord",
     "SupplierProfile",
     "SupplyChainKnowledgeEntry",
+    "LogisticsAiEvaluation",
+    "LogisticsPatternRun",
+    "SupplierAiEvaluation",
+    "SupplierPatternRun",
+    "SupplyChainCalibrationRun",
     "Workspace",
 ]

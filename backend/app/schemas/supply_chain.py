@@ -13,6 +13,12 @@ SUPPLY_CHAIN_ENTRY_TYPES = (
     "delay_pattern",
     "quality_pattern",
     "risk_pattern",
+    "supplier_success_pattern",
+    "supplier_failure_pattern",
+    "logistics_success_pattern",
+    "logistics_failure_pattern",
+    "season_pattern",
+    "country_pattern",
 )
 
 # Supplier factory types (M4.1): factory / trading company / agent.
@@ -271,6 +277,12 @@ class SupplyChainKnowledgeCreate(BaseModel):
         "delay_pattern",
         "quality_pattern",
         "risk_pattern",
+        "supplier_success_pattern",
+        "supplier_failure_pattern",
+        "logistics_success_pattern",
+        "logistics_failure_pattern",
+        "season_pattern",
+        "country_pattern",
     ]
     title: str = Field(min_length=1, max_length=255)
     content: str = Field(min_length=1, max_length=4000)

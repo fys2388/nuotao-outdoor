@@ -459,3 +459,45 @@ curl "http://localhost:8000/api/v1/supply-chain-knowledge-entries?entry_type=del
 
 - 所有写入均走 `event_log`（`supply.*` 前缀），trace_id 贯穿审计链；工作区隔离通过 `X-Workspace-Id`。
 - 边界：不开发 Supply Chain Agent、不自动采购；采购状态机转换必须显式调用，非法转换返回 400。
+
+### 8.11 供应链学习闭环（M4.2）
+
+```bash
+# 供应商预测评估：预测 vs 实测，自动分类 success/failure + error_type；只追加
+curl -X POST http://localhost:8000/api/v1/supplier-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"supplier_id":"<uuid>","prediction":{"decision":"approve","confidence":0.8},"actual_result":{"decision":"approve"}}'
+curl "http://localhost:8000/api/v1/supplier-evaluations?supplier_id=<uuid>"
+
+# 物流交付评估：carrier/route 自动回填自 shipment；delay_reason 记录延误原因
+curl -X POST http://localhost:8000/api/v1/logistics-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"shipment_id":"<uuid>","prediction":{"decision":"on_time","delivery_time_days":10},"actual_result":{"decision":"delayed"},"delay_reason":"customs hold"}'
+curl "http://localhost:8000/api/v1/logistics-evaluations?carrier=Cainiao"
+
+# 供应商模式挖掘：quality/delivery/price/risk/capacity（确定性聚合）
+curl -X POST http://localhost:8000/api/v1/supplier-pattern-runs \
+  -H "Content-Type: application/json" -d '{"pattern_type":"quality_pattern"}'
+curl "http://localhost:8000/api/v1/supplier-pattern-runs?pattern_type=risk_pattern"
+
+# 物流模式挖掘：delay/carrier/route/country（确定性聚合）
+curl -X POST http://localhost:8000/api/v1/logistics-pattern-runs \
+  -H "Content-Type: application/json" -d '{"pattern_type":"delay_pattern"}'
+curl "http://localhost:8000/api/v1/logistics-pattern-runs?pattern_type=country_pattern"
+
+# 校准：发现成功/失败模式（proposed -> 人工审批；禁止自动改规则；二次审批 400）
+curl -X POST http://localhost:8000/api/v1/supply-chain-calibration/runs
+curl "http://localhost:8000/api/v1/supply-chain-calibration/runs?status=proposed"
+curl -X POST http://localhost:8000/api/v1/supply-chain-calibration/runs/<run-uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"ok"}'
+curl -X POST http://localhost:8000/api/v1/supply-chain-calibration/runs/<run-uuid>/reject \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"not now"}'
+
+# 知识沉淀：新增 supplier/logistics success/failure_pattern、season/country_pattern 类型
+curl -X POST http://localhost:8000/api/v1/supply-chain-knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"supplier_id":"<uuid>","entry_type":"supplier_failure_pattern","title":"Defect spike","content":"Defect rate spiked above 5% in August.","confidence":0.8}'
+```
+
+- 所有写入均走 `event_log`（`supply.*` 学习事件），trace_id 贯穿审计链；工作区隔离通过 `X-Workspace-Id`。
+- 边界：不开发 Supply Chain Agent、不自动采购、不自动修改规则；校准提案必须人工 approve / reject。

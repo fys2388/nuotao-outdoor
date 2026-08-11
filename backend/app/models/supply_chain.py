@@ -29,13 +29,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import AI_JSON, Base, CreatedAtMixin, TimestampMixin, WorkspaceMixin
 
-# Supply chain knowledge entry types (Phase 1).
+# Supply chain knowledge entry types (Phase 1 + M4.2 learning loop).
 SUPPLY_CHAIN_ENTRY_TYPES: tuple[str, ...] = (
     "supplier_pattern",
     "logistics_pattern",
     "delay_pattern",
     "quality_pattern",
     "risk_pattern",
+    "supplier_success_pattern",
+    "supplier_failure_pattern",
+    "logistics_success_pattern",
+    "logistics_failure_pattern",
+    "season_pattern",
+    "country_pattern",
 )
 
 # Purchase order lifecycle states (M4.1).

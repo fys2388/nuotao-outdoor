@@ -254,6 +254,16 @@ flowchart LR
 4. 营销实验（`marketing_experiments`）：A/B 提案生命周期 `proposed → active → completed`，完成时确定性计算 B−A deltas（calibration）；仅记录结果与提案，不自动投放。
 5. 事件集成：所有 campaign / creative / feedback / experiment 的创建、更新、删除与状态转换均写入 `event_log`，trace_id 贯穿审计链。
 
+**供应链学习闭环（M4.2 已落地：预测 → 评估 → 分类 → 模式挖掘 → 校准提案 → 人工审批 → 知识沉淀）**
+
+1. Supplier Evaluation（`supplier_ai_evaluations`）：预测供应商表现（approve/reject、质量、交期）与实测对比，确定性分类 success/failure + error_type（decision_mismatch 等）+ confidence bucket，只追加。
+2. Logistics Evaluation（`logistics_ai_evaluations`）：预测交付结果（on_time/delayed + delivery_time_days）与实测对比，记录 carrier / route（shipment 自动回填 origin → destination）/ delay_reason，确定性分类。
+3. Supplier Pattern Mining（`supplier_pattern_runs`）：确定性挖掘五类模式（quality / delivery / price / risk / capacity），基于供应商画像（quality_score / defect_rate / on_time_rate / risk_level / MOQ）与评估聚合，启发式置信度（0.1/样本，上限 0.9）。
+4. Logistics Pattern Mining（`logistics_pattern_runs`）：确定性挖掘四类模式（delay / carrier / route / country），delay_reason 分布、按承运商/线路/目的国聚合（国家从目的地址末段确定性提取）。
+5. Supply Chain Calibration（`supply_chain_calibration_runs`）：聚合供应商+物流评估与模式运行，生成 successful/failure patterns 提案；**禁止自动修改业务规则**，必须人工 approve / reject，二次审批 400 拒绝。
+6. Knowledge Memory 扩展：`supply_chain_knowledge_entries` 新增 supplier_success_pattern / supplier_failure_pattern / logistics_success_pattern / logistics_failure_pattern / season_pattern / country_pattern 六类沉淀。
+7. 事件集成：所有写入均走 `event_log`（supply.supplier_evaluation_recorded / supply.logistics_evaluation_recorded / supply.*_pattern_run_completed / supply.calibration_run_*），trace_id 贯穿审计链；工作区隔离。
+
 **供应链智能数据层（M4.1 已落地：供应链与履约数据基础，暂不开发 Supply Chain Agent、不自动采购）**
 
 1. Supplier Intelligence（`supplier_profiles`）：供应商质量/履约/风险画像（factory_type(factory/trading/agent) / lead_time / MOQ / quality_score / on_time_rate / defect_rate / certifications / risk_level），一个供应商一份画像，`(workspace_id, supplier_id)` 唯一。
@@ -519,6 +529,17 @@ flowchart LR
 | `logistics_events` | 物流轨迹事件（只追加） | shipment_id(fk, CASCADE), event_type, location, description, occurred_at | 只追加；随 shipment 级联删除 |
 | `supply_chain_knowledge_entries` | 供应链知识记忆 | supplier_id/product_id(fk), category, entry_type(supplier/logistics/delay/quality/risk_pattern), title, content, tags(jsonb), source, confidence | 支持 category/supplier/product 查询 |
 
+### 3.14 M4.2 供应链学习闭环落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `supplier_ai_evaluations` | 供应商预测评估（只追加） | supplier_id(fk), prediction, actual_result, accuracy(jsonb), prediction_result, error_type, confidence, confidence_bucket, success_flag, metric_snapshot(jsonb) | 确定性分类；评估时自动计算 |
+| `logistics_ai_evaluations` | 物流交付预测评估（只追加） | shipment_id(fk), carrier, route, prediction, actual_result, delay_reason, accuracy(jsonb), prediction_result, error_type, confidence, success_flag, metric_snapshot | carrier/route 自动回填自 shipment；delay_reason 记录延误原因 |
+| `supplier_pattern_runs` | 供应商模式挖掘审计 | supplier_id(fk), pattern_type(quality/delivery/price/risk/capacity), input_snapshot, output_pattern(jsonb), confidence, sample_size, status | 确定性聚合；启发式置信度 |
+| `logistics_pattern_runs` | 物流模式挖掘审计 | shipment_id(fk), carrier, pattern_type(delay/carrier/route/country), input_snapshot, output_pattern(jsonb), confidence, sample_size | 确定性聚合；国家从目的地址末段提取 |
+| `supply_chain_calibration_runs` | 供应链校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
+| `supply_chain_knowledge_entries`（扩展） | 知识类型扩展 | entry_type 新增 supplier_success/failure_pattern、logistics_success/failure_pattern、season_pattern、country_pattern | 与 M4.1 五类兼容共存 |
+
 ## 9. 变更记录
 
 
@@ -526,6 +547,7 @@ flowchart LR
 
 
 | 版本 | 日期 | 变更 |
+| v0.14 | 2026-08-11 | M4.2 供应链学习闭环：supplier_ai_evaluations + logistics_ai_evaluations（预测 vs 实测 + 确定性分类 + delay_reason）、supplier_pattern_runs（quality/delivery/price/risk/capacity）、logistics_pattern_runs（delay/carrier/route/country）、supply_chain_calibration_runs（proposed → 人工审批，禁止自动改规则）、知识类型扩展（supplier/logistics success/failure_pattern、season/country_pattern）；全部事件集成 + trace_id + 工作区隔离 |
 | v0.13.1 | 2026-08-11 | M4.1 细化：supplier_profiles 增加 factory_type（工厂/贸易商/代理）；采购单新增 partial_received 分批到货状态（ordered → partial_received → received）；inventory_snapshots 增加 snapshot_time 盘点时间戳并固定三仓 location（cn/us/eu，含历史值归一化 + CHECK 约束）；新增 partial-receive 端点与 2 个测试（131 全绿） |
 | v0.13 | 2026-08-11 | M4.1 供应链智能数据层：supplier_profiles（质量/履约/风险画像）、purchase_orders + purchase_order_items（draft→approved→ordered→received 状态机 + 取消）、inventory_snapshots（available = quantity − reserved，cn-main/海外仓）、shipment_records + logistics_events（承运/轨迹/时效/延误）、supply_chain_knowledge_entries（五类模式记忆）；全部事件集成 + trace_id + 工作区隔离；不开发 Supply Chain Agent、不自动采购 |
 
