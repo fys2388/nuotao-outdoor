@@ -90,3 +90,44 @@ ruff check .           # 代码规范
 | 运行全部测试 | `pytest` |
 | 代码检查 | `ruff check .` |
 | 自动修复 | `ruff check . --fix` |
+## 7. WooCommerce Webhook（订单接入）
+
+M1.5 已落地 `POST /api/v1/webhooks/woocommerce` 订单接收闭环（order.created），
+配置与行为如下。
+
+### 7.1 环境变量
+
+```bash
+# .env（本地/CI 示例值；生产必须替换为强随机密钥）
+WOOCOMMERCE_WEBHOOK_SECRET=dev-webhook-secret-change-me
+
+# 支付手续费估算（利润快照使用；WooCommerce 未提供手续费时）
+PAYMENT_FEE_RATE=0.029
+PAYMENT_FEE_FIXED=0.30
+```
+
+### 7.2 WooCommerce 后台注册
+
+1. WooCommerce → Settings → Advanced → Webhooks → Add webhook。
+2. 名称 `nuotao-order-created`；Topic 选择 `Order created`（order.created）。
+3. Delivery URL 填后端地址：`https://<your-domain>/api/v1/webhooks/woocommerce`。
+4. Secret 与 `WOOCOMMERCE_WEBHOOK_SECRET` 保持一致（WooCommerce 用它对请求体做
+   HMAC-SHA256 签名，放入 `X-Wc-Webhook-Signature` 头）。
+5. Status 设为 Active，保存后可在 Webhook 列表点击 Deliver 测试投递。
+
+### 7.3 行为与重试
+
+- 签名校验失败 → 401；payload 非法 → 400；支付网关 topic（含
+  `woocommerce.payments.gateways` 键）→ 404；均不重试。
+- 成功创建 → 201 `{"status": "created", ...}`；重复投递 → 200
+  `{"status": "duplicate", ...}`（幂等，不产生新订单/事件）。
+- 服务端错误（500）由 WooCommerce 按指数退避自动重试，幂等约束保证重试安全。
+- 全链路 `trace_id`：响应头 `x-trace-id`，并写入 orders / event_log /
+  rule_execution_logs，可用于跨系统排查。
+
+### 7.4 本地验证
+
+```bash
+cd backend
+pytest tests/test_webhook_orders.py -q   # 验签/幂等/payload/规则/审计
+```

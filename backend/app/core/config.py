@@ -1,5 +1,6 @@
 """Application settings loaded from environment variables / .env files."""
 
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,14 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://nuotao:nuotao_dev_password@localhost:5432/nuotao"
     )
     redis_url: str = "redis://localhost:6379/0"
+
+    # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
+    # MUST be overridden in staging/production environments.
+    woocommerce_webhook_secret: str = "dev-webhook-secret-change-me"
+
+    # Payment fee estimation used when the payment provider fee is unknown.
+    payment_fee_rate: Decimal = Decimal("0.029")
+    payment_fee_fixed: Decimal = Decimal("0.30")
 
     @property
     def is_production(self) -> bool:
