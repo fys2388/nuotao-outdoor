@@ -45,6 +45,15 @@ from app.models.product_intelligence import (
 from app.models.prompt import Prompt
 from app.models.rule import Rule, RuleExecutionLog
 from app.models.supplier import Supplier
+from app.models.supply_chain import (
+    InventorySnapshot,
+    LogisticsEvent,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    ShipmentRecord,
+    SupplierProfile,
+    SupplyChainKnowledgeEntry,
+)
 from app.models.workspace import Workspace
 
 __all__ = [
@@ -86,5 +95,12 @@ __all__ = [
     "Rule",
     "RuleExecutionLog",
     "Supplier",
+    "InventorySnapshot",
+    "LogisticsEvent",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
+    "ShipmentRecord",
+    "SupplierProfile",
+    "SupplyChainKnowledgeEntry",
     "Workspace",
 ]

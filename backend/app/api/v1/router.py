@@ -17,6 +17,7 @@ from app.api.v1.endpoints import (
     products,
     prompts,
     rules,
+    supply_chain,
     webhooks,
 )
 
@@ -38,3 +39,4 @@ api_router.include_router(customer_learning.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(marketing.router)
 api_router.include_router(marketing_learning.router)
+api_router.include_router(supply_chain.router)

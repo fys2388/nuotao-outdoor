@@ -413,3 +413,48 @@ curl "http://localhost:8000/api/v1/customer-context/<customer-uuid>"
 
 - 所有写入均走 `event_log`（`customer.evaluation_recorded` / `customer.pattern_run_completed` / `customer.calibration_run_*`），trace_id 贯穿审计链。
 - 边界：不开发 Customer Agent、不自动客服、不自动修改业务规则；校准只产出提案，人工审批后才生效。
+
+### 8.10 供应链智能（M4.1）
+
+```bash
+# 供应商画像：一个供应商一份（重复 409）；仅数据采集，不自动采购
+curl -X POST http://localhost:8000/api/v1/supplier-profiles \
+  -H "Content-Type: application/json" \
+  -d '{"supplier_id":"<uuid>","category":"camping","location":"Yiwu, Zhejiang","lead_time_days":7,"minimum_order_qty":50,"quality_score":88.5,"on_time_rate":92,"defect_rate":1.5,"certifications":["BSCI"],"risk_level":"low"}'
+curl "http://localhost:8000/api/v1/supplier-profiles?risk_level=low"
+
+# 采购单：draft -> approved -> ordered -> received（draft/approved 可取消；非法转换 400）
+curl -X POST http://localhost:8000/api/v1/purchase-orders \
+  -H "Content-Type: application/json" \
+  -d '{"po_number":"PO-2026-001","supplier_id":"<uuid>","shipping_cost":"20.00","items":[{"sku":"TENT-1","name":"Tent 1P","quantity":10,"unit_cost":"12.50"}]}'
+curl "http://localhost:8000/api/v1/purchase-orders?status=draft"
+curl -X POST http://localhost:8000/api/v1/purchase-orders/<po-uuid>/approve
+curl -X POST http://localhost:8000/api/v1/purchase-orders/<po-uuid>/order
+curl -X POST http://localhost:8000/api/v1/purchase-orders/<po-uuid>/receive
+curl -X POST http://localhost:8000/api/v1/purchase-orders/<po-uuid>/cancel
+
+# 库存：available = quantity - reserved（更新后自动重算）；location 支持 cn-main/海外仓
+curl -X POST http://localhost:8000/api/v1/inventory-snapshots \
+  -H "Content-Type: application/json" \
+  -d '{"product_id":"<uuid>","location":"us-west","quantity":100,"reserved":30}'
+curl -X PUT http://localhost:8000/api/v1/inventory-snapshots/<inventory-uuid> \
+  -H "Content-Type: application/json" -d '{"reserved":55}'
+
+# 物流：发货记录 + 只追加轨迹事件 + 状态/延误更新
+curl -X POST http://localhost:8000/api/v1/shipments \
+  -H "Content-Type: application/json" \
+  -d '{"carrier":"Cainiao","origin":"Yiwu, China","destination":"Los Angeles, US","tracking_number":"CN123456789"}'
+curl -X POST http://localhost:8000/api/v1/shipments/<shipment-uuid>/events \
+  -H "Content-Type: application/json" -d '{"event_type":"picked_up","location":"Yiwu","description":"Parcel picked up"}'
+curl -X PUT http://localhost:8000/api/v1/shipments/<shipment-uuid> \
+  -H "Content-Type: application/json" -d '{"status":"delayed","delay_reason":"customs hold"}'
+
+# 供应链知识记忆：五类模式（supplier/logistics/delay/quality/risk_pattern）
+curl -X POST http://localhost:8000/api/v1/supply-chain-knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"supplier_id":"<uuid>","category":"logistics","entry_type":"delay_pattern","title":"Customs delays Q4","content":"US customs clearance takes 2-3 extra days in Q4.","tags":["customs","q4"],"confidence":0.8}'
+curl "http://localhost:8000/api/v1/supply-chain-knowledge-entries?entry_type=delay_pattern"
+```
+
+- 所有写入均走 `event_log`（`supply.*` 前缀），trace_id 贯穿审计链；工作区隔离通过 `X-Workspace-Id`。
+- 边界：不开发 Supply Chain Agent、不自动采购；采购状态机转换必须显式调用，非法转换返回 400。
