@@ -131,3 +131,35 @@ PAYMENT_FEE_FIXED=0.30
 cd backend
 pytest tests/test_webhook_orders.py -q   # 验签/幂等/payload/规则/审计
 ```
+## 8. 订单查询与产品智能（M1.6 / M2.1）
+
+### 8.1 订单查询
+
+```bash
+# 列表：status / external_order_id / sku / date_from / date_to / 分页 / 排序
+curl "http://localhost:8000/api/v1/orders?status=received&sku=SKU-001&sort_by=total&sort_order=desc&limit=20"
+# 详情（含行明细与利润/规则快照）
+curl "http://localhost:8000/api/v1/orders/<order-uuid>"
+```
+
+### 8.2 产品智能
+
+```bash
+# 人工录入（1688 URL / 供应商 / 采购成本 / 重量 / 尺寸 / 目标市场），自动评分
+curl -X POST http://localhost:8000/api/v1/products/intake \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Camping Headlamp","source_type":"1688","source_url":"https://detail.1688.com/offer/1.html","purchase_cost":"10.00","weight_kg":"0.3","dimensions":{"length":8,"width":5,"height":4},"target_market":"US"}'
+
+# 查看智能聚合（评分 + 分析审计 + 决策）
+curl "http://localhost:8000/api/v1/products/<product-uuid>/intelligence"
+
+# 决策工作流：提议 -> 审批
+curl -X POST http://localhost:8000/api/v1/products/<product-uuid>/decisions
+curl -X POST http://localhost:8000/api/v1/product-decisions/<decision-uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example"}'
+```
+
+- 评分维度：profit / logistics / demand / competition / differentiation / compliance（0-10），总分 0-100；
+  权重 30/20/15/10/15/10（v1，见 `docs/product_strategy.md` §6）。
+- 成本历史 `product_cost_snapshots` 只追加；利润快照含 `cost_status` / `profit_confidence`，
+  UNKNOWN 成本时 `PROFIT-003` 硬规则拒绝盈利结论。

@@ -4,6 +4,13 @@ from app.models.agent import AiAgentRun
 from app.models.event import EventLog
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
+from app.models.product_intelligence import (
+    ProductAnalysisRun,
+    ProductCostSnapshot,
+    ProductDecision,
+    ProductScore,
+    ProductSource,
+)
 from app.models.rule import Rule, RuleExecutionLog
 from app.models.supplier import Supplier
 from app.models.workspace import Workspace
@@ -15,6 +22,11 @@ __all__ = [
     "EventLog",
     "Product",
     "ProductCost",
+    "ProductAnalysisRun",
+    "ProductCostSnapshot",
+    "ProductDecision",
+    "ProductScore",
+    "ProductSource",
     "Rule",
     "RuleExecutionLog",
     "Supplier",

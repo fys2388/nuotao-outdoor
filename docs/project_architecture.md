@@ -183,7 +183,21 @@ flowchart LR
 5. 规则引擎对 `PRICE` / `PROFIT` / `FULFILLMENT` 三个规则域执行 `check()`，结果写入 `rule_results` 与 `rule_execution_logs`；M1.5 不自动执行任何高风险动作。
 6. `order.created` 事件写入 `event_log`，`trace_id` 贯穿 Webhook → 订单 → 规则日志 → 事件，形成完整审计链。
 
+**订单查询与利润置信度（M1.6 已落地）**
+
+1. `GET /api/v1/orders` 支持 status / external_order_id / SKU / 日期区间 / 分页 / 排序（白名单列）；`GET /api/v1/orders/{id}` 返回订单 + 行明细。
+2. 利润快照新增 `cost_status`（KNOWN / ESTIMATED / UNKNOWN）、`profit_confidence`（HIGH / MEDIUM / LOW）与 `confidence_reasons`。
+3. 规则种子 `PROFIT-003`（hard）：成本 UNKNOWN 时禁止给出盈利结论；未知成本不再默认“正常利润”。
+
+**产品智能确定性链（M2.1 已落地，暂不调用 LLM）**
+
+1. 录入（`POST /api/v1/products/intake`，或 CSV 扩展列）：1688 URL / 供应商 / 采购成本 / 重量 / 尺寸 / 目标市场，全部数据校验。
+2. `Product → Cost → Logistics → Profit → Rule Engine → Score Context`：成本来自 `product_cost`，物流按重量/体积分档，利润按建议售价毛利率，规则走数据库规则注册表（PROD-GATE-*），输出 6 维评分（0-10）+ 总分（0-100）。
+3. 每次分析落 `product_analysis_runs`（provider/model/input/output/token/cost/latency/trace_id）与 `product_scores`（model_version/rule_version/scored_at）。
+4. 决策工作流：`pending → approved/rejected`，`test` 决策审批通过后产品进入 `test` 生命周期；成本历史写入 `product_cost_snapshots`（只追加，不覆盖）。
+
 **订单履约流程（AI 供应链经理）**
+
 
 1. WooCommerce 新订单 Webhook → 订单服务落库。
 2. 自动匹配供应商与采购规则（库存/成本/时效）生成采购单。
@@ -344,12 +358,25 @@ flowchart LR
 | `orders` | id(uuid), workspace_id, external_order_id, status, payment_status, currency, country, total/subtotal/shipping_total/discount_total/tax_total/payment_fee/refunded_amount/advertising_cost(numeric(12,2)), profit_snapshot(jsonb), rule_results(jsonb), trace_id, received_at | 唯一 `(workspace_id, external_order_id)` 保证幂等；不保存姓名/邮箱/地址等 PII |
 | `order_items` | id(uuid), order_id(fk), external_item_id, product_id(fk), sku, name, quantity, unit_price, line_total | 订单行明细，`ondelete=CASCADE` |
 
+
+### 3.5 M2.1 产品智能层落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `product_sources` | 产品来源捕获 | product_id, source_type(1688/MANUAL/OTHER), source_url, supplier_id/code, captured_at, raw_data(jsonb), trace_id | 每次录入一条，raw_data 保留原始快照 |
+| `product_cost_snapshots` | 成本历史（只追加） | product_id, 成本分量, total_cost, weight_kg, valid_from, source, trace_id | 禁止 UPDATE/DELETE；历史成本永不被覆盖 |
+| `product_scores` | 六维评分 | profit/logistics/demand/competition/differentiation/compliance(0-10), total(0-100), model_version, rule_version, scored_at, trace_id | 评分模型 v1：权重 30/20/15/10/15/10 |
+| `product_analysis_runs` | 分析审计 | product_id, provider, model, prompt_version, input_snapshot, output, token_usage, estimated_cost, latency_ms, trace_id | 每次分析（确定性或 LLM）一行 |
+| `product_decisions` | 决策 + 审批流 | decision(test/hold/reject), score, confidence, reasons, risks, recommended_price, max_cac, test_quantity/days, approval_status(pending/approved/rejected), approved_by/at | 状态机：pending → approved/rejected |
+
 ## 9. 变更记录
 
 
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.5 | 2026-08-11 | M1.6 加固：订单查询 API（过滤/分页/排序/明细）、利润成本置信度（KNOWN/ESTIMATED/UNKNOWN + PROFIT-003 门禁）；M2.1 产品智能底座：product_sources / product_cost_snapshots / product_scores / product_analysis_runs / product_decisions、人工+CSV 录入、确定性分析链（Cost→Logistics→Profit→Rule→Score）、决策审批状态机 |
 
 | v0.4 | 2026-08-11 | M1.5 订单域落地：orders/order_items、WooCommerce Webhook（HMAC 验签 + 幂等 + 网关 topic 404 兼容）、利润引擎（Contribution Margin）、PRICE/PROFIT/FULFILLMENT 规则接入、全链路 trace_id 审计 |
 

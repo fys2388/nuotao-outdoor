@@ -1,6 +1,7 @@
 """Product import request/response schemas."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -41,5 +42,8 @@ class ProductOut(BaseModel):
     tags: list[Any]
     attributes: dict[str, Any]
     meta: dict[str, Any]
+    weight_kg: Decimal | None
+    dimensions: dict[str, Any] | None
+    target_market: str
     created_at: datetime
     updated_at: datetime

@@ -4,10 +4,12 @@ PII policy: webhook payloads are parsed into a minimal, non-identifying
 projection (no customer names/emails/addresses are stored).
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WebhookLineItem(BaseModel):
@@ -79,3 +81,58 @@ class WebhookResponse(BaseModel):
     profit: dict[str, Any] = Field(default_factory=dict)
     rules: dict[str, Any] = Field(default_factory=dict)
     events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OrderItemOut(BaseModel):
+    """Order line item as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    order_id: UUID
+    external_item_id: str | None
+    product_id: UUID | None
+    sku: str | None
+    name: str
+    quantity: int
+    unit_price: Decimal
+    line_total: Decimal
+
+
+class OrderOut(BaseModel):
+    """Order summary as returned by the list API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    external_order_id: str
+    status: str
+    payment_status: str | None
+    fulfillment_status: str | None
+    currency: str
+    country: str | None
+    payment_method: str | None
+    source: str
+    total: Decimal
+    profit_snapshot: dict[str, Any]
+    rule_results: dict[str, Any]
+    trace_id: str | None
+    received_at: datetime
+    created_at: datetime
+
+
+class OrderDetailOut(OrderOut):
+    """Order detail including line items."""
+
+    items: list[OrderItemOut] = Field(default_factory=list)
+
+
+class OrderListOut(BaseModel):
+    """Paginated order list."""
+
+    items: list[OrderOut]
+    total: int
+    limit: int
+    offset: int

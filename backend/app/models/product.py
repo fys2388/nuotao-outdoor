@@ -36,6 +36,10 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     attributes: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     meta: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    # M2.1 product intelligence fields (physical + market targeting).
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
+    dimensions: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True)
+    target_market: Mapped[str] = mapped_column(String(16), nullable=False, default="US")
 
     __table_args__ = (
         # SKU is unique within a workspace; used by CSV import upsert.

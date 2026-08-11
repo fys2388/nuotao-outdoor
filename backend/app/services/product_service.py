@@ -3,6 +3,8 @@
 import csv
 import json
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from decimal import Decimal
 from io import StringIO
 from typing import Any
 from uuid import UUID
@@ -10,7 +12,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product
+from app.models.product import Product, ProductCost
+from app.models.product_intelligence import ProductCostSnapshot
 from app.models.supplier import Supplier
 from app.schemas.product import ImportRowError, ProductImportResult
 from app.services import event_service
@@ -26,6 +29,10 @@ _IMPORT_FIELDS = (
     "attributes",
     "source_url",
     "supplier_code",
+    "weight_kg",
+    "dimensions",
+    "purchase_cost",
+    "target_market",
 )
 
 
@@ -59,6 +66,37 @@ def _normalize_row(row: dict[str, str]) -> dict[str, Any]:
     if not sku or not name:
         raise ValueError("sku and name are required")
 
+    weight_raw = (row.get("weight_kg") or "").strip()
+    weight_kg: Decimal | None = None
+    if weight_raw:
+        try:
+            parsed = Decimal(weight_raw)
+        except Exception as exc:  # noqa: BLE001 - row-level validation
+            raise ValueError("weight_kg must be a positive number") from exc
+        if parsed <= 0:
+            raise ValueError("weight_kg must be positive")
+        weight_kg = parsed
+
+    cost_raw = (row.get("purchase_cost") or "").strip()
+    purchase_cost: Decimal | None = None
+    if cost_raw:
+        try:
+            parsed = Decimal(cost_raw)
+        except Exception as exc:  # noqa: BLE001 - row-level validation
+            raise ValueError("purchase_cost must be a number") from exc
+        if parsed < 0:
+            raise ValueError("purchase_cost must be >= 0")
+        purchase_cost = parsed
+
+    dimensions: dict[str, Any] | None = None
+    dims_raw = (row.get("dimensions") or "").strip()
+    if dims_raw:
+        dims = _parse_attributes(dims_raw)
+        for key in ("length", "width", "height"):
+            if key not in dims:
+                raise ValueError("dimensions must include length/width/height")
+        dimensions = dims
+
     return {
         "sku": sku,
         "name": name,
@@ -69,6 +107,10 @@ def _normalize_row(row: dict[str, str]) -> dict[str, Any]:
         "tags": _parse_tags(row.get("tags") or ""),
         "attributes": _parse_attributes(row.get("attributes") or ""),
         "supplier_code": (row.get("supplier_code") or "").strip() or None,
+        "weight_kg": weight_kg,
+        "dimensions": dimensions,
+        "purchase_cost": purchase_cost,
+        "target_market": (row.get("target_market") or "US").strip() or "US",
     }
 
 
@@ -150,6 +192,9 @@ async def import_products(
                 attributes=data["attributes"],
                 source="csv-import",
                 status="draft",
+                weight_kg=data["weight_kg"],
+                dimensions=data["dimensions"],
+                target_market=data["target_market"],
             )
             if supplier_id is not None:
                 product.meta = {"supplier_id": str(supplier_id)}
@@ -173,6 +218,9 @@ async def import_products(
             existing.source_url = data["source_url"]
             existing.tags = data["tags"]
             existing.attributes = data["attributes"]
+            existing.weight_kg = data["weight_kg"]
+            existing.dimensions = data["dimensions"]
+            existing.target_market = data["target_market"]
             if supplier_id is not None:
                 existing.meta = {"supplier_id": str(supplier_id)}
             updated += 1
@@ -185,6 +233,44 @@ async def import_products(
                 payload={"sku": data["sku"]},
                 trace_id=trace_id,
             )
+
+    if data["purchase_cost"] is not None:
+        product_id = product.id if existing is None else existing.id
+        total_cost = data["purchase_cost"]
+        current = (
+            await session.execute(
+                select(ProductCost).where(
+                    ProductCost.workspace_id == workspace_id,
+                    ProductCost.product_id == product_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if current is None:
+            session.add(
+                ProductCost(
+                    workspace_id=workspace_id,
+                    product_id=product_id,
+                    purchase_price=data["purchase_cost"],
+                    total_cost=total_cost,
+                    valid_from=datetime.now(UTC),
+                )
+            )
+        else:
+            current.purchase_price = data["purchase_cost"]
+            current.total_cost = total_cost
+            current.valid_from = datetime.now(UTC)
+        session.add(
+            ProductCostSnapshot(
+                workspace_id=workspace_id,
+                product_id=product_id,
+                purchase_price=data["purchase_cost"],
+                total_cost=total_cost,
+                weight_kg=data["weight_kg"],
+                source="csv-import",
+                valid_from=datetime.now(UTC),
+                trace_id=trace_id,
+            )
+        )
 
     await event_service.create_event(
         session,

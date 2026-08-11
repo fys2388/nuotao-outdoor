@@ -13,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
-__all__ = ["AI_JSON", "BIGINT_PK", "Base", "TimestampMixin", "WorkspaceMixin"]
+__all__ = ["AI_JSON", "BIGINT_PK", "Base", "CreatedAtMixin", "TimestampMixin", "WorkspaceMixin"]
 
 # JSON column that stores as JSONB on PostgreSQL (for AI/JSONB features) and
 # plain JSON elsewhere (e.g. SQLite in tests).
@@ -22,6 +22,16 @@ AI_JSON = JSON().with_variant(JSONB(), "postgresql")
 # BigInteger on PostgreSQL; INTEGER on SQLite so autoincrement keeps working
 # in tests (SQLite only aliases rowid for INTEGER PRIMARY KEY).
 BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
+
+
+class CreatedAtMixin:
+    """Adds a single created_at column for immutable audit rows."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
 
 
 class TimestampMixin:
