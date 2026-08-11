@@ -1,10 +1,11 @@
-﻿"""API v1 router aggregating all endpoint routers."""
+"""API v1 router aggregating all endpoint routers."""
 
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     agents,
     calibration,
+    connectors,
     customer,
     customer_learning,
     events,
@@ -42,3 +43,4 @@ api_router.include_router(marketing.router)
 api_router.include_router(marketing_learning.router)
 api_router.include_router(supply_chain.router)
 api_router.include_router(supply_chain_learning.router)
+api_router.include_router(connectors.router)

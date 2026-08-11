@@ -501,3 +501,56 @@ curl -X POST http://localhost:8000/api/v1/supply-chain-knowledge-entries \
 
 - 所有写入均走 `event_log`（`supply.*` 学习事件），trace_id 贯穿审计链；工作区隔离通过 `X-Workspace-Id`。
 - 边界：不开发 Supply Chain Agent、不自动采购、不自动修改规则；校准提案必须人工 approve / reject。
+
+
+### 8.12 真实数据连接器 + 经营建议（M4.3）
+
+连接器统一契约：`validate() / transform() / sync() / audit()`；仅只读外部数据，单向流入，全部经 `event_log` + `trace_id` + workspace 隔离。可推送批次（`data`）或配置实时源（WooCommerce REST v3 Basic Auth）。
+
+```bash
+# 1) 连接器同步：WooCommerce 订单（重复推送幂等；客户仅存引用哈希，无 PII）
+curl -X POST http://localhost:8000/api/v1/connectors/woocommerce/sync \
+  -H "Content-Type: application/json" \
+  -d '{"data":[{"kind":"orders","data":{"id":90001,"status":"processing","currency":"USD","total":"100.00","subtotal":"95.00","shipping_total":"5.00","discount_total":"5.00","tax_total":"0.00","shipping":{"country":"US"},"line_items":[{"id":1,"name":"Headlamp","sku":"SKU-001","quantity":1,"total":"90.00"}]}}]}'
+
+# WooCommerce 产品（按 SKU upsert）与客户（customer_reference_id 哈希）
+curl -X POST http://localhost:8000/api/v1/connectors/woocommerce/sync \
+  -H "Content-Type: application/json" \
+  -d '{"data":[{"kind":"products","data":{"sku":"SKU-001","name":"Headlamp","categories":[{"name":"Lighting"}],"status":"publish"}},{"kind":"customers","data":{"id":7001,"email":"buyer@example.com","billing":{"country":"US"},"orders_count":1,"total_spent":"100.00"}}]}'
+
+# WooCommerce 实时同步（配置 REST 凭证，按 kind 拉取 /orders|/products|/customers）
+curl -X POST http://localhost:8000/api/v1/connectors/woocommerce/sync \
+  -H "Content-Type: application/json" \
+  -d '{"config":{"kind":"orders","base_url":"https://shop.example","consumer_key":"ck_xxx","consumer_secret":"cs_xxx"}}'
+
+# 2) 物流：tracking 同步（tracking_number 幂等；轨迹事件去重）
+curl -X POST http://localhost:8000/api/v1/connectors/logistics/sync \
+  -H "Content-Type: application/json" \
+  -d '{"data":[{"carrier":"Cainiao","tracking_number":"LP90001","status":"in_transit","origin":"Yiwu, China","destination":"Los Angeles, US","events":[{"event_type":"pickup","location":"Yiwu","description":"Parcel picked up","occurred_at":"2026-08-01T08:00:00Z"}]}]}'
+
+# 3) 营销：campaign 指标同步（platform + campaign_id 幂等；只读，不投放）
+curl -X POST http://localhost:8000/api/v1/connectors/marketing/sync \
+  -H "Content-Type: application/json" \
+  -d '{"data":[{"platform":"meta","campaign_id":"c-001","name":"US Summer Tent","status":"active","budget":"500.00","spend":"120.00","impressions":10000,"clicks":250,"conversion":8,"revenue":"480.00"}]}'
+
+# 4) 供应商：主数据同步（workspace + code 幂等）
+curl -X POST http://localhost:8000/api/v1/connectors/supplier/sync \
+  -H "Content-Type: application/json" \
+  -d '{"data":[{"code":"1688-001","name":"Yiwu Camping Factory","platform":"1688","shop_url":"https://shop1688.example/001","rating":"A","status":"active"}]}'
+
+# 5) 同步审计：connector_runs（connector_name/status/records_count/trace_id 过滤）
+curl http://localhost:8000/api/v1/connector-runs?connector_name=woocommerce&status=success
+
+# 6) 经营建议：propose -> 人工 approve / reject（二次审批 400；不自动执行商业动作）
+curl -X POST http://localhost:8000/api/v1/business-recommendations \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"supply_chain","entity_type":"product","entity_id":"SKU-001","recommendation":"Reorder 200 units before peak season","reason":"Inventory below 2 weeks of coverage","confidence":0.82}'
+curl -X POST http://localhost:8000/api/v1/business-recommendations/<uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"stock is low"}'
+curl -X POST http://localhost:8000/api/v1/business-recommendations/<uuid>/reject \
+  -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"not now"}'
+curl http://localhost:8000/api/v1/business-recommendations?status=proposed&domain=supply_chain
+```
+
+- 所有同步写入 `connector_runs` 并追加 `connector.run_completed` 事件；推荐状态机 `proposed → approved/rejected`，事件 `business.recommendation_proposed/approved/rejected`。
+- 边界：不开发 Agent、不自动执行商业动作、不自动修改规则；建议必须人工审批。

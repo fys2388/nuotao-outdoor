@@ -273,6 +273,15 @@ flowchart LR
 5. Supply Chain Knowledge（`supply_chain_knowledge_entries`）：五类模式记忆（supplier / logistics / delay / quality / risk_pattern），支持按 category / supplier / product 查询，供未来 Supply Chain Agent 学习。
 6. 事件集成：所有写入均走 `event_log`（supply.supplier_profile_* / supply.purchase_order_* / supply.inventory_* / supply.shipment_* / supply.logistics_event_added / supply.knowledge_created），trace_id 贯穿审计链；工作区数据隔离。
 
+**真实数据接入与经营建议层（M4.3 已落地：Connector Framework + Decision Intelligence，全部只读、建议须人工审批）**
+
+1. 统一 Connector 契约：每个连接器实现 `validate() / transform() / sync() / audit()` 四方法；支持 WooCommerce / Logistics / Marketing / Supplier 四类只读同步。
+2. 数据接入方式：可推送批次（`data`，测试/手动）或配置实时源（WooCommerce REST v3 Basic Auth）；外部数据一律单向流入，归一化后经既有服务幂等落库。
+3. 幂等抓手：订单 `(workspace, external_order_id)`、产品 `(workspace, sku)`、客户 `(workspace, customer_reference_id 哈希)`、广告活动 `(workspace, platform, campaign_id)`、物流 `(workspace, tracking_number)`、供应商 `(workspace, code)`。
+4. 每次同步写入 `connector_runs`（running → success/failed + records_count + error_message + trace_id），并追加 `connector.run_completed` 事件；嵌套服务回滚（如重复创建触发 rollback）后自动从库中重载 run，保证审计不丢。
+5. 客户同步遵循 PII 策略：仅存 `customer_reference_id` 确定性哈希 + 行为聚合字段，姓名/邮箱/地址永不落库。
+6. Decision Intelligence（`business_recommendations`）：领域化经营建议（product/marketing/customer/supply_chain/operations）以 `proposed` 状态创建，必须人工 approve / reject（二次审批 400），**不自动执行任何商业动作、不自动修改规则**。
+
 **订单履约流程（AI 供应链经理）**
 
 
@@ -540,6 +549,13 @@ flowchart LR
 | `supply_chain_calibration_runs` | 供应链校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
 | `supply_chain_knowledge_entries`（扩展） | 知识类型扩展 | entry_type 新增 supplier_success/failure_pattern、logistics_success/failure_pattern、season_pattern、country_pattern | 与 M4.1 五类兼容共存 |
 
+### 3.15 M4.3 真实数据接入与经营建议落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `connector_runs` | 连接器同步审计 | connector_name, status(running/success/failed), records_count, error_message, trace_id | 每次同步一行；工作区隔离；失败原因截断 1000 字符 |
+| `business_recommendations` | 经营建议提案 | domain(product/marketing/customer/supply_chain/operations), entity_type, entity_id, recommendation, reason, confidence, status(proposed/approved/rejected), approved_by/at | 状态机 proposed → approved/rejected；二次审批 400；禁止自动执行 |
+
 ## 9. 变更记录
 
 
@@ -547,6 +563,7 @@ flowchart LR
 
 
 | 版本 | 日期 | 变更 |
+| v0.15 | 2026-08-11 | M4.3 真实数据接入 + 经营建议层：统一 Connector Framework（validate/transform/sync/audit 四方法），WooCommerce（orders/products/customers 引用哈希，REST 只读 + 批次推送）/ Logistics（tracking + 轨迹事件去重）/ Marketing（campaign 指标）/ Supplier（主数据）四连接器；connector_runs 同步审计（status/records_count/error_message/trace_id + connector.run_completed 事件）；business_recommendations 经营建议（proposed → 人工 approve/reject，二次审批 400，不自动执行商业动作）；全部 workspace 隔离；新增 16 测试（160 全绿） |
 | v0.14 | 2026-08-11 | M4.2 供应链学习闭环：supplier_ai_evaluations + logistics_ai_evaluations（预测 vs 实测 + 确定性分类 + delay_reason）、supplier_pattern_runs（quality/delivery/price/risk/capacity）、logistics_pattern_runs（delay/carrier/route/country）、supply_chain_calibration_runs（proposed → 人工审批，禁止自动改规则）、知识类型扩展（supplier/logistics success/failure_pattern、season/country_pattern）；全部事件集成 + trace_id + 工作区隔离 |
 | v0.13.1 | 2026-08-11 | M4.1 细化：supplier_profiles 增加 factory_type（工厂/贸易商/代理）；采购单新增 partial_received 分批到货状态（ordered → partial_received → received）；inventory_snapshots 增加 snapshot_time 盘点时间戳并固定三仓 location（cn/us/eu，含历史值归一化 + CHECK 约束）；新增 partial-receive 端点与 2 个测试（131 全绿） |
 | v0.13 | 2026-08-11 | M4.1 供应链智能数据层：supplier_profiles（质量/履约/风险画像）、purchase_orders + purchase_order_items（draft→approved→ordered→received 状态机 + 取消）、inventory_snapshots（available = quantity − reserved，cn-main/海外仓）、shipment_records + logistics_events（承运/轨迹/时效/延误）、supply_chain_knowledge_entries（五类模式记忆）；全部事件集成 + trace_id + 工作区隔离；不开发 Supply Chain Agent、不自动采购 |
