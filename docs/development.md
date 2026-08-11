@@ -554,3 +554,53 @@ curl http://localhost:8000/api/v1/business-recommendations?status=proposed&domai
 
 - 所有同步写入 `connector_runs` 并追加 `connector.run_completed` 事件；推荐状态机 `proposed → approved/rejected`，事件 `business.recommendation_proposed/approved/rejected`。
 - 边界：不开发 Agent、不自动执行商业动作、不自动修改规则；建议必须人工审批。
+### 8.13 Agent 运行时基础（M5.0）
+
+# 0) 前置：Agent 必须绑定版本化提示词（prompt 禁止硬编码；name 约定 AGENT_<AGENT_ID> 大写）
+curl -X POST http://localhost:8000/api/v1/prompts \
+  -H "Content-Type: application/json" \
+  -d '{"prompt_id":"AGENT_PRODUCT_ANALYST","name":"AGENT_PRODUCT_ANALYST","version":"v1","template":"You are a product analyst agent. ...","variables":["product_context"],"status":"active"}'
+
+# 1) Agent 注册（agent_id 唯一；重复注册视为更新）
+curl -X POST http://localhost:8000/api/v1/agent-registry \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"PRODUCT_ANALYST","name":"Product Analyst","domain":"product","version":"v1","status":"active","model_provider":"openai","model_name":"gpt-4o-mini","prompt_version":"v1","permission_level":"L2"}'
+curl http://localhost:8000/api/v1/agent-registry
+curl http://localhost:8000/api/v1/agent-registry/<uuid>/prompt   # 解析绑定提示词
+
+# 2) 任务 + 执行生命周期（pending -> running -> completed/failed）
+curl -X POST http://localhost:8000/api/v1/agent-tasks \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_uuid>","input":{"product_id":"<uuid>","action":"analyze"},"priority":3}'
+curl -X POST http://localhost:8000/api/v1/agent-executions \
+  -H "Content-Type: application/json" -d '{"task_id":"<task_uuid>"}'
+curl -X POST http://localhost:8000/api/v1/agent-executions/<uuid>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"output":{"decision":"test","confidence":0.7},"provider":"openai","model":"gpt-4o-mini","tokens":{"prompt":1200,"completion":300},"cost":"0.012","latency_ms":842}'
+curl -X POST http://localhost:8000/api/v1/agent-tasks/<uuid>/cancel
+
+# 3) 工具白名单 + L0-L3 权限门禁（L3 高风险 -> waiting_approval -> 人工审批）
+curl -X POST http://localhost:8000/api/v1/agent-tools \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name":"product.read","description":"read product data","permission_level":"L1","enabled":true,"category":"product"}'
+curl -X POST http://localhost:8000/api/v1/agent-executions/<uuid>/tool-calls \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name":"product.read","arguments":{"product_id":"<uuid>"}}'   # L0-L2 放行 + 审计；L3 -> requires_approval
+curl -X POST http://localhost:8000/api/v1/agent-executions/<uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"approved"}'   # 二次审批 400
+curl -X POST http://localhost:8000/api/v1/agent-executions/<uuid>/reject \
+  -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"rejected"}'
+
+# 4) Agent 记忆（知识域 grounding）
+curl -X POST http://localhost:8000/api/v1/agent-memory \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_uuid>","domain":"product","source_type":"product_knowledge","source_id":"<product_uuid>","content":"success pattern: ...","tags":["camping","hero"],"meta":{}}'
+curl "http://localhost:8000/api/v1/agent-memory?domain=product&q=camping"
+curl http://localhost:8000/api/v1/agent-memory/knowledge-snapshot?domain=product   # 四知识域快照
+
+# 5) Agent 评估（预测 vs 实测；自动分类 success/failure/unknown + 置信度桶）
+curl -X POST http://localhost:8000/api/v1/agent-evaluations \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_uuid>","prediction":{"decision":"test"},"actual_result":{"decision":"test"},"human_rating":4,"notes":""}'
+curl "http://localhost:8000/api/v1/agent-evaluations?agent_id=<agent_uuid>"
+

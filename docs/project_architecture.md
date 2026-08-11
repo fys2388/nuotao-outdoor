@@ -284,16 +284,22 @@ flowchart LR
 
 **订单履约流程（AI 供应链经理）**
 
-
-
-
-
 1. WooCommerce 新订单 Webhook → 订单服务落库。
 2. 自动匹配供应商与采购规则（库存/成本/时效）生成采购单。
 3. 1688/物流商接口下单，回填物流单号。
 4. 物流轨迹自动同步，异常（超时/退件）触发客服 Agent。
 
 ---
+
+**Agent 运行时基础（M5.0 已落地：注册 → 任务 → 执行 → 权限门禁 → 审批 → 审计）**
+
+1. Agent 注册前置条件：`prompts` 表必须存在 `AGENT_<AGENT_ID>`（大写）且 `version` 匹配、`status=active` 的版本化提示词，保证提示词不硬编码、可评审、可回滚。
+2. 任务入队：`POST /api/v1/agent-tasks` 创建 `pending` 任务（仅 active agent 可创建），支持优先级 1-5。
+3. 执行生命周期：`start_execution`（pending → running，落 context_snapshot）→ `complete_execution`（落 output/provider/model/tokens/cost/latency，任务 completed）或 `fail_execution`。
+4. 工具权限门禁（L0-L3）：所有工具调用必须走 `execute_tool_call`，先查 `agent_tools` 白名单（enabled），再校验 Agent 等级 ≥ 工具等级；L3 高风险工具不自动执行 → 执行进入 `waiting_approval`，人工 approve（execution/task → completed）或 reject（execution → rejected + task → failed），二次审批 400；L0-L2 放行但每次调用落审计（tool_calls JSONB + `agent.tool_call_allowed` 事件）。
+5. Agent 记忆：`agent_memory`（domain 关联 product/marketing/customer/supply_chain/operations）+ `GET /api/v1/agent-memory/knowledge-snapshot` 拉取四个知识域快照，为 Agent 提供 grounding。
+6. 评估闭环：`agent_evaluations` 记录 prediction vs actual_result（复用确定性分类 success/failure/unknown + confidence bucket + accuracy），供未来 Agent 校准。
+7. 全程事件化：`agent.*` 事件写入 `event_log`，`trace_id` 贯穿任务 → 执行 → 工具调用 → 审批；全部 workspace 数据隔离。
 
 ## 3. 数据库设计
 
@@ -439,14 +445,12 @@ flowchart LR
 
 | v0.3 | 2026-08-11 | 确认 1688 数据策略（Phase 1 人工录入+AI 分析，Phase 2 探索 API）与 LLM 多供应商策略（OpenAI 主、DeepSeek 备，防锁定）；同步更新选品流程与开发步骤 |
 
-
 ### 3.4 M1.5 订单域落地表（已实现）
 
 | 表 | 关键字段 | 约束/说明 |
 |---|---|---|
 | `orders` | id(uuid), workspace_id, external_order_id, status, payment_status, currency, country, total/subtotal/shipping_total/discount_total/tax_total/payment_fee/refunded_amount/advertising_cost(numeric(12,2)), profit_snapshot(jsonb), rule_results(jsonb), trace_id, received_at | 唯一 `(workspace_id, external_order_id)` 保证幂等；不保存姓名/邮箱/地址等 PII |
 | `order_items` | id(uuid), order_id(fk), external_item_id, product_id(fk), sku, name, quantity, unit_price, line_total | 订单行明细，`ondelete=CASCADE` |
-
 
 ### 3.5 M2.1 产品智能层落地表（已实现）
 
@@ -484,7 +488,6 @@ flowchart LR
 | `score_calibration_runs` | 评分权重校准提案 | status(proposed/approved/rejected), model_version, current_weights, suggested_weights, input_snapshot, metrics, sample_size, rationale, approved_by/at | 状态机：proposed → approved/rejected；禁止自动改规则 |
 | `product_knowledge_entries` | 产品知识记忆 | product_id, category, entry_type(success_pattern/failure_pattern/category_insight), title, content, tags, source | 支持 category/product 查询 |
 
-
 ### 3.9 M3.1 营销智能落地表（已实现）
 
 | 表 | 用途 | 关键字段 | 约束/说明 |
@@ -493,7 +496,6 @@ flowchart LR
 | `creative_assets` | 创意素材 | product_id(fk), platform, asset_type, reference, hook, angle, copy, performance_snapshot(jsonb), status | 结构化定位字段，为 Growth Agent 提供学习数据 |
 | `customer_feedback` | 客户反馈（只追加） | product_id(fk), source, content, sentiment, issue_type, rating, metadata(jsonb) | content 不可变；无 updated_at；仅分类字段可更新 |
 | `marketing_experiments` | 营销 A/B 实验 | product_id(fk), hypothesis, status(proposed/active/completed), variant_a/b(jsonb), result(jsonb), calibration(jsonb) | 状态机 proposed → active → completed；完成时自动算 B−A deltas |
-
 
 ### 3.10 M3.2 营销学习闭环落地表（已实现）
 
@@ -504,7 +506,6 @@ flowchart LR
 | `marketing_knowledge_entries` | 营销知识记忆 | campaign_id/creative_id(fk), category, entry_type(creative/copy/audience/offer/failure_pattern), title, content, tags, source, confidence | 支持 category/campaign/creative 查询 |
 | `marketing_calibration_runs` | 营销校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
 
-
 ### 3.11 M3.3 客户智能落地表（已实现）
 
 | 表 | 用途 | 关键字段 | 约束/说明 |
@@ -514,7 +515,6 @@ flowchart LR
 | `product_reviews` | 产品评论（只追加） | product_id(fk), platform, rating(1-5), content, sentiment, issue_type, keywords(jsonb) | content 不可变；支持按产品/平台/情绪过滤 |
 | `refund_cases` | 退款智能 | order_id/product_id(fk), reason, category, amount(numeric), resolution | 金额 Decimal；按 category 聚合统计 |
 | `customer_knowledge_entries` | 客户知识记忆 | customer_id/product_id(fk), category, entry_type(purchase/pain/segment/refund/loyalty_pattern), title, content, tags, source, confidence | 支持 category/customer/product 查询 |
-
 
 ### 3.12 M3.4 客户学习闭环落地表（已实现）
 
@@ -556,13 +556,21 @@ flowchart LR
 | `connector_runs` | 连接器同步审计 | connector_name, status(running/success/failed), records_count, error_message, trace_id | 每次同步一行；工作区隔离；失败原因截断 1000 字符 |
 | `business_recommendations` | 经营建议提案 | domain(product/marketing/customer/supply_chain/operations), entity_type, entity_id, recommendation, reason, confidence, status(proposed/approved/rejected), approved_by/at | 状态机 proposed → approved/rejected；二次审批 400；禁止自动执行 |
 
+### 3.16 Agent 运行时基础落地表（M5.0 已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `agents` | Agent 注册表 | agent_id, name, domain(product/marketing/customer/supply_chain/operations), version, status(active/inactive/draft), model_provider(openai/deepseek), model_name, prompt_version, permission_level(L0-L3) | (workspace_id, agent_id) 唯一；注册前置：prompts 存在 `AGENT_<ID>` active 且版本匹配 |
+| `agent_tasks` | Agent 任务队列 | agent_id, input(JSONB), status(pending/running/waiting_approval/completed/failed/cancelled), priority(1-5), result, error_message, trace_id | 仅 active agent 可建任务；pending/running/waiting_approval 可取消 |
+| `agent_executions` | 执行审计 | agent_id, task_id, context_snapshot, input, output, provider, model, tokens, cost(Decimal), latency_ms, tool_calls(JSONB), status, approval(JSONB), error_message, trace_id | 每次执行一行；L3 工具触发 waiting_approval → 人工 approve/reject；二次审批 400 |
+| `agent_tools` | 工具白名单 | tool_name, description, permission_level(L0-L3), enabled, category | (workspace_id, tool_name) 唯一；disabled 直接拒绝；每次调用审计 |
+| `agent_memory` | Agent 记忆 | agent_id, domain, source_type(product_knowledge/marketing_knowledge/customer_knowledge/supply_chain_knowledge/event/note), source_id, content, tags, meta(JSONB) | 知识记忆入口；keyword 检索 + 知识域快照 |
+| `agent_evaluations` | Agent 评估 | agent_id, prediction, actual_result, accuracy, calibration, prediction_result, error_type, success_flag, confidence, confidence_bucket, human_rating(1-5) | 只追加；复用确定性分类 |
+
 ## 9. 变更记录
 
-
-
-
-
 | 版本 | 日期 | 变更 |
+| v0.16 | 2026-08-11 | M5.0 Agent 运行时基础：agents 注册表（前置 `AGENT_<ID>` 版本化 prompt，禁止硬编码）、agent_tasks（pending→running→waiting_approval→completed/failed/cancelled + 优先级）、agent_executions 全量审计（context/input/output/model/tokens/cost/latency/tool_calls/trace_id）、agent_tools 白名单 + L0-L3 权限引擎（低等级/禁用直接拒绝，L3 高风险人工审批，二次审批 400）、agent_memory（四知识域 grounding + keyword 检索）、agent_evaluations（预测 vs 实测 + 确定性分类 + 置信度桶）；全部事件集成 + trace_id + 工作区隔离；不开发具体业务 Agent、不自动执行商业动作；新增 19 测试（179 全绿） |
 | v0.15 | 2026-08-11 | M4.3 真实数据接入 + 经营建议层：统一 Connector Framework（validate/transform/sync/audit 四方法），WooCommerce（orders/products/customers 引用哈希，REST 只读 + 批次推送）/ Logistics（tracking + 轨迹事件去重）/ Marketing（campaign 指标）/ Supplier（主数据）四连接器；connector_runs 同步审计（status/records_count/error_message/trace_id + connector.run_completed 事件）；business_recommendations 经营建议（proposed → 人工 approve/reject，二次审批 400，不自动执行商业动作）；全部 workspace 隔离；新增 16 测试（160 全绿） |
 | v0.14 | 2026-08-11 | M4.2 供应链学习闭环：supplier_ai_evaluations + logistics_ai_evaluations（预测 vs 实测 + 确定性分类 + delay_reason）、supplier_pattern_runs（quality/delivery/price/risk/capacity）、logistics_pattern_runs（delay/carrier/route/country）、supply_chain_calibration_runs（proposed → 人工审批，禁止自动改规则）、知识类型扩展（supplier/logistics success/failure_pattern、season/country_pattern）；全部事件集成 + trace_id + 工作区隔离 |
 | v0.13.1 | 2026-08-11 | M4.1 细化：supplier_profiles 增加 factory_type（工厂/贸易商/代理）；采购单新增 partial_received 分批到货状态（ordered → partial_received → received）；inventory_snapshots 增加 snapshot_time 盘点时间戳并固定三仓 location（cn/us/eu，含历史值归一化 + CHECK 约束）；新增 partial-receive 端点与 2 个测试（131 全绿） |
