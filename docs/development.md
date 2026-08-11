@@ -163,3 +163,39 @@ curl -X POST http://localhost:8000/api/v1/product-decisions/<decision-uuid>/appr
   权重 30/20/15/10/15/10（v1，见 `docs/product_strategy.md` §6）。
 - 成本历史 `product_cost_snapshots` 只追加；利润快照含 `cost_status` / `profit_confidence`，
   UNKNOWN 成本时 `PROFIT-003` 硬规则拒绝盈利结论。
+
+
+### 8.3 产品智能数据完整性（M2.1.5）
+
+```bash
+# 产品录入（新增落地成本分量字段）
+curl -X POST http://localhost:8000/api/v1/products/intake \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Camping Headlamp","source_type":"1688","source_url":"https://detail.1688.com/offer/1.html","purchase_cost":"10.00","domestic_shipping":"1.50","international_shipping":"4.20","packaging":"0.80","tax_estimate":"1.20","handling":"0.50","weight_kg":"0.3","dimensions":{"length":8,"width":5,"height":4},"target_market":"US"}'
+
+# 供应商候选（一个产品多个供应商报价）
+curl -X POST http://localhost:8000/api/v1/products/<product-uuid>/candidates \
+  -H "Content-Type: application/json" \
+  -d '{"supplier_code":"S-1688-01","source_type":"1688","source_url":"https://detail.1688.com/offer/2.html","purchase_price":"8.50","moq":50,"lead_time_days":7,"trend_score":8.0,"profit_model":{"margin_rate":0.42},"notes":"factory A"}'
+curl "http://localhost:8000/api/v1/products/<product-uuid>/candidates"
+
+# 评分证据（每次评分逐维度：score/source/evidence/confidence）
+curl "http://localhost:8000/api/v1/product-decisions/scores/<score-uuid>/evidence"
+
+# 产品测试闭环：proposed -> active -> completed
+curl -X POST http://localhost:8000/api/v1/products/<product-uuid>/experiments \
+  -H "Content-Type: application/json" \
+  -d '{"experiment_type":"market_test","prediction":{"expected_roas":2.0,"expected_conversion_rate":0.03,"score":82.5}}'
+curl -X POST http://localhost:8000/api/v1/product-decisions/experiments/<experiment-uuid>/start \
+  -H "Content-Type: application/json" \
+  -d '{"quantity":50,"channels":["meta"],"budget":"500.00","targets":{"roas":2.0}}'
+curl -X POST http://localhost:8000/api/v1/product-decisions/experiments/<experiment-uuid>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"units_sold":28,"revenue":"1200.00","orders":26,"conversion_rate":0.028,"roas":2.4,"return_rate":0.05,"margin_rate":0.35}'
+curl "http://localhost:8000/api/v1/products/<product-uuid>/experiments"
+```
+
+- 落地成本口径：`total_landed_cost = purchase_cost + domestic_shipping + international_shipping
+  + packaging + tax_estimate + handling`；未显式提供国际运费时回退 `first_leg + last_leg`。
+- 成本/候选/证据/实验均带 `workspace_id / version / trace_id`；重复录入成本快照版本自动 `v1 -> v2`，只追加不覆盖。
+- 实验完成时自动计算 `calibration`（预测 vs 实际的数值差，如 roas / 转化率 / 评分差）。

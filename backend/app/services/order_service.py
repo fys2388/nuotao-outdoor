@@ -71,7 +71,11 @@ async def _resolve_product_costs(
 
     rows = (
         await session.execute(
-            select(Product.sku, ProductCost.total_cost)
+            select(
+                Product.sku,
+                ProductCost.total_cost,
+                ProductCost.total_landed_cost,
+            )
             .join(ProductCost, ProductCost.product_id == Product.id)
             .where(
                 Product.workspace_id == workspace_id,
@@ -84,8 +88,10 @@ async def _resolve_product_costs(
         return ZERO, {}
 
     latest: dict[str, Decimal] = {}
-    for sku, total_cost in rows:
-        latest.setdefault(sku, total_cost)
+    for sku, total_cost, total_landed_cost in rows:
+        # M2.1.5: prefer the authoritative landed cost, fall back to legacy.
+        unit = total_landed_cost if total_landed_cost and total_landed_cost > 0 else total_cost
+        latest.setdefault(sku, unit)
 
     total = ZERO
     details: dict[str, str] = {}

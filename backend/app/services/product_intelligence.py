@@ -26,13 +26,19 @@ from app.models.product_intelligence import (
     ProductAnalysisRun,
     ProductCostSnapshot,
     ProductDecision,
+    ProductExperiment,
     ProductScore,
+    ProductScoreEvidence,
     ProductSource,
+    SourcingCandidate,
 )
 from app.models.supplier import Supplier
 from app.schemas.product_intelligence import (
+    ExperimentCompleteRequest,
+    ExperimentStartRequest,
     ProductIntakeRequest,
     ProductIntakeResult,
+    SourcingCandidateCreate,
 )
 from app.services import event_service, rule_engine
 from app.services.profit_engine import (
@@ -217,7 +223,9 @@ async def analyze_product(
 ) -> ScoreContext:
     """Run the deterministic chain: Cost -> Logistics -> Profit -> Rules -> Score.
 
-    Persists a ``product_scores`` row and a ``product_analysis_runs`` audit row.
+    Persists a ``product_scores`` row, per-dimension evidence rows
+    (``product_score_evidences``) and a ``product_analysis_runs`` audit row.
+    The cost basis is the M2.1.5 landed cost model.
     """
     started = time.perf_counter()
     product = (
@@ -232,7 +240,7 @@ async def analyze_product(
         raise ProductIntelligenceError("product not found")
 
     cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
-    total_cost = cost.total_cost if cost else ZERO
+    total_cost = _landed_cost(cost)
     cost_status = "KNOWN" if total_cost > ZERO else "UNKNOWN"
 
     effective_weight = _effective_weight_kg(product.weight_kg, product.dimensions)
@@ -317,6 +325,20 @@ async def analyze_product(
         trace_id=trace_id,
     )
     session.add(score)
+    await session.flush()
+
+    # Per-dimension evidence rows (score / source / evidence / confidence).
+    _write_score_evidences(
+        session,
+        workspace_id=workspace_id,
+        score_id=score.id,
+        dimensions=dimensions,
+        margin_rate=margin_rate,
+        price=price,
+        effective_weight=effective_weight,
+        cost_status=cost_status,
+        trace_id=trace_id,
+    )
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     run = ProductAnalysisRun(
@@ -327,7 +349,8 @@ async def analyze_product(
         prompt_version=None,
         input_snapshot={
             "product_id": str(product_id),
-            "total_cost": str(total_cost),
+            "total_landed_cost": str(total_cost),
+            "total_cost": str(cost.total_cost) if cost else str(ZERO),
             "cost_status": cost_status,
             "weight_kg": str(effective_weight) if effective_weight is not None else None,
             "dimensions": product.dimensions,
@@ -381,11 +404,93 @@ async def analyze_product(
     )
 
 
+def _landed_cost(cost: ProductCost | None) -> Decimal:
+    """Authoritative landed cost; falls back to the legacy total."""
+    if cost is None:
+        return ZERO
+    if cost.total_landed_cost and cost.total_landed_cost > ZERO:
+        return cost.total_landed_cost
+    return cost.total_cost
+
+
+def _evidence_confidence(cost_status: str) -> Decimal:
+    """Confidence of profit/logistics evidence by cost completeness."""
+    return {
+        "KNOWN": Decimal("0.900"),
+        "ESTIMATED": Decimal("0.600"),
+        "UNKNOWN": Decimal("0.300"),
+    }.get(cost_status, Decimal("0.300"))
+
+
+def _write_score_evidences(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    score_id: UUID,
+    dimensions: dict[str, Decimal],
+    margin_rate: Decimal | None,
+    price: Decimal | None,
+    effective_weight: Decimal | None,
+    cost_status: str,
+    trace_id: str | None,
+) -> None:
+    """Persist one evidence row per dimension (score/source/evidence/confidence)."""
+    cost_confidence = _evidence_confidence(cost_status)
+    rows: list[ProductScoreEvidence] = []
+    for dimension, score_value in dimensions.items():
+        if dimension == "profit":
+            evidence = (
+                [
+                    f"gross margin {margin_rate * 100:.1f}% at recommended price {price}",
+                    f"cost_status {cost_status}",
+                ]
+                if margin_rate is not None
+                else ["cost unknown; profit not scored"]
+            )
+            source = "landed-cost-model-v1"
+            confidence = cost_confidence
+        elif dimension == "logistics":
+            evidence = (
+                [f"effective weight {effective_weight} kg (actual/volumetric)"]
+                if effective_weight is not None
+                else ["weight missing"]
+            )
+            source = "logistics-heuristic-v1"
+            confidence = Decimal("0.800") if effective_weight is not None else Decimal("0.300")
+        else:
+            evidence = ["not computed in deterministic phase; LLM pending"]
+            source = "pending-llm"
+            confidence = Decimal("0.200")
+        rows.append(
+            ProductScoreEvidence(
+                workspace_id=workspace_id,
+                product_score_id=score_id,
+                dimension=dimension,
+                score=score_value,
+                source=source,
+                evidence=evidence,
+                confidence=confidence,
+                version="v1",
+                trace_id=trace_id,
+            )
+        )
+    session.add_all(rows)
+
+
 def _raw_data_snapshot(data: ProductIntakeRequest) -> dict:
     """Serialize intake fields to a JSON-safe raw_data dict (Decimal -> str)."""
     snapshot = data.model_dump()
-    cost_keys = ("purchase_cost", "domestic_shipping", "first_leg_shipping",
-                 "last_leg_shipping", "weight_kg")
+    cost_keys = (
+        "purchase_cost",
+        "domestic_shipping",
+        "first_leg_shipping",
+        "last_leg_shipping",
+        "international_shipping",
+        "packaging",
+        "tax_estimate",
+        "handling",
+        "weight_kg",
+    )
     for key in cost_keys:
         value = snapshot.get(key)
         if isinstance(value, Decimal):
@@ -401,46 +506,66 @@ async def _upsert_product_cost(
     data: ProductIntakeRequest,
     trace_id: str | None,
 ) -> tuple[ProductCost, Decimal, UUID]:
-    """Upsert the current cost row and append an immutable history snapshot."""
-    total_cost = (
-        data.purchase_cost
-        + data.domestic_shipping
-        + data.first_leg_shipping
-        + data.last_leg_shipping
-    )
+    """Upsert the current cost row and append an immutable history snapshot.
+
+    The authoritative cost is ``total_landed_cost`` (purchase + domestic +
+    international + packaging + tax + handling); the legacy ``total_cost`` is
+    kept for backward compatibility. Re-intake bumps the cost version.
+    """
+    international, total_landed, legacy_total = _landed_cost_breakdown(data)
     cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
     if cost is None:
         cost = ProductCost(
             workspace_id=workspace_id,
             product_id=product_id,
             currency=data.currency,
-            purchase_price=data.purchase_cost,
+            purchase_cost=data.purchase_cost,
             domestic_shipping=data.domestic_shipping,
             first_leg_shipping=data.first_leg_shipping,
             last_leg_shipping=data.last_leg_shipping,
-            total_cost=total_cost,
+            international_shipping=international,
+            packaging=data.packaging,
+            tax_estimate=data.tax_estimate,
+            handling=data.handling,
+            total_landed_cost=total_landed,
+            version="v1",
+            total_cost=legacy_total,
             valid_from=datetime.now(UTC),
         )
         session.add(cost)
         await session.flush()
+        version = "v1"
     else:
+        version = _bump_version(cost.version or "v1")
         cost.currency = data.currency
-        cost.purchase_price = data.purchase_cost
+        cost.purchase_cost = data.purchase_cost
         cost.domestic_shipping = data.domestic_shipping
         cost.first_leg_shipping = data.first_leg_shipping
         cost.last_leg_shipping = data.last_leg_shipping
-        cost.total_cost = total_cost
+        cost.international_shipping = international
+        cost.packaging = data.packaging
+        cost.tax_estimate = data.tax_estimate
+        cost.handling = data.handling
+        cost.total_landed_cost = total_landed
+        cost.version = version
+        cost.total_cost = legacy_total
         cost.valid_from = datetime.now(UTC)
 
     snapshot = ProductCostSnapshot(
         workspace_id=workspace_id,
         product_id=product_id,
         currency=data.currency,
-        purchase_price=data.purchase_cost,
+        purchase_cost=data.purchase_cost,
         domestic_shipping=data.domestic_shipping,
         first_leg_shipping=data.first_leg_shipping,
         last_leg_shipping=data.last_leg_shipping,
-        total_cost=total_cost,
+        international_shipping=international,
+        packaging=data.packaging,
+        tax_estimate=data.tax_estimate,
+        handling=data.handling,
+        total_landed_cost=total_landed,
+        version=version,
+        total_cost=legacy_total,
         weight_kg=data.weight_kg,
         source="intake",
         valid_from=datetime.now(UTC),
@@ -448,7 +573,48 @@ async def _upsert_product_cost(
     )
     session.add(snapshot)
     await session.flush()
-    return cost, total_cost, snapshot.id
+    return cost, total_landed, snapshot.id
+
+
+def _landed_cost_breakdown(
+    data: ProductIntakeRequest,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Compute landed cost fields from intake data.
+
+    Returns ``(international_shipping, total_landed_cost, legacy_total)``.
+    ``international_shipping`` defaults to first_leg + last_leg when not
+    provided, so M2.1 data maps cleanly onto the new model.
+    """
+    international = data.international_shipping
+    if international is None:
+        international = data.first_leg_shipping + data.last_leg_shipping
+    total_landed = (
+        data.purchase_cost
+        + data.domestic_shipping
+        + international
+        + data.packaging
+        + data.tax_estimate
+        + data.handling
+    )
+    legacy_total = (
+        data.purchase_cost
+        + data.domestic_shipping
+        + data.first_leg_shipping
+        + data.last_leg_shipping
+    )
+    return international, total_landed, legacy_total
+
+
+def _bump_version(version: str) -> str:
+    """Increment a ``vN`` version string (v1 -> v2)."""
+    try:
+        number = int(version.removeprefix("v"))
+    except ValueError:
+        return "v2"
+    return f"v{number + 1}"
+
+
+
 
 
 async def intake_product(
@@ -545,7 +711,7 @@ async def intake_product(
         payload={
             "sku": sku,
             "source_type": data.source_type,
-            "total_cost": str(total_cost),
+            "total_landed_cost": str(total_cost),
             "score": str(score.total),
         },
         trace_id=trace_id,
@@ -593,7 +759,7 @@ async def propose_decision(
         raise ProductIntelligenceError("product has no score; run analysis first")
 
     cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
-    total_cost = cost.total_cost if cost else ZERO
+    total_cost = _landed_cost(cost)
     cost_status = "KNOWN" if total_cost > ZERO else "UNKNOWN"
     price = _recommended_price(total_cost)
 
@@ -851,3 +1017,308 @@ async def latest_decision(
             .order_by(ProductDecision.created_at.desc())
         )
     ).scalars().first()
+
+
+# --------------------------------------------------------------------------- #
+# M2.1.5: sourcing candidates, score evidence, product experiments
+# --------------------------------------------------------------------------- #
+
+
+async def create_sourcing_candidate(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    data: SourcingCandidateCreate,
+    trace_id: str | None = None,
+) -> SourcingCandidate:
+    """Register a supplier candidate for a product (one product, many quotes)."""
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise ProductIntelligenceError("product not found")
+
+    supplier_id: UUID | None = None
+    if data.supplier_code:
+        supplier = (
+            await session.execute(
+                select(Supplier.id).where(
+                    Supplier.workspace_id == workspace_id,
+                    Supplier.code == data.supplier_code,
+                )
+            )
+        ).scalar_one_or_none()
+        if supplier is None:
+            raise ProductIntelligenceError(
+                f"supplier_code '{data.supplier_code}' not found"
+            )
+        supplier_id = supplier
+
+    candidate = SourcingCandidate(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        supplier_id=supplier_id,
+        supplier_code=data.supplier_code,
+        source_type=data.source_type,
+        source_url=data.source_url,
+        title=data.title,
+        status="active",
+        purchase_price=data.purchase_price,
+        moq=data.moq,
+        lead_time_days=data.lead_time_days,
+        trend_score=data.trend_score,
+        profit_model=data.profit_model,
+        notes=data.notes,
+        version="v1",
+        trace_id=trace_id,
+    )
+    session.add(candidate)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.added",
+        entity_type="product",
+        entity_id=str(product_id),
+        payload={
+            "candidate_id": str(candidate.id),
+            "supplier_code": data.supplier_code,
+            "purchase_price": str(data.purchase_price),
+        },
+        trace_id=trace_id,
+    )
+    return candidate
+
+
+async def list_sourcing_candidates(
+    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
+) -> list[SourcingCandidate]:
+    """List supplier candidates for a product, newest first."""
+    rows = (
+        await session.execute(
+            select(SourcingCandidate)
+            .where(
+                SourcingCandidate.workspace_id == workspace_id,
+                SourcingCandidate.product_id == product_id,
+            )
+            .order_by(SourcingCandidate.created_at.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def list_score_evidences(
+    session: AsyncSession, *, workspace_id: UUID, score_id: UUID
+) -> list[ProductScoreEvidence]:
+    """Return the per-dimension evidence rows of a score."""
+    rows = (
+        await session.execute(
+            select(ProductScoreEvidence)
+            .where(
+                ProductScoreEvidence.workspace_id == workspace_id,
+                ProductScoreEvidence.product_score_id == score_id,
+            )
+            .order_by(ProductScoreEvidence.dimension)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def propose_experiment(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    trace_id: str | None = None,
+) -> ProductExperiment:
+    """Propose a testing-loop experiment from the latest score/decision.
+
+    ``prediction`` is captured deterministically so the experiment can be
+    compared against actual results for model calibration.
+    """
+    score = await latest_score(session, workspace_id=workspace_id, product_id=product_id)
+    if score is None:
+        raise ProductIntelligenceError("product has no score; run analysis first")
+    decision = await latest_decision(
+        session, workspace_id=workspace_id, product_id=product_id
+    )
+    cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
+    total_cost = _landed_cost(cost)
+
+    prediction = {
+        "score_total": str(score.total),
+        "model_version": score.model_version,
+        "rule_version": score.rule_version,
+        "recommended_price": (
+            str(decision.recommended_price) if decision and decision.recommended_price else None
+        ),
+        "max_cac": str(decision.max_cac) if decision and decision.max_cac else None,
+        "test_quantity": decision.test_quantity if decision else None,
+        "test_days": decision.test_days if decision else None,
+        "predicted_decision": decision.decision if decision else None,
+        "landed_cost": str(total_cost),
+    }
+    experiment = ProductExperiment(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        experiment_type="market_test",
+        status="proposed",
+        prediction=prediction,
+        version="v1",
+        trace_id=trace_id,
+    )
+    session.add(experiment)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.experiment.proposed",
+        entity_type="product",
+        entity_id=str(product_id),
+        payload={"experiment_id": str(experiment.id), "status": "proposed"},
+        trace_id=trace_id,
+    )
+    return experiment
+
+
+async def start_experiment(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    experiment_id: UUID,
+    data: ExperimentStartRequest,
+    trace_id: str | None = None,
+) -> ProductExperiment:
+    """Activate an experiment with the executed test plan."""
+    experiment = await _load_experiment(
+        session, workspace_id=workspace_id, experiment_id=experiment_id
+    )
+    if experiment is None:
+        raise ProductIntelligenceError("experiment not found")
+    if experiment.status != "proposed":
+        raise ProductIntelligenceError("experiment is not proposed")
+    experiment.status = "active"
+    experiment.experiment = {
+        "quantity": data.quantity,
+        "channels": data.channels,
+        "budget": str(data.budget),
+        "targets": data.targets,
+        "started_at": (
+            data.started_at.isoformat() if data.started_at else datetime.now(UTC).isoformat()
+        ),
+    }
+    experiment.updated_at = datetime.now(UTC)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.experiment.started",
+        entity_type="product",
+        entity_id=str(experiment.product_id),
+        payload={"experiment_id": str(experiment.id), "status": "active"},
+        trace_id=trace_id,
+    )
+    return experiment
+
+
+async def complete_experiment(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    experiment_id: UUID,
+    data: ExperimentCompleteRequest,
+    trace_id: str | None = None,
+) -> ProductExperiment:
+    """Complete an experiment with measured results and compute calibration."""
+    experiment = await _load_experiment(
+        session, workspace_id=workspace_id, experiment_id=experiment_id
+    )
+    if experiment is None:
+        raise ProductIntelligenceError("experiment not found")
+    if experiment.status != "active":
+        raise ProductIntelligenceError("experiment is not active")
+    experiment.status = "completed"
+    experiment.actual_result = {
+        "units_sold": data.units_sold,
+        "revenue": str(data.revenue),
+        "orders": data.orders,
+        "conversion_rate": str(data.conversion_rate) if data.conversion_rate is not None else None,
+        "roas": str(data.roas) if data.roas is not None else None,
+        "return_rate": str(data.return_rate) if data.return_rate is not None else None,
+        "margin_rate": str(data.margin_rate) if data.margin_rate is not None else None,
+        "completed_at": (
+            data.completed_at.isoformat()
+            if data.completed_at
+            else datetime.now(UTC).isoformat()
+        ),
+    }
+    expectations = dict(experiment.prediction)
+    expectations.update(experiment.experiment.get("targets", {}))
+    experiment.calibration = _compute_calibration(
+        expectations, experiment.actual_result
+    )
+    experiment.updated_at = datetime.now(UTC)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.experiment.completed",
+        entity_type="product",
+        entity_id=str(experiment.product_id),
+        payload={"experiment_id": str(experiment.id), "status": "completed"},
+        trace_id=trace_id,
+    )
+    logger.info("experiment %s completed trace=%s", experiment_id, trace_id)
+    return experiment
+
+
+async def list_experiments(
+    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
+) -> list[ProductExperiment]:
+    """List experiments for a product, newest first."""
+    rows = (
+        await session.execute(
+            select(ProductExperiment)
+            .where(
+                ProductExperiment.workspace_id == workspace_id,
+                ProductExperiment.product_id == product_id,
+            )
+            .order_by(ProductExperiment.created_at.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def _load_experiment(
+    session: AsyncSession, *, workspace_id: UUID, experiment_id: UUID
+) -> ProductExperiment | None:
+    return (
+        await session.execute(
+            select(ProductExperiment).where(
+                ProductExperiment.workspace_id == workspace_id,
+                ProductExperiment.id == experiment_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _compute_calibration(prediction: dict, actual: dict) -> dict:
+    """Deterministic prediction-vs-actual deltas for shared numeric keys."""
+    deltas: dict[str, str] = {}
+    for key in ("conversion_rate", "roas", "return_rate", "margin_rate"):
+        predicted = prediction.get(key)
+        measured = actual.get(key)
+        if predicted is None or measured is None:
+            continue
+        try:
+            delta = Decimal(str(measured)) - Decimal(str(predicted))
+        except (TypeError, ValueError):
+            continue
+        deltas[key] = str(delta.quantize(Decimal("0.0001")))
+    return deltas

@@ -27,6 +27,10 @@ class ProductIntakeRequest(BaseModel):
     domestic_shipping: Decimal = Field(default=Decimal("0"), ge=0)
     first_leg_shipping: Decimal = Field(default=Decimal("0"), ge=0)
     last_leg_shipping: Decimal = Field(default=Decimal("0"), ge=0)
+    international_shipping: Decimal | None = Field(default=None, ge=0)
+    packaging: Decimal = Field(default=Decimal("0"), ge=0)
+    tax_estimate: Decimal = Field(default=Decimal("0"), ge=0)
+    handling: Decimal = Field(default=Decimal("0"), ge=0)
     weight_kg: Decimal | None = Field(default=None, gt=0)
     dimensions: dict[str, Any] | None = None
     target_market: str = Field(default="US", max_length=16)
@@ -91,10 +95,16 @@ class ProductCostSnapshotOut(BaseModel):
     id: UUID
     product_id: UUID
     currency: str
-    purchase_price: Decimal
+    purchase_cost: Decimal
     domestic_shipping: Decimal
     first_leg_shipping: Decimal
     last_leg_shipping: Decimal
+    international_shipping: Decimal
+    packaging: Decimal
+    tax_estimate: Decimal
+    handling: Decimal
+    total_landed_cost: Decimal
+    version: str
     payment_fee: Decimal
     marketing_amortization: Decimal
     after_sales_loss: Decimal
@@ -102,6 +112,23 @@ class ProductCostSnapshotOut(BaseModel):
     weight_kg: Decimal | None
     source: str
     valid_from: datetime
+    trace_id: str | None
+    created_at: datetime
+
+
+class ProductScoreEvidenceOut(BaseModel):
+    """Per-dimension score evidence."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    product_score_id: UUID
+    dimension: str
+    score: Decimal
+    source: str
+    evidence: list[Any]
+    confidence: Decimal
+    version: str
     trace_id: str | None
     created_at: datetime
 
@@ -125,6 +152,7 @@ class ProductScoreOut(BaseModel):
     scored_at: datetime
     trace_id: str | None
     created_at: datetime
+    evidence: list[ProductScoreEvidenceOut] = Field(default_factory=list)
 
 
 class ProductAnalysisRunOut(BaseModel):
@@ -185,3 +213,93 @@ class DecisionApproveRequest(BaseModel):
 
     actor: str = Field(min_length=1, max_length=64)
     note: str | None = Field(default=None, max_length=500)
+
+
+class SourcingCandidateCreate(BaseModel):
+    """Create a supplier candidate for a product."""
+
+    supplier_code: str | None = Field(default=None, max_length=64)
+    source_type: Literal["1688", "MANUAL", "OTHER"] = "1688"
+    source_url: str | None = Field(default=None, max_length=512)
+    title: str | None = Field(default=None, max_length=255)
+    purchase_price: Decimal = Field(default=Decimal("0"), ge=0)
+    moq: int | None = Field(default=None, ge=0)
+    lead_time_days: int | None = Field(default=None, ge=0)
+    trend_score: Decimal | None = Field(default=None, ge=0, le=10)
+    profit_model: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator("source_url")
+    @classmethod
+    def _validate_source_url(cls, value: str | None) -> str | None:
+        if value and not value.startswith(("http://", "https://")):
+            raise ValueError("source_url must be an http(s) URL")
+        return value
+
+
+class SourcingCandidateOut(BaseModel):
+    """A supplier candidate as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    product_id: UUID | None
+    supplier_id: UUID | None
+    supplier_code: str | None
+    source_type: str
+    source_url: str | None
+    title: str | None
+    status: str
+    purchase_price: Decimal
+    moq: int | None
+    lead_time_days: int | None
+    trend_score: Decimal | None
+    profit_model: dict[str, Any]
+    notes: str | None
+    version: str
+    trace_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductExperimentOut(BaseModel):
+    """A product testing-loop record."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    product_id: UUID
+    experiment_type: str
+    status: str
+    prediction: dict[str, Any]
+    experiment: dict[str, Any]
+    actual_result: dict[str, Any]
+    calibration: dict[str, Any]
+    version: str
+    trace_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExperimentStartRequest(BaseModel):
+    """Start an experiment with the executed test plan."""
+
+    quantity: int = Field(default=30, ge=1)
+    channels: list[str] = Field(default_factory=list)
+    budget: Decimal = Field(default=Decimal("0"), ge=0)
+    targets: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime | None = None
+
+
+class ExperimentCompleteRequest(BaseModel):
+    """Complete an experiment with measured results."""
+
+    units_sold: int = Field(default=0, ge=0)
+    revenue: Decimal = Field(default=Decimal("0"), ge=0)
+    orders: int = Field(default=0, ge=0)
+    conversion_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    roas: Decimal | None = Field(default=None, ge=0)
+    return_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    margin_rate: Decimal | None = Field(default=None)
+    completed_at: datetime | None = None

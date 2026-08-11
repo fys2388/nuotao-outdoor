@@ -81,10 +81,18 @@ class ProductCostSnapshot(Base, CreatedAtMixin, WorkspaceMixin):
         index=True,
     )
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
-    purchase_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    purchase_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     domestic_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     first_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     last_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    international_shipping: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    packaging: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    tax_estimate: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    handling: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    total_landed_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     payment_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     marketing_amortization: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
@@ -195,3 +203,100 @@ class ProductDecision(Base, TimestampMixin, WorkspaceMixin):
     approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class SourcingCandidate(Base, TimestampMixin, WorkspaceMixin):
+    """A supplier candidate for a product (one product, many candidates).
+
+    Candidates are discovered before or during product intake (e.g. multiple
+    ?1688 offers for the same product); each carries its own quote data.
+    """
+
+    __tablename__ = "product_sourcing_candidates"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    supplier_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    supplier_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False, default="1688")
+    source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    purchase_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    moq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trend_score: Mapped[Decimal | None] = mapped_column(Numeric(4, 2), nullable=True)
+    profit_model: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_sourcing_candidates_product", "workspace_id", "product_id"),
+    )
+
+
+class ProductScoreEvidence(Base, CreatedAtMixin, WorkspaceMixin):
+    """Per-dimension score evidence for a product score row.
+
+    Each evidence entry carries score / source / evidence / confidence so
+    every dimension is explainable and auditable (docs/product_strategy.md ?6.4).
+    """
+
+    __tablename__ = "product_score_evidences"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_score_id: Mapped[Uuid] = mapped_column(
+        Uuid,
+        ForeignKey("product_scores.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False, default=0)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
+    """Product testing loop: prediction -> experiment -> actual_result.
+
+    ``prediction`` holds what the intelligence layer expected (score, decision,
+    price, targets), ``experiment`` the executed test plan, and ``actual_result``
+    the measured outcome. ``calibration`` stores prediction-vs-actual deltas
+    for scoring model calibration (docs/product_strategy.md ?6.4).
+    """
+
+    __tablename__ = "product_experiments"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    experiment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="market_test")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    experiment: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    calibration: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_product_experiments_product", "workspace_id", "product_id"),
+    )

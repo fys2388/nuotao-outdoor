@@ -8,8 +8,11 @@ from app.models.product_intelligence import (
     ProductAnalysisRun,
     ProductCostSnapshot,
     ProductDecision,
+    ProductExperiment,
     ProductScore,
+    ProductScoreEvidence,
     ProductSource,
+    SourcingCandidate,
 )
 from app.models.rule import Rule, RuleExecutionLog
 from app.models.supplier import Supplier
@@ -25,8 +28,11 @@ __all__ = [
     "ProductAnalysisRun",
     "ProductCostSnapshot",
     "ProductDecision",
+    "ProductExperiment",
     "ProductScore",
+    "ProductScoreEvidence",
     "ProductSource",
+    "SourcingCandidate",
     "Rule",
     "RuleExecutionLog",
     "Supplier",

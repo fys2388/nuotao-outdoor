@@ -196,7 +196,15 @@ flowchart LR
 3. 每次分析落 `product_analysis_runs`（provider/model/input/output/token/cost/latency/trace_id）与 `product_scores`（model_version/rule_version/scored_at）。
 4. 决策工作流：`pending → approved/rejected`，`test` 决策审批通过后产品进入 `test` 生命周期；成本历史写入 `product_cost_snapshots`（只追加，不覆盖）。
 
+**产品智能数据完整性（M2.1.5 已落地，LLM 接入前的基础完善）**
+
+1. 落地成本模型：`total_landed_cost = purchase_cost + domestic_shipping + international_shipping + packaging + tax_estimate + handling`（未显式提供国际运费时回退 `first_leg + last_leg`）；订单利润与产品利润统一优先取 `total_landed_cost`，保持 Decimal 金额体系。
+2. 供应商候选（`product_sourcing_candidates`）：一个产品支持多个供应商报价（采购价 / MOQ / 交期 / 趋势分 / 利润模型），为后续 AI 供应链比价留出结构化数据。
+3. 评分证据（`product_score_evidences`）：每个评分维度一行（score / source / evidence / confidence），使评分可解释、可审计；证据来源标注 `landed-cost-model-v1 / logistics-heuristic-v1 / pending-llm`，LLM 接入后升级为模型证据。
+4. 测试闭环（`product_experiments`）：`proposed → active → completed`，保存 prediction / experiment / actual_result，完成时自动计算 calibration（预测 vs 实际差值），用于评分模型校准。
+
 **订单履约流程（AI 供应链经理）**
+
 
 
 1. WooCommerce 新订单 Webhook → 订单服务落库。
@@ -369,12 +377,25 @@ flowchart LR
 | `product_analysis_runs` | 分析审计 | product_id, provider, model, prompt_version, input_snapshot, output, token_usage, estimated_cost, latency_ms, trace_id | 每次分析（确定性或 LLM）一行 |
 | `product_decisions` | 决策 + 审批流 | decision(test/hold/reject), score, confidence, reasons, risks, recommended_price, max_cac, test_quantity/days, approval_status(pending/approved/rejected), approved_by/at | 状态机：pending → approved/rejected |
 
+### 3.6 M2.1.5 产品数据完整性落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `product_sourcing_candidates` | 供应商候选（一产品多候选） | product_id, supplier_id/code, source_type(1688/MANUAL/OTHER), source_url, title, status, purchase_price, moq, lead_time_days, trend_score, profit_model(jsonb), version, trace_id | 候选比价数据，供 AI 供应链比价与决策 |
+| `product_score_evidences` | 评分证据（每维度一行） | product_score_id(fk), dimension, score, source, evidence(jsonb), confidence, version, trace_id | 六维评分均可解释；source 标注数据来源与版本 |
+| `product_experiments` | 产品测试闭环 | product_id, experiment_type, status(proposed/active/completed), prediction(jsonb), experiment(jsonb), actual_result(jsonb), calibration(jsonb), version, trace_id | 状态机：proposed → active → completed；完成时自动算 calibration |
+
+> 成本口径扩展（`product_cost` / `product_cost_snapshots`）：新增 `international_shipping / packaging / tax_estimate / handling / total_landed_cost / version`；`purchase_price` 重命名为 `purchase_cost`；重复录入版本自动递增，快照只追加不覆盖。
+
 ## 9. 变更记录
+
 
 
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.6 | 2026-08-11 | M2.1.5 产品智能数据完整性：落地成本模型（total_landed_cost + 分量字段、成本版本 v1→v2）、供应商候选（一产品多候选）、评分证据（每维度 score/source/evidence/confidence）、产品测试闭环（proposed→active→completed + calibration）；接入 LLM Gateway 前的数据基础 |
 
 | v0.5 | 2026-08-11 | M1.6 加固：订单查询 API（过滤/分页/排序/明细）、利润成本置信度（KNOWN/ESTIMATED/UNKNOWN + PROFIT-003 门禁）；M2.1 产品智能底座：product_sources / product_cost_snapshots / product_scores / product_analysis_runs / product_decisions、人工+CSV 录入、确定性分析链（Cost→Logistics→Profit→Rule→Score）、决策审批状态机 |
 

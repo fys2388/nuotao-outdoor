@@ -250,21 +250,26 @@ async def import_products(
                 ProductCost(
                     workspace_id=workspace_id,
                     product_id=product_id,
-                    purchase_price=data["purchase_cost"],
+                    purchase_cost=data["purchase_cost"],
                     total_cost=total_cost,
+                    total_landed_cost=total_cost,
+                    version="v1",
                     valid_from=datetime.now(UTC),
                 )
             )
         else:
-            current.purchase_price = data["purchase_cost"]
+            current.purchase_cost = data["purchase_cost"]
             current.total_cost = total_cost
+            current.total_landed_cost = total_cost
             current.valid_from = datetime.now(UTC)
         session.add(
             ProductCostSnapshot(
                 workspace_id=workspace_id,
                 product_id=product_id,
-                purchase_price=data["purchase_cost"],
+                purchase_cost=data["purchase_cost"],
                 total_cost=total_cost,
+                total_landed_cost=total_cost,
+                version="v1",
                 weight_kg=data["weight_kg"],
                 source="csv-import",
                 valid_from=datetime.now(UTC),

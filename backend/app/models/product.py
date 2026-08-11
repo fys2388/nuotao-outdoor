@@ -69,10 +69,19 @@ class ProductCost(Base, WorkspaceMixin):
         index=True,
     )
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
-    purchase_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    purchase_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     domestic_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     first_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     last_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    # M2.1.5 landed cost model (authoritative breakdown).
+    international_shipping: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    packaging: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    tax_estimate: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    handling: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    total_landed_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     payment_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     marketing_amortization: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
@@ -80,6 +89,7 @@ class ProductCost(Base, WorkspaceMixin):
     after_sales_loss: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
     )
+    # Legacy sum of the original components; kept for backward compatibility.
     total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     valid_from: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
