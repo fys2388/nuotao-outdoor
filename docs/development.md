@@ -241,3 +241,33 @@ curl "http://localhost:8000/api/v1/prompts?name=PRODUCT_ANALYST"
 - 业务门禁（PROFIT-003）：成本 `UNKNOWN` 时禁止 `test` 决策且置信度 ≤ 0.5。
 - 硬规则否决（PRODUCT 域）：校验通过后若硬规则未通过，提案强制降级为 `reject` 并记录原因。
 - Agent 权限：只读产品数据；仅写 `product_analysis_runs` + pending 决策提案；无 approve / publish / purchase 能力。
+
+### 8.5 学习闭环（M2.3）
+
+```bash
+# 置信度校准报告（按 LOW/MEDIUM/HIGH 聚合 AI 置信度 vs 实际成功率）
+curl "http://localhost:8000/api/v1/calibration/confidence-report"
+
+# 生成评分权重校准提案（确定性建议；proposed -> 人工审批 -> 版本更新）
+curl -X POST http://localhost:8000/api/v1/calibration/runs
+curl "http://localhost:8000/api/v1/calibration/runs?status=proposed"
+
+# 人工审批/拒绝（仅记录决策；规则表与评分代码永不被自动修改）
+curl -X POST http://localhost:8000/api/v1/calibration/runs/<run-uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"approved for v2"}'
+curl -X POST http://localhost:8000/api/v1/calibration/runs/<run-uuid>/reject \
+  -H "Content-Type: application/json" -d '{"actor":"owner@nuotao.example","note":"not now"}'
+
+# 产品知识记忆（success/failure 模式 + 品类洞察）
+curl -X POST http://localhost:8000/api/v1/knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"category":"headlamp","entry_type":"success_pattern","title":"Light weight wins","content":"Sub-300g headlamps convert 3x category average.","tags":["lightweight"],"source":"evaluation"}'
+curl "http://localhost:8000/api/v1/knowledge-entries?category=headlamp&entry_type=success_pattern"
+```
+
+**评估结果分类口径（product_ai_evaluations）**
+
+- `success_flag`：显式 `success` > 双方 decision 一致 > roas >= 1 > margin_rate >= 0。
+- `confidence_bucket`：LOW < 0.5；MEDIUM 0.5–0.7；HIGH > 0.7。
+- `error_type`：failure 时分类为 decision_mismatch / metric_miss / margin_miss / other。
+- 评分权重建议：六维证据置信度与实验成功的相关性（成功率高的维度加权上调后归一化至 1.00）；样本 < 3 时建议保持原权重。

@@ -109,7 +109,90 @@ class EvaluationOut(BaseModel):
     prediction: dict[str, Any]
     actual_result: dict[str, Any]
     accuracy: dict[str, Any]
+    prediction_result: str | None
+    error_type: str | None
+    confidence_bucket: str | None
+    success_flag: bool | None
+    metric_snapshot: dict[str, Any]
     human_rating: int | None
     notes: str | None
     trace_id: str | None
     created_at: datetime
+
+
+class CalibrationApproveRequest(BaseModel):
+    """Human approval/rejection of a score calibration proposal."""
+
+    actor: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ConfidenceCalibrationOut(BaseModel):
+    """One confidence calibration bucket in a report."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    bucket: str
+    sample_count: int
+    success_count: int
+    success_rate: Decimal
+    avg_confidence: Decimal
+    computed_at: datetime
+    trace_id: str | None
+    created_at: datetime
+
+
+class ScoreCalibrationRunOut(BaseModel):
+    """A score calibration run as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    status: str
+    model_version: str
+    current_weights: dict[str, Any]
+    suggested_weights: dict[str, Any]
+    input_snapshot: dict[str, Any]
+    metrics: dict[str, Any]
+    sample_size: int
+    rationale: str | None
+    approved_by: str | None
+    approved_at: datetime | None
+    trace_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeEntryCreate(BaseModel):
+    """Create a product knowledge memory entry."""
+
+    product_id: UUID | None = None
+    category: str | None = Field(default=None, max_length=64)
+    entry_type: Literal["success_pattern", "failure_pattern", "category_insight"]
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    source: str = Field(default="manual", max_length=32)
+
+
+class KnowledgeEntryOut(BaseModel):
+    """A knowledge entry as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    product_id: UUID | None
+    category: str | None
+    entry_type: str
+    title: str
+    content: str
+    tags: list[Any]
+    source: str
+    trace_id: str | None
+    created_at: datetime
+    updated_at: datetime
+

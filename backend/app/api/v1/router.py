@@ -4,8 +4,10 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     agents,
+    calibration,
     events,
     health,
+    knowledge,
     orders,
     product_intelligence,
     products,
@@ -26,3 +28,5 @@ api_router.include_router(product_intelligence.decision_router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(prompts.router)
+api_router.include_router(calibration.router)
+api_router.include_router(knowledge.router)

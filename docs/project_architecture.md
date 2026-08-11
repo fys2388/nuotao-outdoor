@@ -212,7 +212,15 @@ flowchart LR
 5. 权限边界：Agent 只读产品数据，只写 `product_analysis_runs` 与 pending 决策提案；无权 approve / publish / purchase。
 6. AI Evaluation（`product_ai_evaluations`）：prediction vs actual 确定性差值 + 人工评分，为评分模型校准提供数据闭环。
 
+**学习闭环（M2.3 已落地：从预测系统升级为可校准学习系统）**
+
+1. Prediction Calibration：`product_ai_evaluations` 扩展 `prediction_result / error_type / confidence_bucket / success_flag / metric_snapshot`，每次评估自动做结果分类（成功/失败 + 错误类型：decision_mismatch / metric_miss / margin_miss / other）。
+2. Confidence Calibration：`confidence_calibration` 按 LOW/MEDIUM/HIGH 分桶聚合 AI 置信度 vs 实测成功率，生成校准报告（样本数、成功数、成功率、平均置信度）。
+3. Score Model Calibration：`score_calibration_runs` 从历史实验 + AI 预测 + 实际结果确定性地生成六维权重调整建议；**禁止自动修改规则**，必须 `proposed → 人工审批 → 版本更新`（审批仅记录决策与建议权重，规则表与评分代码永不被自动改动）。
+4. Product Knowledge Memory：`product_knowledge_entries` 沉淀 success/failure 模式与品类洞察，支持按 category/product 查询，供未来 Agent 以经验证据为推理依据。
+
 **订单履约流程（AI 供应链经理）**
+
 
 
 
@@ -404,7 +412,17 @@ flowchart LR
 | `prompts` | Prompt 版本注册表 | prompt_id, name, version, template, variables(jsonb), status(active/inactive), description, trace_id | 唯一 (workspace_id, name, version)；模板禁止硬编码，全部走注册表 |
 | `product_ai_evaluations` | AI 预测评估 | product_id, analysis_run_id, experiment_id, prediction(jsonb), actual_result(jsonb), accuracy(jsonb), human_rating(1-5), notes, trace_id | 只追加；accuracy 为确定性差值（含嵌套扁平化 dotted keys） |
 
+### 3.8 M2.3 学习闭环落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `product_ai_evaluations`（扩展） | 预测结果分类 | prediction_result(success/failure/unknown), error_type, confidence_bucket(LOW/MEDIUM/HIGH), success_flag, metric_snapshot(jsonb) | 追加式；评估时自动分类 |
+| `confidence_calibration` | 置信度校准报告 | bucket, sample_count, success_count, success_rate, avg_confidence, computed_at | 每 workspace 每 bucket 一行（upsert） |
+| `score_calibration_runs` | 评分权重校准提案 | status(proposed/approved/rejected), model_version, current_weights, suggested_weights, input_snapshot, metrics, sample_size, rationale, approved_by/at | 状态机：proposed → approved/rejected；禁止自动改规则 |
+| `product_knowledge_entries` | 产品知识记忆 | product_id, category, entry_type(success_pattern/failure_pattern/category_insight), title, content, tags, source | 支持 category/product 查询 |
+
 ## 9. 变更记录
+
 
 
 
@@ -412,6 +430,8 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.8 | 2026-08-11 | M2.3 学习闭环：评估结果分类（prediction_result/error_type/confidence_bucket/success_flag/metric_snapshot）、置信度校准报告（confidence_calibration）、评分权重校准提案（score_calibration_runs，proposed→审批→版本更新，禁止自动改规则）、产品知识记忆（product_knowledge_entries）；顺带修复实验 targets 的 Decimal JSON 序列化 |
 
 | v0.7 | 2026-08-11 | M2.2 产品分析师 AI 层：LLM Gateway（OpenAI 主/DeepSeek 备 + 统一返回 + 成本估算）、Prompt Registry（版本管理 + 种子 v1）、Product Context Builder、Product Analyst Agent v1（Structured Output + 校验 + 审计 + 权限边界）、product_ai_evaluations（预测 vs 实际校准）；不执行任何商业动作 |
 

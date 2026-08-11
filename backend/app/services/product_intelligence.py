@@ -617,6 +617,14 @@ def _bump_version(version: str) -> str:
 
 
 
+def _json_safe_targets(targets: dict) -> dict:
+    """Make experiment target values JSON-serializable (Decimal -> str)."""
+    return {
+        key: (str(value) if isinstance(value, Decimal) else value)
+        for key, value in targets.items()
+    }
+
+
 async def intake_product(
     session: AsyncSession,
     *,
@@ -1208,7 +1216,7 @@ async def start_experiment(
         "quantity": data.quantity,
         "channels": data.channels,
         "budget": str(data.budget),
-        "targets": data.targets,
+        "targets": _json_safe_targets(data.targets),
         "started_at": (
             data.started_at.isoformat() if data.started_at else datetime.now(UTC).isoformat()
         ),

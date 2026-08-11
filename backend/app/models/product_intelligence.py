@@ -10,12 +10,14 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     Uuid,
     func,
 )
@@ -303,6 +305,12 @@ class ProductAiEvaluation(Base, CreatedAtMixin, WorkspaceMixin):
     prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     accuracy: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    # M2.3 learning-loop fields: outcome classification for calibration.
+    prediction_result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    confidence_bucket: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    success_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    metric_snapshot: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     human_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -339,3 +347,93 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     __table_args__ = (
         Index("ix_product_experiments_product", "workspace_id", "product_id"),
     )
+
+
+class ConfidenceCalibration(Base, CreatedAtMixin, WorkspaceMixin):
+    """Confidence calibration report bucket (M2.3).
+
+    Aggregates AI confidence buckets against measured success rates so the
+    team can see whether "HIGH" confidence actually correlates with success.
+    One row per bucket per workspace (upserted by the report generator).
+    """
+
+    __tablename__ = "confidence_calibration"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    bucket: Mapped[str] = mapped_column(String(8), nullable=False)  # LOW | MEDIUM | HIGH
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    success_rate: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False, default=0)
+    avg_confidence: Mapped[Decimal] = mapped_column(Numeric(6, 4), nullable=False, default=0)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "bucket", name="uq_confidence_calibration_workspace_bucket"
+        ),
+    )
+
+
+class ProductScoreCalibrationRun(Base, TimestampMixin, WorkspaceMixin):
+    """Score model calibration proposal (M2.3).
+
+    Generated deterministically from historical experiments + AI predictions +
+    actual outcomes. Proposes weight adjustments for the six scoring
+    dimensions. **Never modifies rules automatically**: the run stays
+    ``proposed`` until a human approves it, and approval only records the
+    decision + suggested weights (version update is applied by humans).
+    """
+
+    __tablename__ = "score_calibration_runs"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_weights: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    suggested_weights: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    metrics: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rationale: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ProductKnowledgeEntry(Base, TimestampMixin, WorkspaceMixin):
+    """Product knowledge memory (M2.3).
+
+    Stores success/failure patterns and category insights learned from
+    experiments and evaluations. Queryable by category and/or product so
+    future agents can ground their reasoning in accumulated evidence.
+    """
+
+    __tablename__ = "product_knowledge_entries"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    entry_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="category_insight", index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(String(4000), nullable=False)
+    tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_knowledge_entries_workspace_cat", "workspace_id", "category"),
+        Index("ix_knowledge_entries_workspace_product", "workspace_id", "product_id"),
+    )
+
