@@ -256,9 +256,9 @@ flowchart LR
 
 **供应链智能数据层（M4.1 已落地：供应链与履约数据基础，暂不开发 Supply Chain Agent、不自动采购）**
 
-1. Supplier Intelligence（`supplier_profiles`）：供应商质量/履约/风险画像（lead_time / MOQ / quality_score / on_time_rate / defect_rate / certifications / risk_level），一个供应商一份画像，`(workspace_id, supplier_id)` 唯一。
-2. Purchase Order Domain（`purchase_orders` + `purchase_order_items`）：采购生命周期 `draft → approved → ordered → received`（draft/approved 可取消），状态机校验非法转换；金额字段全部 Decimal，subtotal/total 由行项自动计算，`(workspace_id, po_number)` 唯一。
-3. Inventory Domain（`inventory_snapshots`）：按 product/location 记录 quantity/reserved/available/in_transit，`available = quantity − reserved`（显式传入时以显式值为准）；location 支持 cn-main 与海外仓扩展。
+1. Supplier Intelligence（`supplier_profiles`）：供应商质量/履约/风险画像（factory_type(factory/trading/agent) / lead_time / MOQ / quality_score / on_time_rate / defect_rate / certifications / risk_level），一个供应商一份画像，`(workspace_id, supplier_id)` 唯一。
+2. Purchase Order Domain（`purchase_orders` + `purchase_order_items`）：采购生命周期 `draft → approved → ordered → partial_received → received`（draft/approved 可取消，分批到货走 partial_received），状态机校验非法转换；金额字段全部 Decimal，subtotal/total 由行项自动计算，`(workspace_id, po_number)` 唯一。
+3. Inventory Domain（`inventory_snapshots`）：按 product/location 记录 quantity/reserved/available/in_transit，`available = quantity − reserved`（显式传入时以显式值为准）；location 固定三仓 `cn`（中国仓）/ `us`（美国仓）/ `eu`（欧洲仓），含 `snapshot_time` 盘点时间戳。
 4. Logistics Domain（`shipment_records` + `logistics_events`）：承运商/起讫地/运单号/状态/交付时效/延误原因；物流轨迹事件只追加（CASCADE 随 shipment 删除）。
 5. Supply Chain Knowledge（`supply_chain_knowledge_entries`）：五类模式记忆（supplier / logistics / delay / quality / risk_pattern），支持按 category / supplier / product 查询，供未来 Supply Chain Agent 学习。
 6. 事件集成：所有写入均走 `event_log`（supply.supplier_profile_* / supply.purchase_order_* / supply.inventory_* / supply.shipment_* / supply.logistics_event_added / supply.knowledge_created），trace_id 贯穿审计链；工作区数据隔离。
@@ -511,10 +511,10 @@ flowchart LR
 
 | 表 | 用途 | 关键字段 | 约束/说明 |
 |---|---|---|---|
-| `supplier_profiles` | 供应商智能画像 | supplier_id(fk), category, location, lead_time_days, minimum_order_qty, quality_score, on_time_rate, defect_rate, certifications(jsonb), risk_level(low/medium/high) | 唯一 (workspace_id, supplier_id)；质量/履约/风险数据供比价与准入 |
-| `purchase_orders` | 采购单 | po_number, supplier_id(fk), status(draft/approved/ordered/received/cancelled), currency, subtotal/shipping_cost/total(numeric), expected_delivery_at, received_at, notes | 唯一 (workspace_id, po_number)；状态机 draft→approved→ordered→received，draft/approved 可取消 |
+| `supplier_profiles` | 供应商智能画像 | supplier_id(fk), category, location, factory_type(factory/trading/agent), lead_time_days, minimum_order_qty, quality_score, on_time_rate, defect_rate, certifications(jsonb), risk_level(low/medium/high) | 唯一 (workspace_id, supplier_id)；质量/履约/风险数据供比价与准入 |
+| `purchase_orders` | 采购单 | po_number, supplier_id(fk), status(draft/approved/ordered/partial_received/received/cancelled), currency, subtotal/shipping_cost/total(numeric), expected_delivery_at, received_at, notes | 唯一 (workspace_id, po_number)；状态机 draft→approved→ordered→partial_received→received，draft/approved 可取消 |
 | `purchase_order_items` | 采购单行项 | purchase_order_id(fk, CASCADE), product_id(fk), sku, name, quantity, unit_cost, line_total | 金额 Decimal；subtotal/total 由行项自动计算 |
-| `inventory_snapshots` | 库存快照 | product_id(fk), location(cn-main/海外仓), quantity, reserved, available, in_transit | 唯一 (workspace_id, product_id, location)；available = quantity − reserved |
+| `inventory_snapshots` | 库存快照 | product_id(fk), location(cn/us/eu), quantity, reserved, available, in_transit, snapshot_time | 唯一 (workspace_id, product_id, location)；available = quantity − reserved；CHECK location ∈ cn/us/eu |
 | `shipment_records` | 物流发货记录 | purchase_order_id(fk), carrier, origin, destination, tracking_number, status(created/in_transit/delivered/failed/delayed), ship_date, delivery_time_days, delay_reason | 承运/轨迹/时效数据，支持 17TRACK/云途类集成 |
 | `logistics_events` | 物流轨迹事件（只追加） | shipment_id(fk, CASCADE), event_type, location, description, occurred_at | 只追加；随 shipment 级联删除 |
 | `supply_chain_knowledge_entries` | 供应链知识记忆 | supplier_id/product_id(fk), category, entry_type(supplier/logistics/delay/quality/risk_pattern), title, content, tags(jsonb), source, confidence | 支持 category/supplier/product 查询 |
@@ -526,6 +526,7 @@ flowchart LR
 
 
 | 版本 | 日期 | 变更 |
+| v0.13.1 | 2026-08-11 | M4.1 细化：supplier_profiles 增加 factory_type（工厂/贸易商/代理）；采购单新增 partial_received 分批到货状态（ordered → partial_received → received）；inventory_snapshots 增加 snapshot_time 盘点时间戳并固定三仓 location（cn/us/eu，含历史值归一化 + CHECK 约束）；新增 partial-receive 端点与 2 个测试（131 全绿） |
 | v0.13 | 2026-08-11 | M4.1 供应链智能数据层：supplier_profiles（质量/履约/风险画像）、purchase_orders + purchase_order_items（draft→approved→ordered→received 状态机 + 取消）、inventory_snapshots（available = quantity − reserved，cn-main/海外仓）、shipment_records + logistics_events（承运/轨迹/时效/延误）、supply_chain_knowledge_entries（五类模式记忆）；全部事件集成 + trace_id + 工作区隔离；不开发 Supply Chain Agent、不自动采购 |
 
 |---|--|---|

@@ -278,9 +278,29 @@ async def order_purchase_order(
 
 
 @router.post(
+    "/purchase-orders/{po_id}/partial-receive",
+    response_model=PurchaseOrderOut,
+    summary="Receive a partial batch (ordered -> partial_received)",
+)
+async def partial_receive_purchase_order(
+    po_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> PurchaseOrderOut:
+    """Move the PO to partial_received (first delivery batch arrived)."""
+    try:
+        purchase_order = await supply_chain.partial_receive_purchase_order(
+            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+        )
+    except supply_chain.SupplyChainError as exc:
+        raise _http_error(exc) from exc
+    return PurchaseOrderOut.model_validate(purchase_order)
+
+
+@router.post(
     "/purchase-orders/{po_id}/receive",
     response_model=PurchaseOrderOut,
-    summary="Receive goods (ordered -> received)",
+    summary="Receive goods (ordered/partial_received -> received)",
 )
 async def receive_purchase_order(
     po_id: UUID,

@@ -46,10 +46,12 @@ logger = logging.getLogger(__name__)
 ZERO = Decimal("0")
 
 # Allowed PO state transitions (draft/approved can be cancelled).
+# ordered -> partial_received -> received supports split deliveries.
 PO_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"approved", "cancelled"},
     "approved": {"ordered", "cancelled"},
-    "ordered": {"received"},
+    "ordered": {"partial_received", "received"},
+    "partial_received": {"received"},
     "received": set(),
     "cancelled": set(),
 }
@@ -118,6 +120,7 @@ async def create_supplier_profile(
         supplier_id=data.supplier_id,
         category=data.category,
         location=data.location,
+        factory_type=data.factory_type,
         lead_time_days=data.lead_time_days,
         minimum_order_qty=data.minimum_order_qty,
         quality_score=data.quality_score,
@@ -451,6 +454,20 @@ async def order_purchase_order(
     )
 
 
+async def partial_receive_purchase_order(
+    session: AsyncSession, *, workspace_id: UUID, po_id: UUID, trace_id: str | None = None
+) -> PurchaseOrder:
+    """ordered -> partial_received (first delivery batch arrived)."""
+    return await _transition_purchase_order(
+        session,
+        workspace_id=workspace_id,
+        po_id=po_id,
+        target="partial_received",
+        event_type="supply.purchase_order_partial_received",
+        trace_id=trace_id,
+    )
+
+
 async def receive_purchase_order(
     session: AsyncSession, *, workspace_id: UUID, po_id: UUID, trace_id: str | None = None
 ) -> PurchaseOrder:
@@ -529,6 +546,7 @@ async def create_inventory(
         reserved=data.reserved,
         available=_compute_available(data.quantity, data.reserved, data.available),
         in_transit=data.in_transit,
+        snapshot_time=data.snapshot_time,
         trace_id=trace_id,
     )
     session.add(snapshot)

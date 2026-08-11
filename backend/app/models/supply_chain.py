@@ -2,8 +2,10 @@
 
 Foundation for the future Supply Chain Agent. **No Supply Chain Agent, no
 automatic purchasing.** Purchase orders follow an explicit lifecycle
-(draft -> approved -> ordered -> received, cancellable from draft/approved);
-inventory supports CN/US warehouse locations; every write must emit an event.
+(draft -> approved -> ordered -> partial_received -> received, cancellable
+from draft/approved); inventory supports CN/US/EU warehouse locations
+(``cn`` China, ``us`` United States, ``eu`` Europe); every write must emit
+an event.
 """
 
 from datetime import datetime
@@ -12,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -20,6 +23,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,7 +39,18 @@ SUPPLY_CHAIN_ENTRY_TYPES: tuple[str, ...] = (
 )
 
 # Purchase order lifecycle states (M4.1).
-PO_STATUSES: tuple[str, ...] = ("draft", "approved", "ordered", "received", "cancelled")
+# ordered -> partial_received -> received for split deliveries.
+PO_STATUSES: tuple[str, ...] = (
+    "draft",
+    "approved",
+    "ordered",
+    "partial_received",
+    "received",
+    "cancelled",
+)
+
+# Warehouse locations (M4.1): cn China, us United States, eu Europe.
+WAREHOUSE_LOCATIONS: tuple[str, ...] = ("cn", "us", "eu")
 
 # Shipment lifecycle states (M4.1).
 SHIPMENT_STATUSES: tuple[str, ...] = ("created", "in_transit", "delivered", "failed", "delayed")
@@ -59,6 +74,7 @@ class SupplierProfile(Base, TimestampMixin, WorkspaceMixin):
     )
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     location: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    factory_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     minimum_order_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quality_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
@@ -81,8 +97,8 @@ class SupplierProfile(Base, TimestampMixin, WorkspaceMixin):
 class PurchaseOrder(Base, TimestampMixin, WorkspaceMixin):
     """Purchase order with explicit lifecycle (M4.1).
 
-    States: ``draft -> approved -> ordered -> received``; cancellable from
-    draft/approved. Monetary fields use Numeric/Decimal.
+    States: ``draft -> approved -> ordered -> partial_received -> received``;
+    cancellable from draft/approved. Monetary fields use Numeric/Decimal.
     """
 
     __tablename__ = "purchase_orders"
@@ -154,11 +170,16 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
         nullable=True,
         index=True,
     )
-    location: Mapped[str] = mapped_column(String(32), nullable=False, default="cn-main")
+    location: Mapped[str] = mapped_column(String(32), nullable=False, default="cn")
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     in_transit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
@@ -168,6 +189,7 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
             "location",
             name="uq_inventory_workspace_product_location",
         ),
+        CheckConstraint("location IN ('cn', 'us', 'eu')", name="ck_inventory_location"),
         Index("ix_inventory_workspace_location", "workspace_id", "location"),
     )
 

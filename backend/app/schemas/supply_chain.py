@@ -15,6 +15,12 @@ SUPPLY_CHAIN_ENTRY_TYPES = (
     "risk_pattern",
 )
 
+# Supplier factory types (M4.1): factory / trading company / agent.
+FACTORY_TYPES = ("factory", "trading", "agent")
+
+# Warehouse locations (M4.1): cn China, us United States, eu Europe.
+WAREHOUSE_LOCATIONS = ("cn", "us", "eu")
+
 
 class SupplierProfileCreate(BaseModel):
     """Create a supplier intelligence profile (one per supplier)."""
@@ -22,6 +28,7 @@ class SupplierProfileCreate(BaseModel):
     supplier_id: UUID
     category: str | None = Field(default=None, max_length=64)
     location: str | None = Field(default=None, max_length=128)
+    factory_type: Literal["factory", "trading", "agent"] | None = None
     lead_time_days: int | None = Field(default=None, ge=0)
     minimum_order_qty: int | None = Field(default=None, ge=0)
     quality_score: Decimal | None = Field(default=None, ge=0, le=100)
@@ -36,6 +43,7 @@ class SupplierProfileUpdate(BaseModel):
 
     category: str | None = Field(default=None, max_length=64)
     location: str | None = Field(default=None, max_length=128)
+    factory_type: Literal["factory", "trading", "agent"] | None = None
     lead_time_days: int | None = Field(default=None, ge=0)
     minimum_order_qty: int | None = Field(default=None, ge=0)
     quality_score: Decimal | None = Field(default=None, ge=0, le=100)
@@ -55,6 +63,7 @@ class SupplierProfileOut(BaseModel):
     supplier_id: UUID | None
     category: str | None
     location: str | None
+    factory_type: str | None
     lead_time_days: int | None
     minimum_order_qty: int | None
     quality_score: Decimal | None
@@ -145,11 +154,12 @@ class InventoryCreate(BaseModel):
     """Create an inventory snapshot (available defaults to quantity-reserved)."""
 
     product_id: UUID | None = None
-    location: str = Field(default="cn-main", max_length=32)
+    location: Literal["cn", "us", "eu"] = "cn"
     quantity: int = Field(default=0, ge=0)
     reserved: int = Field(default=0, ge=0)
     available: int | None = Field(default=None, ge=0)
     in_transit: int = Field(default=0, ge=0)
+    snapshot_time: datetime | None = None
 
 
 class InventoryUpdate(BaseModel):
@@ -174,6 +184,7 @@ class InventoryOut(BaseModel):
     reserved: int
     available: int
     in_transit: int
+    snapshot_time: datetime
     trace_id: str | None
     created_at: datetime
     updated_at: datetime

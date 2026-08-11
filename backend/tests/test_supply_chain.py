@@ -30,18 +30,14 @@ async def _event_types(db_session) -> set[str]:
     return set(rows)
 
 
-async def _seed_supplier(
-    db_session, workspace: UUID = WORKSPACE, code: str = "1688-demo"
-) -> UUID:
+async def _seed_supplier(db_session, workspace: UUID = WORKSPACE, code: str = "1688-demo") -> UUID:
     supplier = Supplier(workspace_id=workspace, code=code, name=f"Supplier {code}")
     db_session.add(supplier)
     await db_session.flush()
     return supplier.id
 
 
-async def _seed_product(
-    db_session, workspace: UUID = WORKSPACE, sku: str = "SC-PROD-001"
-) -> UUID:
+async def _seed_product(db_session, workspace: UUID = WORKSPACE, sku: str = "SC-PROD-001") -> UUID:
     product = Product(workspace_id=workspace, sku=sku, name=f"Product {sku}")
     db_session.add(product)
     await db_session.flush()
@@ -75,6 +71,7 @@ async def test_supplier_profile_create_and_duplicate_409(db_session, api_client)
         "supplier_id": str(supplier_id),
         "category": "camping",
         "location": "Yiwu, Zhejiang",
+        "factory_type": "factory",
         "lead_time_days": 7,
         "minimum_order_qty": 50,
         "quality_score": "88.5",
@@ -87,6 +84,7 @@ async def test_supplier_profile_create_and_duplicate_409(db_session, api_client)
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["supplier_id"] == str(supplier_id)
+    assert body["factory_type"] == "factory"
     assert body["risk_level"] == "low"
     assert "supply.supplier_profile_created" in await _event_types(db_session)
 
@@ -146,6 +144,10 @@ async def test_purchase_order_full_lifecycle(db_session, api_client) -> None:
     assert ordered.status_code == 200, ordered.text
     assert ordered.json()["status"] == "ordered"
 
+    partial = api_client.post(f"/api/v1/purchase-orders/{po_id}/partial-receive")
+    assert partial.status_code == 200, partial.text
+    assert partial.json()["status"] == "partial_received"
+
     received = api_client.post(f"/api/v1/purchase-orders/{po_id}/receive")
     assert received.status_code == 200, received.text
     assert received.json()["status"] == "received"
@@ -156,6 +158,7 @@ async def test_purchase_order_full_lifecycle(db_session, api_client) -> None:
         "supply.purchase_order_created",
         "supply.purchase_order_approved",
         "supply.purchase_order_ordered",
+        "supply.purchase_order_partial_received",
         "supply.purchase_order_received",
     ):
         assert expected in events
@@ -176,6 +179,28 @@ async def test_purchase_order_invalid_transitions(db_session, api_client) -> Non
 
     approve = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve")
     assert approve.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_purchase_order_partial_received_guardrails(db_session, api_client) -> None:
+    """From partial_received only receive is allowed (no cancel, no repeat)."""
+    po_id = await _make_po(db_session, api_client, "PO-2026-004")
+    api_client.post(f"/api/v1/purchase-orders/{po_id}/approve")
+    api_client.post(f"/api/v1/purchase-orders/{po_id}/order")
+    partial = api_client.post(f"/api/v1/purchase-orders/{po_id}/partial-receive")
+    assert partial.status_code == 200
+    assert partial.json()["status"] == "partial_received"
+
+    repeat = api_client.post(f"/api/v1/purchase-orders/{po_id}/partial-receive")
+    assert repeat.status_code == 400
+    assert "cannot transition" in repeat.json()["detail"]
+
+    cancel = api_client.post(f"/api/v1/purchase-orders/{po_id}/cancel")
+    assert cancel.status_code == 400
+
+    received = api_client.post(f"/api/v1/purchase-orders/{po_id}/receive")
+    assert received.status_code == 200
+    assert received.json()["status"] == "received"
 
 
 @pytest.mark.asyncio
@@ -205,7 +230,7 @@ async def test_inventory_calculation(db_session, api_client) -> None:
         "/api/v1/inventory-snapshots",
         json={
             "product_id": str(product_id),
-            "location": "us-west",
+            "location": "us",
             "quantity": 100,
             "reserved": 30,
         },
@@ -213,6 +238,7 @@ async def test_inventory_calculation(db_session, api_client) -> None:
     assert created.status_code == 201, created.text
     snapshot = created.json()
     assert snapshot["available"] == 70
+    assert snapshot["snapshot_time"] is not None
 
     inventory_id = snapshot["id"]
     updated = api_client.put(
@@ -238,10 +264,21 @@ async def test_inventory_calculation(db_session, api_client) -> None:
 async def test_inventory_duplicate_product_location_409(db_session, api_client) -> None:
     """One snapshot per product/location."""
     product_id = await _seed_product(db_session)
-    payload = {"product_id": str(product_id), "location": "cn-main", "quantity": 10}
+    payload = {"product_id": str(product_id), "location": "cn", "quantity": 10}
     assert api_client.post("/api/v1/inventory-snapshots", json=payload).status_code == 201
     duplicate = api_client.post("/api/v1/inventory-snapshots", json=payload)
     assert duplicate.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_inventory_invalid_location_422(db_session, api_client) -> None:
+    """Only cn/us/eu warehouse locations are accepted."""
+    product_id = await _seed_product(db_session)
+    response = api_client.post(
+        "/api/v1/inventory-snapshots",
+        json={"product_id": str(product_id), "location": "mars", "quantity": 10},
+    )
+    assert response.status_code == 422
 
 
 # --------------------------------------------------------------------------- #
@@ -367,10 +404,14 @@ async def test_event_audit_has_trace_id(db_session, api_client) -> None:
         json={"supplier_id": str(supplier_id), "risk_level": "high"},
     )
     rows = (
-        await db_session.execute(
-            select(EventLog).where(EventLog.event_type == "supply.supplier_profile_created")
+        (
+            await db_session.execute(
+                select(EventLog).where(EventLog.event_type == "supply.supplier_profile_created")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].workspace_id == WORKSPACE
     assert rows[0].entity_type == "supplier"
@@ -393,8 +434,7 @@ async def test_workspace_isolation(db_session, api_client) -> None:
         == 201
     )
     assert (
-        api_client.get("/api/v1/supplier-profiles", headers=_headers(OTHER_WORKSPACE)).json()
-        == []
+        api_client.get("/api/v1/supplier-profiles", headers=_headers(OTHER_WORKSPACE)).json() == []
     )
     cross = api_client.post(
         "/api/v1/supplier-profiles",
@@ -428,9 +468,7 @@ async def test_workspace_isolation(db_session, api_client) -> None:
         ).status_code
         == 201
     )
-    assert (
-        api_client.get("/api/v1/purchase-orders", headers=_headers(OTHER_WORKSPACE)).json() == []
-    )
+    assert api_client.get("/api/v1/purchase-orders", headers=_headers(OTHER_WORKSPACE)).json() == []
 
     assert (
         api_client.post(
