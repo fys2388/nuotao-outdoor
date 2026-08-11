@@ -228,6 +228,15 @@ flowchart LR
 5. Marketing Calibration（`marketing_calibration_runs`）：确定性发现 successful/failure patterns（成功率、平均实际 ROAS/CTR、error_type 分布、实验负向指标），生成 `proposed` 提案；**禁止自动修改营销规则**，必须人工 approve / reject。
 6. 事件集成：所有写入均走 `event_log`（marketing.campaign_evaluation.recorded / marketing.creative_analysis.recorded / marketing.knowledge.created / marketing.calibration_run_*），trace_id 贯穿审计链。
 
+**客户智能数据层（M3.3 已落地：用户认知基础，暂不开发 Customer Agent）**
+
+1. Customer Profile（`customer_profiles`）：只存非识别引用 `customer_reference_id` 与市场/行为字段（country / language / segment / tags / 订单数 / 总营收），**禁止存储姓名/邮箱/地址/电话等 PII**；`(workspace_id, customer_reference_id)` 唯一。
+2. Customer Interaction（`customer_interactions`）：email / chat / review / social 交互日志，content 不可变，仅分类字段可更新；自由 metadata 做 PII 键拦截（400 拒绝）。
+3. Review Intelligence（`product_reviews`）：平台评论（rating / content / sentiment / issue_type / keywords），content 不可变，支持按产品/平台/情绪过滤。
+4. Refund Intelligence（`refund_cases`）：退款原因/分类/金额（Decimal）/处理结果，按 category 聚合统计（case_count + total_amount），为退款模式学习提供数据。
+5. Customer Knowledge Memory（`customer_knowledge_entries`）：五类模式（purchase_pattern / pain_point / segment_pattern / refund_pattern / loyalty_pattern），支持按 category / customer / product 查询。
+6. 事件集成：所有写入均走 `event_log`（customer.profile_* / customer.interaction_* / customer.review_* / customer.refund_* / customer.knowledge_created），trace_id 贯穿审计链。
+
 **营销智能数据层（M3.1 已落地：DTC 增长数据基础）**
 
 1. 营销域（`campaigns`）：记录外部平台广告活动（meta / google / tiktok / pinterest），`(workspace_id, platform, campaign_id)` 唯一；服务层确定性派生 ctr / cpc / roas / roi（Decimal），只采集数据，不执行任何广告动作。
@@ -458,6 +467,17 @@ flowchart LR
 | `marketing_knowledge_entries` | 营销知识记忆 | campaign_id/creative_id(fk), category, entry_type(creative/copy/audience/offer/failure_pattern), title, content, tags, source, confidence | 支持 category/campaign/creative 查询 |
 | `marketing_calibration_runs` | 营销校准提案 | status(proposed/approved/rejected), model_version, input_snapshot, successful_patterns, failure_patterns, metrics, sample_size, rationale, approved_by/at | 状态机 proposed → approved/rejected；禁止自动改规则 |
 
+
+### 3.11 M3.3 客户智能落地表（已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `customer_profiles` | 非 PII 客户档案 | customer_reference_id, country, language, segment, tags(jsonb), first_order_at, total_orders, total_revenue | 唯一 (workspace_id, customer_reference_id)；无姓名/邮箱/地址等 PII 字段 |
+| `customer_interactions` | 客户交互日志（只追加） | customer_id/product_id(fk), channel(email/chat/review/social), interaction_type, content, sentiment, metadata(jsonb) | content 不可变；metadata 做 PII 键拦截 |
+| `product_reviews` | 产品评论（只追加） | product_id(fk), platform, rating(1-5), content, sentiment, issue_type, keywords(jsonb) | content 不可变；支持按产品/平台/情绪过滤 |
+| `refund_cases` | 退款智能 | order_id/product_id(fk), reason, category, amount(numeric), resolution | 金额 Decimal；按 category 聚合统计 |
+| `customer_knowledge_entries` | 客户知识记忆 | customer_id/product_id(fk), category, entry_type(purchase/pain/segment/refund/loyalty_pattern), title, content, tags, source, confidence | 支持 category/customer/product 查询 |
+
 ## 9. 变更记录
 
 
@@ -467,6 +487,8 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 
 |---|--|---|
+
+| v0.11 | 2026-08-11 | M3.3 客户智能数据层：customer_profiles（非 PII + 唯一引用）、customer_interactions（email/chat/review/social，content 不可变 + PII 拦截）、product_reviews、refund_cases（按 category 聚合统计）、customer_knowledge_entries（五类模式）；全部事件集成 + trace_id；不开发 Customer Agent、不自动客服 |
 
 | v0.10 | 2026-08-11 | M3.2 营销学习闭环：campaign_ai_evaluations（预测 vs 实测 + 确定性分类）、creative_analysis_runs（创意分析审计）、marketing_knowledge_entries（五类模式记忆）、Growth Context Builder（campaign → 完整营销上下文）、marketing_calibration_runs（成功/失败模式发现，proposed → 人工审批，禁止自动改规则）；全部事件集成 + trace_id |
 

@@ -1,6 +1,13 @@
 """ORM models package - importing it registers all models on Base.metadata."""
 
 from app.models.agent import AiAgentRun
+from app.models.customer import (
+    CustomerInteraction,
+    CustomerKnowledgeEntry,
+    CustomerProfile,
+    ProductReview,
+    RefundCase,
+)
 from app.models.event import EventLog
 from app.models.marketing import (
     Campaign,
@@ -44,6 +51,11 @@ __all__ = [
     "CreativeAsset",
     "CustomerFeedback",
     "MarketingExperiment",
+    "CustomerKnowledgeEntry",
+    "CustomerInteraction",
+    "CustomerProfile",
+    "ProductReview",
+    "RefundCase",
     "CampaignAiEvaluation",
     "CreativeAnalysisRun",
     "MarketingCalibrationRun",

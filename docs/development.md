@@ -342,3 +342,40 @@ curl -X POST http://localhost:8000/api/v1/marketing-calibration/runs/<run-uuid>/
 
 - 所有写入均走 `event_log`（`marketing.campaign_evaluation.recorded` / `marketing.creative_analysis.recorded` / `marketing.knowledge.created` / `marketing.calibration_run_*`），trace_id 贯穿审计链。
 - 边界：不开发 Growth Agent、不接真实广告平台 API、不自动投放广告；校准只产出提案，人工审批后才生效。
+
+### 8.8 客户智能（M3.3）
+
+```bash
+# 非 PII 客户档案（重复 reference id 返回 409）
+curl -X POST http://localhost:8000/api/v1/customer-profiles \
+  -H "Content-Type: application/json" \
+  -d '{"customer_reference_id":"wc-1001","country":"US","language":"en","segment":"new","total_orders":1,"total_revenue":"49.99"}'
+curl "http://localhost:8000/api/v1/customer-profiles?segment=new&country=US"
+
+# 客户交互（content 不可变；metadata 含 email/phone/name 等 PII 键会被 400 拒绝）
+curl -X POST http://localhost:8000/api/v1/customer-interactions \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"<uuid>","channel":"chat","interaction_type":"question","content":"Is it waterproof?","sentiment":"neutral","metadata":{"topic":"waterproof"}}'
+curl "http://localhost:8000/api/v1/customer-interactions?customer_id=<uuid>&channel=chat"
+
+# 产品评论（content 不可变；支持 product_id/platform/sentiment 过滤）
+curl -X POST http://localhost:8000/api/v1/product-reviews \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"amazon","rating":4,"content":"Comfortable but straps slip.","sentiment":"neutral","issue_type":"fit","keywords":["straps"]}'
+
+# 退款智能 + 按品类统计（金额 Decimal）
+curl -X POST http://localhost:8000/api/v1/refund-cases \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"<uuid>","reason":"Item arrived damaged.","category":"quality","amount":"19.99","resolution":"refunded"}'
+curl "http://localhost:8000/api/v1/refund-cases/stats"
+curl "http://localhost:8000/api/v1/refund-cases?category=quality&resolution=refunded"
+
+# 客户知识记忆（purchase/pain/segment/refund/loyalty_pattern）
+curl -X POST http://localhost:8000/api/v1/customer-knowledge-entries \
+  -H "Content-Type: application/json" \
+  -d '{"entry_type":"pain_point","category":"trekking-chair","title":"Straps slip","content":"Customers report straps slipping on rocky terrain.","confidence":0.9}'
+curl "http://localhost:8000/api/v1/customer-knowledge-entries?entry_type=pain_point&category=trekking-chair"
+```
+
+- 所有写入均走 `event_log`（`customer.profile_*` / `customer.interaction_*` / `customer.review_*` / `customer.refund_*` / `customer.knowledge_created`），trace_id 贯穿审计链。
+- 边界：不开发 Customer Agent、不自动客服；PII 策略为“非必要不存储 + 自由字段键拦截”。
