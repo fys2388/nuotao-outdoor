@@ -740,6 +740,7 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 
 
 | 版本 | 日期 | 变更 |
+| v0.22 | 2026-08-12 | M5.7 Product Analyst Real Business Validation：真实业务验证闭环（staging）；`product_validation_cases`（source CHECK staging_real/staging_synthetic，区分真实与 synthetic 数据）；experiment `result_history` 追加式 actual_result（actor + source manual/external/connector 必填，ai/predicted 拒绝，禁止覆盖历史）；dry-run 零写入（context→LLM→schema→gates）；provider 选择 + fallback 落库；calibration 样本不足显式标记（MIN=3）且永不自动改权重；rejected calibration 禁止同步 knowledge；scorecard 新增 blocked_runs / experiment_waiting_for_result / total_tokens / p95_latency / provider_fallback_rate / calibration / knowledge；ROI 无归因时保持 null（"ROI attribution unavailable"）；readiness CLI 15 项 Phase 0 检查（缺项 BLOCKED，不伪造成功）；迁移 0022；新增 23 测试 |
 | v0.20 | 2026-08-12 | M5.3 Agent Runtime 可观测性与 Exactly-Once 加固：消息级 dedup（Redis SET NX EX token，idempotency_key+attempt 稳定身份，绝不随机 UUID，fresh 阻止并发、stale 可接管支持 crash 恢复）、明确 at-least-once/effectively-once 交付语义（DB 为业务事实源，dedup 为优化）、Queue Observability（`GET /agent-queue/stats`：深度/分状态计数/age/吞吐/成功率，Redis+PG 实测）、Queue Health（`GET /agent-queue/health`：redis/stream/group/workers/pending/DLQ/长期 running，阈值 config 化）、Worker Registry/Heartbeat（Redis hash + `POST /agent-workers/heartbeat`、`GET /agent-workers`，dead 由 heartbeat 超时派生）、DLQ 只读查询（无自动 replay）、Trace 全链路查询（`GET /agent-traces/{trace_id}`，404 + JSON-safe + 时间排序）、复用 agent_metrics 不建新表、新增 agent.queue.* 审计事件；**零新增迁移（alembic head 0018）**；新增 29 测试（273 全绿） |
 | v0.19 | 2026-08-12 | M5.2.1 生产验证：真实 PostgreSQL（pgserver 嵌入 PG16）完整迁移链 0001→0018 + downgrade/upgrade 演练 + FK/UNIQUE/JSONB/Numeric/BIGINT/UUID/workspace 隔离/事务 rollback 一致性；真实 Redis Streams（XADD/XREADGROUP/XACK + consumer group + PEL crash reclaim + 延迟重试 ZSET + dead-letter + 幂等）；修复 redis-py `BLOCK 0` 永久阻塞语义陷阱（block_ms=0 不再传 BLOCK）；LLM Gateway 真实/可 mock 验证（OpenAI 主/DeepSeek 备 fallback、401 终态、双 provider 失败 dead-letter、tokens/cost/latency/provider/model 审计）；Evaluation/Calibration 统一桥 `app/services/evaluation_bridge.py`（M5 agent_evaluations ↔ M2.3 product_ai_evaluations 单一分类来源，actual 回填进入 M2.3 calibration，仅人工批准可同步知识）；agent_tasks.idempotency_key 幂等（迁移 0018，API/服务层去重不二次入队）；新增 24 集成测试（244 全绿） |
 | v0.18 | 2026-08-12 | M5.2 Product Analyst Agent（第一个业务 Agent）：注册 product_analyst（L2）+ AGENT_PRODUCT_ANALYST v1 prompt（幂等种子 ensure_product_analyst_agent），M2.2 分析管线复用接入 M5.1 worker executor（worker 按 agent 分发 executor）；Product Context JSON-safe 快照写入 agent_executions.context_snapshot；LLM Gateway（OpenAI 主/DeepSeek 备）+ M5.1 timeout/retry/budget/audit 全复用；三层校验（Pydantic schema → PROFIT-003 业务门禁 → Rule Engine hard-rule 否决强制 reject）；成功/失败全审计落库（product_analysis_runs / product_decisions pending / product_ai_evaluations prediction / ai_agent_runs / agent_executions / event_log）；worker 沿用任务 trace_id 打通全链路；无新增数据表；新增 14 测试（220 全绿） |
@@ -919,3 +920,88 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 - ROI 的 revenue/margin/roas impact 在真实归因管道建立前保持 `null`，不模拟业务收益。
 - 没有真实实验结果时，系统只完成技术闭环并明确标记 **"Pilot waiting for real business result"**。
 - 真实 LLM（OpenAI/DeepSeek）只通过 staging 手动执行验证；API key 永不进入 DB / event_log / trace / console / logs。
+
+
+
+---
+
+## 3.22 M5.7 Product Analyst Real Business Validation
+
+> 目标：让 Product Analyst 在 staging 环境完成第一条**真实业务验证闭环**：
+> 真实产品数据 → 真实 OpenAI/DeepSeek LLM → Product Analysis → Decision Proposal
+> → 人工 Approval → Experiment Proposal → 人工 Start → 真实业务结果回填
+> → Evaluation → Calibration Proposal → 人工 Approval → Knowledge → 下一次 Product Context。
+>
+> 边界：不开发第二个业务 Agent；不自动 approve / experiment start / purchase /
+> campaign / inventory / refund；不自动修改 SCORE_WEIGHTS / rules；不伪造
+> actual_result / revenue / margin / ROAS / 实验收益；synthetic 数据永不标记为真实业务数据。
+
+### 1. 阶段划分
+
+- **M5.7-A Production Readiness**：`python -m app.pilot.readiness --workspace <ws>` 输出 15 项检查
+  （alembic head / toolchain / PG / Redis / worker / scheduler / agent active / prompt /
+  execution & budget & retry policy / RBAC / SLA / audit / LLM keys）。缺失项标 `BLOCKED`，
+  不伪造成功；API key 只做存在性检查，绝不写入 DB / event_log / trace / prompt / console / logs。
+- **M5.7-B Real LLM Validation**：`python -m app.pilot.product_analyst` 支持 `--provider
+  auto|openai|deepseek`、`--dry-run`、`--trace`、`--validation-source staging_real|staging_synthetic`。
+  dry-run 只验证 `context → LLM → schema → business gates`，**零写入**；真实 run 只创建
+  pending decision，保持人工审批。
+- **M5.7-C ～ F**：决策审批 → 实验（第二人工闸门）→ 真实结果回填 → evaluation →
+  calibration（proposed → human approve/reject）→ knowledge → 第二次 context 读取。
+  缺少真实实验结果时暂停于 **"Pilot waiting for real business result"**。
+
+### 2. 新增表 / 迁移（0022）
+
+| 表 | 变更 | 说明 |
+|---|---|---|
+| product_validation_cases | 新增 | `source` CHECK 限定 `staging_real` / `staging_synthetic`，明确区分真实与 synthetic 数据 |
+| product_experiments | 新增列 | `result_history JSON`：actual_result 追加式历史，禁止覆盖历史结果 |
+
+- 复用已有：`product_analysis_runs` / `product_decisions` / `product_ai_evaluations` /
+  `agent_evaluations` / `product_knowledge_entries` / `agent_approvals` / `event_log`，不重复造表。
+
+### 3. Actual Result 来源约束（不可伪造）
+
+- `POST /api/v1/product-decisions/experiments/{id}/complete`（与 `/result` 同一实现）必须提供：
+  `actor`（人工操作者）、`source`（`manual` / `external` / `connector`）、`observed_at`（可选）。
+- `ai` / `predicted` 作为 source 一律拒绝（模型预测不能充当 actual_result）。
+- 每次回填写入 `result_history`（append-only），`actual_result` 始终为最新一次观测；
+  历史结果永不被覆盖或删除。
+- 新增事件 `agent.experiment.completed` 携带 `source` / `actor` / `observed_at`，trace_id 贯穿。
+
+### 4. 验证数据集（synthetic vs real）
+
+- `validation_dataset.register_case(workspace_id, product_id, source, run_id, trace_id, ...)`
+  仅接受 `staging_real` / `staging_synthetic`；非法 source 直接拒绝。
+- 报告 / scorecard 只统计真实来源或显式标注 synthetic；禁止把 synthetic 数据标记成真实业务数据。
+
+### 5. Calibration 样本门槛
+
+- `pilot_product_analyst.run_calibration` 返回 `insufficient_sample` / `sample_size` /
+  `minimum_required`（`calibration.MIN_CALIBRATION_SAMPLES = 3`）。
+- 样本不足时明确标记，不自动生成可审批的权重提案；SCORE_WEIGHTS / rules 永不自动修改。
+- 只有 human-approve 的 calibration 才能 `sync_calibration_to_knowledge`；rejected 永远不能。
+
+### 6. Scorecard / ROI（M5.7 扩展）
+
+- scorecard 新增：`blocked_runs`、`experiment_waiting_for_result`、`total_tokens`、
+  `p95_latency_ms`、`provider_fallback_rate`、`calibration{proposed/approved/rejected}`、
+  `knowledge{generated/approved/rejected}`。
+- ROI 的 `revenue_impact` / `margin_impact` / `roas_impact` 在无可靠归因源时保持 `null`，
+  note 固定为 **"ROI attribution unavailable: no verified business attribution source."**，
+  绝不用模型预测值冒充实际 ROI。
+
+### 7. 关键服务与入口
+
+- `app/pilot/readiness.py`：M5.7-A 15 项 Phase 0 检查。
+- `app/pilot/product_analyst.py`：`--dry-run` / `--provider` / `--trace` / `--validation-source`。
+- `app/services/validation_dataset.py`：验证数据集注册与查询。
+- `app/services/product_intelligence.py#complete_experiment`：result_history 追加式回填。
+- `app/services/pilot_product_analyst.py`：scorecard / roi / run_calibration 扩展。
+- `app/services/evaluation_bridge.py`：actual_result → `ai_evaluation` 统一分类（不复制逻辑）。
+
+### 8. 诚实边界
+
+- 真实 LLM（OpenAI/DeepSeek）只通过 staging 手动执行验证；无 key 时 readiness 输出 BLOCKED。
+- 没有真实业务结果时，M5.7 只完成 A/B（Readiness + 代码/测试/文档），状态为
+  **"Pilot waiting for real business result"**，绝不虚报已完成。

@@ -1530,6 +1530,9 @@ async def start_experiment(
     return experiment
 
 
+_EXPERIMENT_RESULT_SOURCES = frozenset({"manual", "external", "connector"})
+
+
 async def complete_experiment(
     session: AsyncSession,
     *,
@@ -1538,7 +1541,14 @@ async def complete_experiment(
     data: ExperimentCompleteRequest,
     trace_id: str | None = None,
 ) -> ProductExperiment:
-    """Complete an experiment with measured results and compute calibration."""
+    """Complete an experiment with measured results and compute calibration.
+
+    M5.7 result provenance: ``source`` must be ``manual`` / ``external`` /
+    ``connector`` (a model prediction can never be an actual_result) and
+    ``actor`` must name the human operator who backfilled the outcome.
+    The observed outcome is appended to ``result_history`` (append-only) and
+    ``actual_result`` always reflects the latest observation.
+    """
     experiment = await _load_experiment(
         session, workspace_id=workspace_id, experiment_id=experiment_id
     )
@@ -1546,8 +1556,16 @@ async def complete_experiment(
         raise ProductIntelligenceError("experiment not found")
     if experiment.status != "active":
         raise ProductIntelligenceError("experiment is not active")
-    experiment.status = "completed"
-    experiment.actual_result = {
+    if not data.source or data.source not in _EXPERIMENT_RESULT_SOURCES:
+        raise ProductIntelligenceError(
+            "source is required and must be one of manual|external|connector"
+        )
+    if not data.actor:
+        raise ProductIntelligenceError("actor is required to backfill an experiment result")
+    observed_at = (
+        data.observed_at.isoformat() if data.observed_at else datetime.now(UTC).isoformat()
+    )
+    actual = {
         "units_sold": data.units_sold,
         "revenue": str(data.revenue),
         "orders": data.orders,
@@ -1558,7 +1576,22 @@ async def complete_experiment(
         "completed_at": (
             data.completed_at.isoformat() if data.completed_at else datetime.now(UTC).isoformat()
         ),
+        "source": data.source,
+        "actor": data.actor,
+        "observed_at": observed_at,
     }
+    # Append-only history: the previous actual_result (if any) moves into the
+    # history list; the latest observation becomes actual_result. Historical
+    # results are never overwritten or deleted. The previous observation is
+    # only appended once (the last history row already mirrors it).
+    history = list(experiment.result_history or [])
+    previous = dict(experiment.actual_result or {})
+    if previous and (not history or dict(history[-1]) != previous):
+        history.append(previous)
+    history.append(actual)
+    experiment.result_history = history
+    experiment.status = "completed"
+    experiment.actual_result = actual
     expectations = dict(experiment.prediction)
     expectations.update(experiment.experiment.get("targets", {}))
     experiment.calibration = _compute_calibration(expectations, experiment.actual_result)
@@ -1570,7 +1603,13 @@ async def complete_experiment(
         event_type="product.experiment.completed",
         entity_type="product",
         entity_id=str(experiment.product_id),
-        payload={"experiment_id": str(experiment.id), "status": "completed"},
+        payload={
+            "experiment_id": str(experiment.id),
+            "status": "completed",
+            "source": data.source,
+            "actor": data.actor,
+            "observed_at": observed_at,
+        },
         trace_id=trace_id,
     )
     await event_service.create_event(
@@ -1583,6 +1622,8 @@ async def complete_experiment(
             "product_id": str(experiment.product_id),
             "decision_id": str(experiment.decision_id) if experiment.decision_id else None,
             "status": "completed",
+            "source": data.source,
+            "actor": data.actor,
         },
         trace_id=trace_id,
     )

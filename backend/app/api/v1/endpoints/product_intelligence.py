@@ -480,7 +480,7 @@ async def complete_experiment(
             workspace_id=workspace_id,
             experiment_id=experiment_id,
             data=body,
-            trace_id=get_trace_id(),
+            trace_id=body.trace_id or get_trace_id(),
         )
     except pi.ProductIntelligenceError as exc:
         raise _http_error(exc) from exc

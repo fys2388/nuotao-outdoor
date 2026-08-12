@@ -972,7 +972,181 @@ cd backend
 .venv\Scripts\python -m pytest tests/integration/test_operations_integration.py -q -s  # 真实 Redis + Worker
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
-.venv\Scripts\python -m alembic heads          # 0021 (head)
+.venv\Scripts\python -m alembic heads          # 0022 (head)
 ```
 
 真实 LLM（OpenAI/DeepSeek）验证仅在 staging 手动执行；API key 不进入 DB / event_log / trace / console / logs。没有真实实验结果时输出 "Pilot waiting for real business result"。
+
+
+---
+
+## 8.21 Product Analyst Real Business Validation（M5.7）
+
+> 目标：在 staging 完成第一条真实业务验证闭环：真实产品 → 真实 LLM → 分析 → 决策提案 → 人工审批 → 实验 → 人工启动 → 真实结果回填 → evaluation → calibration → knowledge → 第二次 context。
+> 边界：不开发第二个业务 Agent；不自动 approve / experiment start / purchase / campaign / inventory / refund；不自动修改 SCORE_WEIGHTS / rules；不伪造 actual_result / ROI；synthetic 数据永不标记为 real。
+> 真实业务结果未到位时，状态保持 **"Pilot waiting for real business result"**。
+
+### 1) 环境变量（.env / staging）
+
+```
+DATABASE_URL=postgresql+asyncpg://<user>:<pass>@localhost:5432/nuotao
+REDIS_URL=redis://localhost:6379/0
+OPENAI_API_KEY=<staging key>        # 主 provider
+DEEPSEEK_API_KEY=<staging key>       # fallback provider
+AGENT_WORKER_CONCURRENCY=4
+AGENT_ALERT_INTERVAL_SECONDS=30
+```
+
+- API key 只做存在性检查，绝不写入 DB / event_log / trace / prompt / context_snapshot / console / logs。
+- 真实 key 只在 staging 环境由运维注入；文档中不出现任何真实 key。
+
+### 2) 启动 PostgreSQL / Redis
+
+```powershell
+docker compose up -d postgres redis
+# 或本地已装服务：确认 5432 / 6379 可连
+```
+
+### 3) 启动 Worker
+
+```powershell
+cd backend
+set PYTHONPATH=%CD%
+.venv\Scripts\python -m app.worker.agent_worker --worker-id worker-1
+```
+
+### 4) 启动 Alert Scheduler（可选）
+
+```powershell
+.venv\Scripts\python -m app.tasks.alert_scheduler   # AGENT_ALERT_SCHEDULER_ENABLED=true
+```
+
+### 5) Agent Activation
+
+- 确认 `agents` 表存在 `product_analyst`（status=active），且 `AGENT_PRODUCT_ANALYST` prompt 有 active 版本。
+
+### 6) RBAC 配置
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/approval-roles -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"role_name\":\"product-ops\",\"permissions\":[\"product.decision.approve\",\"product.decision.reject\",\"experiment.start\"],\"actors\":[\"ops@nuotao.example\"]}"
+```
+
+- 无权限 actor → 403；跨 workspace → 404；Agent actor 永远不能 approve。
+
+### 7) Approval SLA
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/approval-slas -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"approval_type\":\"PRODUCT_DECISION\",\"warning_after_seconds\":3600,\"expire_after_seconds\":86400,\"enabled\":true}"
+```
+
+### 8) OpenAI / DeepSeek 配置
+
+- 通过环境变量注入（见 1）；readiness 的 `llm_keys` 项为 PASS 后再进入真实 LLM 验证。
+
+### 9) Dry-run（零写入）
+
+```powershell
+.venv\Scripts\python -m app.pilot.product_analyst --workspace <ws> --product <product_id> --dry-run --provider auto
+# 输出 DRY-RUN OK + decision/confidence/price；不创建 decision / experiment / approval / event
+```
+
+### 10) Real run（创建 pending decision）
+
+```powershell
+.venv\Scripts\python -m app.pilot.product_analyst --workspace <ws> --product <product_id> --provider auto --validation-source staging_real --trace
+# 输出 trace_id / task_id / analysis_run_id / decision_id / provider / tokens / cost / latency
+```
+
+- `--provider openai|deepseek` 固定单 provider（禁用 fallback）；`--validation-source` 只能是 `staging_real` / `staging_synthetic`。
+
+### 11) 人工审批（第一闸门）
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/product-decisions/{decision_id}/approve -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"actor\":\"ops@nuotao.example\",\"note\":\"ok\"}"
+# 或 reject；二次 approve/reject → 400
+```
+
+### 12) Experiment Proposal + Human Start（第二闸门）
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/product-decisions/{decision_id}/experiment -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"note\":\"market test\"}"
+curl -X POST http://localhost:8000/api/v1/product-decisions/experiments/{experiment_id}/start -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"quantity\":30,\"channels\":[\"meta\"],\"budget\":\"300.00\",\"targets\":{\"roas\":1.0},\"started_by\":\"ops@nuotao.example\"}"
+```
+
+- `started_by` 必须是真实 operator；Agent 永远不能 start。
+
+### 13) Result Backfill（真实结果，禁止伪造）
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/product-decisions/experiments/{experiment_id}/complete -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"units_sold\":40,\"revenue\":\"1600.00\",\"orders\":32,\"roas\":\"2.00\",\"actor\":\"ops@nuotao.example\",\"source\":\"manual\",\"observed_at\":\"2026-08-12T10:00:00Z\"}"
+```
+
+- `source` 仅允许 `manual` / `external` / `connector`；`ai` / `predicted` 拒绝（400）。
+- 每次回填追加进 `result_history`；`actual_result` 为最新一次，历史结果不可覆盖。
+
+### 14) Evaluation 回流
+
+- `complete` 自动调用 `evaluation_bridge.backfill_experiment_evaluation` → `product_ai_evaluations` + agent evaluation mirror，复用 `ai_evaluation` 统一分类，不复制逻辑。
+
+### 15) Calibration（样本不足显式标记）
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/calibration/runs -H "X-Workspace-Id: <ws>"
+# 或服务层 pilot_product_analyst.run_calibration；返回 insufficient_sample / sample_size / minimum_required
+```
+
+- `MIN_CALIBRATION_SAMPLES = 3`；样本不足不生成可审批权重提案；SCORE_WEIGHTS / rules 永不自动修改。
+
+### 16) Knowledge Approval（只有 approved calibration 才能同步）
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/calibration/runs/{run_id}/approve -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" -d "{\"actor\":\"ops@nuotao.example\",\"note\":\"approved\"}"
+# 之后 feedback_knowledge 才会生成 product_knowledge_entries（source=calibration / experiment）
+```
+
+- rejected calibration → `sync_calibration_to_knowledge` 直接报错，禁止进入 knowledge。
+
+### 17) 第二次 Context 验证
+
+```powershell
+curl -X GET "http://localhost:8000/api/v1/products/{product_id}/context" -H "X-Workspace-Id: <ws>"
+# 确认 context.knowledge 能读到刚批准的知识（success_pattern / failure_pattern / category_insight）
+```
+
+### 18) Trace 查询
+
+```powershell
+curl -X GET "http://localhost:8000/api/v1/agent-traces/{trace_id}" -H "X-Workspace-Id: <ws>"
+# Task -> Execution -> Attempts -> LLM -> Tools -> Approval -> Decision -> Evaluation -> Events
+```
+
+### 19) Scorecard 查询
+
+```powershell
+curl -X GET "http://localhost:8000/api/v1/agents/product-analyst/scorecard" -H "X-Workspace-Id: <ws>"
+curl -X GET "http://localhost:8000/api/v1/agents/product-analyst/roi" -H "X-Workspace-Id: <ws>"
+# scorecard: blocked_runs / experiment_waiting_for_result / total_tokens / p95_latency_ms / provider_fallback_rate / calibration / knowledge
+# roi: 无归因时 revenue/margin/roas impact 恒为 null + "ROI attribution unavailable"
+```
+
+### 20) 故障排查
+
+| 现象 | 处理 |
+|---|---|
+| readiness 输出 BLOCKED（llm_keys / postgres / redis） | 注入 key / 启动服务后重跑 `python -m app.pilot.readiness --workspace <ws>` |
+| complete 返回 400 source | 检查 `source` 必须是 manual/external/connector 且带 `actor` |
+| calibration 显示 insufficient_sample | 样本 < 3；补真实实验后再跑，禁止用 synthetic 充数 |
+| knowledge 未生成 | 确认 calibration 已 approve；rejected 永不生成 |
+| trace 查询 404 | 确认 trace_id 与 workspace 匹配（跨 workspace 返回 404） |
+| 真实 LLM 401 | key 无效；按 gateway 策略 401 不 fallback |
+
+### 验证命令
+
+```powershell
+cd backend
+.venv\Scripts\python -m pytest tests/test_product_analyst_validation.py -q   # M5.7（23 测试）
+.venv\Scripts\python -m pytest tests/integration/test_postgres_migrations.py -q   # 真实 PG：0022 head + downgrade drill
+.venv\Scripts\python -m ruff check .
+.venv\Scripts\python -m ruff format --check .
+.venv\Scripts\python -m alembic heads          # 0022 (head)
+```

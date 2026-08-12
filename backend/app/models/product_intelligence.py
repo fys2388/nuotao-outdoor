@@ -353,6 +353,9 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     experiment: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    result_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        AI_JSON, nullable=True, default=list
+    )
     calibration: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     source_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -362,6 +365,26 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (Index("ix_product_experiments_product", "workspace_id", "product_id"),)
+
+
+class ProductValidationCase(Base, CreatedAtMixin, WorkspaceMixin):
+    """One staging validation case (M5.7).
+
+    ``source`` explicitly distinguishes real business data (``staging_real``)
+    from synthetic fixtures (``staging_synthetic``) - synthetic rows are
+    never reported as real business results. ``run_id`` links the Product
+    Analyst run that produced the analysis; ``trace_id`` keeps the chain.
+    """
+
+    __tablename__ = "product_validation_cases"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid | None] = mapped_column(Uuid, nullable=True, index=True)
+    category: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    run_id: Mapped[Uuid | None] = mapped_column(Uuid, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 class ConfidenceCalibration(Base, CreatedAtMixin, WorkspaceMixin):

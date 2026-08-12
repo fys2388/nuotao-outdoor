@@ -131,6 +131,8 @@ async def _complete_experiment(
             roas=Decimal(roas),
             return_rate=Decimal("0.05"),
             margin_rate=Decimal("0.30"),
+            actor="tester",
+            source="manual",
         ),
     )
 

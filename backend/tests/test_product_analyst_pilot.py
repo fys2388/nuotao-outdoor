@@ -178,6 +178,8 @@ async def _complete(
         "conversion_rate": "0.031",
         "roas": "2.00",
         "margin_rate": "0.35",
+        "actor": overrides.pop("actor", "tester"),
+        "source": overrides.pop("source", "manual"),
         **overrides,
     }
     response = api_client.post(

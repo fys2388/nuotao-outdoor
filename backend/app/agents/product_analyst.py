@@ -63,11 +63,18 @@ class ProductAnalystError(Exception):
 
 @dataclass
 class ProductAnalysisResult:
-    """Outcome of one analyst run (success or failure audit)."""
+    """Outcome of one analyst run (success or failure audit).
 
-    analysis_run: ProductAnalysisRun
+    In dry-run mode (``persist=False``) ``analysis_run`` is ``None`` because
+    nothing is written to the database; ``output`` still carries the
+    validated structured result so the caller can verify the chain
+    ``context -> LLM -> schema -> business gate`` without side effects.
+    """
+
+    analysis_run: ProductAnalysisRun | None
     decision: ProductDecision | None = None
     output: ProductAnalysisOutput | None = None
+    dry_run: bool = False
 
 
 def _json_safe(value: Any) -> Any:
@@ -261,6 +268,8 @@ async def analyze_product(
     trace_id: str | None = None,
     prompt_name: str | None = None,
     re_raise_llm_errors: bool = False,
+    persist: bool = True,
+    dry_run: bool = False,
 ) -> ProductAnalysisResult:
     """Run the Product Analyst Agent v1 pipeline for a product.
 
@@ -273,6 +282,10 @@ async def analyze_product(
             the M5.2 worker passes the runtime-bound AGENT_<ID> prompt.
         re_raise_llm_errors: when True, LLM gateway errors propagate
             unwrapped so the M5.1 worker can classify and retry them.
+        persist: when False (dry-run) the pipeline validates the chain
+            context -> LLM -> schema -> business gates without writing any
+            audit/decision/approval/event rows.
+        dry_run: explicit flag recorded on the result (same as ``not persist``).
     """
     await _load_product(session, workspace_id=workspace_id, product_id=product_id)
 
@@ -330,20 +343,21 @@ async def analyze_product(
         parsed = parse_json_content(response.content)
         output = ProductAnalysisOutput.model_validate(parsed)
     except (LLMError, ValueError) as exc:
-        await _persist_failure(
-            session,
-            workspace_id=workspace_id,
-            product_id=product_id,
-            context=context,
-            error=f"invalid structured output: {exc}",
-            provider=response.provider,
-            model=response.model,
-            tokens=response.tokens,
-            cost=response.cost,
-            latency_ms=response.latency_ms,
-            prompt_version=prompt.version,
-            trace_id=trace_id,
-        )
+        if persist:
+            await _persist_failure(
+                session,
+                workspace_id=workspace_id,
+                product_id=product_id,
+                context=context,
+                error=f"invalid structured output: {exc}",
+                provider=response.provider,
+                model=response.model,
+                tokens=response.tokens,
+                cost=response.cost,
+                latency_ms=response.latency_ms,
+                prompt_version=prompt.version,
+                trace_id=trace_id,
+            )
         raise ProductAnalystError(f"invalid structured output: {exc}") from exc
 
     # Rule gate check (rules loaded from the database; deterministic veto).
@@ -363,25 +377,32 @@ async def analyze_product(
     )
     valid, failures = _validate_output(output, context=context)
     if not valid:
-        await _persist_failure(
-            session,
-            workspace_id=workspace_id,
-            product_id=product_id,
-            context=context,
-            error="; ".join(failures),
-            provider=response.provider,
-            model=response.model,
-            tokens=response.tokens,
-            cost=response.cost,
-            latency_ms=response.latency_ms,
-            prompt_version=prompt.version,
-            trace_id=trace_id,
-        )
+        if persist:
+            await _persist_failure(
+                session,
+                workspace_id=workspace_id,
+                product_id=product_id,
+                context=context,
+                error="; ".join(failures),
+                provider=response.provider,
+                model=response.model,
+                tokens=response.tokens,
+                cost=response.cost,
+                latency_ms=response.latency_ms,
+                prompt_version=prompt.version,
+                trace_id=trace_id,
+            )
         raise ProductAnalystError("output failed validation: " + "; ".join(failures))
 
     # Deterministic enforcement: a hard veto overrides the LLM decision.
     enforced_reject = vetoed and output.decision != "reject"
     decision_value = "reject" if enforced_reject else output.decision
+
+    if not persist:
+        # M5.7 dry-run: the chain context -> LLM -> schema -> business gates
+        # validated successfully; nothing is written to the database and no
+        # approval/decision/experiment is created.
+        return ProductAnalysisResult(analysis_run=None, decision=None, output=output, dry_run=True)
 
     # 5. Audit: analysis run + decision proposal + agent run + event.
     score_total = _as_decimal(context.get("score", {}).get("total"))

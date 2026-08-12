@@ -323,6 +323,8 @@ async def test_experiment_prediction_loop(db_session, api_client) -> None:
             "conversion_rate": "0.03",
             "roas": "2.50",
             "return_rate": "0.05",
+            "actor": "tester",
+            "source": "manual",
         },
     )
     assert completed.status_code == 200

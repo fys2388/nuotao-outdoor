@@ -24,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.agent_runtime import AgentRegistry, AgentTask
 from app.models.product import Product
 from app.models.product_intelligence import (
@@ -32,6 +33,7 @@ from app.models.product_intelligence import (
     ProductDecision,
     ProductExperiment,
     ProductKnowledgeEntry,
+    ProductScoreCalibrationRun,
 )
 from app.schemas.agent_runtime import TaskCreate
 from app.schemas.knowledge import KnowledgeEntryCreate
@@ -83,8 +85,13 @@ async def create_pilot_task(
     product_id: UUID,
     actor: str | None = None,
     trace_id: str | None = None,
+    task_input: dict[str, Any] | None = None,
 ) -> AgentTask:
-    """Create + enqueue one product-analysis task (never auto-approved)."""
+    """Create + enqueue one product-analysis task (never auto-approved).
+
+    ``task_input`` may add runtime hints (e.g. ``provider``) that the
+    executor forwards to the LLM Gateway; ``product_id`` is always set.
+    """
     product = (
         await session.execute(
             select(Product.id).where(
@@ -96,12 +103,15 @@ async def create_pilot_task(
     if product is None:
         raise PilotError("product not found")
     agent = await _product_analyst_agent(session, workspace_id=workspace_id)
+    resolved_input = {"product_id": str(product_id)}
+    if task_input:
+        resolved_input.update(task_input)
     task = await agent_runtime.create_task(
         session,
         workspace_id=workspace_id,
         data=TaskCreate(
             agent_id=agent.id,
-            input={"product_id": str(product_id)},
+            input=resolved_input,
             priority=3,
         ),
         trace_id=trace_id,
@@ -225,7 +235,14 @@ async def run_calibration(
         .all()
     )
     if not completed:
-        return {"confidence": [], "calibration_run": None, "skipped": True}
+        return {
+            "confidence": [],
+            "calibration_run": None,
+            "skipped": True,
+            "insufficient_sample": True,
+            "sample_size": 0,
+            "minimum_required": calibration.MIN_CALIBRATION_SAMPLES,
+        }
 
     report = await calibration.generate_confidence_report(
         session, workspace_id=workspace_id, trace_id=trace_id
@@ -246,12 +263,16 @@ async def run_calibration(
         },
         trace_id=trace_id,
     )
+    insufficient = run.sample_size < calibration.MIN_CALIBRATION_SAMPLES
     return {
         "confidence": [
             ConfidenceCalibrationOut.model_validate(row).model_dump(mode="json") for row in report
         ],
         "calibration_run": ScoreCalibrationRunOut.model_validate(run).model_dump(mode="json"),
         "skipped": False,
+        "insufficient_sample": insufficient,
+        "sample_size": run.sample_size,
+        "minimum_required": calibration.MIN_CALIBRATION_SAMPLES,
     }
 
 
@@ -449,29 +470,77 @@ async def scorecard(session: AsyncSession, *, workspace_id: UUID) -> dict[str, A
         "approved": sum(1 for e in experiments if e.status in ("approved", "ready")),
         "active": sum(1 for e in experiments if e.status == "active"),
         "completed": sum(1 for e in experiments if e.status == "completed"),
+        "waiting_for_result": sum(1 for e in experiments if e.status == "active"),
+    }
+
+    calibration_runs = (
+        (
+            await session.execute(
+                select(ProductScoreCalibrationRun).where(
+                    ProductScoreCalibrationRun.workspace_id == workspace_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    calibration_counts = {
+        "proposed": sum(1 for r in calibration_runs if r.status == "proposed"),
+        "approved": sum(1 for r in calibration_runs if r.status == "approved"),
+        "rejected": sum(1 for r in calibration_runs if r.status == "rejected"),
+    }
+
+    knowledge_rows = (
+        (
+            await session.execute(
+                select(ProductKnowledgeEntry).where(
+                    ProductKnowledgeEntry.workspace_id == workspace_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    knowledge_counts = {
+        "generated": len(knowledge_rows),
+        # Only approved calibrations may create knowledge (source="calibration").
+        "approved": sum(1 for k in knowledge_rows if k.source == "calibration"),
+        "rejected": 0,
     }
 
     avg_cost = (
         sum((row.estimated_cost or Decimal("0")) for row in runs) / len(runs) if runs else None
     )
-    avg_tokens = None
     token_rows = [row.token_usage or {} for row in runs if row.token_usage]
-    if token_rows:
-        totals = [int(t.get("total_tokens") or 0) for t in token_rows if t.get("total_tokens")]
-        avg_tokens = round(sum(totals) / len(totals)) if totals else None
+    totals = [int(t.get("total_tokens") or 0) for t in token_rows if t.get("total_tokens")]
+    total_tokens = sum(totals) if totals else 0
+    avg_tokens = round(total_tokens / len(totals)) if totals else None
     avg_latency = round(sum(row.latency_ms for row in runs) / len(runs)) if runs else None
+    latencies = sorted(row.latency_ms for row in runs)
+    p95_latency = None
+    if latencies:
+        idx = min(len(latencies) - 1, int(0.95 * len(latencies)))
+        p95_latency = latencies[idx]
+
+    llm_runs = [row for row in runs if row.provider != "deterministic"]
+    settings = get_settings()
+    fallback_provider = settings.llm_fallback_provider
+    fallback_count = sum(1 for row in llm_runs if row.provider == fallback_provider)
+    provider_fallback_rate = round(fallback_count / len(llm_runs), 4) if llm_runs else None
 
     return {
         "workspace_id": str(workspace_id),
         "analyzed_products": len(analyzed_products),
         "analysis_success": len(success_runs),
         "analysis_failed": len(failed_runs),
+        "blocked_runs": len(failed_runs),
         "decision_proposed": sum(1 for d in decisions if d.approval_status == "pending"),
         "decision_approved": len(approved),
         "decision_rejected": len(rejected),
         "experiment_proposed": experiment_counts["proposed"],
         "experiment_approved": experiment_counts["approved"],
         "experiment_completed": experiment_counts["completed"],
+        "experiment_waiting_for_result": experiment_counts["waiting_for_result"],
         "prediction_success": prediction_counts["success"],
         "prediction_failure": prediction_counts["failure"],
         "prediction_unknown": prediction_counts["unknown"],
@@ -491,11 +560,16 @@ async def scorecard(session: AsyncSession, *, workspace_id: UUID) -> dict[str, A
             }
             for bucket, stats in sorted(bucket_stats.items())
         },
+        "calibration": calibration_counts,
+        "knowledge": knowledge_counts,
         "avg_llm_cost": str(avg_cost) if avg_cost is not None else None,
+        "total_tokens": total_tokens,
         "avg_tokens": avg_tokens,
         "avg_latency_ms": avg_latency,
+        "p95_latency_ms": p95_latency,
         "retry_rate": (round(len(failed_runs) / len(runs), 4) if runs else None),
         "llm_failure_rate": (round(len(failed_runs) / len(runs), 4) if runs else None),
+        "provider_fallback_rate": provider_fallback_rate,
         "human_override_rate": (round(len(rejected) / decided, 4) if decided else None),
     }
 
@@ -560,7 +634,8 @@ async def roi(session: AsyncSession, *, workspace_id: UUID) -> dict[str, Any]:
             str(total_llm_cost / Decimal(successful)) if successful else None
         ),
         "note": (
-            "revenue/margin/roas impacts are null until a real attribution "
+            "ROI attribution unavailable: no verified business attribution source. "
+            "revenue/margin/roas impacts stay null until a real attribution "
             "pipeline links experiments to business outcomes; no figures are simulated"
         ),
     }

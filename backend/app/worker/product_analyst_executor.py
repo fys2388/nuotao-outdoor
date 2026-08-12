@@ -118,6 +118,21 @@ async def product_analyst_executor(
     """
     product_id = parse_product_id(task.input or {})
 
+    # M5.7 provider selection: a task may pin the primary provider
+    # (openai | deepseek). ``auto`` (absent) keeps the gateway default with
+    # the configured OpenAI -> DeepSeek fallback chain.
+    requested_provider = (task.input or {}).get("provider")
+    if requested_provider in ("openai", "deepseek") and gateway_complete is None:
+        from dataclasses import replace
+
+        from app.services import llm_gateway
+
+        async def _pinned_gateway(request, trace_id=None):
+            pinned = replace(request, provider=requested_provider)
+            return await llm_gateway.complete(pinned, trace_id=trace_id, allow_fallback=False)
+
+        gateway_complete = _pinned_gateway
+
     try:
         result = await product_analyst.analyze_product(
             session,

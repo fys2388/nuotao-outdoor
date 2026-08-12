@@ -280,6 +280,7 @@ class ProductExperimentOut(BaseModel):
     prediction: dict[str, Any]
     experiment: dict[str, Any]
     actual_result: dict[str, Any]
+    result_history: list[dict[str, Any]] | None = None
     calibration: dict[str, Any]
     version: str
     source_trace_id: str | None = None
@@ -307,7 +308,14 @@ class ExperimentStartRequest(BaseModel):
 
 
 class ExperimentCompleteRequest(BaseModel):
-    """Complete an experiment with measured results."""
+    """Complete an experiment with measured results (M5.7).
+
+    ``source`` must be an explicit provenance: ``manual`` (human-entered),
+    ``external`` (business platform) or ``connector`` (synced pipeline).
+    ``ai`` / ``predicted`` are rejected - a model prediction can never be
+    an actual_result. ``actor`` is the human operator who backfills the
+    outcome; ``observed_at`` is when the outcome was observed.
+    """
 
     units_sold: int = Field(default=0, ge=0)
     revenue: Decimal = Field(default=Decimal("0"), ge=0)
@@ -317,6 +325,10 @@ class ExperimentCompleteRequest(BaseModel):
     return_rate: Decimal | None = Field(default=None, ge=0, le=1)
     margin_rate: Decimal | None = Field(default=None)
     completed_at: datetime | None = None
+    actor: str | None = Field(default=None, min_length=1, max_length=64)
+    source: Literal["manual", "external", "connector"] | None = None
+    observed_at: datetime | None = None
+    trace_id: str | None = Field(default=None, max_length=64)
 
 
 # --------------------------------------------------------------------------- #
