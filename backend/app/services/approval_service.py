@@ -351,6 +351,26 @@ async def _dispatch(
             )
         else:
             raise ApprovalError(f"unsupported lifecycle action '{action}'")
+    elif approval.approval_type == "PRODUCT_DECISION":
+        from app.services import product_intelligence
+
+        decision_id = UUID(approval.entity_id)
+        if decision == APPROVAL_APPROVED:
+            await product_intelligence.approve_decision(
+                session,
+                workspace_id=approval.workspace_id,
+                decision_id=decision_id,
+                actor=actor,
+                trace_id=trace_id,
+            )
+        else:
+            await product_intelligence.reject_decision(
+                session,
+                workspace_id=approval.workspace_id,
+                decision_id=decision_id,
+                actor=actor,
+                trace_id=trace_id,
+            )
     else:  # pragma: no cover - validated on creation
         raise ApprovalError(f"unsupported approval_type '{approval.approval_type}'")
 

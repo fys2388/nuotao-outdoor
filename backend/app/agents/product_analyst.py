@@ -35,7 +35,13 @@ from app.schemas.product_analyst import (
     ProductAnalysisOutput,
     ProductAnalysisResultOut,
 )
-from app.services import event_service, llm_gateway, product_context, prompt_registry
+from app.services import (
+    approval_service,
+    event_service,
+    llm_gateway,
+    product_context,
+    prompt_registry,
+)
 from app.services.llm_gateway import LLMError, LLMRequest, parse_json_content
 
 logger = logging.getLogger(__name__)
@@ -425,6 +431,31 @@ async def analyze_product(
     )
     session.add(decision)
     await session.flush()
+
+    # M5.6 Human Approval Bridge: the agent proposal also lands in the unified
+    # Approval Center (PRODUCT_DECISION). The agent itself can never decide it.
+    await approval_service.ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="PRODUCT_DECISION",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        metadata_={
+            "product_id": str(product_id),
+            "decision": decision_value,
+            "proposed_trace_id": trace_id,
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_decision.proposed",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        payload={"product_id": str(product_id), "decision": decision_value},
+        trace_id=trace_id,
+    )
 
     agent_run = AiAgentRun(
         workspace_id=workspace_id,

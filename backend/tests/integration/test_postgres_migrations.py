@@ -1,6 +1,6 @@
 """M5.2.1 PostgreSQL production validation (real PostgreSQL 16).
 
-Runs the full Alembic chain (0001 -> 0019) against a real PostgreSQL server
+Runs the full Alembic chain (0001 -> 0021) against a real PostgreSQL server
 (embedded binaries via pgserver), drills downgrade/upgrade, and proves the
 constraints and isolation guarantees the schema relies on: FK, UNIQUE, JSONB,
 Numeric, BIGSERIAL and workspace isolation, plus transaction-rollback
@@ -63,11 +63,11 @@ async def _index_names(conn, table: str) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
-    """The full migration chain applies to real PostgreSQL and ends at 0020 (M5.5)."""
+    """The full migration chain applies to real PostgreSQL and ends at 0021 (M5.6)."""
     conn = await _connect(pg_migrated)
     try:
         version = await conn.fetchval("SELECT version_num FROM alembic_version")
-        assert version == "0020"
+        assert version == "0021"
 
         # Core brain schema tables (M1/M2)
         for table in (
@@ -85,6 +85,7 @@ async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
             "product_analysis_runs",
             "product_decisions",
             "product_ai_evaluations",
+            "product_experiments",
         ):
             assert await _table_exists(conn, table), f"missing table {table}"
 
@@ -144,8 +145,19 @@ async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> No
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0020"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0021"
         assert await _column_type(conn, "agent_tasks", "idempotency_key") == "varchar"
+        assert await _column_type(conn, "product_experiments", "decision_id") == "uuid"
+    finally:
+        await conn.close()
+
+    # Downgrade 0021 -> 0020 drops the M5.6 experiment linkage columns.
+    await asyncio.to_thread(run_alembic, pg_database_url, "downgrade", "0020")
+    conn = await _connect(pg_database_url)
+    try:
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0020"
+        assert await _column_type(conn, "product_experiments", "decision_id") is None
+        assert await _column_type(conn, "product_experiments", "hypothesis") is None
     finally:
         await conn.close()
 
@@ -181,11 +193,11 @@ async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> No
     finally:
         await conn.close()
 
-    # Upgrade back to head: everything is restored, including migration 0020.
+    # Upgrade back to head: everything is restored, including migration 0021.
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0020"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0021"
         assert await _table_exists(conn, "agents") is True
         assert await _table_exists(conn, "agent_metrics") is True
         assert await _table_exists(conn, "agent_versions") is True
@@ -223,6 +235,7 @@ async def test_postgres_constraints_types_workspace_isolation(pg_migrated: str) 
             ("agent_task_attempts", "agent_tasks"),
             ("product_cost", "products"),
             ("inventory_snapshots", "products"),
+            ("product_experiments", "product_decisions"),
         ):
             fks = await _fk_names(conn, table)
             assert fks, f"no FK on {table}"

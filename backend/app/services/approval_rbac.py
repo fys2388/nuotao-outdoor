@@ -37,6 +37,7 @@ APPROVAL_PERMISSION_PREFIX: dict[str, str] = {
     "CALIBRATION": "calibration",
     "DLQ_REPLAY": "dlq_replay",
     "AGENT_LIFECYCLE": "agent.lifecycle",
+    "PRODUCT_DECISION": "product.decision",
 }
 
 # lifecycle actions need an explicit action discriminator.

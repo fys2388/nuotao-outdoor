@@ -294,3 +294,117 @@ async def sync_calibration_to_knowledge(
         trace_id=trace_id,
     )
     return entry
+
+
+async def backfill_experiment_evaluation(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    experiment_id: UUID,
+    actual_result: dict[str, Any],
+    trace_id: str | None = None,
+):
+    """Close the experiment leg of the learning loop (M5.6).
+
+    The measured experiment outcome is appended to the M2.3 product-domain
+    evaluations (via ``ai_evaluation.record_evaluation`` with the experiment
+    link - the same shared classification helpers, never re-implemented) and
+    mirrored into the most recent M5 agent evaluation for the same product so
+    the runtime audit and the product calibration stay aligned. Original
+    evaluation rows are never deleted; the product row is append-only.
+    """
+    from app.models.product_intelligence import ProductExperiment
+    from app.schemas.product_analyst import EvaluationCreate
+
+    experiment = (
+        await session.execute(
+            select(ProductExperiment).where(
+                ProductExperiment.workspace_id == workspace_id,
+                ProductExperiment.id == experiment_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if experiment is None:
+        raise EvaluationBridgeError("experiment not found")
+
+    product_evaluation = await ai_evaluation.record_evaluation(
+        session,
+        workspace_id=workspace_id,
+        data=EvaluationCreate(
+            product_id=experiment.product_id,
+            experiment_id=experiment.id,
+            actual_result=actual_result,
+        ),
+        trace_id=trace_id,
+    )
+
+    # Mirror into the latest agent evaluation that carries this product link
+    # and has not been backfilled yet (best effort - the deterministic intake
+    # path creates no agent evaluation, that is fine).
+    agent_rows = (
+        (
+            await session.execute(
+                select(AgentEvaluation)
+                .where(AgentEvaluation.workspace_id == workspace_id)
+                .order_by(AgentEvaluation.created_at.desc())
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    mirror: AgentEvaluation | None = None
+    for row in agent_rows:
+        link = extract_product_link(row.prediction or {})
+        if (
+            link is not None
+            and link.product_id == experiment.product_id
+            and not (row.actual_result or {})
+        ):
+            mirror = row
+            break
+    if mirror is not None:
+        prediction = mirror.prediction or {}
+        accuracy = ai_evaluation.compute_accuracy(prediction, actual_result)
+        decision_match = accuracy.get("decision_match")
+        success_flag = ai_evaluation._determine_success(  # noqa: SLF001
+            prediction, actual_result, decision_match
+        )
+        mirror.actual_result = actual_result
+        mirror.accuracy = accuracy
+        mirror.prediction_result = (
+            "success" if success_flag is True else "failure" if success_flag is False else "unknown"
+        )
+        mirror.error_type = (
+            ai_evaluation._error_type(prediction, actual_result, decision_match)  # noqa: SLF001
+            if success_flag is False
+            else None
+        )
+        mirror.confidence = ai_evaluation._prediction_confidence(prediction)
+        mirror.confidence_bucket = ai_evaluation._confidence_bucket(mirror.confidence)
+        mirror.success_flag = success_flag
+        mirror.calibration = {
+            "confidence": str(mirror.confidence) if mirror.confidence is not None else None,
+            "bucket": mirror.confidence_bucket,
+            "prediction_result": mirror.prediction_result,
+            "success_flag": success_flag,
+            "sample_size": 1,
+        }
+        await session.flush()
+
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_evaluation.backfilled",
+        entity_type="product_experiment",
+        entity_id=str(experiment_id),
+        payload={
+            "product_evaluation_id": str(product_evaluation.id),
+            "agent_evaluation_id": str(mirror.id) if mirror else None,
+            "product_id": str(experiment.product_id),
+            "prediction_result": product_evaluation.prediction_result,
+            "error_type": product_evaluation.error_type,
+        },
+        trace_id=trace_id,
+    )
+    return product_evaluation

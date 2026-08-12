@@ -158,6 +158,25 @@ async def product_analyst_executor(
         trace_id=trace_id,
     )
 
+    # M5.6 pilot audit: mark the analysis leg of the chain as completed.
+    from app.services import event_service
+
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_analyst.analysis_completed",
+        entity_type="product",
+        entity_id=str(product_id),
+        payload={
+            "analysis_run_id": str(run.id),
+            "decision_proposal_id": str(result.decision.id) if result.decision else None,
+            "provider": run.provider,
+            "model": run.model,
+            "estimated_cost": str(run.estimated_cost),
+        },
+        trace_id=trace_id,
+    )
+
     return ExecutionResult(
         output=dict(run.output),
         provider=run.provider,

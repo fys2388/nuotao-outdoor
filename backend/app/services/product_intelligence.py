@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.agent_runtime import AgentRegistry
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
     ProductAnalysisRun,
@@ -40,7 +41,7 @@ from app.schemas.product_intelligence import (
     ProductIntakeResult,
     SourcingCandidateCreate,
 )
-from app.services import event_service, rule_engine
+from app.services import approval_service, event_service, rule_engine
 from app.services.profit_engine import (
     ProfitInput,
     calculate_contribution_margin,
@@ -77,6 +78,40 @@ CONFIDENCE_BY_STATUS = {
 
 class ProductIntelligenceError(Exception):
     """Raised when a product intelligence operation cannot complete."""
+
+
+class ProductDecisionActorError(Exception):
+    """Raised when a non-human actor (e.g. an agent) tries to decide a
+    product decision. Mapped to 403 by the API layer - an agent can never
+    approve or reject its own proposal."""
+
+
+# Reserved identifiers that never count as human approval actors.
+_RESERVED_AGENT_ACTORS: frozenset[str] = frozenset({"product_analyst", "agent"})
+
+
+async def _assert_human_actor(session: AsyncSession, *, workspace_id: UUID, actor: str) -> None:
+    """Reject decision attempts by agents (never a human approver)."""
+    if actor in _RESERVED_AGENT_ACTORS:
+        raise ProductDecisionActorError(
+            f"actor '{actor}' is not a human and cannot decide product decisions"
+        )
+    registered = (
+        (
+            await session.execute(
+                select(AgentRegistry.agent_id).where(
+                    AgentRegistry.workspace_id == workspace_id,
+                    AgentRegistry.agent_id == actor,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if registered is not None:
+        raise ProductDecisionActorError(
+            f"actor '{actor}' is a registered agent and cannot decide product decisions"
+        )
 
 
 @dataclass(frozen=True)
@@ -860,6 +895,30 @@ async def propose_decision(
         },
         trace_id=trace_id,
     )
+    # M5.6 Human Approval Bridge: every decision proposal also appears in the
+    # unified Approval Center (PRODUCT_DECISION type, RBAC-gated).
+    await approval_service.ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="PRODUCT_DECISION",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        metadata_={
+            "product_id": str(product_id),
+            "decision": decision_type,
+            "proposed_trace_id": trace_id,
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_decision.proposed",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        payload={"product_id": str(product_id), "decision": decision_type},
+        trace_id=trace_id,
+    )
     logger.info("product %s decision=%s proposed trace=%s", product_id, decision_type, trace_id)
     return decision
 
@@ -877,6 +936,13 @@ async def _load_decision(
     ).scalar_one_or_none()
 
 
+async def get_decision(
+    session: AsyncSession, *, workspace_id: UUID, decision_id: UUID
+) -> ProductDecision | None:
+    """Return one decision row (workspace-scoped) or None."""
+    return await _load_decision(session, workspace_id=workspace_id, decision_id=decision_id)
+
+
 async def approve_decision(
     session: AsyncSession,
     *,
@@ -885,7 +951,12 @@ async def approve_decision(
     actor: str,
     trace_id: str | None = None,
 ) -> ProductDecision:
-    """Approve a pending decision; a test decision advances the lifecycle."""
+    """Approve a pending decision; a test decision advances the lifecycle.
+
+    Only a human may decide: agents (registered ``agents`` rows or reserved
+    names) are rejected with :class:`ProductDecisionActorError`.
+    """
+    await _assert_human_actor(session, workspace_id=workspace_id, actor=actor)
     decision = await _load_decision(session, workspace_id=workspace_id, decision_id=decision_id)
     if decision is None:
         raise ProductIntelligenceError("decision not found")
@@ -919,6 +990,19 @@ async def approve_decision(
         payload={"decision": decision.decision, "approved_by": actor},
         trace_id=trace_id,
     )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_decision.approved",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        payload={
+            "product_id": str(decision.product_id),
+            "decision": decision.decision,
+            "actor": actor,
+        },
+        trace_id=trace_id,
+    )
     return decision
 
 
@@ -930,7 +1014,10 @@ async def reject_decision(
     actor: str,
     trace_id: str | None = None,
 ) -> ProductDecision:
-    """Reject a pending decision (audited, lifecycle unchanged)."""
+    """Reject a pending decision (audited, lifecycle unchanged).
+
+    Only a human may decide (see :meth:`approve_decision`)."""
+    await _assert_human_actor(session, workspace_id=workspace_id, actor=actor)
     decision = await _load_decision(session, workspace_id=workspace_id, decision_id=decision_id)
     if decision is None:
         raise ProductIntelligenceError("decision not found")
@@ -949,6 +1036,19 @@ async def reject_decision(
         entity_type="product",
         entity_id=str(decision.product_id),
         payload={"decision": decision.decision, "approved_by": actor},
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.product_decision.rejected",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        payload={
+            "product_id": str(decision.product_id),
+            "decision": decision.decision,
+            "actor": actor,
+        },
         trace_id=trace_id,
     )
     return decision
@@ -1220,6 +1320,136 @@ async def propose_experiment(
         payload={"experiment_id": str(experiment.id), "status": "proposed"},
         trace_id=trace_id,
     )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.experiment.proposed",
+        entity_type="product_experiment",
+        entity_id=str(experiment.id),
+        payload={"product_id": str(product_id), "status": "proposed"},
+        trace_id=trace_id,
+    )
+    return experiment
+
+
+async def propose_experiment_for_decision(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    decision_id: UUID,
+    trace_id: str | None = None,
+) -> ProductExperiment:
+    """Create an experiment proposal from an APPROVED product decision.
+
+    The decision approval is the first human gate; starting the experiment is
+    the second (see :meth:`start_experiment`). Idempotent per decision: an
+    existing pending/active experiment for the decision is returned as-is.
+    """
+    decision = await _load_decision(session, workspace_id=workspace_id, decision_id=decision_id)
+    if decision is None:
+        raise ProductIntelligenceError("decision not found")
+    if decision.approval_status != "approved":
+        raise ProductIntelligenceError(
+            "decision is not approved; approve it before proposing an experiment"
+        )
+
+    existing = (
+        (
+            await session.execute(
+                select(ProductExperiment).where(
+                    ProductExperiment.workspace_id == workspace_id,
+                    ProductExperiment.decision_id == decision_id,
+                    ProductExperiment.status.in_(("proposed", "approved", "ready", "active")),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    product_id = decision.product_id
+    score = await latest_score(session, workspace_id=workspace_id, product_id=product_id)
+    cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
+    total_cost = _landed_cost(cost)
+
+    prediction = {
+        "decision": decision.decision,
+        "confidence": str(decision.confidence) if decision.confidence is not None else None,
+        "score_total": str(score.total) if score else None,
+        "model_version": score.model_version if score else None,
+        "rule_version": score.rule_version if score else None,
+        "recommended_price": (
+            str(decision.recommended_price) if decision.recommended_price is not None else None
+        ),
+        "max_cac": str(decision.max_cac) if decision.max_cac is not None else None,
+        "test_quantity": decision.test_quantity,
+        "test_days": decision.test_days,
+        "landed_cost": str(total_cost),
+    }
+    expected_metrics = {
+        "target_roas": "1.0",
+        "target_margin_rate": "0.30",
+        "expected_units": decision.test_quantity,
+        "expected_days": decision.test_days,
+    }
+    hypothesis = (
+        f"Product {product_id} scores {prediction['score_total']} "
+        f"({prediction['model_version']}) with a '{decision.decision}' decision; "
+        f"expected ROAS >= 1.0 and margin rate >= 0.30 at the recommended price "
+        f"{prediction['recommended_price']}."
+    )
+
+    experiment = ProductExperiment(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        decision_id=decision_id,
+        experiment_type="market_test",
+        status="proposed",
+        hypothesis=hypothesis,
+        expected_metrics=expected_metrics,
+        baseline={"landed_cost": str(total_cost), "score_total": prediction["score_total"]},
+        target_metrics={"roas": "1.0", "margin_rate": "0.30"},
+        prediction=prediction,
+        version="v1",
+        source_trace_id=decision.trace_id,
+        trace_id=trace_id,
+    )
+    session.add(experiment)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.experiment.proposed",
+        entity_type="product",
+        entity_id=str(product_id),
+        payload={
+            "experiment_id": str(experiment.id),
+            "status": "proposed",
+            "decision_id": str(decision_id),
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.experiment.proposed",
+        entity_type="product_experiment",
+        entity_id=str(experiment.id),
+        payload={
+            "product_id": str(product_id),
+            "decision_id": str(decision_id),
+            "status": "proposed",
+        },
+        trace_id=trace_id,
+    )
+    logger.info(
+        "experiment %s proposed from decision %s trace=%s",
+        experiment.id,
+        decision_id,
+        trace_id,
+    )
     return experiment
 
 
@@ -1231,15 +1461,37 @@ async def start_experiment(
     data: ExperimentStartRequest,
     trace_id: str | None = None,
 ) -> ProductExperiment:
-    """Activate an experiment with the executed test plan."""
+    """Activate an experiment with the executed test plan.
+
+    M5.6 second human control point: an experiment spawned from an approved
+    decision can only be started by a human (``data.started_by``) and only
+    while the underlying decision stays approved. The agent has no tool to
+    call this endpoint, so the loop is always proposal -> human start.
+    """
     experiment = await _load_experiment(
         session, workspace_id=workspace_id, experiment_id=experiment_id
     )
     if experiment is None:
         raise ProductIntelligenceError("experiment not found")
-    if experiment.status != "proposed":
-        raise ProductIntelligenceError("experiment is not proposed")
+    if experiment.status not in ("proposed", "approved", "ready"):
+        raise ProductIntelligenceError("experiment is not in a startable state")
+    if experiment.decision_id is not None:
+        decision = await _load_decision(
+            session, workspace_id=workspace_id, decision_id=experiment.decision_id
+        )
+        if decision is None or decision.approval_status != "approved":
+            raise ProductIntelligenceError(
+                "experiment decision is not approved; human approval required before start"
+            )
+        if not data.started_by:
+            raise ProductIntelligenceError(
+                "starting a decision-linked experiment requires a human 'started_by' actor"
+            )
+        # M5.6 second human gate: agents (reserved names or registered rows)
+        # are never allowed to start an experiment.
+        await _assert_human_actor(session, workspace_id=workspace_id, actor=data.started_by)
     experiment.status = "active"
+    experiment.started_by = data.started_by
     experiment.experiment = {
         "quantity": data.quantity,
         "channels": data.channels,
@@ -1248,6 +1500,7 @@ async def start_experiment(
         "started_at": (
             data.started_at.isoformat() if data.started_at else datetime.now(UTC).isoformat()
         ),
+        "started_by": data.started_by,
     }
     experiment.updated_at = datetime.now(UTC)
     await session.flush()
@@ -1258,6 +1511,20 @@ async def start_experiment(
         entity_type="product",
         entity_id=str(experiment.product_id),
         payload={"experiment_id": str(experiment.id), "status": "active"},
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.experiment.started",
+        entity_type="product_experiment",
+        entity_id=str(experiment.id),
+        payload={
+            "product_id": str(experiment.product_id),
+            "decision_id": str(experiment.decision_id) if experiment.decision_id else None,
+            "status": "active",
+            "started_by": data.started_by,
+        },
         trace_id=trace_id,
     )
     return experiment
@@ -1304,6 +1571,19 @@ async def complete_experiment(
         entity_type="product",
         entity_id=str(experiment.product_id),
         payload={"experiment_id": str(experiment.id), "status": "completed"},
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.experiment.completed",
+        entity_type="product_experiment",
+        entity_id=str(experiment.id),
+        payload={
+            "product_id": str(experiment.product_id),
+            "decision_id": str(experiment.decision_id) if experiment.decision_id else None,
+            "status": "completed",
+        },
         trace_id=trace_id,
     )
     logger.info("experiment %s completed trace=%s", experiment_id, trace_id)

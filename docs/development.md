@@ -918,3 +918,61 @@ cd backend
 .venv\Scripts\python -m ruff check .           # ??
 .venv\Scripts\python -m ruff format --check .  # ??
 .venv\Scripts\python -m alembic heads          # 0020 (head)
+
+
+---
+
+## 8.20 Product Analyst Production Pilot（M5.6）
+
+> 目标：跑通真实业务闭环 pilot：真实产品 → Context Builder → Product Analyst → LLM → 结构化输出 → Hard Rules → Decision Proposal → 人工审批 → Experiment Proposal → 人工启动 → 实际结果 → Evaluation → Calibration → Knowledge → 下一轮 Context。
+> 边界：不开发新 Agent；不自动 approve / start / purchase / campaign / inventory / refund / publish；不自动修改 SCORE_WEIGHTS / Rules / Prompt active version。
+
+### 1) 运行真实 pilot（staging）
+
+```powershell
+cd backend
+set PYTHONPATH=%CD%
+.venv\Scripts\python -m app.pilot.product_analyst --workspace <workspace_id> --product <product_id>
+# 输出：task_id / trace_id / analysis_run_id / provider/model / execution_cost / latency_ms / decision_id（pending）
+# 注意：该命令绝不自动 approve；decision 必须通过 Approval Center 由人工审批。
+```
+
+或通过 API：
+
+```powershell
+curl -X POST http://localhost:8000/api/v1/agents/product-analyst/pilot ^
+  -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>" ^
+  -d "{"product_id": "<product_id>", "wait_seconds": 120, "actor": "ops@nuotao.example"}"
+```
+
+### 2) 人工审批流程（两道闸门）
+
+1. **Decision 审批**：`POST /api/v1/product-decisions/{id}/approve|reject`（需 RBAC 权限 `product.decision.approve/reject`；代理 actor → 403；二次审批 → 400）。
+2. **Experiment Proposal**：`POST /api/v1/product-decisions/{id}/experiment`（仅 approved decision 可提案；幂等）。
+3. **Human Start（第二闸门）**：`POST /api/v1/product-decisions/experiments/{id}/start` 必须带 `started_by`（人工）；代理 → 403。
+4. **Complete**：`POST /api/v1/product-decisions/experiments/{id}/complete` 写入 actual_result 并自动回流 evaluation。
+
+### 3) Evaluation / Calibration / Knowledge 回流
+
+- `complete` 后：`evaluation_bridge.backfill_experiment_evaluation` 复用 `ai_evaluation` 统一分类（success/failure/unknown、error_type、confidence_bucket、metric_snapshot），写入 `product_ai_evaluations` 并尽力镜像最近的同产品 `agent_evaluations`。
+- Calibration：`pilot_product_analyst.run_calibration` 生成 confidence report + `ProductScoreCalibrationRun`（proposed），**不自动修改权重/规则**。
+- Knowledge：只有人工 approve 的 calibration run 才允许 `sync_calibration_to_knowledge`；实验知识按 `(product, entry_type, source_trace)` 去重；knowledge 会进入下一次 Product Context（`context.knowledge`）。
+
+### 4) Scorecard / ROI
+
+- `GET /api/v1/agents/product-analyst/scorecard`：分析/决策/实验/预测统计、置信度分桶成功率、平均 LLM cost/tokens/latency、retry_rate、LLM failure_rate、human override rate（workspace 隔离，无 PII）。
+- `GET /api/v1/agents/product-analyst/roi`：真实 LLM 成本与实验数；revenue/margin/roas impact 在真实归因管道建立前为 `null`，禁止伪造。
+
+### 5) 验证
+
+```powershell
+cd backend
+.venv\Scripts\python -m pytest tests/test_product_analyst_pilot.py -q   # M5.6 pilot 闭环（25 项）
+.venv\Scripts\python -m pytest tests/integration/test_postgres_migrations.py -q   # 真实 PG upgrade/downgrade（含 0021）
+.venv\Scripts\python -m pytest tests/integration/test_operations_integration.py -q -s  # 真实 Redis + Worker
+.venv\Scripts\python -m ruff check .
+.venv\Scripts\python -m ruff format --check .
+.venv\Scripts\python -m alembic heads          # 0021 (head)
+```
+
+真实 LLM（OpenAI/DeepSeek）验证仅在 staging 手动执行；API key 不进入 DB / event_log / trace / console / logs。没有真实实验结果时输出 "Pilot waiting for real business result"。

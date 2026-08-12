@@ -15,13 +15,14 @@ from app.agents.product_analyst import ProductAnalystError
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
+from app.schemas.pilot import PilotOut, PilotRequest
 from app.schemas.product_analyst import (
     EvaluationCreate,
     EvaluationOut,
     ProductAnalysisResultOut,
 )
 from app.schemas.product_intelligence import ProductAnalysisRunOut
-from app.services import ai_evaluation
+from app.services import ai_evaluation, pilot_product_analyst
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 evaluation_router = APIRouter(prefix="/ai-evaluations", tags=["ai-evaluations"])
@@ -115,3 +116,152 @@ async def list_evaluations(
         db, workspace_id=workspace_id, product_id=product_id, limit=limit
     )
     return [EvaluationOut.model_validate(row) for row in rows]
+
+
+# --------------------------------------------------------------------------- #
+# M5.6 Production pilot: task + scorecard + ROI (no auto business actions)
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/product-analyst/pilot",
+    response_model=PilotOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a Product Analyst pilot task (never auto-approves)",
+)
+async def pilot_analysis(
+    body: PilotRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> PilotOut:
+    """Create + enqueue one product-analysis task and optionally wait.
+
+    The output contains the task/trace ids and, when waited to completion,
+    the analysis run + pending decision proposal. Approving the decision,
+    proposing and starting experiments stay human-only.
+    """
+    trace_id = get_trace_id()
+    try:
+        task = await pilot_product_analyst.create_pilot_task(
+            db,
+            workspace_id=workspace_id,
+            product_id=body.product_id,
+            actor=body.actor,
+            trace_id=trace_id,
+        )
+        await db.commit()
+        waiting = False
+        if body.wait_seconds:
+            task = await pilot_product_analyst.wait_for_task(
+                db,
+                task_id=task.id,
+                timeout_seconds=body.wait_seconds,
+            )
+            waiting = True
+    except pilot_product_analyst.PilotError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    run_id = None
+    decision_id = None
+    decision = None
+    approval_status = None
+    provider = None
+    model = None
+    cost = None
+    latency = None
+    if task.status == "completed":
+        # The run/decision are the audit facts of the chain; resolve them from
+        # the DB (task.result holds only the structured LLM output).
+        from sqlalchemy import select
+
+        from app.models.product_intelligence import (
+            ProductAnalysisRun,
+            ProductDecision,
+        )
+
+        task_trace = task.trace_id
+        run = (
+            await db.execute(
+                select(ProductAnalysisRun)
+                .where(
+                    ProductAnalysisRun.workspace_id == workspace_id,
+                    ProductAnalysisRun.product_id == body.product_id,
+                    ProductAnalysisRun.provider != "deterministic",
+                )
+                .order_by(ProductAnalysisRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if run is None and task_trace:
+            run = (
+                await db.execute(
+                    select(ProductAnalysisRun).where(
+                        ProductAnalysisRun.workspace_id == workspace_id,
+                        ProductAnalysisRun.trace_id == task_trace,
+                    )
+                )
+            ).scalar_one_or_none()
+        if run is not None:
+            run_id = run.id
+            provider = run.provider
+            model = run.model
+            cost = run.estimated_cost
+            latency = run.latency_ms
+            decision_row = (
+                await db.execute(
+                    select(ProductDecision)
+                    .where(
+                        ProductDecision.workspace_id == workspace_id,
+                        ProductDecision.product_id == body.product_id,
+                    )
+                    .order_by(ProductDecision.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if decision_row is not None:
+                decision_id = decision_row.id
+                decision = decision_row.decision
+                approval_status = decision_row.approval_status
+    return PilotOut(
+        task_id=task.id,
+        workspace_id=workspace_id,
+        product_id=body.product_id,
+        trace_id=task.trace_id or trace_id,
+        status=task.status,
+        analysis_run_id=run_id,
+        decision_proposal_id=decision_id,
+        decision=decision,
+        approval_status=approval_status,
+        provider=provider,
+        model=model,
+        cost=cost,
+        latency_ms=latency,
+        error_message=task.error_message,
+        waiting=waiting,
+    )
+
+
+@router.get(
+    "/product-analyst/scorecard",
+    response_model=dict,
+    summary="Product Analyst scorecard (workspace-scoped, no PII)",
+)
+async def product_analyst_scorecard(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict:
+    """Return the analyst scorecard aggregates for the workspace."""
+    return await pilot_product_analyst.scorecard(db, workspace_id=workspace_id)
+
+
+@router.get(
+    "/product-analyst/roi",
+    response_model=dict,
+    summary="Product Analyst ROI (real costs; impact null until attribution)",
+)
+async def product_analyst_roi(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict:
+    """Return ROI figures; revenue/margin/roas impacts are null (no mock)."""
+    return await pilot_product_analyst.roi(db, workspace_id=workspace_id)

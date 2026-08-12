@@ -270,26 +270,40 @@ class ProductExperimentOut(BaseModel):
 
     id: UUID
     product_id: UUID
+    decision_id: UUID | None = None
     experiment_type: str
     status: str
+    hypothesis: str | None = None
+    expected_metrics: dict[str, Any] | None = None
+    baseline: dict[str, Any] | None = None
+    target_metrics: dict[str, Any] | None = None
     prediction: dict[str, Any]
     experiment: dict[str, Any]
     actual_result: dict[str, Any]
     calibration: dict[str, Any]
     version: str
+    source_trace_id: str | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    started_by: str | None = None
     trace_id: str | None
     created_at: datetime
     updated_at: datetime
 
 
 class ExperimentStartRequest(BaseModel):
-    """Start an experiment with the executed test plan."""
+    """Start an experiment with the executed test plan.
+
+    ``started_by`` is the M5.6 second human control point: a decision-linked
+    experiment may only be started by a human actor (agents are rejected).
+    """
 
     quantity: int = Field(default=30, ge=1)
     channels: list[str] = Field(default_factory=list)
     budget: Decimal = Field(default=Decimal("0"), ge=0)
     targets: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime | None = None
+    started_by: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class ExperimentCompleteRequest(BaseModel):
@@ -303,3 +317,21 @@ class ExperimentCompleteRequest(BaseModel):
     return_rate: Decimal | None = Field(default=None, ge=0, le=1)
     margin_rate: Decimal | None = Field(default=None)
     completed_at: datetime | None = None
+
+
+# --------------------------------------------------------------------------- #
+# M5.6 Product Analyst pilot
+# --------------------------------------------------------------------------- #
+
+
+class ExperimentProposeFromDecisionRequest(BaseModel):
+    """Create an experiment proposal from an approved decision."""
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ExperimentProposalOut(ProductExperimentOut):
+    """An experiment proposal (decision-linked) as returned by the API."""
+
+    decision_id: UUID
+    source_trace_id: str | None = None

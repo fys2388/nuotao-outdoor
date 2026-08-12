@@ -23,6 +23,7 @@ from app.models.product_intelligence import (
     SourcingCandidate,
 )
 from app.models.rule import Rule
+from app.services import knowledge
 from app.services.product_intelligence import _landed_cost
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,15 @@ async def build_product_context(
 
     rules = await _load_rule_gates(session, workspace_id=workspace_id)
 
+    # M5.6 knowledge feedback: prior experiment outcomes (only after human-
+    # approved calibration) ground the next analysis round.
+    knowledge_entries = await knowledge.list_knowledge_entries(
+        session,
+        workspace_id=workspace_id,
+        product_id=product_id,
+        limit=5,
+    )
+
     landed = _landed_cost(cost)
     cost_status = "KNOWN" if landed > Decimal("0") else "UNKNOWN"
 
@@ -275,6 +285,19 @@ async def build_product_context(
             else None
         ),
         "rules": rules,
+        "knowledge": [
+            {
+                "knowledge_id": str(entry.id),
+                "entry_type": entry.entry_type,
+                "category": entry.category,
+                "title": entry.title,
+                "content": entry.content,
+                "tags": entry.tags,
+                "source": entry.source,
+                "trace_id": entry.trace_id,
+            }
+            for entry in knowledge_entries
+        ],
         "experiments": [
             {
                 "experiment_id": str(experiment.id),

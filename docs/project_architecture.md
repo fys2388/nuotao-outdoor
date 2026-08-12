@@ -476,7 +476,7 @@ flowchart LR
 > 以上假设在后续文档与评审中逐步收敛，任何变更需更新本文档版本号并记录变更日志。
 
 
-## ? M5.5 Agent Platform Productionization
+## 3.20 M5.5 Agent Platform Productionization
 
 > ???? Agent Runtime ?"????"???"???????"???????
 > Alert ???? / Approval RBAC + SLA / Agent ?????? / Docker Compose ? Worker ???? / Runtime Console ??? + ?????
@@ -560,7 +560,7 @@ flowchart LR
 `agent.alert.scheduler_run`?`agent.approval.warning/expired`?`agent.lifecycle.created/activated/paused/resumed/retired/rollback`?
 `agent.console.viewed/approved/rejected/alert_acknowledged/alert_resolved/dlq_replay_proposed/lifecycle_action`?
 
-### 10. ?????M5.5?
+### 3.20.1 M5.5 落地清单
 
 - ???364 passed + 2 skipped??????? LLM key ????M5.5 ?? 63 ????
 - ruff check / ruff format --check ???`alembic upgrade head --sql` ???
@@ -769,9 +769,10 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 | v0.5 | 2026-08-11 | M1.6 加固：订单查询 API（过滤/分页/排序/明细）、利润成本置信度（KNOWN/ESTIMATED/UNKNOWN + PROFIT-003 门禁）；M2.1 产品智能底座：product_sources / product_cost_snapshots / product_scores / product_analysis_runs / product_decisions、人工+CSV 录入、确定性分析链（Cost→Logistics→Profit→Rule→Score）、决策审批状态机 |
 
 | v0.4 | 2026-08-11 | M1.5 订单域落地：orders/order_items、WooCommerce Webhook（HMAC 验签 + 幂等 + 网关 topic 404 兼容）、利润引擎（Contribution Margin）、PRICE/PROFIT/FULFILLMENT 规则接入、全链路 trace_id 审计 |
+| v0.7 | 2026-08-12 | M5.6 Product Analyst Production Pilot：Approval Center 接入 product_decisions（PRODUCT_DECISION + RBAC）、实验提案/人工启动第二闸门、Evaluation Bridge 回流、Calibration 提案、Knowledge 反馈进 Context、Pilot API + Scorecard + ROI（impact null，不伪造）、迁移 0021 |
 
 
-## § M5.4 Production Operations & Human Control
+## 3.19.1 M5.4 Production Operations & Human Control
 
 > 目标：把 Agent Runtime 从"可靠运行 + 可观测"升级到"可监控 + 可人工干预 + 可安全恢复 + 可多 Worker 扩展"。
 > 约束：不开发新业务 Agent；不自动执行任何商业动作；L3 高风险动作必须人工审批；DLQ 只能"提案 → 人工审批 → 新 attempt"。
@@ -844,3 +845,77 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 | v0.2 | 2026-08-11 | 确认多市场战略（美国主、德国/欧盟次、未来英/加/澳）；需求、数据模型、技术选型同步补充多币种/多语言/税制适配 |
 
 | v0.1 | 2026-08-11 | 初稿 |
+
+
+---
+
+## 3.21 M5.6 Product Analyst Production Pilot
+
+> 目标：把现有 Product Analyst Agent 从"Runtime 技术验证完成"推进到"真实业务闭环 Pilot"。
+> 边界：不开发新业务 Agent；不自动采购/投放/发布/改库存/改规则；**所有高风险动作继续经过 Human Approval**；
+> 决策审批是第一道人工闸门，实验启动是第二道人工闸门；没有真实业务结果时不伪造 actual_result / ROI。
+
+### 1. 真实业务闭环
+
+```
+真实 product_id
+  → Agent Task（POST /api/v1/agent-tasks 或 /agents/product-analyst/pilot）
+  → Redis Stream → Worker → product_analyst_executor
+  → Product Context Builder（含 knowledge 反馈）
+  → LLM Gateway（OpenAI 主 / DeepSeek 备，M5.1 timeout/retry/budget/audit 复用）
+  → ProductAnalysisOutput（Pydantic Schema → PROFIT/PRODUCT hard rules → Rule Engine）
+  → product_analysis_runs（审计）
+  → product_decisions（pending）
+  → Approval Center（PRODUCT_DECISION，RBAC `product.decision.approve/reject`）
+  → 人工 approve/reject（Agent 永远不能 approve 自己）
+  → Experiment Proposal（proposed）
+  → 人工 start（started_by，第二闸门，active）
+  → actual_result（complete，append-only）
+  → Evaluation Bridge（product_ai_evaluations + agent evaluation mirror，复用 ai_evaluation 分类）
+  → Calibration（confidence report + score run，proposed，禁止自动改 SCORE_WEIGHTS/Rules）
+  → 人工 approve calibration → Knowledge（product_knowledge_entries）
+  → 下一次 Product Context（context.knowledge）
+```
+
+### 2. 新增/扩展表（迁移 0021）
+
+| 表 | 变更 | 说明 |
+|---|---|---|
+| product_experiments | 新增列 | `decision_id`(FK→product_decisions, SET NULL)、`hypothesis`、`expected_metrics`、`baseline`、`target_metrics`、`source_trace_id`、`approved_by`、`approved_at`、`started_by` |
+
+- 复用已有表：`product_analysis_runs`、`product_decisions`、`product_ai_evaluations`、`agent_evaluations`、`product_knowledge_entries`、`agent_approvals`、`event_log`。不重复造表。
+
+### 3. 人工审批安全边界
+
+- **Decision 审批**：`POST /product-decisions/{id}/approve|reject` 走统一 Approval Center；RBAC 无权限 → 403；代理 actor（保留名或已注册 agent）→ 403；二次审批 → 400。
+- **Experiment 启动**：`POST /product-decisions/experiments/{id}/start` 要求 `started_by` 为人工（代理 → 403），且底层 decision 仍为 approved。
+- **Calibration**：`run_calibration` 只生成 proposal；`sync_calibration_to_knowledge` 仅接受 approved 的 calibration run。
+- **Knowledge**：实验知识按 `(product, entry_type, source_trace)` 去重，append-only。
+- 任何 shortcut（agent → approve → start → purchase）都会被测试拒绝。
+
+### 4. 关键服务
+
+- `app/services/pilot_product_analyst.py`：`create_pilot_task` / `wait_for_task` / `complete_experiment_with_evaluation` / `run_calibration` / `feedback_knowledge` / `scorecard` / `roi`。
+- `app/services/evaluation_bridge.py`：`backfill_experiment_evaluation`（统一 `ai_evaluation` 分类，不复制逻辑）、`sync_calibration_to_knowledge`。
+- `app/agents/product_analyst.py` + `app/worker/product_analyst_executor.py`：decision 创建后自动进入 Approval Center 并写 `agent.product_decision.proposed` / `agent.product_analyst.analysis_completed`。
+- `app/pilot/product_analyst.py`：`python -m app.pilot.product_analyst --workspace <ws> --product <id>`（创建任务、等待、输出 trace_id / decision_id / cost / latency，绝不自动 approve）。
+
+### 5. API
+
+- `POST /api/v1/agents/product-analyst/pilot`（创建 pilot 任务，可等待；输出 trace_id / decision_id / cost / latency）。
+- `GET /api/v1/agents/product-analyst/scorecard`（workspace 隔离：分析/决策/实验/预测统计、置信度分桶成功率、平均成本/tokens/latency、retry/LLM failure/human override rate）。
+- `GET /api/v1/agents/product-analyst/roi`（真实 LLM 成本与实验数；revenue/margin/roas impact 恒为 null，禁止伪造）。
+- `POST /api/v1/product-decisions/{id}/approve` / `reject`（Approval Center + RBAC）。
+- `POST /api/v1/product-decisions/{id}/experiment`（approved decision → 实验提案）。
+- `POST /api/v1/product-decisions/experiments/{id}/start` / `complete`；`GET /api/v1/product-decisions/experiments/{id}`。
+- 现有 `POST /api/v1/agent-tasks`（agent_id=product_analyst + product_id）保持可用。
+
+### 6. 事件（新增）
+
+`agent.product_analyst.pilot_started`、`agent.product_analyst.analysis_completed`、`agent.product_decision.proposed/approved/rejected`、`agent.experiment.proposed/started/completed`、`agent.product_evaluation.backfilled`、`agent.product_calibration.proposed`、`agent.product_knowledge.created`。全部带 `workspace_id` / `trace_id` / actor / timestamp。
+
+### 7. 诚实边界
+
+- ROI 的 revenue/margin/roas impact 在真实归因管道建立前保持 `null`，不模拟业务收益。
+- 没有真实实验结果时，系统只完成技术闭环并明确标记 **"Pilot waiting for real business result"**。
+- 真实 LLM（OpenAI/DeepSeek）只通过 staging 手动执行验证；API key 永不进入 DB / event_log / trace / console / logs。

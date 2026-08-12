@@ -317,6 +317,12 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     price, targets), ``experiment`` the executed test plan, and ``actual_result``
     the measured outcome. ``calibration`` stores prediction-vs-actual deltas
     for scoring model calibration (docs/product_strategy.md ?6.4).
+
+    M5.6 pilot: an experiment is a proposal spawned from an APPROVED product
+    decision (``decision_id``) and needs a second human gate (``started_by``)
+    before it runs. ``hypothesis`` / ``expected_metrics`` / ``baseline`` /
+    ``target_metrics`` are the test contract; ``source_trace_id`` keeps the
+    full chain auditable.
     """
 
     __tablename__ = "product_experiments"
@@ -328,13 +334,31 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
         nullable=False,
         index=True,
     )
+    decision_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("product_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     experiment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="market_test")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    hypothesis: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    expected_metrics: Mapped[dict[str, Any] | None] = mapped_column(
+        AI_JSON, nullable=True, default=dict
+    )
+    baseline: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True, default=dict)
+    target_metrics: Mapped[dict[str, Any] | None] = mapped_column(
+        AI_JSON, nullable=True, default=dict
+    )
     prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     experiment: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     calibration: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    source_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (Index("ix_product_experiments_product", "workspace_id", "product_id"),)

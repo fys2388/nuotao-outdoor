@@ -5,7 +5,7 @@ Routes under ``/products`` extend the existing product domain; routes under
 involved in this phase - all processing is deterministic.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +20,7 @@ from app.schemas.product import ProductOut
 from app.schemas.product_intelligence import (
     DecisionApproveRequest,
     ExperimentCompleteRequest,
+    ExperimentProposeFromDecisionRequest,
     ExperimentStartRequest,
     ProductAnalysisRunOut,
     ProductCostSnapshotOut,
@@ -34,7 +35,15 @@ from app.schemas.product_intelligence import (
     SourcingCandidateCreate,
     SourcingCandidateOut,
 )
-from app.services import product_intelligence as pi
+from app.services import (
+    approval_service,
+    task_queue,
+)
+from app.services import (
+    product_intelligence as pi,
+)
+from app.services.approval_rbac import ApprovalRBACError
+from app.services.product_intelligence import ProductDecisionActorError
 
 product_router = APIRouter(prefix="/products", tags=["product-intelligence"])
 decision_router = APIRouter(prefix="/product-decisions", tags=["product-decisions"])
@@ -43,8 +52,10 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 
-def _http_error(exc: pi.ProductIntelligenceError) -> HTTPException:
-    """Map service errors to 400, or 404 for missing resources."""
+def _http_error(exc: Exception) -> HTTPException:
+    """Map service errors: RBAC/actor -> 403, missing -> 404, state -> 400."""
+    if isinstance(exc, (ApprovalRBACError, ProductDecisionActorError)):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     if "not found" in str(exc):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -191,7 +202,7 @@ async def propose_decision(
 @decision_router.post(
     "/{decision_id}/approve",
     response_model=ProductDecisionOut,
-    summary="Approve a pending product decision",
+    summary="Approve a pending product decision (Approval Center + RBAC)",
 )
 async def approve_decision(
     decision_id: UUID,
@@ -199,16 +210,34 @@ async def approve_decision(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDecisionOut:
-    """Approve the decision; test decisions advance the product lifecycle."""
+    """Approve the decision through the unified Approval Center.
+
+    The actor must hold ``product.decision.approve`` (403 otherwise); agents
+    can never decide their own proposals; a second decision is 400. Test
+    decisions advance the product lifecycle after approval.
+    """
     try:
-        decision = await pi.approve_decision(
+        approval = await _resolve_product_decision_approval(
+            db, workspace_id=workspace_id, decision_id=decision_id
+        )
+        backend = task_queue.get_queue_backend()
+        await approval_service.approve_approval(
             db,
+            backend,
             workspace_id=workspace_id,
-            decision_id=decision_id,
+            approval_id=approval.id,
             actor=body.actor,
+            note=body.note,
             trace_id=get_trace_id(),
         )
-    except pi.ProductIntelligenceError as exc:
+        decision = await pi.get_decision(db, workspace_id=workspace_id, decision_id=decision_id)
+        if decision is None:
+            raise pi.ProductIntelligenceError("decision not found")
+    except (approval_service.ApprovalError, pi.ProductIntelligenceError) as exc:
+        raise _http_error(exc) from exc
+    except ApprovalRBACError as exc:
+        raise _http_error(exc) from exc
+    except ProductDecisionActorError as exc:
         raise _http_error(exc) from exc
     return ProductDecisionOut.model_validate(decision)
 
@@ -224,18 +253,96 @@ async def reject_decision(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDecisionOut:
-    """Reject the decision (audited)."""
+    """Reject the decision through the Approval Center (RBAC + audit)."""
     try:
-        decision = await pi.reject_decision(
+        approval = await _resolve_product_decision_approval(
+            db, workspace_id=workspace_id, decision_id=decision_id
+        )
+        backend = task_queue.get_queue_backend()
+        await approval_service.reject_approval(
+            db,
+            backend,
+            workspace_id=workspace_id,
+            approval_id=approval.id,
+            actor=body.actor,
+            note=body.note,
+            trace_id=get_trace_id(),
+        )
+        decision = await pi.get_decision(db, workspace_id=workspace_id, decision_id=decision_id)
+        if decision is None:
+            raise pi.ProductIntelligenceError("decision not found")
+    except (approval_service.ApprovalError, pi.ProductIntelligenceError) as exc:
+        raise _http_error(exc) from exc
+    except ApprovalRBACError as exc:
+        raise _http_error(exc) from exc
+    except ProductDecisionActorError as exc:
+        raise _http_error(exc) from exc
+    return ProductDecisionOut.model_validate(decision)
+
+
+async def _resolve_product_decision_approval(
+    db: AsyncSession,
+    *,
+    workspace_id: WorkspaceId,
+    decision_id: UUID,
+) -> Any:
+    """Return (creating if needed) the PRODUCT_DECISION approval row."""
+    from sqlalchemy import select
+
+    from app.models.agent_operations import AgentApproval
+
+    approval = (
+        await db.execute(
+            select(AgentApproval).where(
+                AgentApproval.workspace_id == workspace_id,
+                AgentApproval.approval_type == "PRODUCT_DECISION",
+                AgentApproval.entity_id == str(decision_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if approval is not None:
+        return approval
+    decision = await pi.get_decision(db, workspace_id=workspace_id, decision_id=decision_id)
+    if decision is None:
+        raise pi.ProductIntelligenceError("decision not found")
+    return await approval_service.ensure_approval(
+        db,
+        workspace_id=workspace_id,
+        approval_type="PRODUCT_DECISION",
+        entity_type="product_decision",
+        entity_id=str(decision.id),
+        metadata_={"product_id": str(decision.product_id), "decision": decision.decision},
+        trace_id=get_trace_id(),
+    )
+
+
+@decision_router.post(
+    "/{decision_id}/experiment",
+    response_model=ProductExperimentOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an experiment proposal from an approved decision",
+)
+async def propose_decision_experiment(
+    decision_id: UUID,
+    body: ExperimentProposeFromDecisionRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductExperimentOut:
+    """Propose a market test for an APPROVED decision (never auto-started).
+
+    The experiment starts in ``proposed``; starting it is a second human
+    control point (``started_by``) - the agent can never do it.
+    """
+    try:
+        experiment = await pi.propose_experiment_for_decision(
             db,
             workspace_id=workspace_id,
             decision_id=decision_id,
-            actor=body.actor,
             trace_id=get_trace_id(),
         )
     except pi.ProductIntelligenceError as exc:
         raise _http_error(exc) from exc
-    return ProductDecisionOut.model_validate(decision)
+    return ProductExperimentOut.model_validate(experiment)
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +450,7 @@ async def start_experiment(
             data=body,
             trace_id=get_trace_id(),
         )
-    except pi.ProductIntelligenceError as exc:
+    except (pi.ProductIntelligenceError, ProductDecisionActorError) as exc:
         raise _http_error(exc) from exc
     return ProductExperimentOut.model_validate(experiment)
 
@@ -359,9 +466,16 @@ async def complete_experiment(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductExperimentOut:
-    """Complete the experiment (active -> completed) and compute calibration."""
+    """Complete the experiment and backfill actuals into the learning loop.
+
+    The measured outcome flows through the unified evaluation bridge
+    (``product_ai_evaluations`` + agent evaluation mirror) so M2.3
+    calibration consumes real results. Append-only; no rule is changed.
+    """
     try:
-        experiment = await pi.complete_experiment(
+        from app.services import pilot_product_analyst
+
+        experiment = await pilot_product_analyst.complete_experiment_with_evaluation(
             db,
             workspace_id=workspace_id,
             experiment_id=experiment_id,
@@ -370,6 +484,25 @@ async def complete_experiment(
         )
     except pi.ProductIntelligenceError as exc:
         raise _http_error(exc) from exc
+    return ProductExperimentOut.model_validate(experiment)
+
+
+@decision_router.get(
+    "/experiments/{experiment_id}",
+    response_model=ProductExperimentOut,
+    summary="Get one product experiment",
+)
+async def get_experiment(
+    experiment_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductExperimentOut:
+    """Return one experiment (workspace-scoped)."""
+    from app.services.product_intelligence import _load_experiment
+
+    experiment = await _load_experiment(db, workspace_id=workspace_id, experiment_id=experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="experiment not found")
     return ProductExperimentOut.model_validate(experiment)
 
 
