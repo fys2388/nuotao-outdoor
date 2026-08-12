@@ -189,7 +189,11 @@ async def create_task(
         # POST; never double-enqueue the same work.
         if task.enqueued_at is None:
             await task_queue.enqueue_task(
-                backend, workspace_id=workspace_id, task_id=task.id, attempt=1
+                backend,
+                workspace_id=workspace_id,
+                task_id=task.id,
+                attempt=1,
+                idempotency_key=task.idempotency_key,
             )
             task.enqueued_at = datetime.now(UTC)
             await db.flush()

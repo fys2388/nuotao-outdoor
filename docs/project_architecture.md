@@ -618,9 +618,35 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 | `agent_tasks.idempotency_key`（迁移 0018） | `String(128)` 可空；partial unique index `uq_agent_tasks_ws_agent_idem`（workspace_id, agent_id, idempotency_key，WHERE idempotency_key IS NOT NULL）；生产方重试去重，DB 行是幂等事实源 |
 | 无新增业务表 | M5.2.1 复用 M2/M3/M4/M5 全部既有数据模型；新增 `app/services/evaluation_bridge.py`（统一映射层，不复制分类逻辑） |
 
+
+### 3.19 Agent Runtime 可观测性与 Exactly-Once 加固（M5.3 已实现）
+
+> 交付语义（明确声明，绝不夸大）：**Redis Streams = at-least-once transport**；
+> **PostgreSQL 任务/执行行 = 业务事实源**；**业务效果 = effectively-once（幂等）**。
+> 消息级 dedup 只是 Redis 侧的优化，永远不替代 DB 幂等守门。系统不声称提供
+> 理论意义上的 distributed exactly-once。
+
+| 能力 | 实现 | 说明 |
+|---|---|---|
+| 消息级 Dedup | Redis `SET NX EX` token（`nuotao:agent-dedup:*`，TTL 900s 默认） | dedup identity = `idempotency_key + attempt`（无 key 时 `workspace_id + task_id + attempt`），绝不使用随机 UUID；token 记录 claimed_at，超过 reclaim idle 阈值可被“接管”（crash 恢复），fresh token 阻止并发重复投递 |
+| Worker 崩溃恢复 | XAUTOCLAIM + 可接管 token | 崩溃 worker 的 PEL 消息可被回收；stale dedup token 可被新 worker 接管；DB 任务行守门保证不重复执行 |
+| 执行语义 | 文档化 at-least-once / effectively-once | 同一业务 task 无论 XADD 一次/两次、crash、XAUTOCLAIM、retry、producer retry，都不会产生第二次有效业务执行 |
+| Queue Observability | `GET /api/v1/agent-queue/stats` | queue_depth/pending/running/waiting_approval/retry/dead_letter/oldest_pending|running_age_ms/throughput_per_minute/success_rate/failure_rate；支持 workspace + agent_id 维度；全部由 Redis + PostgreSQL 实际状态计算，不硬编码 |
+| Queue Health | `GET /api/v1/agent-queue/health` | 检查 Redis ping、stream/consumer group 存在、stale PEL、pending/dead-letter 阈值、长期 running、worker 存活；返回 healthy/degraded/unhealthy + 逐项 checks；阈值全部 config 化（`queue_health_*`） |
+| Worker Registry / Heartbeat | Redis hash（`nuotao:agent-worker:*`，TTL 120s 默认） | 记录 worker_id/hostname/status(starting/idle/busy/stopping/dead 派生)/started_at/last_heartbeat_at/current_task_id/current_execution_id/processed/failed；dead 判定 = `now - last_heartbeat_at > worker_heartbeat_timeout_seconds`（config，默认 30s） |
+| DLQ 查询 | `GET /api/v1/agent-queue/dead-letters` | 只读（查看/统计/审计），**不提供自动 replay**；支持 workspace_id/agent_id/error_type/task_id/时间范围/分页 |
+| Trace 全链路 | `GET /api/v1/agent-traces/{trace_id}` | 聚合 task → execution → attempt → LLM call → tool call → decision → evaluation → event_log，按时间排序，JSON-safe，404 处理；`agent.trace.queried` 事件 |
+| Metrics 复用 | 不新建 metrics 表 | queue/worker 统计复用 `agent_metrics` 与现有 execution 审计；最小变更，零新增业务表 |
+| 事件审计 | 新增 `agent.queue.*` / `agent.trace.queried` | message_deduplicated / message_skipped / worker_started / worker_heartbeat（节流）/ worker_dead / worker_stopped / retry_scheduled / dead_lettered / health_checked；全部带 workspace_id + trace_id |
+| 数据库变更 | **零新增迁移** | dedup token 与 worker registry 用 Redis（TTL 自然回收）；DB 只复用 `agents/agent_tasks/agent_executions/agent_task_attempts/agent_metrics/event_log` 等既有表；alembic head 仍为 0018 |
+
+关键文件：`app/services/task_queue.py`（dedup 原语 + 传输语义）、`app/services/agent_workers.py`（Worker Registry）、`app/services/agent_queue.py`（stats/health/DLQ/trace）、`app/worker/agent_worker.py`（worker 接入 heartbeat + 消息级 dedup + 新事件）。
+
 ## 9. 变更记录
 
+
 | 版本 | 日期 | 变更 |
+| v0.20 | 2026-08-12 | M5.3 Agent Runtime 可观测性与 Exactly-Once 加固：消息级 dedup（Redis SET NX EX token，idempotency_key+attempt 稳定身份，绝不随机 UUID，fresh 阻止并发、stale 可接管支持 crash 恢复）、明确 at-least-once/effectively-once 交付语义（DB 为业务事实源，dedup 为优化）、Queue Observability（`GET /agent-queue/stats`：深度/分状态计数/age/吞吐/成功率，Redis+PG 实测）、Queue Health（`GET /agent-queue/health`：redis/stream/group/workers/pending/DLQ/长期 running，阈值 config 化）、Worker Registry/Heartbeat（Redis hash + `POST /agent-workers/heartbeat`、`GET /agent-workers`，dead 由 heartbeat 超时派生）、DLQ 只读查询（无自动 replay）、Trace 全链路查询（`GET /agent-traces/{trace_id}`，404 + JSON-safe + 时间排序）、复用 agent_metrics 不建新表、新增 agent.queue.* 审计事件；**零新增迁移（alembic head 0018）**；新增 29 测试（273 全绿） |
 | v0.19 | 2026-08-12 | M5.2.1 生产验证：真实 PostgreSQL（pgserver 嵌入 PG16）完整迁移链 0001→0018 + downgrade/upgrade 演练 + FK/UNIQUE/JSONB/Numeric/BIGINT/UUID/workspace 隔离/事务 rollback 一致性；真实 Redis Streams（XADD/XREADGROUP/XACK + consumer group + PEL crash reclaim + 延迟重试 ZSET + dead-letter + 幂等）；修复 redis-py `BLOCK 0` 永久阻塞语义陷阱（block_ms=0 不再传 BLOCK）；LLM Gateway 真实/可 mock 验证（OpenAI 主/DeepSeek 备 fallback、401 终态、双 provider 失败 dead-letter、tokens/cost/latency/provider/model 审计）；Evaluation/Calibration 统一桥 `app/services/evaluation_bridge.py`（M5 agent_evaluations ↔ M2.3 product_ai_evaluations 单一分类来源，actual 回填进入 M2.3 calibration，仅人工批准可同步知识）；agent_tasks.idempotency_key 幂等（迁移 0018，API/服务层去重不二次入队）；新增 24 集成测试（244 全绿） |
 | v0.18 | 2026-08-12 | M5.2 Product Analyst Agent（第一个业务 Agent）：注册 product_analyst（L2）+ AGENT_PRODUCT_ANALYST v1 prompt（幂等种子 ensure_product_analyst_agent），M2.2 分析管线复用接入 M5.1 worker executor（worker 按 agent 分发 executor）；Product Context JSON-safe 快照写入 agent_executions.context_snapshot；LLM Gateway（OpenAI 主/DeepSeek 备）+ M5.1 timeout/retry/budget/audit 全复用；三层校验（Pydantic schema → PROFIT-003 业务门禁 → Rule Engine hard-rule 否决强制 reject）；成功/失败全审计落库（product_analysis_runs / product_decisions pending / product_ai_evaluations prediction / ai_agent_runs / agent_executions / event_log）；worker 沿用任务 trace_id 打通全链路；无新增数据表；新增 14 测试（220 全绿） |
 | v0.17 | 2026-08-12 | M5.1 Agent 运行时生产加固：Redis Streams Task Queue（内存后端适配，模块化单体，不引入 Celery/Kafka）、Worker 流水线（claim→幂等→策略→预算→并发→attempt→执行→重试→ack）、Retry Engine（版本化重试策略 + 指数退避 + agent_task_attempts 只追加审计）、Execution/Budget Policy（版本化、config 默认值 + DB 覆盖）、执行超时 + sweeper 兜底（过期 running 自动 fail/重试）、L3 审批超时自动 reject（绝不自动 approve）、Tool Gateway/Handler（handler_name 绑定，L0-L2 执行，L3 仍人工审批）、Agent Metrics（日聚合 + p95 + 错误分布）、队列统计/清扫 API；事件全量 event_log + trace_id + workspace 隔离；全库 ruff format 归一化（一次性机械变更）；新增 27 测试（206 全绿） |

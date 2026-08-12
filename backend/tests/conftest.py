@@ -59,3 +59,29 @@ def _memory_queue_backend() -> None:
     task_queue.reset_queue_backend_cache()
     yield
     task_queue.reset_queue_backend_cache()
+
+
+@pytest.fixture(autouse=True)
+def _restore_runtime_settings() -> None:
+    """Restore M5 runtime settings to their configured defaults per test.
+
+    Runtime tests mutate the settings singleton (reclaim idle, heartbeat
+    timeout, dedup TTL, ...); without a restore these leak across tests and
+    change dedup/health semantics. Defaults come from a fresh Settings
+    instance so cross-file leaks are repaired too.
+    """
+    from app.core.config import Settings, get_settings
+
+    defaults = Settings()
+    settings = get_settings()
+    keys = (
+        "task_queue_reclaim_idle_ms",
+        "task_queue_reconcile_idle_seconds",
+        "task_queue_dedup_ttl_seconds",
+        "worker_heartbeat_timeout_seconds",
+        "worker_heartbeat_interval_seconds",
+        "worker_registry_ttl_seconds",
+    )
+    yield
+    for key in keys:
+        setattr(settings, key, getattr(defaults, key))

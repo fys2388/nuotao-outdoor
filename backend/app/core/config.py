@@ -66,9 +66,38 @@ class Settings(BaseSettings):
     # this are reclaimed and reprocessed (the DB task row keeps it idempotent).
     task_queue_reclaim_idle_ms: int = 60000
     task_queue_reclaim_batch: int = 100
+    # Reconcile: pending tasks whose enqueued_at is older than this are
+    # re-enqueued by the sweeper (DB is the source of truth; the queue is an
+    # accelerator). Crash window between DB commit and XADD is covered too.
+    task_queue_reconcile_idle_seconds: int = 60
+    # Message-level dedup (M5.3): stable per (task, attempt) identity held in
+    # Redis with a TTL. This is an optimization on top of the DB guard - the
+    # PostgreSQL task row remains the business source of truth.
+    task_queue_dedup_key_prefix: str = "nuotao:agent-dedup"
+    task_queue_dedup_ttl_seconds: int = 900
     worker_enabled: bool = False  # start the resident worker in the API lifespan
     worker_concurrency: int = 4
     worker_id: str = "worker-1"
+
+    # --- M5.3 Worker registry / heartbeat (Redis-backed, no new tables) ------
+    # A worker is considered dead when no heartbeat arrived for longer than
+    # ``worker_heartbeat_timeout_seconds``. Keys expire after
+    # ``worker_registry_ttl_seconds`` so crashed workers do not linger forever.
+    worker_registry_prefix: str = "nuotao:agent-worker"
+    worker_heartbeat_timeout_seconds: int = 30
+    worker_heartbeat_interval_seconds: int = 10
+    worker_registry_ttl_seconds: int = 120
+    # Throttle ``agent.queue.worker_heartbeat`` events (they are audit rows).
+    worker_heartbeat_event_interval_seconds: int = 60
+
+    # --- M5.3 Queue health thresholds (config-driven, never hardcoded) --------
+    queue_health_max_pending: int = 100
+    queue_health_max_dead_letters: int = 50
+    queue_health_oldest_pending_ms: int = 600000
+    queue_health_oldest_running_ms: int = 600000
+    queue_health_max_stale_workers: int = 0
+    # Window (minutes) used for throughput / success / failure rates in stats.
+    queue_stats_window_minutes: int = 60
 
     # Default agent policies (config-driven; overridable per agent in the DB).
     agent_default_execution_timeout: int = 300

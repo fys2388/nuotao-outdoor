@@ -8,7 +8,7 @@ business action live here.
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -22,18 +22,27 @@ from app.schemas.agent_runtime_hardening import (
     AgentMetricOut,
     BudgetPolicyCreate,
     BudgetPolicyOut,
+    DeadLetterListOut,
+    DeadLetterOut,
     ExecutionPolicyCreate,
     ExecutionPolicyOut,
     MetricsSnapshotRequest,
+    QueueHealthOut,
     QueueStatsOut,
     RetryPolicyCreate,
     RetryPolicyOut,
     SweeperRunOut,
+    TraceOut,
+    WorkerHeartbeatIn,
+    WorkerOut,
 )
 from app.services import (
     agent_metrics,
     agent_policies,
+    agent_queue,
     agent_sweeper,
+    agent_workers,
+    event_service,
     task_queue,
 )
 
@@ -287,13 +296,186 @@ async def list_metrics(
 @router.get(
     "/agent-queue/stats",
     response_model=QueueStatsOut,
-    summary="Shallow task queue health stats",
+    summary="Queue statistics from live Redis + PostgreSQL state",
 )
-async def queue_stats(db: DbSession, workspace_id: WorkspaceId) -> QueueStatsOut:
-    """Return queue depth and delayed-retry counts (no business data)."""
+async def queue_stats(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    agent_id: Annotated[UUID | None, Query()] = None,
+) -> QueueStatsOut:
+    """Return queue depth, per-status counts, ages, throughput and rates.
+
+    Every number is computed from the actual Redis queue and the PostgreSQL
+    task/execution rows (nothing hardcoded). ``agent_id`` narrows the view to
+    one agent. Supports workspace + agent + queue dimensions.
+    """
     backend = task_queue.get_queue_backend()
-    stats = await task_queue.queue_stats(backend)
+    stats = await agent_queue.queue_stats(
+        db,
+        backend,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        trace_id=get_trace_id(),
+    )
     return QueueStatsOut.model_validate(stats)
+
+
+@router.get(
+    "/agent-queue/health",
+    response_model=QueueHealthOut,
+    summary="Queue health verdict (healthy / degraded / unhealthy)",
+)
+async def queue_health(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    agent_id: Annotated[UUID | None, Query()] = None,
+) -> QueueHealthOut:
+    """Check Redis, stream, consumer group, workers, pending and DLQ.
+
+    Thresholds are config-driven (``queue_health_*``). A degraded check never
+    fails the request; the verdict is returned for operators to act on.
+    """
+    backend = task_queue.get_queue_backend()
+    result = await agent_queue.queue_health(
+        db,
+        backend,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        trace_id=get_trace_id(),
+    )
+    await event_service.create_event(
+        db,
+        workspace_id=workspace_id,
+        event_type="agent.queue.health_checked",
+        entity_type="agent_queue",
+        entity_id="queue",
+        payload={"status": result["status"], "checks": result["checks"]},
+        trace_id=get_trace_id(),
+    )
+    return QueueHealthOut.model_validate(result)
+
+
+@router.get(
+    "/agent-queue/dead-letters",
+    response_model=DeadLetterListOut,
+    summary="List dead-lettered tasks (read-only; no replay)",
+)
+async def list_dead_letters(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    agent_id: Annotated[UUID | None, Query()] = None,
+    error_type: Annotated[str | None, Query()] = None,
+    task_id: Annotated[UUID | None, Query()] = None,
+    from_dt: Annotated[datetime | None, Query()] = None,
+    to_dt: Annotated[datetime | None, Query()] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> DeadLetterListOut:
+    """Return dead-lettered tasks with their error class, newest first.
+
+    Viewing / statistics / audit only: M5.3 deliberately does NOT offer an
+    automatic DLQ replay endpoint.
+    """
+    items, total = await agent_queue.list_dead_letters(
+        db,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        error_type=error_type,
+        task_id=task_id,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        limit=min(limit, 200),
+        offset=max(offset, 0),
+        trace_id=get_trace_id(),
+    )
+    return DeadLetterListOut(
+        items=[DeadLetterOut.model_validate(item) for item in items],
+        total=total,
+        limit=min(limit, 200),
+        offset=max(offset, 0),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Full-chain trace query
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/agent-traces/{trace_id}",
+    response_model=TraceOut,
+    summary="Full-chain trace for one trace_id",
+)
+async def get_trace(
+    trace_id: str,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> TraceOut:
+    """Return the complete execution chain for one ``trace_id``.
+
+    Aggregates task / execution / attempt / LLM call / tool call / decision /
+    evaluation / event-log nodes in time order (JSON-safe, workspace-scoped).
+    Returns 404 when the trace id does not exist.
+    """
+    trace = await agent_queue.get_trace(db, workspace_id=workspace_id, trace_id=trace_id)
+    if trace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="trace not found")
+    await event_service.create_event(
+        db,
+        workspace_id=workspace_id,
+        event_type="agent.trace.queried",
+        entity_type="agent_trace",
+        entity_id=trace_id,
+        payload={"node_count": len(trace["nodes"])},
+        trace_id=get_trace_id(),
+    )
+    return TraceOut.model_validate(trace)
+
+
+# --------------------------------------------------------------------------- #
+# Worker registry / heartbeat (infrastructure, not workspace-scoped)
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/agent-workers/heartbeat",
+    response_model=WorkerOut,
+    summary="Report a worker heartbeat",
+)
+async def worker_heartbeat(body: WorkerHeartbeatIn) -> WorkerOut:
+    """Refresh a worker's registry entry (keeps it alive)."""
+    backend = task_queue.get_queue_backend()
+    await agent_workers.heartbeat(
+        backend,
+        worker_id=body.worker_id,
+        hostname=body.hostname,
+        status=body.status or agent_workers.WORKER_IDLE,
+        current_task_id=body.current_task_id,
+        current_execution_id=body.current_execution_id,
+        processed_count=body.processed_count,
+        failed_count=body.failed_count,
+        trace_id=get_trace_id(),
+    )
+    workers = await agent_workers.list_workers(backend)
+    worker = next(
+        (worker for worker in workers if worker["worker_id"] == body.worker_id),
+        None,
+    )
+    if worker is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="worker not found")
+    return WorkerOut.model_validate(worker)
+
+
+@router.get(
+    "/agent-workers",
+    response_model=list[WorkerOut],
+    summary="List workers (dead status derived from heartbeat age)",
+)
+async def list_workers() -> list[WorkerOut]:
+    """List registered workers; ``dead`` is derived from heartbeat age."""
+    backend = task_queue.get_queue_backend()
+    workers = await agent_workers.list_workers(backend)
+    return [WorkerOut.model_validate(worker) for worker in workers]
 
 
 @router.post(

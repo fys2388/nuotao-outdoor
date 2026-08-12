@@ -182,6 +182,7 @@ async def fail_stale_executions(
                 task_id=task.id,
                 attempt=attempt + 1,
                 delay_seconds=delay,
+                idempotency_key=task.idempotency_key,
             )
             await event_service.create_event(
                 session,
@@ -233,7 +234,11 @@ async def reconcile_pending_tasks(
     enqueued = 0
     for task in pending:
         await task_queue.enqueue_task(
-            backend, workspace_id=workspace_id, task_id=task.id, attempt=max(task.attempt_count, 1)
+            backend,
+            workspace_id=workspace_id,
+            task_id=task.id,
+            attempt=max(task.attempt_count, 1),
+            idempotency_key=task.idempotency_key,
         )
         task.enqueued_at = _now()
         await event_service.create_event(

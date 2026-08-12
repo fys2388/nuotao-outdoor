@@ -173,12 +173,102 @@ class AgentMetricOut(BaseModel):
 
 
 class QueueStatsOut(BaseModel):
-    """Shallow queue health stats (no business data)."""
+    """Queue statistics computed from live Redis + PostgreSQL state (M5.3).
+
+    ``backend`` / ``stream`` / ``stream_length`` / ``delayed_count`` keep the
+    M5.1 surface; the remaining fields are the M5.3 observability view. All
+    numbers come from the actual queue + DB state, never hardcoded.
+    """
 
     backend: str
     stream: str
     stream_length: int
     delayed_count: int
+    queue_depth: int
+    pending_count: int
+    running_count: int
+    waiting_approval_count: int
+    retry_count: int
+    dead_letter_count: int
+    oldest_pending_age_ms: int | None = None
+    oldest_running_age_ms: int | None = None
+    throughput_per_minute: float = 0.0
+    success_rate: float = 0.0
+    failure_rate: float = 0.0
+
+
+class QueueHealthOut(BaseModel):
+    """Queue health verdict with per-check detail (M5.3)."""
+
+    status: Literal["healthy", "degraded", "unhealthy"]
+    checks: dict[str, str]
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeadLetterOut(BaseModel):
+    """One dead-lettered task (read-only view, no replay in M5.3)."""
+
+    task_id: UUID
+    agent_id: UUID | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+    trace_id: str | None = None
+
+
+class DeadLetterListOut(BaseModel):
+    """Paginated dead-letter query result."""
+
+    items: list[DeadLetterOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class WorkerHeartbeatIn(BaseModel):
+    """Worker heartbeat reported to the registry (M5.3)."""
+
+    worker_id: str = Field(min_length=1, max_length=64)
+    hostname: str | None = Field(default=None, max_length=255)
+    status: str | None = Field(default=None, max_length=16)
+    current_task_id: str | None = Field(default=None, max_length=64)
+    current_execution_id: str | None = Field(default=None, max_length=64)
+    processed_count: int | None = Field(default=None, ge=0)
+    failed_count: int | None = Field(default=None, ge=0)
+
+
+class WorkerOut(BaseModel):
+    """A worker registry entry (``dead`` is derived from heartbeat age)."""
+
+    worker_id: str
+    hostname: str
+    status: str
+    is_dead: bool
+    started_at: str | None = None
+    last_heartbeat_at: str | None = None
+    current_task_id: str | None = None
+    current_execution_id: str | None = None
+    processed_count: int = 0
+    failed_count: int = 0
+
+
+class TraceNodeOut(BaseModel):
+    """One node of a full-chain trace (M5.3)."""
+
+    type: str
+    id: str
+    status: str | None = None
+    timestamp: str | None = None
+    duration_ms: int | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceOut(BaseModel):
+    """The full execution chain for one ``trace_id`` (JSON-safe)."""
+
+    trace_id: str
+    nodes: list[TraceNodeOut]
 
 
 class SweeperRunOut(BaseModel):

@@ -716,3 +716,49 @@ curl -X POST http://localhost:8000/api/v1/agent-evaluations/<evaluation_uuid>/ba
   -H "Content-Type: application/json" -d '{"actual_result":{"decision":"test","test_outcome":"success"}}'
 curl http://localhost:8000/api/v1/calibration/reports
 
+### 8.17 Agent Runtime 可观测性（M5.3）
+
+> 交付语义：**Redis Streams = at-least-once transport**；**PostgreSQL 任务/执行行 =
+> 业务事实源（effectively-once）**；消息级 dedup 只是 Redis 侧优化，不替代 DB 幂等守门。
+> 本阶段不新增业务 Agent、不自动执行任何商业动作、不引入 Celery/Kafka。
+
+# 1) Queue Health（Redis 连通性 / stream / consumer group / workers / pending / DLQ / 长期 running）
+curl http://localhost:8000/api/v1/agent-queue/health -H "X-Workspace-Id: <ws>"
+# 返回：{"status":"healthy|degraded|unhealthy","checks":{...},"details":{...}}
+# 阈值全部配置化：queue_health_max_pending / max_dead_letters / oldest_pending_ms /
+#   oldest_running_ms / max_stale_workers（app/core/config.py）
+
+# 2) Queue Stats（从 Redis + PostgreSQL 实际状态计算，不硬编码）
+curl "http://localhost:8000/api/v1/agent-queue/stats?agent_id=<uuid>" -H "X-Workspace-Id: <ws>"
+# 字段：queue_depth / pending_count / running_count / waiting_approval_count /
+#   retry_count / dead_letter_count / oldest_pending_age_ms / oldest_running_age_ms /
+#   throughput_per_minute / success_rate / failure_rate（含 M5.1 的 backend/stream/...）
+
+# 3) Worker Health（Registry + Heartbeat；dead 由 heartbeat 超时派生，阈值配置化）
+curl -X POST http://localhost:8000/api/v1/agent-workers/heartbeat \
+  -H "Content-Type: application/json" \
+  -d '{"worker_id":"worker-1","hostname":"host-a","status":"idle","processed_count":42,"failed_count":1}'
+curl http://localhost:8000/api/v1/agent-workers
+# Worker 是共享基础设施（全局，不按 workspace 隔离）；事件镜像 agent.queue.worker_*
+
+# 4) DLQ 查询（只读：查看/统计/审计；本阶段不提供自动 replay）
+curl "http://localhost:8000/api/v1/agent-queue/dead-letters?error_type=llm&limit=50&offset=0" \
+  -H "X-Workspace-Id: <ws>"
+
+# 5) Trace 全链路查询（task -> execution -> attempt -> llm_call -> tool_call -> decision -> evaluation -> event）
+curl http://localhost:8000/api/v1/agent-traces/<trace_id> -H "X-Workspace-Id: <ws>"
+# 不存在返回 404；结果 JSON-safe、按时间排序；每次查询写 agent.trace.queried 事件
+
+# 6) 真实 Redis 集成测试（consumer group / dedup / crash reclaim / heartbeat / DLQ / 隔离）
+cd backend
+set PYTHONPATH=%CD%
+.venv\Scripts\python -m pytest tests/integration/test_redis_streams.py tests/integration/test_runtime_observability.py -q
+
+# 7) Worker 恢复测试（worker crash -> XAUTOCLAIM 回收 -> 不产生重复业务 effect）
+.venv\Scripts\python -m pytest tests/integration/test_runtime_observability.py::test_redis_crash_reclaim_with_dedup_token -q
+
+# 8) 全量验证
+.venv\Scripts\python -m pytest tests -q          # 273 passed（M5.3 基线）
+.venv\Scripts\python -m ruff check .             # 全绿
+.venv\Scripts\python -m ruff format --check .     # 全绿
+.venv\Scripts\python -m alembic heads             # 0018 (head) — M5.3 零新增迁移

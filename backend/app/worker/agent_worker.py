@@ -35,6 +35,7 @@ from app.services import (
     agent_budget,
     agent_policies,
     agent_runtime,
+    agent_workers,
     event_service,
     retry_engine,
     task_queue,
@@ -180,6 +181,7 @@ async def _handle_failure(
             task_id=task.id,
             attempt=attempt + 1,
             delay_seconds=delay,
+            idempotency_key=task.idempotency_key,
         )
         await _emit(
             session,
@@ -188,6 +190,20 @@ async def _handle_failure(
             entity_type="agent_task",
             entity_id=str(task.id),
             payload={"attempt": attempt + 1, "delay_seconds": delay, "error_type": error_type},
+            trace_id=trace_id,
+        )
+        await _emit(
+            session,
+            workspace_id=workspace_id,
+            event_type="agent.queue.retry_scheduled",
+            entity_type="agent_task",
+            entity_id=str(task.id),
+            payload={
+                "attempt": attempt + 1,
+                "delay_seconds": delay,
+                "error_type": error_type,
+                "execution_id": str(execution.id),
+            },
             trace_id=trace_id,
         )
         await backend.ack(task_queue.task_stream(), get_settings().task_queue_group, message_id)
@@ -214,6 +230,19 @@ async def _handle_failure(
         payload={"error_type": error_type, "attempt": attempt},
         trace_id=trace_id,
     )
+    await _emit(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.queue.dead_lettered",
+        entity_type="agent_task",
+        entity_id=str(task.id),
+        payload={
+            "error_type": error_type,
+            "attempt": attempt,
+            "execution_id": str(execution.id),
+        },
+        trace_id=trace_id,
+    )
     await backend.ack(task_queue.task_stream(), get_settings().task_queue_group, message_id)
     return "dead_letter"
 
@@ -231,8 +260,8 @@ async def process_message(
     """Process one queue message end-to-end; always acks terminal outcomes.
 
     Returns one of: ``completed`` / ``retried`` / ``dead_letter`` /
-    ``budget_blocked`` / ``deferred`` / ``skipped`` / ``malformed`` /
-    ``failed``.
+    ``budget_blocked`` / ``deferred`` / ``skipped`` / ``skipped_concurrent`` /
+    ``malformed`` / ``failed``.
     """
     settings = get_settings()
     worker_id = worker_id or settings.worker_id
@@ -251,14 +280,55 @@ async def process_message(
     task_id: UUID = data["task_id"]
     attempt: int = data["attempt"]
 
+    # M5.3 message-level dedup: stable identity per (task, attempt) - never a
+    # random UUID. The Redis token is an optimization; the DB task row stays
+    # the business source of truth (idempotent redeliveries).
+    dedup_key = data.get("dedup_key") or task_queue.build_dedup_key(
+        workspace_id=workspace_id, task_id=task_id, attempt=attempt
+    )
+    dedup_claimed = await backend.dedup_claim(
+        dedup_key,
+        ttl_seconds=settings.task_queue_dedup_ttl_seconds,
+        stale_after_seconds=settings.task_queue_reclaim_idle_ms / 1000.0,
+    )
+    if not dedup_claimed:
+        # A live duplicate delivery (concurrent worker / duplicate XADD):
+        # only one worker may hold the token - ack and never execute.
+        async with session_factory() as session:
+            await _emit(
+                session,
+                workspace_id=workspace_id,
+                event_type="agent.queue.message_skipped",
+                entity_type="agent_task",
+                entity_id=str(task_id),
+                payload={"attempt": attempt, "reason": "dedup_token_busy"},
+                trace_id=trace_id,
+            )
+        await backend.ack(stream, group, message.message_id)
+        return "skipped_concurrent"
+
     async with session_factory() as session:
         task = await session.get(AgentTask, task_id)
         if task is not None and task.workspace_id == workspace_id and task.trace_id:
             # Continue the creation-time trace id through the whole chain
             # (task -> execution -> LLM -> decision -> events).
             trace_id = task.trace_id
-        if task is None or task.workspace_id != workspace_id or task.status != "pending":
-            # Redelivery after crash / already handled: idempotent skip.
+        if task is None or task.workspace_id != workspace_id:
+            # Unknown or cross-workspace delivery: idempotent skip.
+            await backend.ack(stream, group, message.message_id)
+            return "skipped"
+        if task.status != "pending":
+            # Already handled (completed/failed/running): the DB guard
+            # deduplicates the redelivery - ack, do not re-execute.
+            await _emit(
+                session,
+                workspace_id=workspace_id,
+                event_type="agent.queue.message_deduplicated",
+                entity_type="agent_task",
+                entity_id=str(task_id),
+                payload={"attempt": attempt, "task_status": task.status},
+                trace_id=trace_id,
+            )
             await backend.ack(stream, group, message.message_id)
             return "skipped"
 
@@ -300,12 +370,16 @@ async def process_message(
 
         # Per-agent concurrency gate (defer without consuming an attempt).
         if gate is not None and not gate.try_acquire(str(agent.id), policy.max_concurrent):
+            # The deferred message carries the SAME dedup key (same attempt):
+            # release our token so the re-enqueued message can be claimed.
+            await backend.dedup_release(dedup_key)
             await task_queue.enqueue_delayed_retry(
                 backend,
                 workspace_id=workspace_id,
                 task_id=task.id,
                 attempt=attempt,
                 delay_seconds=settings.task_queue_defer_delay,
+                idempotency_key=task.idempotency_key,
             )
             await _emit(
                 session,
@@ -519,6 +593,55 @@ async def _run_attempt(
     return "completed"
 
 
+async def _process_with_runtime(
+    backend: task_queue.TaskQueueBackend,
+    session_factory: async_sessionmaker,
+    message: task_queue.StreamMessage,
+    *,
+    executor: ExecutorFn | None,
+    worker_id: str,
+    gate: ConcurrencyGate | None,
+    runtime: agent_workers.WorkerRuntime | None,
+) -> str:
+    """Run one message with worker heartbeat (busy -> idle/processed/failed)."""
+    current_task_id = message.fields.get(task_queue.FIELD_TASK_ID)
+    if runtime is not None:
+        async with session_factory() as session:
+            await runtime.beat(
+                status=agent_workers.WORKER_BUSY,
+                current_task_id=current_task_id,
+                session=session,
+            )
+    try:
+        outcome = await process_message(
+            backend,
+            session_factory,
+            message,
+            executor=executor,
+            worker_id=worker_id,
+            gate=gate,
+        )
+    except Exception:
+        if runtime is not None:
+            async with session_factory() as session:
+                await runtime.mark_failed(session=session)
+        raise
+    if runtime is not None:
+        async with session_factory() as session:
+            if outcome in ("failed", "dead_letter", "budget_blocked", "malformed"):
+                await runtime.mark_failed(session=session)
+            elif outcome == "completed":
+                await runtime.mark_processed(session=session)
+            else:
+                await runtime.beat(
+                    status=agent_workers.WORKER_IDLE,
+                    current_task_id="",
+                    current_execution_id="",
+                    session=session,
+                )
+    return outcome
+
+
 async def run_worker_once(
     backend: task_queue.TaskQueueBackend,
     session_factory: async_sessionmaker,
@@ -526,9 +649,15 @@ async def run_worker_once(
     executor: ExecutorFn | None = None,
     worker_id: str | None = None,
     gate: ConcurrencyGate | None = None,
+    runtime: agent_workers.WorkerRuntime | None = None,
     max_messages: int = 10,
 ) -> int:
-    """Drain up to ``max_messages`` messages (flush delayed first)."""
+    """Drain up to ``max_messages`` messages (flush delayed first).
+
+    When ``runtime`` is provided the worker heartbeats through the registry
+    (``starting`` -> ``busy`` -> ``idle``) and keeps processed/failed
+    counters; ``None`` keeps the call side-effect free for unit tests.
+    """
     settings = get_settings()
     worker_id = worker_id or settings.worker_id
     stream = task_queue.task_stream()
@@ -551,15 +680,19 @@ async def run_worker_once(
         count=max_messages,
         block_ms=0,
     )
+    if runtime is not None:
+        async with session_factory() as session:
+            await runtime.start(session=session)
     processed = 0
     for message in messages:
-        await process_message(
+        await _process_with_runtime(
             backend,
             session_factory,
             message,
             executor=executor,
             worker_id=worker_id,
             gate=gate,
+            runtime=runtime,
         )
         processed += 1
     return processed
@@ -572,8 +705,14 @@ async def run_worker(
     executor: ExecutorFn | None = None,
     worker_id: str | None = None,
     stop_event: asyncio.Event | None = None,
+    runtime: agent_workers.WorkerRuntime | None = None,
 ) -> None:
-    """Resident worker loop (blocking); start it in its own process/task."""
+    """Resident worker loop (blocking); start it in its own process/task.
+
+    The worker registers itself and heartbeats through
+    :class:`~app.services.agent_workers.WorkerRuntime`; state changes are
+    mirrored to ``event_log`` (``agent.queue.worker_*``).
+    """
     from app.core.database import async_session_factory
 
     settings = get_settings()
@@ -586,42 +725,52 @@ async def run_worker(
     group = settings.task_queue_group
 
     await backend.ensure_group(stream, group)
+    runtime = runtime or agent_workers.WorkerRuntime(backend=backend, worker_id=worker_id)
+    async with session_factory() as session:
+        await runtime.start(session=session)
     logger.info("agent worker %s started (concurrency=%s)", worker_id, settings.worker_concurrency)
-    while stop_event is None or not stop_event.is_set():
-        try:
-            await task_queue.flush_delayed(backend)
-            reclaimed = await backend.reclaim_orphaned(
-                stream,
-                group,
-                worker_id,
-                min_idle_ms=settings.task_queue_reclaim_idle_ms,
-                count=settings.task_queue_reclaim_batch,
-            )
-            messages = reclaimed + await backend.read_group(
-                stream,
-                group,
-                worker_id,
-                count=settings.worker_concurrency,
-                block_ms=settings.task_queue_poll_ms,
-            )
-            for message in messages:
-                try:
-                    await process_message(
-                        backend,
-                        session_factory,
-                        message,
-                        executor=executor,
-                        worker_id=worker_id,
-                        gate=gate,
-                    )
-                except Exception:  # noqa: BLE001 - never kill the loop
-                    logger.exception(
-                        "worker message error (message=%s, trace=%s)",
-                        message.message_id,
-                        worker_id,
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - keep the worker alive
-            logger.exception("worker loop error (worker=%s)", worker_id)
-            await asyncio.sleep(1)
+    try:
+        while stop_event is None or not stop_event.is_set():
+            try:
+                async with session_factory() as session:
+                    await runtime.beat(status=agent_workers.WORKER_IDLE, session=session)
+                await task_queue.flush_delayed(backend)
+                reclaimed = await backend.reclaim_orphaned(
+                    stream,
+                    group,
+                    worker_id,
+                    min_idle_ms=settings.task_queue_reclaim_idle_ms,
+                    count=settings.task_queue_reclaim_batch,
+                )
+                messages = reclaimed + await backend.read_group(
+                    stream,
+                    group,
+                    worker_id,
+                    count=settings.worker_concurrency,
+                    block_ms=settings.task_queue_poll_ms,
+                )
+                for message in messages:
+                    try:
+                        await _process_with_runtime(
+                            backend,
+                            session_factory,
+                            message,
+                            executor=executor,
+                            worker_id=worker_id,
+                            gate=gate,
+                            runtime=runtime,
+                        )
+                    except Exception:  # noqa: BLE001 - never kill the loop
+                        logger.exception(
+                            "worker message error (message=%s, worker=%s)",
+                            message.message_id,
+                            worker_id,
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - keep the worker alive
+                logger.exception("worker loop error (worker=%s)", worker_id)
+                await asyncio.sleep(1)
+    finally:
+        async with session_factory() as session:
+            await runtime.stop(session=session)
