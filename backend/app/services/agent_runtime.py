@@ -40,8 +40,13 @@ from app.schemas.agent_runtime import (
     MemoryCreate,
     TaskCreate,
 )
-from app.services import agent_policies, event_service, permission_engine, tool_gateway
-from app.services.ai_evaluation import compute_accuracy
+from app.services import (
+    agent_policies,
+    ai_evaluation,  # shared classification (single source)
+    event_service,
+    permission_engine,
+    tool_gateway,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +60,6 @@ _KNOWLEDGE_MODELS: dict[str, type] = {
     "customer": CustomerKnowledgeEntry,
     "supply_chain": SupplyChainKnowledgeEntry,
 }
-
-BUCKET_LOW_MAX = Decimal("0.5")
-BUCKET_MEDIUM_MAX = Decimal("0.7")
 
 
 class AgentRuntimeError(Exception):
@@ -75,33 +77,6 @@ class ToolNotFoundError(AgentRuntimeError):
 def agent_prompt_name(agent_id: str) -> str:
     """Registry name of the versioned prompt bound to an agent."""
     return f"{PROMPT_NAME_PREFIX}{agent_id.upper()}"
-
-
-def _as_decimal(value: Any) -> Decimal | None:
-    try:
-        return Decimal(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _confidence_bucket(confidence: Decimal | None) -> str | None:
-    """Map a confidence value to LOW / MEDIUM / HIGH (deterministic)."""
-    if confidence is None:
-        return None
-    if confidence < BUCKET_LOW_MAX:
-        return "LOW"
-    if confidence <= BUCKET_MEDIUM_MAX:
-        return "MEDIUM"
-    return "HIGH"
-
-
-def _prediction_confidence(prediction: dict) -> Decimal | None:
-    """Extract the confidence value from a prediction snapshot (any shape)."""
-    for key in ("confidence", "predicted_confidence"):
-        value = prediction.get(key)
-        if value is not None:
-            return _as_decimal(value)
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -311,18 +286,60 @@ async def create_task(
     data: TaskCreate,
     trace_id: str | None = None,
 ) -> AgentTask:
-    """Create a task in ``pending`` for a registered, active agent."""
+    """Create a task in ``pending`` for a registered, active agent.
+
+    When ``idempotency_key`` is set, an existing task with the same
+    (workspace, agent, key) is returned instead of creating a duplicate - the
+    producer may safely retry, and the same work is never enqueued twice.
+    """
     agent = await get_agent(session, workspace_id=workspace_id, agent_uuid=data.agent_id)
     if agent is None:
         raise AgentRuntimeError("agent not found")
     if agent.status != "active":
         raise AgentRuntimeError(f"agent '{agent.agent_id}' is not active")
+
+    if data.idempotency_key:
+        existing = (
+            (
+                await session.execute(
+                    select(AgentTask).where(
+                        AgentTask.workspace_id == workspace_id,
+                        AgentTask.agent_id == data.agent_id,
+                        AgentTask.idempotency_key == data.idempotency_key,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is not None:
+            await event_service.create_event(
+                session,
+                workspace_id=workspace_id,
+                event_type="agent.task_idempotent_reused",
+                entity_type="agent_task",
+                entity_id=str(existing.id),
+                payload={
+                    "agent_id": agent.agent_id,
+                    "idempotency_key": data.idempotency_key,
+                },
+                trace_id=trace_id,
+            )
+            logger.info(
+                "task %s reused for idempotency_key=%s trace=%s",
+                existing.id,
+                data.idempotency_key,
+                trace_id,
+            )
+            return existing
+
     task = AgentTask(
         workspace_id=workspace_id,
         agent_id=data.agent_id,
         input=data.input,
         status="pending",
         priority=data.priority,
+        idempotency_key=data.idempotency_key,
         trace_id=trace_id,
     )
     session.add(task)
@@ -1227,36 +1244,35 @@ async def record_evaluation(
     data: AgentEvaluationCreate,
     trace_id: str | None = None,
 ) -> AgentEvaluation:
-    """Record one agent evaluation with deterministic accuracy/calibration."""
+    """Record one agent evaluation with deterministic accuracy/calibration.
+
+    Classification is delegated to the shared ``ai_evaluation`` module
+    (confidence buckets, success flags, error types) so the M5 agent rows and
+    the M2.3 product-domain rows never drift apart (single source of truth).
+    """
     if data.agent_id is not None:
         agent = await get_agent(session, workspace_id=workspace_id, agent_uuid=data.agent_id)
         if agent is None:
             raise AgentRuntimeError("agent not found")
 
-    accuracy = compute_accuracy(data.prediction, data.actual_result)
-    confidence = _prediction_confidence(data.prediction)
-    success_flag: bool | None = None
-    if "success" in data.actual_result and isinstance(data.actual_result["success"], bool):
-        success_flag = data.actual_result["success"]
-    elif accuracy.get("decision_match") is not None:
-        success_flag = bool(accuracy["decision_match"])
-
-    prediction_result: str | None = None
-    error_type: str | None = None
-    if success_flag is True:
-        prediction_result = "success"
-    elif success_flag is False:
-        prediction_result = "failure"
-        if accuracy.get("decision_match") is False:
-            error_type = "decision_mismatch"
-        else:
-            error_type = "other"
-    else:
-        prediction_result = "unknown"
+    accuracy = ai_evaluation.compute_accuracy(data.prediction, data.actual_result)
+    confidence = ai_evaluation._prediction_confidence(data.prediction)
+    decision_match = accuracy.get("decision_match")
+    success_flag = ai_evaluation._determine_success(
+        data.prediction, data.actual_result, decision_match
+    )
+    prediction_result = (
+        "success" if success_flag is True else "failure" if success_flag is False else "unknown"
+    )
+    error_type = (
+        ai_evaluation._error_type(data.prediction, data.actual_result, decision_match)
+        if success_flag is False
+        else None
+    )
 
     calibration = {
         "confidence": str(confidence) if confidence is not None else None,
-        "bucket": _confidence_bucket(confidence),
+        "bucket": ai_evaluation._confidence_bucket(confidence),
         "prediction_result": prediction_result,
         "success_flag": success_flag,
         "sample_size": 1,
@@ -1273,7 +1289,7 @@ async def record_evaluation(
         error_type=error_type,
         success_flag=success_flag,
         confidence=confidence,
-        confidence_bucket=_confidence_bucket(confidence),
+        confidence_bucket=ai_evaluation._confidence_bucket(confidence),
         human_rating=data.human_rating,
         notes=data.notes,
         trace_id=trace_id,
@@ -1289,7 +1305,7 @@ async def record_evaluation(
         payload={
             "prediction_result": prediction_result,
             "error_type": error_type,
-            "confidence_bucket": _confidence_bucket(confidence),
+            "confidence_bucket": ai_evaluation._confidence_bucket(confidence),
         },
         trace_id=trace_id,
     )

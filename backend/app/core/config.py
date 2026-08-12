@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     task_queue_maxlen: int = 2000
     task_queue_poll_ms: int = 2000
     task_queue_defer_delay: int = 2
+    # Crash recovery: messages idle in the consumer-group PEL for longer than
+    # this are reclaimed and reprocessed (the DB task row keeps it idempotent).
+    task_queue_reclaim_idle_ms: int = 60000
+    task_queue_reclaim_batch: int = 100
     worker_enabled: bool = False  # start the resident worker in the API lifespan
     worker_concurrency: int = 4
     worker_id: str = "worker-1"

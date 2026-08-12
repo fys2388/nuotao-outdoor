@@ -82,11 +82,17 @@ class AgentOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    """Create one agent task (starts in ``pending``)."""
+    """Create one agent task (starts in ``pending``).
+
+    ``idempotency_key`` deduplicates producer retries: posting the same
+    (workspace, agent, idempotency_key) returns the existing task instead of
+    creating a second one, so the same work is never enqueued twice.
+    """
 
     agent_id: UUID
     input: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=3, ge=1, le=5)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class TaskOut(BaseModel):

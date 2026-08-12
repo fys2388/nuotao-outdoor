@@ -325,6 +325,14 @@ flowchart LR
 7. 权限边界：Agent 只读产品数据（Context Builder）+ 写 analysis / decision proposal / prediction；不得 approve / publish / purchase / campaign / 库存分配；L3 工具绝不自动执行；决策保持 `pending → 人工 approve/reject`，Agent 无法自动批准。
 8. 全链路：worker 沿用任务创建时的 `trace_id`，task → execution → LLM → analysis → decision → evaluation → event 全部一致；所有调用 workspace 隔离；M5.2 不新增数据表（复用 M2/M5 模型）。
 
+**生产验证（M5.2.1 已落地：真实 PostgreSQL / Redis Streams / LLM Gateway 验证 + Evaluation 统一桥）**
+
+1. PostgreSQL 真实验证：嵌入式 PG16（pgserver）跑完整迁移链 0001→0018（含 downgrade 演练 0018→0017→0012→head），校验 FK/UNIQUE/JSONB/Numeric/BIGSERIAL/UUID 类型与 workspace 隔离；事务 rollback 后 agent task / execution / attempt / event 数据一致性；孤儿执行（不存在的 task_id）被 FK 拒绝。
+2. Redis Streams 真实验证：真实 redis-server（Windows 二进制自动解析/缓存）验证 XADD/XREADGROUP/XACK、consumer group 不相交分发、PEL crash reclaim（XAUTOCLAIM，worker 每次消费前先 reclaim 超时未 ack 消息）、延迟重试 ZSET 到期回写 stream、dead-letter；DB 任务行是幂等事实源（同一 task 重复投递只执行一次，同一 (workspace, agent, idempotency_key) 只建一个任务，API 层幂等去重不二次入队）；**修复 redis-py `BLOCK 0` 语义陷阱**（`block_ms=0` 在 Redis 协议中永久阻塞 → 仅 `block_ms>0` 传 BLOCK，保持内存后端一致语义）。
+3. LLM Gateway 真实/可 mock 验证：OpenAI 正常路径、OpenAI 5xx/超时 → DeepSeek fallback、401 终态不 fallback、双 provider 失败进入终态 dead-letter；provider/model/tokens/cost/latency/trace_id 完整进入 `agent_executions`；schema failure 不重试、provider failure 按 M5.1 retry policy 重试；真实测试不产生任何 approve/purchase/campaign/inventory 动作。
+4. Evaluation/Calibration 统一桥：新增 `app/services/evaluation_bridge.py` —— M5 `agent_evaluations` 与 M2.3 `product_ai_evaluations` 复用同一套确定性分类（`ai_evaluation` 单一来源，不复制分类逻辑）；Product Analyst prediction 经桥镜像到 `product_ai_evaluations`（append-only），actual 回填后进入 M2.3 confidence/score calibration；仅人工批准的 calibration 可同步知识（proposed/rejected 拒绝），禁止自动修改 SCORE_WEIGHTS 或 rules。
+5. 幂等增强：`agent_tasks` 增加 `idempotency_key`（迁移 0018，partial unique index），生产方重试同一 (workspace, agent, key) 返回既有任务且不重复入队；worker 端重复投递按任务状态幂等跳过。
+
 ## 3. 数据库设计
 
 ### 3.1 设计原则
@@ -603,9 +611,17 @@ flowchart LR
 
 M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worker_id / attempt_number`；`agent_tasks` + `attempt_count / enqueued_at`；`agent_tools` + `handler_name / args_schema`（迁移 0017）。
 
+### 3.18 生产验证与幂等落地表（M5.2.1 已实现）
+
+| 变更 | 说明 |
+|---|---|
+| `agent_tasks.idempotency_key`（迁移 0018） | `String(128)` 可空；partial unique index `uq_agent_tasks_ws_agent_idem`（workspace_id, agent_id, idempotency_key，WHERE idempotency_key IS NOT NULL）；生产方重试去重，DB 行是幂等事实源 |
+| 无新增业务表 | M5.2.1 复用 M2/M3/M4/M5 全部既有数据模型；新增 `app/services/evaluation_bridge.py`（统一映射层，不复制分类逻辑） |
+
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 |
+| v0.19 | 2026-08-12 | M5.2.1 生产验证：真实 PostgreSQL（pgserver 嵌入 PG16）完整迁移链 0001→0018 + downgrade/upgrade 演练 + FK/UNIQUE/JSONB/Numeric/BIGINT/UUID/workspace 隔离/事务 rollback 一致性；真实 Redis Streams（XADD/XREADGROUP/XACK + consumer group + PEL crash reclaim + 延迟重试 ZSET + dead-letter + 幂等）；修复 redis-py `BLOCK 0` 永久阻塞语义陷阱（block_ms=0 不再传 BLOCK）；LLM Gateway 真实/可 mock 验证（OpenAI 主/DeepSeek 备 fallback、401 终态、双 provider 失败 dead-letter、tokens/cost/latency/provider/model 审计）；Evaluation/Calibration 统一桥 `app/services/evaluation_bridge.py`（M5 agent_evaluations ↔ M2.3 product_ai_evaluations 单一分类来源，actual 回填进入 M2.3 calibration，仅人工批准可同步知识）；agent_tasks.idempotency_key 幂等（迁移 0018，API/服务层去重不二次入队）；新增 24 集成测试（244 全绿） |
 | v0.18 | 2026-08-12 | M5.2 Product Analyst Agent（第一个业务 Agent）：注册 product_analyst（L2）+ AGENT_PRODUCT_ANALYST v1 prompt（幂等种子 ensure_product_analyst_agent），M2.2 分析管线复用接入 M5.1 worker executor（worker 按 agent 分发 executor）；Product Context JSON-safe 快照写入 agent_executions.context_snapshot；LLM Gateway（OpenAI 主/DeepSeek 备）+ M5.1 timeout/retry/budget/audit 全复用；三层校验（Pydantic schema → PROFIT-003 业务门禁 → Rule Engine hard-rule 否决强制 reject）；成功/失败全审计落库（product_analysis_runs / product_decisions pending / product_ai_evaluations prediction / ai_agent_runs / agent_executions / event_log）；worker 沿用任务 trace_id 打通全链路；无新增数据表；新增 14 测试（220 全绿） |
 | v0.17 | 2026-08-12 | M5.1 Agent 运行时生产加固：Redis Streams Task Queue（内存后端适配，模块化单体，不引入 Celery/Kafka）、Worker 流水线（claim→幂等→策略→预算→并发→attempt→执行→重试→ack）、Retry Engine（版本化重试策略 + 指数退避 + agent_task_attempts 只追加审计）、Execution/Budget Policy（版本化、config 默认值 + DB 覆盖）、执行超时 + sweeper 兜底（过期 running 自动 fail/重试）、L3 审批超时自动 reject（绝不自动 approve）、Tool Gateway/Handler（handler_name 绑定，L0-L2 执行，L3 仍人工审批）、Agent Metrics（日聚合 + p95 + 错误分布）、队列统计/清扫 API；事件全量 event_log + trace_id + workspace 隔离；全库 ruff format 归一化（一次性机械变更）；新增 27 测试（206 全绿） |
 | v0.16 | 2026-08-11 | M5.0 Agent 运行时基础：agents 注册表（前置 `AGENT_<ID>` 版本化 prompt，禁止硬编码）、agent_tasks（pending→running→waiting_approval→completed/failed/cancelled + 优先级）、agent_executions 全量审计（context/input/output/model/tokens/cost/latency/tool_calls/trace_id）、agent_tools 白名单 + L0-L3 权限引擎（低等级/禁用直接拒绝，L3 高风险人工审批，二次审批 400）、agent_memory（四知识域 grounding + keyword 检索）、agent_evaluations（预测 vs 实测 + 确定性分类 + 置信度桶）；全部事件集成 + trace_id + 工作区隔离；不开发具体业务 Agent、不自动执行商业动作；新增 19 测试（179 全绿） |

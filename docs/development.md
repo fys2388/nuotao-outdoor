@@ -680,3 +680,39 @@ curl "http://localhost:8000/api/v1/agents/product-analyst/runs/<product_uuid>"
 # 5) 人工审批决策提案（Agent 绝不自动批准；pending -> approve/reject）
 curl -X POST http://localhost:8000/api/v1/product-decisions/<decision_uuid>/approve \
   -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"approved"}'
+
+### 8.16 生产验证（M5.2.1）
+
+> 在真实 PostgreSQL / Redis Streams / LLM Gateway 上验证 Agent Runtime 生产可用性；不新增业务 Agent、不改变现有业务规则、不自动执行商业动作。
+> 集成测试位于 `backend/tests/integration/`，默认自动启动嵌入式 PostgreSQL 16（pgserver）与真实 Redis（Windows 二进制自动解析/缓存下载，`NUOTAO_REDIS_SERVER_BIN` 可指定路径）；Redis 不可用时相关测试自动 skip，内存队列后端保持不变（单元测试不依赖 Redis）。
+
+# 1) 真实 PostgreSQL 迁移验证（完整链 + downgrade 演练 + 约束/隔离/回滚）
+cd backend
+set PYTHONPATH=%CD%
+.venv\Scripts\python -m pytest tests/integration/test_postgres_migrations.py -q
+# 覆盖：0001→0018 upgrade；0018→0017→0012→head downgrade/upgrade；FK/UNIQUE/JSONB/Numeric/BIGSERIAL/UUID；
+#     workspace 隔离；事务 rollback 后 agent task/execution/attempt/event 零残留；孤儿 execution 被 FK 拒绝
+
+# 2) 真实 Redis Streams 验证（consumer group / crash reclaim / retry / idempotency / dead-letter）
+.venv\Scripts\python -m pytest tests/integration/test_redis_streams.py tests/integration/test_runtime_real_infra.py -q
+# 覆盖：XADD/XREADGROUP/XACK；group 不相交分发；PEL 未 ack 消息 XAUTOCLAIM 回收；ZSET 延迟重试到期回写；
+#     DB 任务行幂等（重复投递只执行一次）；(workspace, agent, idempotency_key) 生产方去重；schema failure 直接 dead-letter、
+#     双 provider 失败按 retry policy 重试后 dead-letter
+
+# 3) LLM Gateway 验证（OpenAI 主 / DeepSeek 备；401 终态不 fallback）
+.venv\Scripts\python -m pytest tests/integration/test_llm_gateway_integration.py -q
+# 真实 key 的端到端（staging）：OPENAI_API_KEY / DEEPSEEK_API_KEY 同时设置后运行
+set OPENAI_API_KEY=... && set DEEPSEEK_API_KEY=...
+.venv\Scripts\python -m pytest tests/integration/test_llm_gateway_integration.py::test_real_openai_e2e -q
+
+# 4) 生产方幂等：POST /api/v1/agent-tasks 传 idempotency_key，重复提交返回同一任务且不二次入队
+curl -X POST http://localhost:8000/api/v1/agent-tasks \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<product_analyst_agent_uuid>","input":{"product_id":"<product_uuid>"},"idempotency_key":"webhook-order-001"}'
+# 5) Evaluation/Calibration 闭环（agent prediction -> product_ai_evaluations -> M2.3 calibration）
+#    Agent 运行后 product_ai_evaluations 自动镜像 prediction（append-only）；actual_result 回填后进入
+#    M2.3 confidence 报告与 score calibration（proposed -> 人工 approve -> 才允许同步知识；禁止自动改规则）
+curl -X POST http://localhost:8000/api/v1/agent-evaluations/<evaluation_uuid>/backfill \
+  -H "Content-Type: application/json" -d '{"actual_result":{"decision":"test","test_outcome":"success"}}'
+curl http://localhost:8000/api/v1/calibration/reports
+

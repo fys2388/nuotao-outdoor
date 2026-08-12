@@ -185,11 +185,14 @@ async def create_task(
         raise _http_error(exc) from exc
     try:
         backend = task_queue.get_queue_backend()
-        await task_queue.enqueue_task(
-            backend, workspace_id=workspace_id, task_id=task.id, attempt=1
-        )
-        task.enqueued_at = datetime.now(UTC)
-        await db.flush()
+        # A reused idempotency-key task was already enqueued by its first
+        # POST; never double-enqueue the same work.
+        if task.enqueued_at is None:
+            await task_queue.enqueue_task(
+                backend, workspace_id=workspace_id, task_id=task.id, attempt=1
+            )
+            task.enqueued_at = datetime.now(UTC)
+            await db.flush()
         await event_service.create_event(
             db,
             workspace_id=workspace_id,

@@ -531,11 +531,22 @@ async def run_worker_once(
     """Drain up to ``max_messages`` messages (flush delayed first)."""
     settings = get_settings()
     worker_id = worker_id or settings.worker_id
-    await backend.ensure_group(task_queue.task_stream(), settings.task_queue_group)
+    stream = task_queue.task_stream()
+    group = settings.task_queue_group
+    await backend.ensure_group(stream, group)
     await task_queue.flush_delayed(backend)
-    messages = await backend.read_group(
-        task_queue.task_stream(),
-        settings.task_queue_group,
+    # Reclaim deliveries left in the PEL by crashed workers (idempotent via
+    # the DB task row) before consuming new messages.
+    reclaimed = await backend.reclaim_orphaned(
+        stream,
+        group,
+        worker_id,
+        min_idle_ms=settings.task_queue_reclaim_idle_ms,
+        count=settings.task_queue_reclaim_batch,
+    )
+    messages = reclaimed + await backend.read_group(
+        stream,
+        group,
         worker_id,
         count=max_messages,
         block_ms=0,
@@ -579,7 +590,14 @@ async def run_worker(
     while stop_event is None or not stop_event.is_set():
         try:
             await task_queue.flush_delayed(backend)
-            messages = await backend.read_group(
+            reclaimed = await backend.reclaim_orphaned(
+                stream,
+                group,
+                worker_id,
+                min_idle_ms=settings.task_queue_reclaim_idle_ms,
+                count=settings.task_queue_reclaim_batch,
+            )
+            messages = reclaimed + await backend.read_group(
                 stream,
                 group,
                 worker_id,

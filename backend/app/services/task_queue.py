@@ -15,6 +15,7 @@ before starting, making redeliveries idempotent).
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,6 +24,8 @@ from uuid import UUID
 from redis.asyncio import Redis
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # Fields stored inside each stream message.
 FIELD_TASK_ID = "task_id"
@@ -52,6 +55,15 @@ class TaskQueueBackend(Protocol):
         block_ms: int = 0,
     ) -> list[StreamMessage]: ...
     async def ack(self, stream: str, group: str, message_id: str) -> None: ...
+    async def reclaim_orphaned(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_ms: int,
+        count: int,
+    ) -> list[StreamMessage]: ...
     async def stream_length(self, stream: str) -> int: ...
     async def ensure_group(self, stream: str, group: str) -> None: ...
     async def add_delayed(self, key: str, member: str, score: float) -> None: ...
@@ -80,12 +92,16 @@ class RedisStreamBackend:
         block_ms: int = 0,
     ) -> list[StreamMessage]:
         await self.ensure_group(stream, group)
+        # ``block_ms == 0`` means "do not block" in this codebase's protocol
+        # (memory backend semantics). redis-py sends ``BLOCK 0`` when ``0`` is
+        # passed, which blocks *forever* in the Redis protocol - so only pass
+        # BLOCK for a bounded wait.
         result = await self.redis.xreadgroup(
             group,
             consumer,
             {stream: ">"},
             count=count,
-            block=block_ms,
+            block=block_ms if block_ms > 0 else None,
         )
         messages: list[StreamMessage] = []
         for _stream_name, entries in result or []:
@@ -95,6 +111,43 @@ class RedisStreamBackend:
 
     async def ack(self, stream: str, group: str, message_id: str) -> None:
         await self.redis.xack(stream, group, message_id)
+
+    async def reclaim_orphaned(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_ms: int,
+        count: int,
+    ) -> list[StreamMessage]:
+        """Reclaim PEL messages left by crashed workers (XAUTOCLAIM)."""
+        await self.ensure_group(stream, group)
+        result = await self.redis.xautoclaim(
+            stream,
+            group,
+            consumer,
+            min_idle_ms,
+            start_id="0-0",
+            count=count,
+        )
+        entries: list[tuple[str, dict]] = []
+        if isinstance(result, dict):
+            # RESP3 style: {"next": ..., "entries": [...], "deleted": [...]}
+            entries = result.get("entries") or []
+        elif isinstance(result, (list, tuple)) and len(result) >= 2:
+            entries = result[1]
+        reclaimed: list[StreamMessage] = []
+        for message_id, fields in entries:
+            reclaimed.append(StreamMessage(message_id=message_id, fields=dict(fields)))
+        if reclaimed:
+            logger.info(
+                "reclaimed %s orphaned message(s) from %s (consumer=%s)",
+                len(reclaimed),
+                stream,
+                consumer,
+            )
+        return reclaimed
 
     async def stream_length(self, stream: str) -> int:
         return int(await self.redis.xlen(stream) or 0)
@@ -126,7 +179,9 @@ class MemoryStreamBackend:
 
     def __init__(self) -> None:
         self._streams: dict[str, list[StreamMessage]] = {}
-        self._pending: dict[str, set[str]] = {}
+        # message_id -> (claimed_at, message) for messages delivered but not
+        # yet acked (the in-memory analog of the Redis PEL).
+        self._pending: dict[str, dict[str, tuple[float, StreamMessage]]] = {}
         self._delayed: dict[str, list[tuple[float, str]]] = {}
         self._counter: int = 0
 
@@ -155,18 +210,45 @@ class MemoryStreamBackend:
         bucket = self._streams.setdefault(stream, [])
         taken = bucket[:count]
         del bucket[:count]
-        self._pending.setdefault(stream, set()).update(m.message_id for m in taken)
+        now = time.time()
+        pending = self._pending.setdefault(stream, {})
+        for message in taken:
+            pending[message.message_id] = (now, message)
         return taken
 
     async def ack(self, stream: str, group: str, message_id: str) -> None:
-        self._pending.setdefault(stream, set()).discard(message_id)
+        self._pending.setdefault(stream, {}).pop(message_id, None)
+
+    async def reclaim_orphaned(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_ms: int,
+        count: int,
+    ) -> list[StreamMessage]:
+        """Return pending messages idle for >= min_idle_ms and re-claim them."""
+        self._pending.setdefault(stream, {})
+        now = time.time()
+        threshold = now - (min_idle_ms / 1000.0)
+        candidates = [
+            (claimed_at, message)
+            for claimed_at, message in self._pending[stream].values()
+            if claimed_at <= threshold
+        ]
+        candidates.sort(key=lambda item: item[0])
+        reclaimed = [message for _claimed_at, message in candidates[:count]]
+        for message in reclaimed:
+            self._pending[stream][message.message_id] = (now, message)
+        return reclaimed
 
     async def stream_length(self, stream: str) -> int:
         return len(self._streams.get(stream, []))
 
     async def ensure_group(self, stream: str, group: str) -> None:
         self._streams.setdefault(stream, [])
-        self._pending.setdefault(stream, set())
+        self._pending.setdefault(stream, {})
 
     async def add_delayed(self, key: str, member: str, score: float) -> None:
         bucket = self._delayed.setdefault(key, [])

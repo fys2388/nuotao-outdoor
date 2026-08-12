@@ -32,8 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import product_analyst
 from app.models.agent_runtime import AgentExecution, AgentRegistry, AgentTask
 from app.models.agent_runtime_hardening import AgentExecutionPolicy
-from app.schemas.product_analyst import EvaluationCreate
-from app.services import agent_runtime, ai_evaluation
+from app.services import agent_runtime
+from app.services.evaluation_bridge import ProductDomainLink, record_agent_evaluation
 from app.services.llm_gateway import LLMError
 from app.worker.executor import ExecutionResult
 
@@ -145,16 +145,16 @@ async def product_analyst_executor(
         decision=result.decision,
     )
 
-    # Prediction for the learning loop: actuals arrive later via experiments
-    # (M2.3 flow); the row is append-only and linked to this analysis run.
-    await ai_evaluation.record_evaluation(
+    # Prediction for the learning loop: record the M5 agent evaluation AND
+    # mirror the M2.3 product-domain row through the unified bridge, so the
+    # prediction is reachable from both the runtime audit and M2.3
+    # calibration. Actuals arrive later via backfill/experiments (append-only).
+    await record_agent_evaluation(
         session,
         workspace_id=workspace_id,
-        data=EvaluationCreate(
-            product_id=product_id,
-            analysis_run_id=run.id,
-            actual_result={},
-        ),
+        agent_id=agent.id,
+        prediction=dict(run.output),
+        domain=ProductDomainLink(product_id=product_id, analysis_run_id=run.id),
         trace_id=trace_id,
     )
 
