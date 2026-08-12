@@ -62,6 +62,17 @@ async def propose_recommendation(
     logger.info(
         "recommendation %s proposed (%s) trace=%s", recommendation.id, data.domain, trace_id
     )
+    # M5.4: surface every recommendation proposal in the Approval Center.
+    from app.services.approval_service import ensure_approval
+
+    await ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="RECOMMENDATION",
+        entity_type="business_recommendation",
+        entity_id=str(recommendation.id),
+        trace_id=trace_id,
+    )
     await session.refresh(recommendation)
     return recommendation
 
@@ -114,6 +125,18 @@ async def _decide(
         trace_id=trace_id,
     )
     logger.info("recommendation %s %s by %s trace=%s", recommendation.id, decision, actor, trace_id)
+    from app.services.approval_service import sync_approval
+
+    await sync_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="RECOMMENDATION",
+        entity_id=str(recommendation.id),
+        decision=decision,
+        actor=actor,
+        note=note,
+        trace_id=trace_id,
+    )
     await session.refresh(recommendation)
     return recommendation
 

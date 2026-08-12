@@ -96,6 +96,22 @@ class Settings(BaseSettings):
     queue_health_oldest_pending_ms: int = 600000
     queue_health_oldest_running_ms: int = 600000
     queue_health_max_stale_workers: int = 0
+    # --- M5.4 Alert Service thresholds (config-driven, never hardcoded) ----
+    # An alert is opened when the live queue/worker/metric state crosses one
+    # of these thresholds; the same problem keeps ONE active alert (dedup by
+    # workspace + agent + alert_type + resource) until it is resolved.
+    alert_queue_depth_threshold: int = 100
+    alert_oldest_pending_age_ms: int = 600000
+    alert_worker_dead_timeout_seconds: int = 60
+    alert_failure_rate_threshold: float = 0.15
+    alert_retry_rate_threshold: float = 0.50
+    alert_dlq_growth_threshold: int = 10
+    alert_llm_latency_threshold_ms: int = 30000
+    alert_budget_warning_threshold: Decimal = Decimal("0.80")
+    alert_approval_timeout_threshold_seconds: int = 3600
+    alert_stats_window_minutes: int = 60
+    alert_max_severity_queue_backlog: int = 200
+
     # Window (minutes) used for throughput / success / failure rates in stats.
     queue_stats_window_minutes: int = 60
 

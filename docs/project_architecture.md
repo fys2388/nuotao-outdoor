@@ -1,4 +1,4 @@
-﻿# Nuotao Outdoor AI OS — 项目架构分析
+# Nuotao Outdoor AI OS — 项目架构分析
 
 > 版本：v0.3（架构规划草案）
 > 状态：规划阶段，未开始编码
@@ -675,6 +675,75 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 | v0.5 | 2026-08-11 | M1.6 加固：订单查询 API（过滤/分页/排序/明细）、利润成本置信度（KNOWN/ESTIMATED/UNKNOWN + PROFIT-003 门禁）；M2.1 产品智能底座：product_sources / product_cost_snapshots / product_scores / product_analysis_runs / product_decisions、人工+CSV 录入、确定性分析链（Cost→Logistics→Profit→Rule→Score）、决策审批状态机 |
 
 | v0.4 | 2026-08-11 | M1.5 订单域落地：orders/order_items、WooCommerce Webhook（HMAC 验签 + 幂等 + 网关 topic 404 兼容）、利润引擎（Contribution Margin）、PRICE/PROFIT/FULFILLMENT 规则接入、全链路 trace_id 审计 |
+
+
+## § M5.4 Production Operations & Human Control
+
+> 目标：把 Agent Runtime 从"可靠运行 + 可观测"升级到"可监控 + 可人工干预 + 可安全恢复 + 可多 Worker 扩展"。
+> 约束：不开发新业务 Agent；不自动执行任何商业动作；L3 高风险动作必须人工审批；DLQ 只能"提案 → 人工审批 → 新 attempt"。
+
+### 1. 定位与分层
+
+- **Redis Streams = at-least-once 传输**：一条消息可能被投递多次（producer 重试、worker crash + XAUTOCLAIM、重复 XADD）。
+- **PostgreSQL = 业务事实源**：worker 只执行 `pending` 的 task 行，业务效果为 effectively-once / idempotent。
+- **Dedup = 消息级优化 + DB 幂等护栏**：Redis dedup token 只拦截并发重复投递，绝不替代 DB 状态守卫。
+- 本阶段不提供理论意义上的分布式 exactly-once，文档与代码都明确不夸大。
+
+### 2. Alert Service（agent_alerts）
+
+- 生命周期：`open → acknowledged → resolved`。
+- 规则全部配置化（`alert_*` 配置项），从 live Redis + PostgreSQL 状态计算，禁止硬编码阈值。
+- 覆盖：queue backlog、oldest pending、worker dead、failure rate、retry rate、DLQ growth、LLM latency、budget warning、approval timeout。
+- **Dedup**：`dedup_key = workspace + agent + alert_type + resource`；部分唯一索引保证同一问题同时只有一个 active alert，未恢复前不重复创建。
+- 事件：`agent.alert.created / acknowledged / resolved`。
+- API：`GET /agent-alerts`、`POST /agent-alerts/evaluate`、`GET /agent-alerts/{id}`、`POST /agent-alerts/{id}/ack`、`POST /agent-alerts/{id}/resolve`。
+
+### 3. Human Approval Center（agent_approvals）
+
+- 统一抽象四类人工审批：`L3_TOOL`（L3 Agent 工具）、`RECOMMENDATION`（业务建议）、`CALIBRATION`（校准提案）、`DLQ_REPLAY`（死信重放）。
+- 生命周期：`pending → approved / rejected`；二次 approve/reject 返回 400；跨 workspace 完全隔离。
+- 审批动作全量审计：actor、action、note、decided_at、trace_id，并写入 `event_log`（`agent.approval.created / approved / rejected`）。
+- 底层服务（execution waiting_approval、recommendation proposed、calibration proposed）通过 hook 自动进入审批中心；旧端点直接审批时同步回写审批行。
+- API：`GET /approvals`、`GET /approvals/{id}`、`POST /approvals/{id}/approve`、`POST /approvals/{id}/reject`。
+
+### 4. DLQ Human Replay
+
+- `POST /agent-queue/dead-letters/{task_id}/replay` 只创建 replay **提案**（`DLQ_REPLAY` 审批行），绝不直接重放。
+- 审批通过后：task 重置为 `pending`、`attempt_count+1`、重新入队；原 attempt 审计行不可变；`replay_count`/`replay_reason`/actor 记录在提案 metadata。
+- 同一 task 同一时刻只允许一个 pending replay 提案（部分唯一索引 + 行级 claim + task 状态守卫，防止双审批人同时重放）。
+- 事件：`agent.dlq.replay_proposed / approved / started`；重放失败可再次进入 DLQ。
+- 禁止 API 自动 replay（本阶段无 DLQ replay 直通端点）。
+
+### 5. Worker 多进程 / 水平扩展
+
+- 消费模型不变：同一 Consumer Group + 不同 consumer（worker_id），`XREADGROUP` 自动分发。
+- 真实 Redis + PostgreSQL 集成测试验证 1 / 2 / 4 workers 并发消费 100 tasks：
+  - 全部 task 恰好产生 100 条 execution（无重复业务效应）。
+  - workspace 完全隔离（两个 workspace 共享队列互不串数据）。
+  - 记录吞吐 / p50 / p95 / failure rate（不作为硬性 benchmark 门槛）。
+
+### 6. Runtime Overview API
+
+- `GET /agent-runtime/overview`：一次请求返回 Dashboard 摘要（agents、workers、queue stats、executions、retry、DLQ、approvals、alerts、cost、tokens、failure_rate），全部来自 live 状态。
+- 保留 M5.3 全部旧 API：`/agent-queue/stats`、`/agent-queue/health`、`/agent-workers`、`/agent-queue/dead-letters`、`/agent-traces/{trace_id}`。
+- 事件：`agent.runtime.overview_queried`。
+
+### 7. Trace UI / Runtime Console
+
+- 静态页面挂载于 `/agent-runtime`（index.html）与 `/agent-runtime/traces/{trace_id}`（trace.html），纯原生 JS，无构建步骤。
+- 控制台展示 Queue / Workers / Alerts / Approvals / DLQ / Recent Executions；Trace 页按时间序渲染 Task → Execution → Attempts → LLM → Tools → Approval → Decision → Evaluation → Events 节点。
+- **敏感数据保护**：完整 prompt / PII / credentials 不允许出现在 UI；Trace 页只渲染白名单审计字段。
+
+### 8. 数据库变更（0019）
+
+| 表 | 说明 |
+|---|---|
+| agent_alerts | Alert 记录（workspace/agent/type/status/severity/resource/dedup_key/threshold_snapshot/ack/resolved） |
+| agent_approvals | 统一审批中心（approval_type/status/entity/target_task/actor/action/note/decided_at/trace_id） |
+
+### 9. 事件清单（新增）
+
+`agent.alert.created/acknowledged/resolved`、`agent.approval.created/approved/rejected`、`agent.dlq.replay_proposed/replay_started`、`agent.runtime.overview_queried`。
 
 | v0.3 | 2026-08-11 | M1 数据底座：workspace/event_log/products/suppliers/rules/rule_execution_logs/ai_agent_runs 与事件、规则引擎骨架 |
 

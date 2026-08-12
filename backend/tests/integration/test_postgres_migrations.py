@@ -1,6 +1,6 @@
 """M5.2.1 PostgreSQL production validation (real PostgreSQL 16).
 
-Runs the full Alembic chain (0001 -> 0018) against a real PostgreSQL server
+Runs the full Alembic chain (0001 -> 0019) against a real PostgreSQL server
 (embedded binaries via pgserver), drills downgrade/upgrade, and proves the
 constraints and isolation guarantees the schema relies on: FK, UNIQUE, JSONB,
 Numeric, BIGSERIAL and workspace isolation, plus transaction-rollback
@@ -63,11 +63,11 @@ async def _index_names(conn, table: str) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
-    """The full migration chain applies to real PostgreSQL and ends at 0018."""
+    """The full migration chain applies to real PostgreSQL and ends at 0019 (M5.4)."""
     conn = await _connect(pg_migrated)
     try:
         version = await conn.fetchval("SELECT version_num FROM alembic_version")
-        assert version == "0018"
+        assert version == "0019"
 
         # Core brain schema tables (M1/M2)
         for table in (
@@ -124,22 +124,22 @@ async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2. Downgrade / upgrade drill (0018 -> 0017 -> 0012 -> head)
+# 2. Downgrade / upgrade drill (0019 -> 0018 -> 0017 -> 0012 -> head)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
 async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> None:
-    """Downgrade drills (0018 -> 0017 -> 0012) then upgrade back to head."""
+    """Downgrade drills (0019 -> 0018 -> 0017 -> 0012) then upgrade back to head."""
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0018"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0019"
         assert await _column_type(conn, "agent_tasks", "idempotency_key") == "varchar"
     finally:
         await conn.close()
 
-    # Downgrade 0018 -> 0017 drops the idempotency column.
+    # Downgrade 0019 -> 0018 drops the agent alerts + approvals tables.
     await asyncio.to_thread(run_alembic, pg_database_url, "downgrade", "0017")
     conn = await _connect(pg_database_url)
     try:
@@ -160,11 +160,11 @@ async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> No
     finally:
         await conn.close()
 
-    # Upgrade back to head: everything is restored, including migration 0018.
+    # Upgrade back to head: everything is restored, including migration 0019.
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0018"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0019"
         assert await _table_exists(conn, "agents") is True
         assert await _table_exists(conn, "agent_metrics") is True
         assert await _column_type(conn, "agent_tasks", "idempotency_key") == "varchar"

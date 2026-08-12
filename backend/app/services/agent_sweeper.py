@@ -93,6 +93,20 @@ async def expire_stale_approvals(
             payload={"task_id": str(execution.task_id), "decision": "rejected"},
             trace_id=trace_id,
         )
+        # M5.4: keep the unified Approval Center row in sync (auto-reject is
+        # never an approval - the decision is always "rejected").
+        from app.services.approval_service import sync_approval
+
+        await sync_approval(
+            session,
+            workspace_id=workspace_id,
+            approval_type="L3_TOOL",
+            entity_id=str(execution.id),
+            decision="rejected",
+            actor="system-sweeper",
+            note="approval deadline exceeded; auto-rejected",
+            trace_id=trace_id,
+        )
     return len(rows)
 
 

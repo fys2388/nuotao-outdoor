@@ -1,4 +1,4 @@
-"""Agent queue observability (M5.3).
+"""Agent queue observability (M5.3/5.4).
 
 Computes queue stats / health / dead-letter / trace views from LIVE Redis and
 PostgreSQL state - nothing is hardcoded or cached-stale. Delivery semantics
@@ -19,23 +19,37 @@ DLQ surface is read-only for viewing / statistics / audit.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.agent import AiAgentRun
+from app.models.agent_operations import AgentApproval
 from app.models.agent_runtime import AgentEvaluation, AgentExecution, AgentTask
 from app.models.agent_runtime_hardening import AgentTaskAttempt
 from app.models.event import EventLog
 from app.models.product_intelligence import ProductDecision
-from app.services import agent_workers, task_queue
+from app.services import agent_workers, event_service, task_queue
 
 TERMINAL_STATUSES = ("completed", "failed", "rejected")
+
+logger = logging.getLogger(__name__)
+
+
+class AgentQueueError(Exception):
+    """Raised when a queue operation cannot complete."""
+
+
+def agent_queue_error(message: str) -> AgentQueueError:
+    """Return a pre-built queue error (keeps raise sites one-liners)."""
+    return AgentQueueError(message)
 
 
 def _now() -> datetime:
@@ -693,3 +707,144 @@ async def get_trace(
         return None
     nodes.sort(key=lambda node: node["timestamp"] or "")
     return {"trace_id": trace_id, "nodes": nodes}
+
+
+# --------------------------------------------------------------------------- #
+# DLQ human replay (M5.4): proposal -> human approval -> new attempt
+# --------------------------------------------------------------------------- #
+
+
+async def propose_dlq_replay(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    task_id: UUID,
+    reason: str,
+    trace_id: str | None = None,
+) -> AgentApproval:
+    """Create a DLQ replay PROPOSAL (never a direct replay).
+
+    The proposal is an ``AgentApproval`` row with ``approval_type=DLQ_REPLAY``
+    and status ``pending``. Only a human approval through the Approval Center
+    may actually re-enqueue the task (see :func:`replay_dead_letter`). The
+    partial unique index guarantees at most one pending proposal per task, so
+    two people cannot both propose/approve the same replay.
+    """
+    task = await session.get(AgentTask, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise agent_queue_error("dead-letter task not found")
+    if task.status != "failed":
+        raise agent_queue_error(
+            f"task is {task.status}; only dead-lettered (failed) tasks can be replayed"
+        )
+    approval = AgentApproval(
+        workspace_id=workspace_id,
+        approval_type="DLQ_REPLAY",
+        status="pending",
+        entity_type="agent_task",
+        entity_id=str(task.id),
+        target_task_id=task.id,
+        agent_id=task.agent_id,
+        metadata_={
+            "proposed_reason": reason,
+            "original_error": task.error_message,
+            "original_attempt_count": task.attempt_count,
+        },
+        trace_id=trace_id,
+    )
+    session.add(approval)
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        raise agent_queue_error("a replay proposal already exists for this task") from None
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.approval.created",
+        entity_type="agent_approval",
+        entity_id=str(approval.id),
+        payload={
+            "approval_type": "DLQ_REPLAY",
+            "entity_id": str(task.id),
+            "reason": reason,
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.dlq.replay_proposed",
+        entity_type="agent_task",
+        entity_id=str(task.id),
+        payload={
+            "proposal_id": str(approval.id),
+            "reason": reason,
+            "original_error": task.error_message,
+            "attempt_count": task.attempt_count,
+        },
+        trace_id=trace_id,
+    )
+    logger.info(
+        "DLQ replay proposed for task %s (proposal=%s) trace=%s",
+        task.id,
+        approval.id,
+        trace_id,
+    )
+    await session.refresh(approval)
+    return approval
+
+
+async def replay_dead_letter(
+    session: AsyncSession,
+    backend: task_queue.TaskQueueBackend,
+    *,
+    workspace_id: UUID,
+    task_id: UUID,
+    trace_id: str | None = None,
+) -> AgentTask:
+    """Execute an APPROVED DLQ replay: requeue one new attempt.
+
+    Called only from the Approval Center after a human approved the replay
+    proposal. The original task row is mutated to ``pending`` (fresh attempt
+    number) and re-enqueued; the original attempt audit rows are never
+    touched. A task that is no longer ``failed`` (someone else already
+    replayed it) refuses the replay.
+    """
+    task = await session.get(AgentTask, task_id)
+    if task is None or task.workspace_id != workspace_id:
+        raise agent_queue_error("dead-letter task not found")
+    if task.status != "failed":
+        raise agent_queue_error(
+            f"task is {task.status}; only dead-lettered (failed) tasks can be replayed"
+        )
+    attempt = max(task.attempt_count or 0, 1) + 1
+    task.status = "pending"
+    task.started_at = None
+    task.completed_at = None
+    task.error_message = None
+    task.attempt_count = attempt
+    await session.flush()
+    await task_queue.enqueue_task(
+        backend,
+        workspace_id=workspace_id,
+        task_id=task.id,
+        attempt=attempt,
+        idempotency_key=task.idempotency_key,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.dlq.replay_started",
+        entity_type="agent_task",
+        entity_id=str(task.id),
+        payload={"attempt": attempt, "source": "human_approved_replay"},
+        trace_id=trace_id,
+    )
+    logger.info(
+        "DLQ replay started for task %s (attempt=%s) trace=%s",
+        task.id,
+        attempt,
+        trace_id,
+    )
+    return task

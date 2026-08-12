@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    agent_operations,
     agent_runtime,
     agent_runtime_hardening,
     agents,
@@ -48,3 +49,4 @@ api_router.include_router(supply_chain_learning.router)
 api_router.include_router(connectors.router)
 api_router.include_router(agent_runtime.router)
 api_router.include_router(agent_runtime_hardening.router)
+api_router.include_router(agent_operations.router)

@@ -179,6 +179,12 @@ def redis_url(redis_server_bin: Path) -> Iterator[str]:
 @pytest.fixture(scope="session")
 def pg_server() -> Iterator[str]:
     """Start one embedded PostgreSQL 16 instance; yields the admin URI."""
+    # ``initdb`` derives its default locale from the OS. On Windows systems
+    # with a non-English locale (e.g. zh-CN) it fails with "could not find
+    # suitable text search configuration"; pinning C locale keeps the
+    # embedded instance deterministic and portable.
+    os.environ.setdefault("LANG", "C")
+    os.environ.setdefault("LC_ALL", "C")
     pgserver = pytest.importorskip("pgserver")
     tmp = Path(tempfile.mkdtemp(prefix="nuotao_pg_"))
     server = pgserver.PostgresServer(tmp, cleanup_mode="delete")

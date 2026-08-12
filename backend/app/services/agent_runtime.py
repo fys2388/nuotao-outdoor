@@ -648,6 +648,20 @@ async def _waiting_approval(
         payload={"reason": reason},
         trace_id=trace_id,
     )
+    # M5.4: surface every L3 decision in the unified Approval Center.
+    from app.services.approval_service import ensure_approval
+
+    await ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="L3_TOOL",
+        entity_type="agent_execution",
+        entity_id=str(execution.id),
+        target_task_id=execution.task_id,
+        agent_id=execution.agent_id,
+        metadata_={"reason": reason},
+        trace_id=trace_id,
+    )
     await session.refresh(execution)
     return execution
 
@@ -687,6 +701,20 @@ async def approve_execution(
         entity_type="agent_execution",
         entity_id=str(execution.id),
         payload={"actor": actor, "note": note},
+        trace_id=trace_id,
+    )
+    # M5.4: keep the unified Approval Center row in sync when the legacy
+    # endpoint decides directly.
+    from app.services.approval_service import sync_approval
+
+    await sync_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="L3_TOOL",
+        entity_id=str(execution.id),
+        decision="approved",
+        actor=actor,
+        note=note,
         trace_id=trace_id,
     )
     logger.info("execution %s approved by %s trace=%s", execution.id, actor, trace_id)
@@ -734,6 +762,18 @@ async def reject_execution(
         entity_type="agent_execution",
         entity_id=str(execution.id),
         payload={"actor": actor, "note": note},
+        trace_id=trace_id,
+    )
+    from app.services.approval_service import sync_approval
+
+    await sync_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="L3_TOOL",
+        entity_id=str(execution.id),
+        decision="rejected",
+        actor=actor,
+        note=note,
         trace_id=trace_id,
     )
     logger.info("execution %s rejected by %s trace=%s", execution.id, actor, trace_id)

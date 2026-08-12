@@ -1,6 +1,7 @@
 """ORM models package - importing it registers all models on Base.metadata."""
 
 from app.models.agent import AiAgentRun
+from app.models.agent_operations import AgentAlert, AgentApproval
 from app.models.agent_runtime import (
     AgentEvaluation,
     AgentExecution,
@@ -81,6 +82,8 @@ from app.models.workspace import Workspace
 
 __all__ = [
     "AiAgentRun",
+    "AgentAlert",
+    "AgentApproval",
     "AgentEvaluation",
     "AgentExecution",
     "AgentMemory",

@@ -360,6 +360,18 @@ async def run_score_calibration(
         },
         trace_id=trace_id,
     )
+    # M5.4: surface calibration proposals in the unified Approval Center.
+    from app.services.approval_service import ensure_approval
+
+    await ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="CALIBRATION",
+        entity_type="score_calibration_run",
+        entity_id=str(run.id),
+        metadata_={"suggested_weights": run.suggested_weights},
+        trace_id=trace_id,
+    )
     logger.info(
         "score calibration run %s proposed (n=%s) trace=%s",
         run.id,
@@ -424,6 +436,18 @@ async def approve_calibration(
         trace_id=trace_id,
     )
     logger.info("calibration run %s approved by %s trace=%s", run.id, data.actor, trace_id)
+    from app.services.approval_service import sync_approval
+
+    await sync_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="CALIBRATION",
+        entity_id=str(run.id),
+        decision="approved",
+        actor=data.actor,
+        note=data.note,
+        trace_id=trace_id,
+    )
     return run
 
 
@@ -456,6 +480,18 @@ async def reject_calibration(
         entity_type="workspace",
         entity_id=str(workspace_id),
         payload={"run_id": str(run.id), "rejected_by": data.actor, "note": data.note},
+        trace_id=trace_id,
+    )
+    from app.services.approval_service import sync_approval
+
+    await sync_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="CALIBRATION",
+        entity_id=str(run.id),
+        decision="rejected",
+        actor=data.actor,
+        note=data.note,
         trace_id=trace_id,
     )
     return run

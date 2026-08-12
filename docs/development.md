@@ -762,3 +762,63 @@ set PYTHONPATH=%CD%
 .venv\Scripts\python -m ruff check .             # 全绿
 .venv\Scripts\python -m ruff format --check .     # 全绿
 .venv\Scripts\python -m alembic heads             # 0018 (head) — M5.3 零新增迁移
+
+### 8.18 ??????????M5.4?
+
+> ???? Agent Runtime ??????? + ????? + ????? + ?? Worker ????
+> ???????? Agent???????????????? replay DLQ???? approve?
+> ?? L3 / DLQ replay / calibration ?????? Human Approval Center?
+
+# 1) Alert Service???????????????????????? active alert?
+# ???????????????????
+curl -X POST http://localhost:8000/api/v1/agent-alerts/evaluate -H "X-Workspace-Id: <ws>"
+# ?? / ?? / ???
+curl "http://localhost:8000/api/v1/agent-alerts?status=open&alert_type=worker_dead&limit=50&offset=0" -H "X-Workspace-Id: <ws>"
+curl -X POST http://localhost:8000/api/v1/agent-alerts/<alert_id>/ack   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"actor":"ops-zhang","note":"ack before handover"}'
+curl -X POST http://localhost:8000/api/v1/agent-alerts/<alert_id>/resolve   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"actor":"ops-zhang","note":"recovered"}'
+# Alert ???queue_backlog / oldest_pending / worker_dead / failure_rate / retry_rate /
+#   dlq_growth / llm_latency / budget_warning / approval_timeout
+# ????open -> acknowledged -> resolved????agent.alert.created/acknowledged/resolved?
+# dedup_key = workspace + agent + alert_type + resource?? resolve ??????
+
+# 2) Human Approval Center??????L3 tool / recommendation / calibration / DLQ replay?
+curl "http://localhost:8000/api/v1/approvals?status=pending&approval_type=DLQ_REPLAY&limit=50" -H "X-Workspace-Id: <ws>"
+curl -X POST http://localhost:8000/api/v1/approvals/<approval_id>/approve   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"actor":"ops-zhang","note":"approved, retry once"}'
+curl -X POST http://localhost:8000/api/v1/approvals/<approval_id>/reject   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"actor":"ops-zhang","note":"known upstream issue"}'
+# ?? approve/reject ?? 400?? workspace ??????? event_log?agent.approval.*?
+
+# 3) DLQ Human Replay??? proposal -> ???? -> ? attempt?? attempt ?????
+curl -X POST http://localhost:8000/api/v1/agent-queue/dead-letters/<task_id>/replay   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"reason":"upstream recovered, retry once"}'
+# ?? 201 proposal???? /approvals ??? approve ???? enqueue ? attempt?
+# replay ??????? DLQ??? task ????????????? 400
+curl -X POST http://localhost:8000/api/v1/approvals/<proposal_id>/approve   -H "Content-Type: application/json" -H "X-Workspace-Id: <ws>"   -d '{"actor":"ops-zhang","note":"go"}'
+
+# 4) Runtime Overview?Dashboard ??????agents/workers/queue/executions/retry/DLQ/approvals/alerts/cost/tokens/failure_rate?
+curl http://localhost:8000/api/v1/agent-runtime/overview -H "X-Workspace-Id: <ws>"
+# ????? agent.runtime.overview_queried ??
+
+# 5) Worker ??? / ????????? Redis + PostgreSQL ?????
+cd backend
+set PYTHONPATH=%CD%
+.venv\Scripts\python -m pytest tests/integration/test_operations_integration.py -q -s
+# ???1/2/4 worker ? 100 tasks ?? 100 ?????????????? workspace ???
+#   DLQ replay ???????3 ? provider ?? -> DLQ -> proposal -> approve -> ? attempt ????
+#   Alert ????? dedup
+# ???????throughput 26/42/43 tasks/s?1/2/4 workers??p50=2ms?p95=3ms?failure=0
+
+# 6) Trace Console?Runtime UI??????
+# Console:  http://localhost:8000/agent-runtime
+# Trace:    http://localhost:8000/agent-runtime/traces/{trace_id}
+# ???Queue Overview / Worker Status / Active Alerts / Pending Approvals / DLQ?propose replay?/ Recent Executions
+# ???UI ?????????????? prompt / PII / credentials
+
+# 7) ???
+# ?? migration 0019_agent_operations?agent_alerts?dedup ????????agent_approvals?DLQ ?????????
+cd backend
+.venv\Scripts\python -m alembic upgrade head   # head = 0019
+
+# 8) ????
+.venv\Scripts\python -m pytest tests -q        # 273 + 24 ?? + 5 ?? = 302+???????? LLM key ???
+.venv\Scripts\python -m ruff check .           # ??
+.venv\Scripts\python -m ruff format --check .  # ??
+.venv\Scripts\python -m alembic heads          # 0019 (head)
