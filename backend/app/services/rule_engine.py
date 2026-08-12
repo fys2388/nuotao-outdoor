@@ -203,9 +203,7 @@ def _rule_result(
     score: float | None = None,
 ) -> RuleResult:
     """Build a RuleResult with a human-readable reason."""
-    message = rule.then_result.get(
-        "passed_message" if passed else "failed_message"
-    )
+    message = rule.then_result.get("passed_message" if passed else "failed_message")
     reasons = [message or f"condition {'met' if passed else 'not met'}"]
     return RuleResult(
         rule_id=rule.rule_id,
@@ -295,9 +293,7 @@ async def evaluate(
         raise RuleEngineError(f"active rule '{rule_id}' not found")
 
     rule = max(rules, key=lambda r: (r.created_at, str(r.id)))
-    passed = evaluate_conditions(rule.when_conditions, context) and _matches_scope(
-        rule, context
-    )
+    passed = evaluate_conditions(rule.when_conditions, context) and _matches_scope(rule, context)
     score: float | None = None
     if rule.rule_type == "soft":
         if passed:

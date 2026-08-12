@@ -1,4 +1,4 @@
-﻿"""Tests for the WooCommerce webhook -> order -> event -> rule loop.
+"""Tests for the WooCommerce webhook -> order -> event -> rule loop.
 
 Covers signature verification, idempotency, payload validation, order/event
 creation, rule execution, profit calculation integration and audit logs.
@@ -199,10 +199,10 @@ async def test_webhook_creates_order_with_full_loop(db_session, api_client) -> N
     assert order.total == Decimal("100.00")
     assert order.trace_id == result["trace_id"]
     items = (
-        await db_session.execute(
-            select(OrderItem).where(OrderItem.order_id == order.id)
-        )
-    ).scalars().all()
+        (await db_session.execute(select(OrderItem).where(OrderItem.order_id == order.id)))
+        .scalars()
+        .all()
+    )
     assert len(items) == 1
     item: OrderItem = items[0]
     assert item.sku == "SKU-001"
@@ -280,10 +280,14 @@ async def test_webhook_rule_execution_is_audited(db_session, api_client) -> None
     trace_id = response.json()["trace_id"]
 
     logs = (
-        await db_session.execute(
-            select(RuleExecutionLog).where(RuleExecutionLog.trace_id == trace_id)
+        (
+            await db_session.execute(
+                select(RuleExecutionLog).where(RuleExecutionLog.trace_id == trace_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {log.rule_id for log in logs} == {
         "PRICE-001",
         "PROFIT-002",

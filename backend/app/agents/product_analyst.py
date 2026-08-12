@@ -89,9 +89,7 @@ def _as_decimal(value: Any) -> Decimal | None:
         return None
 
 
-async def _load_product(
-    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
-) -> None:
+async def _load_product(session: AsyncSession, *, workspace_id: UUID, product_id: UUID) -> None:
     """Verify the product exists (read-only); raises ProductAnalystError."""
     from app.models.product import Product
 
@@ -157,9 +155,7 @@ def _validate_output(
 
     if cost_status == "UNKNOWN":
         if output.decision == "test":
-            failures.append(
-                "cost_status UNKNOWN forbids a 'test' decision (PROFIT-003 gate)"
-            )
+            failures.append("cost_status UNKNOWN forbids a 'test' decision (PROFIT-003 gate)")
         if output.confidence > UNKNOWN_COST_MAX_CONFIDENCE:
             failures.append(
                 "cost_status UNKNOWN caps confidence at "
@@ -477,7 +473,11 @@ async def analyze_product(
     )
     logger.info(
         "product analyst %s decision=%s confidence=%s cost=%s trace=%s",
-        product_id, decision_value, output.confidence, response.cost, trace_id,
+        product_id,
+        decision_value,
+        output.confidence,
+        response.cost,
+        trace_id,
     )
     return ProductAnalysisResult(analysis_run=run, decision=decision, output=output)
 
@@ -487,17 +487,21 @@ async def latest_runs(
 ) -> list[ProductAnalysisRun]:
     """List the most recent analyst runs for a product (newest first)."""
     rows = (
-        await session.execute(
-            select(ProductAnalysisRun)
-            .where(
-                ProductAnalysisRun.workspace_id == workspace_id,
-                ProductAnalysisRun.product_id == product_id,
-                ProductAnalysisRun.provider != "deterministic",
+        (
+            await session.execute(
+                select(ProductAnalysisRun)
+                .where(
+                    ProductAnalysisRun.workspace_id == workspace_id,
+                    ProductAnalysisRun.product_id == product_id,
+                    ProductAnalysisRun.provider != "deterministic",
+                )
+                .order_by(ProductAnalysisRun.created_at.desc())
+                .limit(limit)
             )
-            .order_by(ProductAnalysisRun.created_at.desc())
-            .limit(limit)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 

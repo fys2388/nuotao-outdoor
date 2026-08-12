@@ -1,4 +1,4 @@
-﻿"""Order query API endpoints."""
+"""Order query API endpoints."""
 
 from datetime import datetime
 from typing import Annotated
@@ -79,11 +79,7 @@ async def get_order(
     workspace_id: WorkspaceId,
 ) -> OrderDetailOut:
     """Return one order including its line items."""
-    order = await order_service.get_order(
-        db, workspace_id=workspace_id, order_id=order_id
-    )
+    order = await order_service.get_order(db, workspace_id=workspace_id, order_id=order_id)
     if order is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="order not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
     return OrderDetailOut.model_validate(order)

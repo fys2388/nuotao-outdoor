@@ -130,9 +130,7 @@ async def import_products(
     # Only sku/name are mandatory; the remaining columns are optional.
     missing = [f for f in ("sku", "name") if f not in (reader.fieldnames or [])]
     if missing:
-        raise ProductImportError(
-            f"CSV is missing required columns: {', '.join(missing)}"
-        )
+        raise ProductImportError(f"CSV is missing required columns: {', '.join(missing)}")
 
     imported = 0
     updated = 0
@@ -316,17 +314,19 @@ async def list_products(
         filters.append(Product.category == category)
 
     total = (
-        await session.execute(
-            select(func.count()).select_from(Product).where(*filters)
-        )
+        await session.execute(select(func.count()).select_from(Product).where(*filters))
     ).scalar_one()
     rows = (
-        await session.execute(
-            select(Product)
-            .where(*filters)
-            .order_by(Product.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+        (
+            await session.execute(
+                select(Product)
+                .where(*filters)
+                .order_by(Product.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return rows, total

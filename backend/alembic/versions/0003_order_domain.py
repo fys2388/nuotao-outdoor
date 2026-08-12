@@ -50,13 +50,23 @@ def upgrade() -> None:
         sa.Column("payment_fee", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("refunded_amount", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("advertising_cost", sa.Numeric(12, 2), nullable=False, server_default="0"),
-        sa.Column("profit_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "profit_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
         sa.Column("rule_results", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("trace_id", sa.String(length=64), nullable=True),
-        sa.Column("received_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("workspace_id", "external_order_id", name="uq_orders_workspace_external"),
+        sa.Column(
+            "received_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.UniqueConstraint(
+            "workspace_id", "external_order_id", name="uq_orders_workspace_external"
+        ),
     )
     op.create_index("ix_orders_workspace_id", "orders", ["workspace_id"])
     op.create_index("ix_orders_status", "orders", ["status"])
@@ -66,16 +76,24 @@ def upgrade() -> None:
         "order_items",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("order_id", UUID(), sa.ForeignKey("orders.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "order_id", UUID(), sa.ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("external_item_id", sa.String(length=64), nullable=True),
-        sa.Column("product_id", UUID(), sa.ForeignKey("products.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "product_id", UUID(), sa.ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+        ),
         sa.Column("sku", sa.String(length=64), nullable=True),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("quantity", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("unit_price", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("line_total", sa.Numeric(12, 2), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_order_items_workspace_id", "order_items", ["workspace_id"])
     op.create_index("ix_order_items_order_id", "order_items", ["order_id"])
@@ -107,7 +125,11 @@ def upgrade() -> None:
             "rule_type": "hard",
             "version": "v1",
             "status": "active",
-            "when_conditions": {"field": "profit.contribution_margin_rate", "op": "gte", "value": 0.2},
+            "when_conditions": {
+                "field": "profit.contribution_margin_rate",
+                "op": "gte",
+                "value": 0.2,
+            },
             "then_result": {
                 "passed_message": "margin rate acceptable",
                 "failed_message": "margin rate below 20%",

@@ -1,4 +1,4 @@
-﻿"""Product intelligence service: deterministic analysis chain (M2.1, no LLM).
+"""Product intelligence service: deterministic analysis chain (M2.1, no LLM).
 
 Chain: Product -> Cost -> Logistics -> Profit -> Rule Engine -> Score Context.
 
@@ -179,15 +179,19 @@ async def _load_cost(
 ) -> ProductCost | None:
     """Return the newest current cost row for a product (if any)."""
     rows = (
-        await session.execute(
-            select(ProductCost)
-            .where(
-                ProductCost.workspace_id == workspace_id,
-                ProductCost.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductCost)
+                .where(
+                    ProductCost.workspace_id == workspace_id,
+                    ProductCost.product_id == product_id,
+                )
+                .order_by(ProductCost.valid_from.desc())
             )
-            .order_by(ProductCost.valid_from.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return rows[0] if rows else None
 
 
@@ -250,9 +254,7 @@ async def analyze_product(
     margin_rate: Decimal | None = None
     shipping_ratio: Decimal | None = None
     if price is not None:
-        profit = calculate_contribution_margin(
-            ProfitInput(revenue=price, product_cost=total_cost)
-        )
+        profit = calculate_contribution_margin(ProfitInput(revenue=price, product_cost=total_cost))
         margin_rate = profit.contribution_margin_rate
         shipping = (cost.first_leg_shipping + cost.last_leg_shipping) if cost else ZERO
         if shipping > ZERO and price > ZERO:
@@ -283,8 +285,7 @@ async def analyze_product(
     }
 
     total = sum(
-        dimensions[key] * Decimal(str(SCORE_WEIGHTS[key]))
-        for key in SCORE_WEIGHTS
+        dimensions[key] * Decimal(str(SCORE_WEIGHTS[key])) for key in SCORE_WEIGHTS
     ) * Decimal("10")
     total = total.quantize(Decimal("0.01"))
 
@@ -303,9 +304,7 @@ async def analyze_product(
         context=context,
         trace_id=trace_id,
     )
-    vetoed = any(
-        r.rule_type == "hard" and not r.passed for r in check.results
-    )
+    vetoed = any(r.rule_type == "hard" and not r.passed for r in check.results)
     rule_results = [r.model_dump() for r in check.results]
 
     scored_at = datetime.now(UTC)
@@ -388,7 +387,10 @@ async def analyze_product(
 
     logger.info(
         "product %s scored total=%s vetoed=%s trace=%s",
-        product_id, total, vetoed, trace_id,
+        product_id,
+        total,
+        vetoed,
+        trace_id,
     )
     return ScoreContext(
         product_id=product_id,
@@ -614,14 +616,10 @@ def _bump_version(version: str) -> str:
     return f"v{number + 1}"
 
 
-
-
-
 def _json_safe_targets(targets: dict) -> dict:
     """Make experiment target values JSON-serializable (Decimal -> str)."""
     return {
-        key: (str(value) if isinstance(value, Decimal) else value)
-        for key, value in targets.items()
+        key: (str(value) if isinstance(value, Decimal) else value) for key, value in targets.items()
     }
 
 
@@ -649,9 +647,7 @@ async def intake_product(
             )
         ).scalar_one_or_none()
         if supplier is None:
-            raise ProductIntelligenceError(
-                f"supplier_code '{data.supplier_code}' not found"
-            )
+            raise ProductIntelligenceError(f"supplier_code '{data.supplier_code}' not found")
         supplier_id = supplier
 
     product = (
@@ -727,15 +723,19 @@ async def intake_product(
 
     # Locate the just-created score row for the response.
     score_row = (
-        await session.execute(
-            select(ProductScore)
-            .where(
-                ProductScore.workspace_id == workspace_id,
-                ProductScore.product_id == product.id,
+        (
+            await session.execute(
+                select(ProductScore)
+                .where(
+                    ProductScore.workspace_id == workspace_id,
+                    ProductScore.product_id == product.id,
+                )
+                .order_by(ProductScore.scored_at.desc())
             )
-            .order_by(ProductScore.scored_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     return ProductIntakeResult(
         product=product,
@@ -754,15 +754,19 @@ async def propose_decision(
 ) -> ProductDecision:
     """Propose a decision from the latest score (deterministic, pending approval)."""
     score = (
-        await session.execute(
-            select(ProductScore)
-            .where(
-                ProductScore.workspace_id == workspace_id,
-                ProductScore.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductScore)
+                .where(
+                    ProductScore.workspace_id == workspace_id,
+                    ProductScore.product_id == product_id,
+                )
+                .order_by(ProductScore.scored_at.desc())
             )
-            .order_by(ProductScore.scored_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if score is None:
         raise ProductIntelligenceError("product has no score; run analysis first")
 
@@ -954,15 +958,19 @@ async def list_sources(
     session: AsyncSession, *, workspace_id: UUID, product_id: UUID
 ) -> list[ProductSource]:
     rows = (
-        await session.execute(
-            select(ProductSource)
-            .where(
-                ProductSource.workspace_id == workspace_id,
-                ProductSource.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductSource)
+                .where(
+                    ProductSource.workspace_id == workspace_id,
+                    ProductSource.product_id == product_id,
+                )
+                .order_by(ProductSource.captured_at.desc())
             )
-            .order_by(ProductSource.captured_at.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -970,15 +978,19 @@ async def list_cost_snapshots(
     session: AsyncSession, *, workspace_id: UUID, product_id: UUID
 ) -> list[ProductCostSnapshot]:
     rows = (
-        await session.execute(
-            select(ProductCostSnapshot)
-            .where(
-                ProductCostSnapshot.workspace_id == workspace_id,
-                ProductCostSnapshot.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductCostSnapshot)
+                .where(
+                    ProductCostSnapshot.workspace_id == workspace_id,
+                    ProductCostSnapshot.product_id == product_id,
+                )
+                .order_by(ProductCostSnapshot.valid_from.desc())
             )
-            .order_by(ProductCostSnapshot.valid_from.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -986,45 +998,57 @@ async def latest_score(
     session: AsyncSession, *, workspace_id: UUID, product_id: UUID
 ) -> ProductScore | None:
     return (
-        await session.execute(
-            select(ProductScore)
-            .where(
-                ProductScore.workspace_id == workspace_id,
-                ProductScore.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductScore)
+                .where(
+                    ProductScore.workspace_id == workspace_id,
+                    ProductScore.product_id == product_id,
+                )
+                .order_by(ProductScore.scored_at.desc())
             )
-            .order_by(ProductScore.scored_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 async def latest_analysis(
     session: AsyncSession, *, workspace_id: UUID, product_id: UUID
 ) -> ProductAnalysisRun | None:
     return (
-        await session.execute(
-            select(ProductAnalysisRun)
-            .where(
-                ProductAnalysisRun.workspace_id == workspace_id,
-                ProductAnalysisRun.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductAnalysisRun)
+                .where(
+                    ProductAnalysisRun.workspace_id == workspace_id,
+                    ProductAnalysisRun.product_id == product_id,
+                )
+                .order_by(ProductAnalysisRun.created_at.desc())
             )
-            .order_by(ProductAnalysisRun.created_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 async def latest_decision(
     session: AsyncSession, *, workspace_id: UUID, product_id: UUID
 ) -> ProductDecision | None:
     return (
-        await session.execute(
-            select(ProductDecision)
-            .where(
-                ProductDecision.workspace_id == workspace_id,
-                ProductDecision.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductDecision)
+                .where(
+                    ProductDecision.workspace_id == workspace_id,
+                    ProductDecision.product_id == product_id,
+                )
+                .order_by(ProductDecision.created_at.desc())
             )
-            .order_by(ProductDecision.created_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1063,9 +1087,7 @@ async def create_sourcing_candidate(
             )
         ).scalar_one_or_none()
         if supplier is None:
-            raise ProductIntelligenceError(
-                f"supplier_code '{data.supplier_code}' not found"
-            )
+            raise ProductIntelligenceError(f"supplier_code '{data.supplier_code}' not found")
         supplier_id = supplier
 
     candidate = SourcingCandidate(
@@ -1109,15 +1131,19 @@ async def list_sourcing_candidates(
 ) -> list[SourcingCandidate]:
     """List supplier candidates for a product, newest first."""
     rows = (
-        await session.execute(
-            select(SourcingCandidate)
-            .where(
-                SourcingCandidate.workspace_id == workspace_id,
-                SourcingCandidate.product_id == product_id,
+        (
+            await session.execute(
+                select(SourcingCandidate)
+                .where(
+                    SourcingCandidate.workspace_id == workspace_id,
+                    SourcingCandidate.product_id == product_id,
+                )
+                .order_by(SourcingCandidate.created_at.desc())
             )
-            .order_by(SourcingCandidate.created_at.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -1126,15 +1152,19 @@ async def list_score_evidences(
 ) -> list[ProductScoreEvidence]:
     """Return the per-dimension evidence rows of a score."""
     rows = (
-        await session.execute(
-            select(ProductScoreEvidence)
-            .where(
-                ProductScoreEvidence.workspace_id == workspace_id,
-                ProductScoreEvidence.product_score_id == score_id,
+        (
+            await session.execute(
+                select(ProductScoreEvidence)
+                .where(
+                    ProductScoreEvidence.workspace_id == workspace_id,
+                    ProductScoreEvidence.product_score_id == score_id,
+                )
+                .order_by(ProductScoreEvidence.dimension)
             )
-            .order_by(ProductScoreEvidence.dimension)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -1153,9 +1183,7 @@ async def propose_experiment(
     score = await latest_score(session, workspace_id=workspace_id, product_id=product_id)
     if score is None:
         raise ProductIntelligenceError("product has no score; run analysis first")
-    decision = await latest_decision(
-        session, workspace_id=workspace_id, product_id=product_id
-    )
+    decision = await latest_decision(session, workspace_id=workspace_id, product_id=product_id)
     cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
     total_cost = _landed_cost(cost)
 
@@ -1261,16 +1289,12 @@ async def complete_experiment(
         "return_rate": str(data.return_rate) if data.return_rate is not None else None,
         "margin_rate": str(data.margin_rate) if data.margin_rate is not None else None,
         "completed_at": (
-            data.completed_at.isoformat()
-            if data.completed_at
-            else datetime.now(UTC).isoformat()
+            data.completed_at.isoformat() if data.completed_at else datetime.now(UTC).isoformat()
         ),
     }
     expectations = dict(experiment.prediction)
     expectations.update(experiment.experiment.get("targets", {}))
-    experiment.calibration = _compute_calibration(
-        expectations, experiment.actual_result
-    )
+    experiment.calibration = _compute_calibration(expectations, experiment.actual_result)
     experiment.updated_at = datetime.now(UTC)
     await session.flush()
     await event_service.create_event(
@@ -1291,15 +1315,19 @@ async def list_experiments(
 ) -> list[ProductExperiment]:
     """List experiments for a product, newest first."""
     rows = (
-        await session.execute(
-            select(ProductExperiment)
-            .where(
-                ProductExperiment.workspace_id == workspace_id,
-                ProductExperiment.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductExperiment)
+                .where(
+                    ProductExperiment.workspace_id == workspace_id,
+                    ProductExperiment.product_id == product_id,
+                )
+                .order_by(ProductExperiment.created_at.desc())
             )
-            .order_by(ProductExperiment.created_at.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 

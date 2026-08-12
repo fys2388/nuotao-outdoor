@@ -47,19 +47,21 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-async def _load_rule_gates(
-    session: AsyncSession, *, workspace_id: UUID
-) -> list[dict[str, Any]]:
+async def _load_rule_gates(session: AsyncSession, *, workspace_id: UUID) -> list[dict[str, Any]]:
     """Load active product-analysis rules (read-only registry snapshot)."""
     rows = (
-        await session.execute(
-            select(Rule).where(
-                Rule.workspace_id == workspace_id,
-                Rule.status == "active",
-                Rule.category == "PRODUCT",
+        (
+            await session.execute(
+                select(Rule).where(
+                    Rule.workspace_id == workspace_id,
+                    Rule.status == "active",
+                    Rule.category == "PRODUCT",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     rules: dict[str, Rule] = {}
     for row in rows:
         current = rules.get(row.rule_id)
@@ -104,57 +106,77 @@ async def build_product_context(
         raise ProductContextError("product not found")
 
     cost = (
-        await session.execute(
-            select(ProductCost).where(
-                ProductCost.workspace_id == workspace_id,
-                ProductCost.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductCost).where(
+                    ProductCost.workspace_id == workspace_id,
+                    ProductCost.product_id == product_id,
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     candidates = (
-        await session.execute(
-            select(SourcingCandidate)
-            .where(
-                SourcingCandidate.workspace_id == workspace_id,
-                SourcingCandidate.product_id == product_id,
+        (
+            await session.execute(
+                select(SourcingCandidate)
+                .where(
+                    SourcingCandidate.workspace_id == workspace_id,
+                    SourcingCandidate.product_id == product_id,
+                )
+                .order_by(SourcingCandidate.purchase_price)
             )
-            .order_by(SourcingCandidate.purchase_price)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     score = (
-        await session.execute(
-            select(ProductScore)
-            .where(
-                ProductScore.workspace_id == workspace_id,
-                ProductScore.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductScore)
+                .where(
+                    ProductScore.workspace_id == workspace_id,
+                    ProductScore.product_id == product_id,
+                )
+                .order_by(ProductScore.scored_at.desc())
             )
-            .order_by(ProductScore.scored_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     evidence: list[ProductScoreEvidence] = []
     if score is not None:
         evidence = (
-            await session.execute(
-                select(ProductScoreEvidence).where(
-                    ProductScoreEvidence.workspace_id == workspace_id,
-                    ProductScoreEvidence.product_score_id == score.id,
+            (
+                await session.execute(
+                    select(ProductScoreEvidence).where(
+                        ProductScoreEvidence.workspace_id == workspace_id,
+                        ProductScoreEvidence.product_score_id == score.id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     experiments = (
-        await session.execute(
-            select(ProductExperiment)
-            .where(
-                ProductExperiment.workspace_id == workspace_id,
-                ProductExperiment.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductExperiment)
+                .where(
+                    ProductExperiment.workspace_id == workspace_id,
+                    ProductExperiment.product_id == product_id,
+                )
+                .order_by(ProductExperiment.created_at.desc())
             )
-            .order_by(ProductExperiment.created_at.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     rules = await _load_rule_gates(session, workspace_id=workspace_id)
 
@@ -199,9 +221,7 @@ async def build_product_context(
         "landed_cost": {
             "purchase_cost": str(cost.purchase_cost) if cost else "0",
             "domestic_shipping": str(cost.domestic_shipping) if cost else "0",
-            "international_shipping": (
-                str(cost.international_shipping) if cost else "0"
-            ),
+            "international_shipping": (str(cost.international_shipping) if cost else "0"),
             "packaging": str(cost.packaging) if cost else "0",
             "tax_estimate": str(cost.tax_estimate) if cost else "0",
             "handling": str(cost.handling) if cost else "0",

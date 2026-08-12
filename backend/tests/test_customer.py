@@ -1,4 +1,4 @@
-﻿"""Tests for M3.3 Customer Intelligence Foundation.
+"""Tests for M3.3 Customer Intelligence Foundation.
 
 Covers: profile CRUD + duplicate conflict, PII blocking, workspace isolation,
 interaction/review append-only content, refund statistics and knowledge
@@ -47,18 +47,14 @@ def _profile_payload(ref: str, **overrides) -> dict:
 @pytest.mark.asyncio
 async def test_profile_crud_and_duplicate_conflict(db_session, api_client) -> None:
     """Profiles round-trip; duplicate reference id returns 409."""
-    created = api_client.post(
-        "/api/v1/customer-profiles", json=_profile_payload("wc-1001")
-    )
+    created = api_client.post("/api/v1/customer-profiles", json=_profile_payload("wc-1001"))
     assert created.status_code == 201, created.text
     body = created.json()
     profile_id = UUID(body["id"])
     assert body["customer_reference_id"] == "wc-1001"
     assert "customer.profile_created" in await _event_types(db_session, WORKSPACE)
 
-    duplicate = api_client.post(
-        "/api/v1/customer-profiles", json=_profile_payload("wc-1001")
-    )
+    duplicate = api_client.post("/api/v1/customer-profiles", json=_profile_payload("wc-1001"))
     assert duplicate.status_code == 409
     assert "already exists" in duplicate.json()["detail"]
 
@@ -82,19 +78,21 @@ async def test_profile_crud_and_duplicate_conflict(db_session, api_client) -> No
 @pytest.mark.asyncio
 async def test_profile_workspace_isolation(db_session, api_client) -> None:
     """Profiles are invisible across workspaces."""
-    assert api_client.post(
-        "/api/v1/customer-profiles", json=_profile_payload("wc-iso-1")
-    ).status_code == 201
-    assert api_client.post(
-        "/api/v1/customer-profiles",
-        json=_profile_payload("wc-iso-2"),
-        headers=_headers(OTHER_WORKSPACE),
-    ).status_code == 201
+    assert (
+        api_client.post("/api/v1/customer-profiles", json=_profile_payload("wc-iso-1")).status_code
+        == 201
+    )
+    assert (
+        api_client.post(
+            "/api/v1/customer-profiles",
+            json=_profile_payload("wc-iso-2"),
+            headers=_headers(OTHER_WORKSPACE),
+        ).status_code
+        == 201
+    )
 
     mine = api_client.get("/api/v1/customer-profiles").json()
-    theirs = api_client.get(
-        "/api/v1/customer-profiles", headers=_headers(OTHER_WORKSPACE)
-    ).json()
+    theirs = api_client.get("/api/v1/customer-profiles", headers=_headers(OTHER_WORKSPACE)).json()
     assert [row["customer_reference_id"] for row in mine] == ["wc-iso-1"]
     assert [row["customer_reference_id"] for row in theirs] == ["wc-iso-2"]
 
@@ -150,9 +148,7 @@ async def test_pii_blocked_in_metadata(db_session, api_client) -> None:
 async def test_interaction_crud_immutable_content(db_session, api_client) -> None:
     """Interaction content is immutable; classification is updatable."""
     profile_id = UUID(
-        api_client.post(
-            "/api/v1/customer-profiles", json=_profile_payload("wc-int-1")
-        ).json()["id"]
+        api_client.post("/api/v1/customer-profiles", json=_profile_payload("wc-int-1")).json()["id"]
     )
     created = api_client.post(
         "/api/v1/customer-interactions",
@@ -219,9 +215,7 @@ async def test_review_crud(db_session, api_client) -> None:
     assert updated.json()["sentiment"] == "negative"
     assert updated.json()["content"] == "Comfortable but straps slip."
 
-    negative = api_client.get(
-        "/api/v1/product-reviews?platform=amazon&sentiment=negative"
-    ).json()
+    negative = api_client.get("/api/v1/product-reviews?platform=amazon&sentiment=negative").json()
     assert len(negative) == 1
 
     deleted = api_client.delete(f"/api/v1/product-reviews/{review_id}")
@@ -298,17 +292,11 @@ async def test_customer_knowledge_retrieval(db_session, api_client) -> None:
         "tags": ["repeat"],
         "confidence": "0.7",
     }
-    assert api_client.post(
-        "/api/v1/customer-knowledge-entries", json=pain_point
-    ).status_code == 201
-    assert api_client.post(
-        "/api/v1/customer-knowledge-entries", json=loyalty
-    ).status_code == 201
+    assert api_client.post("/api/v1/customer-knowledge-entries", json=pain_point).status_code == 201
+    assert api_client.post("/api/v1/customer-knowledge-entries", json=loyalty).status_code == 201
     assert "customer.knowledge_created" in await _event_types(db_session, WORKSPACE)
 
-    by_type = api_client.get(
-        "/api/v1/customer-knowledge-entries?entry_type=pain_point"
-    ).json()
+    by_type = api_client.get("/api/v1/customer-knowledge-entries?entry_type=pain_point").json()
     assert len(by_type) == 1
     assert by_type[0]["title"] == "Straps slip"
 

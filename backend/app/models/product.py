@@ -86,9 +86,7 @@ class ProductCost(Base, WorkspaceMixin):
     marketing_amortization: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
     )
-    after_sales_loss: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    after_sales_loss: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     # Legacy sum of the original components; kept for backward compatibility.
     total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     valid_from: Mapped[datetime] = mapped_column(

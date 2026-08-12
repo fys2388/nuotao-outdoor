@@ -1,4 +1,4 @@
-﻿"""product intelligence completeness: landed cost model, candidates, evidence, experiments
+"""product intelligence completeness: landed cost model, candidates, evidence, experiments
 
 Revision ID: 0005
 Revises: 0004
@@ -22,9 +22,7 @@ def upgrade() -> None:
 
     # --- landed cost model: rename purchase_price -> purchase_cost -----------
     op.alter_column("product_cost", "purchase_price", new_column_name="purchase_cost")
-    op.alter_column(
-        "product_cost_snapshots", "purchase_price", new_column_name="purchase_cost"
-    )
+    op.alter_column("product_cost_snapshots", "purchase_price", new_column_name="purchase_cost")
 
     # --- product_cost: new landed cost columns + version ----------------------
     for column in (
@@ -69,8 +67,12 @@ def upgrade() -> None:
         "product_sourcing_candidates",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=True),
-        sa.Column("supplier_id", UUID(), sa.ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=True
+        ),
+        sa.Column(
+            "supplier_id", UUID(), sa.ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
+        ),
         sa.Column("supplier_code", sa.String(64), nullable=True),
         sa.Column("source_type", sa.String(16), nullable=False, server_default="1688"),
         sa.Column("source_url", sa.String(512), nullable=True),
@@ -84,10 +86,16 @@ def upgrade() -> None:
         sa.Column("notes", sa.String(500), nullable=True),
         sa.Column("version", sa.String(16), nullable=False, server_default="v1"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_index("ix_sourcing_candidates_workspace_id", "product_sourcing_candidates", ["workspace_id"])
+    op.create_index(
+        "ix_sourcing_candidates_workspace_id", "product_sourcing_candidates", ["workspace_id"]
+    )
     op.execute(
         sa.text(
             "CREATE INDEX ix_sourcing_candidates_product "
@@ -100,7 +108,12 @@ def upgrade() -> None:
         "product_score_evidences",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("product_score_id", UUID(), sa.ForeignKey("product_scores.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "product_score_id",
+            UUID(),
+            sa.ForeignKey("product_scores.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("dimension", sa.String(32), nullable=False),
         sa.Column("score", sa.Numeric(5, 2), nullable=False, server_default="0"),
         sa.Column("source", sa.String(64), nullable=False),
@@ -108,17 +121,25 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Numeric(4, 3), nullable=False, server_default="0"),
         sa.Column("version", sa.String(16), nullable=False, server_default="v1"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_index("ix_product_score_evidences_workspace_id", "product_score_evidences", ["workspace_id"])
-    op.create_index("ix_product_score_evidences_score_id", "product_score_evidences", ["product_score_id"])
+    op.create_index(
+        "ix_product_score_evidences_workspace_id", "product_score_evidences", ["workspace_id"]
+    )
+    op.create_index(
+        "ix_product_score_evidences_score_id", "product_score_evidences", ["product_score_id"]
+    )
 
     # --- product_experiments ---------------------------------------------------
     op.create_table(
         "product_experiments",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("experiment_type", sa.String(32), nullable=False, server_default="market_test"),
         sa.Column("status", sa.String(16), nullable=False, server_default="proposed"),
         sa.Column("prediction", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
@@ -127,8 +148,12 @@ def upgrade() -> None:
         sa.Column("calibration", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("version", sa.String(16), nullable=False, server_default="v1"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_product_experiments_workspace_id", "product_experiments", ["workspace_id"])
     op.execute(

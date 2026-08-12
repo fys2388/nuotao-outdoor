@@ -1,4 +1,4 @@
-﻿"""Customer learning loop models (M3.4): evaluation, pattern mining, calibration.
+"""Customer learning loop models (M3.4): evaluation, pattern mining, calibration.
 
 Customer intelligence becomes a learning layer: predicted behaviors are
 evaluated against real behavior, deterministic pattern runs surface

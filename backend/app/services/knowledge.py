@@ -88,9 +88,7 @@ async def list_knowledge_entries(
     limit: int = 100,
 ) -> list[ProductKnowledgeEntry]:
     """Query knowledge entries by category and/or product, newest first."""
-    stmt = select(ProductKnowledgeEntry).where(
-        ProductKnowledgeEntry.workspace_id == workspace_id
-    )
+    stmt = select(ProductKnowledgeEntry).where(ProductKnowledgeEntry.workspace_id == workspace_id)
     if category:
         stmt = stmt.where(ProductKnowledgeEntry.category == category)
     if product_id is not None:

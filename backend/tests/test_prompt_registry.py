@@ -12,12 +12,8 @@ from app.services.prompt_registry import (
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 
-TEMPLATE_V1 = (
-    "Analyze product {context_json} against schema {output_schema}."
-)
-TEMPLATE_V2 = (
-    "Analyze product {context_json} against schema {output_schema} (v2)."
-)
+TEMPLATE_V1 = "Analyze product {context_json} against schema {output_schema}."
+TEMPLATE_V2 = "Analyze product {context_json} against schema {output_schema} (v2)."
 
 
 def _data(**overrides) -> PromptCreate:
@@ -37,9 +33,7 @@ def _data(**overrides) -> PromptCreate:
 @pytest.mark.asyncio
 async def test_create_and_list_prompts(db_session) -> None:
     """A registered prompt is persisted and listed."""
-    created = await prompt_registry.create_prompt(
-        db_session, workspace_id=WORKSPACE, data=_data()
-    )
+    created = await prompt_registry.create_prompt(db_session, workspace_id=WORKSPACE, data=_data())
     assert created.name == "PRODUCT_ANALYST"
     assert created.version == "v1"
     assert created.status == "active"
@@ -77,9 +71,7 @@ async def test_get_active_prompt_prefers_latest_version(db_session) -> None:
 async def test_get_active_prompt_missing(db_session) -> None:
     """A missing active prompt raises PromptNotFoundError."""
     with pytest.raises(PromptNotFoundError):
-        await prompt_registry.get_active_prompt(
-            db_session, workspace_id=WORKSPACE, name="NOPE"
-        )
+        await prompt_registry.get_active_prompt(db_session, workspace_id=WORKSPACE, name="NOPE")
 
 
 @pytest.mark.asyncio

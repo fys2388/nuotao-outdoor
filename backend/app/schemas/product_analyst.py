@@ -195,4 +195,3 @@ class KnowledgeEntryOut(BaseModel):
     trace_id: str | None
     created_at: datetime
     updated_at: datetime
-

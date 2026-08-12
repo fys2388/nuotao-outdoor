@@ -215,14 +215,14 @@ async def test_agent_full_flow_creates_audit_and_pending_decision(
     assert agent_run.status == "completed"
     assert agent_run.cost == Decimal("0.001500")
     assert agent_run.approval == {
-        "required": True, "status": "pending", "target": "product_decisions"
+        "required": True,
+        "status": "pending",
+        "target": "product_decisions",
     }
 
     # Permission: product lifecycle untouched; no approval event emitted.
     product = (
-        await db_session.execute(
-            select(Product).where(Product.id == product_id)
-        )
+        await db_session.execute(select(Product).where(Product.id == product_id))
     ).scalar_one()
     assert product.status == "candidate"
 
@@ -270,15 +270,15 @@ async def test_agent_unknown_cost_gate_blocks_test_decision(
     await _seed_analyst_prompt(db_session)
     product_id = await _intake_product(
         api_client,
-        purchase_cost="0.00", domestic_shipping="0.00",
-        first_leg_shipping="0.00", last_leg_shipping="0.00",
+        purchase_cost="0.00",
+        domestic_shipping="0.00",
+        first_leg_shipping="0.00",
+        last_leg_shipping="0.00",
     )
 
     risky = dict(VALID_OUTPUT)
     risky["confidence"] = "0.90"  # > 0.5 with UNKNOWN cost
-    monkeypatch.setattr(
-        product_analyst.llm_gateway, "complete", _fake_complete(risky)
-    )
+    monkeypatch.setattr(product_analyst.llm_gateway, "complete", _fake_complete(risky))
     response = api_client.post(f"{ANALYZE_URL}/{product_id}")
     assert response.status_code == 422
 
@@ -309,9 +309,7 @@ async def test_agent_rule_veto_forces_reject(db_session, api_client, monkeypatch
     assert body["decision"] == "reject"
     assert body["approval_status"] == "pending"
 
-    decision = (
-        await db_session.execute(select(ProductDecision))
-    ).scalars().first()
+    decision = (await db_session.execute(select(ProductDecision))).scalars().first()
     assert decision.decision == "reject"
     assert any("hard product gate failed" in reason for reason in decision.reasons)
 
@@ -350,9 +348,7 @@ async def test_agent_permission_never_mutates_product(db_session, api_client, mo
     api_client.post(f"{ANALYZE_URL}/{product_id}")
     await db_session.flush()
 
-    after = (
-        await db_session.execute(select(Product).where(Product.id == product_id))
-    ).scalar_one()
+    after = (await db_session.execute(select(Product).where(Product.id == product_id))).scalar_one()
     assert after.status == "candidate"
     assert after.sku == before.sku
     # No purchase orders / suppliers / order rows are created by the agent.

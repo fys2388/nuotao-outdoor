@@ -6,6 +6,8 @@ High-risk (L3) tool calls stop at ``waiting_approval`` for a human decision;
 the API never auto-executes business actions.
 """
 
+import logging
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -35,7 +37,7 @@ from app.schemas.agent_runtime import (
     ToolRegisterRequest,
     ToolUpdateRequest,
 )
-from app.services import agent_runtime
+from app.services import agent_runtime, event_service, task_queue
 
 router = APIRouter(tags=["agent-runtime"])
 
@@ -170,13 +172,50 @@ async def create_task(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> TaskOut:
-    """Create a pending task for a registered, active agent."""
+    """Create a pending task and enqueue it on the Redis-Stream queue.
+
+    The DB row is the source of truth; if enqueueing fails the task stays
+    ``pending`` and the reconciliation sweeper re-enqueues it later.
+    """
     try:
         task = await agent_runtime.create_task(
             db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
         )
     except agent_runtime.AgentRuntimeError as exc:
         raise _http_error(exc) from exc
+    try:
+        backend = task_queue.get_queue_backend()
+        await task_queue.enqueue_task(
+            backend, workspace_id=workspace_id, task_id=task.id, attempt=1
+        )
+        task.enqueued_at = datetime.now(UTC)
+        await db.flush()
+        await event_service.create_event(
+            db,
+            workspace_id=workspace_id,
+            event_type="agent.task_enqueued",
+            entity_type="agent_task",
+            entity_id=str(task.id),
+            payload={"attempt": 1},
+            trace_id=get_trace_id(),
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade, never fail task creation
+        logging.getLogger(__name__).warning(
+            "task %s enqueue failed (%s) trace=%s; reconciliation will retry",
+            task.id,
+            exc,
+            get_trace_id(),
+        )
+        await event_service.create_event(
+            db,
+            workspace_id=workspace_id,
+            event_type="agent.task_enqueue_failed",
+            entity_type="agent_task",
+            entity_id=str(task.id),
+            payload={"error": str(exc)[:300]},
+            trace_id=get_trace_id(),
+        )
+    await db.refresh(task)
     return TaskOut.model_validate(task)
 
 
@@ -459,6 +498,8 @@ async def register_tool(
             permission_level=body.permission_level,
             enabled=body.enabled,
             category=body.category,
+            handler_name=body.handler_name,
+            args_schema=body.args_schema,
             trace_id=get_trace_id(),
         )
     except agent_runtime.AgentRuntimeError as exc:
@@ -502,6 +543,8 @@ async def update_tool(
             tool_name=tool_name,
             enabled=body.enabled,
             description=body.description,
+            handler_name=body.handler_name,
+            args_schema=body.args_schema,
             trace_id=get_trace_id(),
         )
     except agent_runtime.AgentRuntimeError as exc:

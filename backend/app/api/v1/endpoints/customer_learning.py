@@ -1,4 +1,4 @@
-﻿"""Customer learning loop endpoints (M3.4): evaluation, pattern mining, calibration, context.
+"""Customer learning loop endpoints (M3.4): evaluation, pattern mining, calibration, context.
 
 Reads + proposal writes only. No Customer Agent, no automatic customer
 support, no automatic business rule changes.

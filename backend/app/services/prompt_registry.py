@@ -62,8 +62,7 @@ async def create_prompt(
         )
     if not declared.issubset(found):
         raise PromptRegistryError(
-            "declared variables missing from template: "
-            f"{sorted(declared - found)}"
+            f"declared variables missing from template: {sorted(declared - found)}"
         )
 
     prompt = Prompt(
@@ -117,16 +116,20 @@ async def get_active_prompt(
         PromptNotFoundError: when no active version exists.
     """
     rows = (
-        await session.execute(
-            select(Prompt)
-            .where(
-                Prompt.workspace_id == workspace_id,
-                Prompt.name == name,
-                Prompt.status == "active",
+        (
+            await session.execute(
+                select(Prompt)
+                .where(
+                    Prompt.workspace_id == workspace_id,
+                    Prompt.name == name,
+                    Prompt.status == "active",
+                )
+                .order_by(Prompt.version.desc())
             )
-            .order_by(Prompt.version.desc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         raise PromptNotFoundError(f"no active prompt '{name}' found")
     return rows[0]
@@ -158,9 +161,7 @@ async def render_prompt(
     declared = set(prompt.variables or [])
     missing = declared - set(variables)
     if missing:
-        raise PromptRegistryError(
-            f"prompt '{name}' missing variables: {sorted(missing)}"
-        )
+        raise PromptRegistryError(f"prompt '{name}' missing variables: {sorted(missing)}")
     stringified = {key: str(value) for key, value in variables.items()}
     rendered = prompt.template.format(**stringified)
     return RenderedPrompt(prompt=prompt, variables=stringified, text=rendered)

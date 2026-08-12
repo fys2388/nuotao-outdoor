@@ -1,4 +1,4 @@
-﻿"""Order ingestion service: WooCommerce webhook -> order -> event -> rule check.
+"""Order ingestion service: WooCommerce webhook -> order -> event -> rule check.
 
 The pipeline is deliberately sequential and auditable:
 
@@ -302,16 +302,11 @@ async def ingest_order(
             "total": str(order.total),
             "currency": order.currency,
             "profit": profit_snapshot,
-            "rules": {
-                group: {"all_passed": data["all_passed"]}
-                for group, data in checks.items()
-            },
+            "rules": {group: {"all_passed": data["all_passed"]} for group, data in checks.items()},
         },
         trace_id=trace_id,
     )
-    logger.info(
-        "order %s ingested (event=%s) trace=%s", external_order_id, event.id, trace_id
-    )
+    logger.info("order %s ingested (event=%s) trace=%s", external_order_id, event.id, trace_id)
 
     return WebhookResponse(
         status="created",
@@ -378,11 +373,7 @@ async def list_orders(
     column = ORDER_SORT_COLUMNS.get(sort_by, Order.received_at)
     order_expr = column.desc() if sort_order == "desc" else column.asc()
     stmt: Select = (
-        select(Order)
-        .where(*filters)
-        .order_by(order_expr, Order.id)
-        .limit(limit)
-        .offset(offset)
+        select(Order).where(*filters).order_by(order_expr, Order.id).limit(limit).offset(offset)
     )
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), total

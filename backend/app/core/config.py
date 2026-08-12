@@ -27,9 +27,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
-    database_url: str = (
-        "postgresql+asyncpg://nuotao:nuotao_dev_password@localhost:5432/nuotao"
-    )
+    database_url: str = "postgresql+asyncpg://nuotao:nuotao_dev_password@localhost:5432/nuotao"
     redis_url: str = "redis://localhost:6379/0"
 
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
@@ -53,6 +51,36 @@ class Settings(BaseSettings):
     deepseek_default_model: str = "deepseek-chat"
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 1500
+
+    # --- M5.1 Agent Runtime production hardening ------------------------------
+    # Task queue: Redis Streams for Phase 1 (modular monolith; no Celery/Kafka).
+    # ``task_queue_backend`` may be ``redis`` (default) or ``memory`` (tests).
+    task_queue_backend: str = "redis"
+    task_queue_stream: str = "nuotao:agent-tasks"
+    task_queue_group: str = "nuotao:agent-worker"
+    task_queue_retry_key: str = "nuotao:agent-retry"
+    task_queue_maxlen: int = 2000
+    task_queue_poll_ms: int = 2000
+    task_queue_defer_delay: int = 2
+    worker_enabled: bool = False  # start the resident worker in the API lifespan
+    worker_concurrency: int = 4
+    worker_id: str = "worker-1"
+
+    # Default agent policies (config-driven; overridable per agent in the DB).
+    agent_default_execution_timeout: int = 300
+    agent_default_approval_timeout: int = 86400
+    agent_default_max_concurrent: int = 3
+    agent_default_max_context_size: int = 20000
+    agent_default_retry_policy: str = "standard"
+    agent_default_monthly_budget: Decimal = Decimal("100.00")
+    agent_default_max_cost_per_execution: Decimal = Decimal("5.00")
+    agent_default_budget_alert_threshold: Decimal = Decimal("0.80")
+
+    # Default "standard" retry policy (per-workspace, versioned).
+    retry_standard_max_attempts: int = 3
+    retry_standard_backoff_base: int = 2
+    retry_standard_backoff_multiplier: Decimal = Decimal("2.0")
+    retry_standard_max_backoff: int = 60
 
     @property
     def is_production(self) -> bool:

@@ -47,3 +47,15 @@ def api_client(db_session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(autouse=True)
+def _memory_queue_backend() -> None:
+    """Force the in-memory task queue backend for all tests (no Redis)."""
+    from app.core.config import get_settings
+    from app.services import task_queue
+
+    get_settings().task_queue_backend = "memory"
+    task_queue.reset_queue_backend_cache()
+    yield
+    task_queue.reset_queue_backend_cache()

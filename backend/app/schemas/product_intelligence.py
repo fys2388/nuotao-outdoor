@@ -1,4 +1,4 @@
-﻿"""Product intelligence request/response schemas (M2.1)."""
+"""Product intelligence request/response schemas (M2.1)."""
 
 from datetime import datetime
 from decimal import Decimal

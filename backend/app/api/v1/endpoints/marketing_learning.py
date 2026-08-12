@@ -1,4 +1,4 @@
-﻿"""Marketing learning loop endpoints (M3.2): evaluation, analysis, knowledge, calibration.
+"""Marketing learning loop endpoints (M3.2): evaluation, analysis, knowledge, calibration.
 
 Reads + proposal writes only. No marketing action is executed automatically
 and no real ad platform is called.

@@ -218,9 +218,7 @@ async def record_evaluation(
     decision_match = accuracy.get("decision_match")
     success_flag = _determine_success(prediction, data.actual_result, decision_match)
     prediction_result = (
-        "success" if success_flag is True
-        else "failure" if success_flag is False
-        else "unknown"
+        "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
         _error_type(prediction, data.actual_result, decision_match)
@@ -265,7 +263,9 @@ async def record_evaluation(
     )
     logger.info(
         "evaluation %s recorded for product %s trace=%s",
-        evaluation.id, data.product_id, trace_id,
+        evaluation.id,
+        data.product_id,
+        trace_id,
     )
     return evaluation
 
@@ -278,9 +278,7 @@ async def list_evaluations(
     limit: int = 50,
 ) -> list[ProductAiEvaluation]:
     """List evaluations (newest first), optionally filtered by product."""
-    stmt = select(ProductAiEvaluation).where(
-        ProductAiEvaluation.workspace_id == workspace_id
-    )
+    stmt = select(ProductAiEvaluation).where(ProductAiEvaluation.workspace_id == workspace_id)
     if product_id is not None:
         stmt = stmt.where(ProductAiEvaluation.product_id == product_id)
     stmt = stmt.order_by(ProductAiEvaluation.created_at.desc()).limit(limit)

@@ -1,4 +1,4 @@
-﻿"""Marketing learning loop models (M3.2): evaluation, analysis, knowledge, calibration.
+"""Marketing learning loop models (M3.2): evaluation, analysis, knowledge, calibration.
 
 Marketing intelligence becomes a learning system: campaign predictions are
 evaluated against measured outcomes, creative analysis runs are audited,

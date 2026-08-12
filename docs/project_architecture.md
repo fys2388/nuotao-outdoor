@@ -301,6 +301,19 @@ flowchart LR
 6. 评估闭环：`agent_evaluations` 记录 prediction vs actual_result（复用确定性分类 success/failure/unknown + confidence bucket + accuracy），供未来 Agent 校准。
 7. 全程事件化：`agent.*` 事件写入 `event_log`，`trace_id` 贯穿任务 → 执行 → 工具调用 → 审批；全部 workspace 数据隔离。
 
+**Agent 运行时生产加固（M5.1 已落地：队列 → 策略 → 预算 → 并发 → 重试 → 超时 → 工具网关 → 指标 → 清扫）**
+
+1. Task Queue（Phase 1 用 Redis Streams，模块化单体，不引入 Celery/Kafka）：`POST /api/v1/agent-tasks` 创建任务后即 XADD 入队（DB 是事实源、队列是加速器，sweeper 兜底 reconcile 补入队）；worker 通过 consumer group（XREADGROUP/XACK）消费，延迟重试存 Redis ZSET、到期回写 stream；提供内存后端（`TASK_QUEUE_BACKEND=memory`）供测试/本地。
+2. Worker 流水线：claim → 幂等检查（任务非 `pending` 直接跳过，重复投递不产生副作用）→ Execution Policy → Budget Gate（预算不足在调用模型前拦截）→ 并发门禁（进程内 per-agent，超出按 `task_queue_defer_delay` 延迟重入队，不消耗 attempt）→ attempt 审计 → 执行（LLM Gateway，`max_context_size` 截断上下文）→ complete/fail → Retry 决策 → ack。
+3. Retry Engine：`agent_retry_policies` 版本化策略（max_attempts / backoff_base / multiplier / max_backoff / retry_on_error_types）；错误分类 `llm/network/timeout/transient` 可重试、`auth/invalid/budget/unknown` 终态；每次 attempt 落不可变 `agent_task_attempts`（只追加），任务 `attempt_count` 只增。
+4. Execution Policy：`agent_execution_policies`（max_concurrent / execution_timeout_seconds / approval_timeout_seconds / max_context_size / retry_policy_id，per-agent 版本化 + is_current），默认值来自 config，可被数据库版本覆盖，禁止硬编码。
+5. Budget Policy：`agent_budget_policies`（monthly_budget / max_cost_per_execution / alert_threshold），按月聚合已完成执行成本，`usage + projected > budget` 直接拦截；越过 `alert_threshold` 发 `agent.budget_alert` 事件。
+6. Execution Timeout：worker 内 `asyncio.wait_for` 超时 → 该次尝试 fail 并按策略重试；sweeper 兜底把崩溃遗留的 `running` 执行按超时 fail 并重试/dead-letter，防止永久卡死。
+7. L3 人工审批超时：`expire_stale_approvals` 只**自动 reject**（绝不自动 approve），任务 fail 并记录 `approval timed out`；审批期限来自 Execution Policy。
+8. Tool Gateway/Handler：`agent_tools` 增加 `handler_name + args_schema` 绑定进程内 handler（`register_handler` 注册，handler 只接收最小 ToolContext、返回 JSON-safe 结果）；L0-L2 经网关执行并审计，L3 仍停 `waiting_approval` 人工审批；handler 缺失或失败一律 deny 403 + 审计事件。
+9. Agent Metrics：`agent_metrics` 按 workspace+agent+UTC 日聚合（executions/success/failure/timeout/retried/tokens/cost/avg/p95/error_breakdown），`POST /api/v1/agent-metrics/snapshot` 手动快照、`GET /api/v1/agent-metrics` 查询。
+10. 事件贯穿：`agent.task_*`（enqueued/requeued/deferred/dead_letter）、`agent.execution_*`（timed_out/budget_blocked）、`agent.approval_expired`、`agent.tool_call_*`（executed/denied）、`agent.metrics_snapshotted`、`agent.budget_alert` 全部写入 `event_log`，`trace_id` 贯穿任务 → 执行 → 工具调用 → 审批 → 重试；全部 workspace 隔离。
+
 ## 3. 数据库设计
 
 ### 3.1 设计原则
@@ -567,9 +580,22 @@ flowchart LR
 | `agent_memory` | Agent 记忆 | agent_id, domain, source_type(product_knowledge/marketing_knowledge/customer_knowledge/supply_chain_knowledge/event/note), source_id, content, tags, meta(JSONB) | 知识记忆入口；keyword 检索 + 知识域快照 |
 | `agent_evaluations` | Agent 评估 | agent_id, prediction, actual_result, accuracy, calibration, prediction_result, error_type, success_flag, confidence, confidence_bucket, human_rating(1-5) | 只追加；复用确定性分类 |
 
+### 3.17 Agent 运行时生产加固落地表（M5.1 已实现）
+
+| 表 | 用途 | 关键字段 | 约束/说明 |
+|---|---|---|---|
+| `agent_execution_policies` | 执行策略（版本化） | agent_id, policy_version, is_current, max_concurrent, execution_timeout_seconds, approval_timeout_seconds, max_context_size, retry_policy_id, enabled | (workspace_id, agent_id, policy_version) 唯一；默认值来自 config，DB 覆盖 |
+| `agent_budget_policies` | 预算策略（版本化） | agent_id, policy_version, is_current, monthly_budget(Numeric 12,2), max_cost_per_execution, alert_threshold, currency, enabled | 执行前拦截；超阈值发 agent.budget_alert；默认 standard 配置 |
+| `agent_retry_policies` | 重试策略（版本化） | retry_policy_id, name, version, is_current, max_attempts, backoff_base_seconds, backoff_multiplier, max_backoff_seconds, retry_on_error_types(JSONB), enabled | (workspace_id, retry_policy_id, version) 唯一；standard 种子由 config 生成 |
+| `agent_task_attempts` | 任务尝试审计（只追加） | task_id, execution_id, attempt_number, status(running/succeeded/failed/timed_out/budget_blocked), error_type, error_message(<=1000), latency_ms, worker_id, trace_id | 每次尝试一行；任务 attempt_count 只增 |
+| `agent_metrics` | Agent 日指标 | agent_id, metric_date, executions/success/failure/timeout/retried_count, total_tokens, total_cost, avg/p95_latency_ms, error_breakdown(JSONB) | (workspace_id, agent_id, metric_date) 每日 upsert；workspace 隔离 |
+
+M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worker_id / attempt_number`；`agent_tasks` + `attempt_count / enqueued_at`；`agent_tools` + `handler_name / args_schema`（迁移 0017）。
+
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 |
+| v0.17 | 2026-08-12 | M5.1 Agent 运行时生产加固：Redis Streams Task Queue（内存后端适配，模块化单体，不引入 Celery/Kafka）、Worker 流水线（claim→幂等→策略→预算→并发→attempt→执行→重试→ack）、Retry Engine（版本化重试策略 + 指数退避 + agent_task_attempts 只追加审计）、Execution/Budget Policy（版本化、config 默认值 + DB 覆盖）、执行超时 + sweeper 兜底（过期 running 自动 fail/重试）、L3 审批超时自动 reject（绝不自动 approve）、Tool Gateway/Handler（handler_name 绑定，L0-L2 执行，L3 仍人工审批）、Agent Metrics（日聚合 + p95 + 错误分布）、队列统计/清扫 API；事件全量 event_log + trace_id + workspace 隔离；全库 ruff format 归一化（一次性机械变更）；新增 27 测试（206 全绿） |
 | v0.16 | 2026-08-11 | M5.0 Agent 运行时基础：agents 注册表（前置 `AGENT_<ID>` 版本化 prompt，禁止硬编码）、agent_tasks（pending→running→waiting_approval→completed/failed/cancelled + 优先级）、agent_executions 全量审计（context/input/output/model/tokens/cost/latency/tool_calls/trace_id）、agent_tools 白名单 + L0-L3 权限引擎（低等级/禁用直接拒绝，L3 高风险人工审批，二次审批 400）、agent_memory（四知识域 grounding + keyword 检索）、agent_evaluations（预测 vs 实测 + 确定性分类 + 置信度桶）；全部事件集成 + trace_id + 工作区隔离；不开发具体业务 Agent、不自动执行商业动作；新增 19 测试（179 全绿） |
 | v0.15 | 2026-08-11 | M4.3 真实数据接入 + 经营建议层：统一 Connector Framework（validate/transform/sync/audit 四方法），WooCommerce（orders/products/customers 引用哈希，REST 只读 + 批次推送）/ Logistics（tracking + 轨迹事件去重）/ Marketing（campaign 指标）/ Supplier（主数据）四连接器；connector_runs 同步审计（status/records_count/error_message/trace_id + connector.run_completed 事件）；business_recommendations 经营建议（proposed → 人工 approve/reject，二次审批 400，不自动执行商业动作）；全部 workspace 隔离；新增 16 测试（160 全绿） |
 | v0.14 | 2026-08-11 | M4.2 供应链学习闭环：supplier_ai_evaluations + logistics_ai_evaluations（预测 vs 实测 + 确定性分类 + delay_reason）、supplier_pattern_runs（quality/delivery/price/risk/capacity）、logistics_pattern_runs（delay/carrier/route/country）、supply_chain_calibration_runs（proposed → 人工审批，禁止自动改规则）、知识类型扩展（supplier/logistics success/failure_pattern、season/country_pattern）；全部事件集成 + trace_id + 工作区隔离 |

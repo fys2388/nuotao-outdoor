@@ -50,7 +50,5 @@ async def list_prompts(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[PromptOut]:
     """List registered prompts (optionally filtered by name)."""
-    rows = await prompt_registry.list_prompts(
-        db, workspace_id=workspace_id, name=name, limit=limit
-    )
+    rows = await prompt_registry.list_prompts(db, workspace_id=workspace_id, name=name, limit=limit)
     return [PromptOut.model_validate(row) for row in rows]

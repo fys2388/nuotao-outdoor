@@ -35,6 +35,4 @@ class AiAgentRun(Base, WorkspaceMixin):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (
-        Index("ix_ai_agent_runs_created", "workspace_id", text("created_at DESC")),
-    )
+    __table_args__ = (Index("ix_ai_agent_runs_created", "workspace_id", text("created_at DESC")),)

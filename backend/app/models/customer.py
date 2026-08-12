@@ -1,4 +1,4 @@
-﻿"""Customer intelligence models (M3.3): profiles, interactions, reviews, refunds, knowledge.
+"""Customer intelligence models (M3.3): profiles, interactions, reviews, refunds, knowledge.
 
 Builds the customer-awareness data layer for the future Customer Agent.
 **PII policy**: profiles store only a non-identifying ``customer_reference_id``

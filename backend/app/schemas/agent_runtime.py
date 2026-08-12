@@ -105,6 +105,8 @@ class TaskOut(BaseModel):
     trace_id: str | None
     started_at: datetime | None
     completed_at: datetime | None
+    attempt_count: int
+    enqueued_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -159,6 +161,9 @@ class ToolCallOut(BaseModel):
     message: str
     execution_id: UUID
     requires_approval: bool = False
+    handler_name: str | None = None
+    output: dict[str, Any] | None = None
+    approval_deadline: datetime | None = None
 
 
 class ExecutionOut(BaseModel):
@@ -181,7 +186,11 @@ class ExecutionOut(BaseModel):
     tool_calls: list[Any]
     status: str
     error_message: str | None
+    error_type: str | None
     approval: dict[str, Any]
+    approval_deadline: datetime | None
+    worker_id: str | None
+    attempt_number: int
     trace_id: str | None
     started_at: datetime | None
     completed_at: datetime | None
@@ -202,13 +211,17 @@ class ToolRegisterRequest(BaseModel):
     permission_level: Literal["L0", "L1", "L2", "L3"] = "L1"
     enabled: bool = True
     category: str | None = Field(default=None, max_length=32)
+    handler_name: str | None = Field(default=None, max_length=64)
+    args_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolUpdateRequest(BaseModel):
-    """Toggle a registered tool's enabled state."""
+    """Toggle a registered tool's enabled state and (optionally) its binding."""
 
     enabled: bool
     description: str | None = Field(default=None, max_length=500)
+    handler_name: str | None = Field(default=None, max_length=64)
+    args_schema: dict[str, Any] | None = Field(default=None)
 
 
 class ToolOut(BaseModel):
@@ -223,6 +236,8 @@ class ToolOut(BaseModel):
     permission_level: str
     enabled: bool
     category: str | None
+    handler_name: str | None
+    args_schema: dict[str, Any]
     trace_id: str | None
     created_at: datetime
     updated_at: datetime

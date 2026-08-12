@@ -1,4 +1,4 @@
-﻿"""Customer learning loop service (M3.4).
+"""Customer learning loop service (M3.4).
 
 Upgrades customer intelligence to a learning layer: predicted behaviors are
 evaluated against actual behavior (deterministic classification), pattern
@@ -102,9 +102,7 @@ async def record_customer_evaluation(
     trace_id: str | None = None,
 ) -> CustomerAiEvaluation:
     """Record one predicted-vs-actual customer behavior evaluation (append-only)."""
-    profile = await _load_profile(
-        session, workspace_id=workspace_id, customer_id=data.customer_id
-    )
+    profile = await _load_profile(session, workspace_id=workspace_id, customer_id=data.customer_id)
     if profile is None:
         raise CustomerLearningError("customer profile not found")
 
@@ -114,11 +112,7 @@ async def record_customer_evaluation(
         data.prediction, data.actual_behavior, decision_match
     )
     prediction_result = (
-        "success"
-        if success_flag is True
-        else "failure"
-        if success_flag is False
-        else "unknown"
+        "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
         ai_evaluation._error_type(  # noqa: SLF001
@@ -165,7 +159,9 @@ async def record_customer_evaluation(
     )
     logger.info(
         "customer evaluation %s recorded (%s) trace=%s",
-        evaluation.id, prediction_result, trace_id,
+        evaluation.id,
+        prediction_result,
+        trace_id,
     )
     return evaluation
 
@@ -178,9 +174,7 @@ async def list_customer_evaluations(
     limit: int = 50,
 ) -> list[CustomerAiEvaluation]:
     """List customer evaluations, newest first."""
-    stmt = select(CustomerAiEvaluation).where(
-        CustomerAiEvaluation.workspace_id == workspace_id
-    )
+    stmt = select(CustomerAiEvaluation).where(CustomerAiEvaluation.workspace_id == workspace_id)
     if customer_id is not None:
         stmt = stmt.where(CustomerAiEvaluation.customer_id == customer_id)
     stmt = stmt.order_by(CustomerAiEvaluation.created_at.desc()).limit(limit)
@@ -207,18 +201,14 @@ async def _pattern_inputs(
     workspace_id: UUID,
     customer_id: UUID | None,
 ) -> tuple[list[CustomerProfile], list[CustomerAiEvaluation], list[RefundCase]]:
-    profiles_stmt = select(CustomerProfile).where(
-        CustomerProfile.workspace_id == workspace_id
-    )
+    profiles_stmt = select(CustomerProfile).where(CustomerProfile.workspace_id == workspace_id)
     evaluations_stmt = select(CustomerAiEvaluation).where(
         CustomerAiEvaluation.workspace_id == workspace_id
     )
     refunds_stmt = select(RefundCase).where(RefundCase.workspace_id == workspace_id)
     if customer_id is not None:
         profiles_stmt = profiles_stmt.where(CustomerProfile.id == customer_id)
-        evaluations_stmt = evaluations_stmt.where(
-            CustomerAiEvaluation.customer_id == customer_id
-        )
+        evaluations_stmt = evaluations_stmt.where(CustomerAiEvaluation.customer_id == customer_id)
         refunds_stmt = refunds_stmt.where(RefundCase.customer_id == customer_id)
     profiles = list((await session.execute(profiles_stmt)).scalars().all())
     evaluations = list((await session.execute(evaluations_stmt)).scalars().all())
@@ -241,9 +231,7 @@ def _extract_pattern(
             "avg_total_orders": (
                 str(Decimal(order_sum) / Decimal(len(profiles))) if profiles else None
             ),
-            "avg_total_revenue": (
-                str(revenue_sum / Decimal(len(profiles))) if profiles else None
-            ),
+            "avg_total_revenue": (str(revenue_sum / Decimal(len(profiles))) if profiles else None),
         }, len(profiles)
 
     if pattern_type == "segment_pattern":
@@ -262,19 +250,13 @@ def _extract_pattern(
             error_types[error_type] = error_types.get(error_type, 0) + 1
             if row.confidence is not None:
                 confidence_sum += row.confidence
-        top_error_type = (
-            max(error_types, key=error_types.get) if error_types else None
-        )
+        top_error_type = max(error_types, key=error_types.get) if error_types else None
         return {
             "failure_evaluation_count": len(failures),
             "top_error_type": top_error_type,
             "error_type_distribution": error_types,
             "avg_confidence": (
-                str(
-                    (confidence_sum / Decimal(len(failures))).quantize(
-                        Decimal("0.0001")
-                    )
-                )
+                str((confidence_sum / Decimal(len(failures))).quantize(Decimal("0.0001")))
                 if failures
                 else None
             ),
@@ -356,7 +338,10 @@ async def run_pattern_mining(
     )
     logger.info(
         "customer pattern run %s completed (%s, n=%s) trace=%s",
-        run.id, data.pattern_type, sample_size, trace_id,
+        run.id,
+        data.pattern_type,
+        sample_size,
+        trace_id,
     )
     return run
 
@@ -370,9 +355,7 @@ async def list_pattern_runs(
     limit: int = 50,
 ) -> list[CustomerPatternRun]:
     """List pattern runs, newest first."""
-    stmt = select(CustomerPatternRun).where(
-        CustomerPatternRun.workspace_id == workspace_id
-    )
+    stmt = select(CustomerPatternRun).where(CustomerPatternRun.workspace_id == workspace_id)
     if pattern_type:
         stmt = stmt.where(CustomerPatternRun.pattern_type == pattern_type)
     if customer_id is not None:
@@ -434,9 +417,7 @@ async def run_customer_calibration(
     successful_patterns: dict[str, Any] = {
         "evaluation_success_count": success_count,
         "latest_pattern_type": latest_pattern.pattern_type if latest_pattern else None,
-        "latest_pattern_output": (
-            latest_pattern.output_pattern if latest_pattern else {}
-        ),
+        "latest_pattern_output": (latest_pattern.output_pattern if latest_pattern else {}),
     }
     failure_patterns: dict[str, Any] = {
         "evaluation_failure_count": failure_count,
@@ -488,7 +469,9 @@ async def run_customer_calibration(
     )
     logger.info(
         "customer calibration run %s proposed (n=%s) trace=%s",
-        run.id, sample_size, trace_id,
+        run.id,
+        sample_size,
+        trace_id,
     )
     return run
 
@@ -517,9 +500,7 @@ async def _decide_calibration(
     trace_id: str | None,
 ) -> CustomerCalibrationRun:
     """Shared approve/reject logic (human-only; rules never auto-edited)."""
-    run = await _load_calibration_run(
-        session, workspace_id=workspace_id, run_id=run_id
-    )
+    run = await _load_calibration_run(session, workspace_id=workspace_id, run_id=run_id)
     if run is None:
         raise CustomerLearningError("calibration run not found")
     if run.status != "proposed":
@@ -594,9 +575,7 @@ async def list_customer_calibration_runs(
     limit: int = 50,
 ) -> list[CustomerCalibrationRun]:
     """List customer calibration runs, newest first."""
-    stmt = select(CustomerCalibrationRun).where(
-        CustomerCalibrationRun.workspace_id == workspace_id
-    )
+    stmt = select(CustomerCalibrationRun).where(CustomerCalibrationRun.workspace_id == workspace_id)
     if status:
         stmt = stmt.where(CustomerCalibrationRun.status == status)
     stmt = stmt.order_by(CustomerCalibrationRun.created_at.desc()).limit(limit)
@@ -623,9 +602,7 @@ async def build_customer_context(
     interacted products, knowledge entries and evaluations - the input a
     future Customer Agent would use, without calling any model.
     """
-    profile = await _load_profile(
-        session, workspace_id=workspace_id, customer_id=customer_id
-    )
+    profile = await _load_profile(session, workspace_id=workspace_id, customer_id=customer_id)
     if profile is None:
         raise CustomerLearningError("customer profile not found")
 
@@ -657,11 +634,7 @@ async def build_customer_context(
         .scalars()
         .all()
     )
-    product_ids = [
-        row.product_id
-        for row in interactions
-        if row.product_id is not None
-    ]
+    product_ids = [row.product_id for row in interactions if row.product_id is not None]
     unique_product_ids = list(dict.fromkeys(product_ids))
 
     reviews: list[ProductReview] = []

@@ -78,12 +78,18 @@ async def test_context_contains_all_analysis_sections(db_session, api_client) ->
     assert len(context["score"]["evidence"]) == 6
     dimensions = {row["dimension"] for row in context["score"]["evidence"]}
     assert dimensions == {
-        "profit", "logistics", "demand", "competition", "differentiation", "compliance",
+        "profit",
+        "logistics",
+        "demand",
+        "competition",
+        "differentiation",
+        "compliance",
     }
     # Rules + experiments sections are lists (may be empty without seeding).
     assert isinstance(context["rules"], list)
     assert len(context["experiments"]) == 1
     assert context["experiments"][0]["status"] == "proposed"
+
     # JSON-safe: no Decimal left anywhere in the tree.
     def _walk(value):
         if isinstance(value, dict):
@@ -101,8 +107,10 @@ async def test_context_unknown_cost(db_session, api_client) -> None:
     response = api_client.post(
         INTAKE_URL,
         json=_intake_payload(
-            purchase_cost="0.00", domestic_shipping="0.00",
-            first_leg_shipping="0.00", last_leg_shipping="0.00",
+            purchase_cost="0.00",
+            domestic_shipping="0.00",
+            first_leg_shipping="0.00",
+            last_leg_shipping="0.00",
         ),
     )
     assert response.status_code == 201

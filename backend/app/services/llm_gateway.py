@@ -215,9 +215,7 @@ async def _post(
     model = request.model or resolved_model
 
     if not api_key:
-        raise LLMError(
-            f"provider '{provider}' has no API key configured", kind="auth"
-        )
+        raise LLMError(f"provider '{provider}' has no API key configured", kind="auth")
 
     payload: dict[str, Any] = {
         "model": model,
@@ -255,9 +253,7 @@ async def _post(
             kind="auth",
         )
     if response.status_code >= 500 or response.status_code == 429:
-        raise LLMError(
-            f"provider '{provider}' returned {response.status_code}", kind="provider"
-        )
+        raise LLMError(f"provider '{provider}' returned {response.status_code}", kind="provider")
     if response.status_code >= 400:
         raise LLMError(
             f"provider '{provider}' returned {response.status_code}: {response.text[:200]}",
@@ -288,7 +284,12 @@ async def _post(
     cost = estimate_cost(provider, model, tokens)
     logger.info(
         "llm provider=%s model=%s tokens=%s cost=%s latency_ms=%s trace=%s",
-        provider, model, tokens, cost, latency_ms, trace_id,
+        provider,
+        model,
+        tokens,
+        cost,
+        latency_ms,
+        trace_id,
     )
     return LLMResponse(
         provider=provider,

@@ -22,9 +22,7 @@ async def test_create_event_roundtrip(db_session) -> None:
     assert event.id is not None
     assert event.payload == {"total": 49.99}
 
-    rows, total = await event_service.query_events(
-        db_session, workspace_id=WORKSPACE
-    )
+    rows, total = await event_service.query_events(db_session, workspace_id=WORKSPACE)
     assert total == 1
     assert rows[0].entity_id == "ord-1"
     assert rows[0].trace_id == "trace-1"

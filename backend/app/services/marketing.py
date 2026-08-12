@@ -157,9 +157,7 @@ async def create_campaign(
             "campaign_id": data.campaign_id,
             "product_id": str(data.product_id) if data.product_id else None,
             "roas": str(roas) if roas is not None else None,
-            "roi": str(calculate_roi(data.revenue, data.spend))
-            if data.spend > ZERO
-            else None,
+            "roi": str(calculate_roi(data.revenue, data.spend)) if data.spend > ZERO else None,
         },
         trace_id=trace_id,
     )
@@ -653,14 +651,10 @@ async def complete_experiment(
         "winner": data.winner,
         "notes": data.notes,
         "completed_at": (
-            data.completed_at.isoformat()
-            if data.completed_at
-            else datetime.now(UTC).isoformat()
+            data.completed_at.isoformat() if data.completed_at else datetime.now(UTC).isoformat()
         ),
     }
-    experiment.calibration = _ab_calibration(
-        data.variant_a_result, data.variant_b_result
-    )
+    experiment.calibration = _ab_calibration(data.variant_a_result, data.variant_b_result)
     experiment.status = "completed"
     experiment.updated_at = datetime.now(UTC)
     await session.flush()
@@ -687,9 +681,7 @@ async def list_experiments(
     status: str | None = None,
     limit: int = 50,
 ) -> list[MarketingExperiment]:
-    stmt = select(MarketingExperiment).where(
-        MarketingExperiment.workspace_id == workspace_id
-    )
+    stmt = select(MarketingExperiment).where(MarketingExperiment.workspace_id == workspace_id)
     if product_id is not None:
         stmt = stmt.where(MarketingExperiment.product_id == product_id)
     if status:

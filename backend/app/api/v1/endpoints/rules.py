@@ -43,9 +43,7 @@ async def create_rule(
 ) -> RuleOut:
     """Register a new versioned rule (rules always come from the database)."""
     try:
-        rule = await rule_engine.create_rule(
-            db, workspace_id=workspace_id, data=body
-        )
+        rule = await rule_engine.create_rule(db, workspace_id=workspace_id, data=body)
     except rule_engine.RuleEngineError as exc:
         raise _http_error(exc) from exc
     return RuleOut.model_validate(rule)
@@ -80,9 +78,7 @@ async def get_rule(
 ) -> RuleOut:
     """Return the newest active version of a rule."""
     try:
-        rule = await rule_engine.get_rule(
-            db, workspace_id=workspace_id, rule_id=rule_id
-        )
+        rule = await rule_engine.get_rule(db, workspace_id=workspace_id, rule_id=rule_id)
     except rule_engine.RuleEngineError as exc:
         raise _http_error(exc) from exc
     return RuleOut.model_validate(rule)

@@ -12,7 +12,7 @@ WORKSPACE = DEFAULT_WORKSPACE_ID
 
 VALID_CSV = (
     "sku,name,description,category,brand,tags,attributes,source_url,supplier_code\n"
-    "SKU-001,Camping Headlamp,USB rechargeable,camping,Nuotao,lamp;light,\"{\"\"max_lumens\"\": 300}\",https://1688.com/item/1,\n"
+    'SKU-001,Camping Headlamp,USB rechargeable,camping,Nuotao,lamp;light,"{""max_lumens"": 300}",https://1688.com/item/1,\n'
     "SKU-002,Camping Stove Set,,cooking,,stove;pot,{},https://1688.com/item/2,\n"
 )
 
@@ -51,13 +51,8 @@ async def test_import_creates_products_and_events(db_session) -> None:
 @pytest.mark.asyncio
 async def test_import_updates_existing_sku(db_session) -> None:
     """Re-importing an existing sku updates the row instead of duplicating."""
-    await product_service.import_products(
-        db_session, workspace_id=WORKSPACE, csv_content=VALID_CSV
-    )
-    changed = (
-        "sku,name,description,category\n"
-        "SKU-001,Camping Headlamp Pro,,lighting\n"
-    )
+    await product_service.import_products(db_session, workspace_id=WORKSPACE, csv_content=VALID_CSV)
+    changed = "sku,name,description,category\nSKU-001,Camping Headlamp Pro,,lighting\n"
     result = await product_service.import_products(
         db_session, workspace_id=WORKSPACE, csv_content=changed
     )
@@ -65,14 +60,10 @@ async def test_import_updates_existing_sku(db_session) -> None:
     assert result.updated == 1
     assert result.failed == 0
 
-    total = (
-        await db_session.execute(select(func.count()).select_from(Product))
-    ).scalar_one()
+    total = (await db_session.execute(select(func.count()).select_from(Product))).scalar_one()
     assert total == 2
     headlamp = (
-        await db_session.execute(
-            select(Product).where(Product.sku == "SKU-001")
-        )
+        await db_session.execute(select(Product).where(Product.sku == "SKU-001"))
     ).scalar_one()
     assert headlamp.name == "Camping Headlamp Pro"
 

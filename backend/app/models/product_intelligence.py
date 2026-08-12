@@ -1,4 +1,4 @@
-﻿"""Product intelligence models: sources, cost history, scores, analysis, decisions.
+"""Product intelligence models: sources, cost history, scores, analysis, decisions.
 
 All rows are workspace-scoped; scores/analysis/snapshots are append-only so
 history is never overwritten (audit + calibration requirements).
@@ -61,9 +61,7 @@ class ProductSource(Base, TimestampMixin, WorkspaceMixin):
     raw_data: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        Index("ix_product_sources_captured", "workspace_id", "captured_at"),
-    )
+    __table_args__ = (Index("ix_product_sources_captured", "workspace_id", "captured_at"),)
 
 
 class ProductCostSnapshot(Base, CreatedAtMixin, WorkspaceMixin):
@@ -99,9 +97,7 @@ class ProductCostSnapshot(Base, CreatedAtMixin, WorkspaceMixin):
     marketing_amortization: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=0
     )
-    after_sales_loss: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    after_sales_loss: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
@@ -242,9 +238,7 @@ class SourcingCandidate(Base, TimestampMixin, WorkspaceMixin):
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        Index("ix_sourcing_candidates_product", "workspace_id", "product_id"),
-    )
+    __table_args__ = (Index("ix_sourcing_candidates_product", "workspace_id", "product_id"),)
 
 
 class ProductScoreEvidence(Base, CreatedAtMixin, WorkspaceMixin):
@@ -317,7 +311,6 @@ class ProductAiEvaluation(Base, CreatedAtMixin, WorkspaceMixin):
 
 
 class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
-
     """Product testing loop: prediction -> experiment -> actual_result.
 
     ``prediction`` holds what the intelligence layer expected (score, decision,
@@ -344,9 +337,7 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        Index("ix_product_experiments_product", "workspace_id", "product_id"),
-    )
+    __table_args__ = (Index("ix_product_experiments_product", "workspace_id", "product_id"),)
 
 
 class ConfidenceCalibration(Base, CreatedAtMixin, WorkspaceMixin):
@@ -436,4 +427,3 @@ class ProductKnowledgeEntry(Base, TimestampMixin, WorkspaceMixin):
         Index("ix_knowledge_entries_workspace_cat", "workspace_id", "category"),
         Index("ix_knowledge_entries_workspace_product", "workspace_id", "product_id"),
     )
-

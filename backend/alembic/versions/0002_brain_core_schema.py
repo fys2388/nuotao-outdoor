@@ -31,8 +31,12 @@ def upgrade() -> None:
         sa.Column("market", sa.String(length=16), nullable=False, server_default="US"),
         sa.Column("currency", sa.String(length=8), nullable=False, server_default="USD"),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="active"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
 
     # --- event_log --------------------------------------------------------
@@ -45,10 +49,16 @@ def upgrade() -> None:
         sa.Column("entity_id", sa.String(length=64), nullable=False),
         sa.Column("payload", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("trace_id", sa.String(length=64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_event_log_type", "event_log", ["event_type"])
-    op.execute(sa.text("CREATE INDEX ix_event_log_workspace_created ON event_log (workspace_id, created_at DESC)"))
+    op.execute(
+        sa.text(
+            "CREATE INDEX ix_event_log_workspace_created ON event_log (workspace_id, created_at DESC)"
+        )
+    )
     op.create_index("ix_event_log_entity", "event_log", ["entity_type", "entity_id"])
 
     # --- suppliers --------------------------------------------------------
@@ -63,8 +73,12 @@ def upgrade() -> None:
         sa.Column("rating", sa.String(length=8), nullable=False, server_default="C"),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="active"),
         sa.Column("contact", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.UniqueConstraint("workspace_id", "code", name="uq_suppliers_workspace_code"),
     )
     op.create_index("ix_suppliers_workspace_id", "suppliers", ["workspace_id"])
@@ -85,8 +99,12 @@ def upgrade() -> None:
         sa.Column("tags", JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column("attributes", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("meta", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.UniqueConstraint("workspace_id", "sku", name="uq_products_workspace_sku"),
     )
     op.create_index("ix_products_workspace_id", "products", ["workspace_id"])
@@ -97,7 +115,9 @@ def upgrade() -> None:
         "product_cost",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "product_id", UUID(), sa.ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("currency", sa.String(length=8), nullable=False, server_default="USD"),
         sa.Column("purchase_price", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("domestic_shipping", sa.Numeric(12, 2), nullable=False, server_default="0"),
@@ -107,7 +127,9 @@ def upgrade() -> None:
         sa.Column("marketing_amortization", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("after_sales_loss", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("total_cost", sa.Numeric(12, 2), nullable=False, server_default="0"),
-        sa.Column("valid_from", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "valid_from", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("notes", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
     )
     op.create_index("ix_product_cost_workspace_id", "product_cost", ["workspace_id"])
@@ -132,9 +154,15 @@ def upgrade() -> None:
         sa.Column("params", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("approval_level", sa.String(length=8), nullable=False, server_default="L0"),
         sa.Column("owner", sa.String(length=128), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("workspace_id", "rule_id", "version", name="uq_rules_workspace_rule_version"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.UniqueConstraint(
+            "workspace_id", "rule_id", "version", name="uq_rules_workspace_rule_version"
+        ),
     )
     op.create_index("ix_rules_workspace_id", "rules", ["workspace_id"])
     op.create_index("ix_rules_category", "rules", ["category"])
@@ -149,10 +177,16 @@ def upgrade() -> None:
         sa.Column("context", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("result", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("trace_id", sa.String(length=64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_rule_execution_rule_id", "rule_execution_logs", ["rule_id"])
-    op.execute(sa.text("CREATE INDEX ix_rule_execution_created ON rule_execution_logs (workspace_id, created_at DESC)"))
+    op.execute(
+        sa.text(
+            "CREATE INDEX ix_rule_execution_created ON rule_execution_logs (workspace_id, created_at DESC)"
+        )
+    )
 
     # --- ai_agent_runs ----------------------------------------------------
     op.create_table(
@@ -169,11 +203,17 @@ def upgrade() -> None:
         sa.Column("cost", sa.Numeric(12, 6), nullable=True),
         sa.Column("status", sa.String(length=24), nullable=False, server_default="pending"),
         sa.Column("trace_id", sa.String(length=64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_ai_agent_runs_agent", "ai_agent_runs", ["agent"])
-    op.execute(sa.text("CREATE INDEX ix_ai_agent_runs_created ON ai_agent_runs (workspace_id, created_at DESC)"))
+    op.execute(
+        sa.text(
+            "CREATE INDEX ix_ai_agent_runs_created ON ai_agent_runs (workspace_id, created_at DESC)"
+        )
+    )
 
     # --- seed data --------------------------------------------------------
     op.bulk_insert(
@@ -250,7 +290,7 @@ def upgrade() -> None:
                 "when_conditions, then_result, params, approval_level"
                 ") VALUES ("
                 f"'{rule['id']}', '{rule['workspace_id']}', '{rule['rule_id']}', "
-                f"'{rule['name'].replace(chr(39), chr(39)*2)}', '{rule['category']}', "
+                f"'{rule['name'].replace(chr(39), chr(39) * 2)}', '{rule['category']}', "
                 f"'{rule['rule_type']}', '{rule['version']}', '{rule['status']}', "
                 f"{_jsonb_literal(rule['when_conditions'])}, {_jsonb_literal(rule['then_result'])}, "
                 f"{_jsonb_literal(rule['params'])}, '{rule['approval_level']}'"

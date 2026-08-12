@@ -63,12 +63,6 @@ async def query_events(
     count_stmt = select(func.count()).select_from(EventLog).where(*filters)
     total = (await session.execute(count_stmt)).scalar_one()
 
-    stmt = (
-        select(EventLog)
-        .where(*filters)
-        .order_by(EventLog.id.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = select(EventLog).where(*filters).order_by(EventLog.id.desc()).limit(limit).offset(offset)
     rows = (await session.execute(stmt)).scalars().all()
     return rows, total

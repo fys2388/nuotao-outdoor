@@ -603,4 +603,45 @@ curl -X POST http://localhost:8000/api/v1/agent-evaluations \
   -H "Content-Type: application/json" \
   -d '{"agent_id":"<agent_uuid>","prediction":{"decision":"test"},"actual_result":{"decision":"test"},"human_rating":4,"notes":""}'
 curl "http://localhost:8000/api/v1/agent-evaluations?agent_id=<agent_uuid>"
+### 8.14 Agent 运行时生产加固（M5.1）
 
+> 前置：Agent 与版本化 prompt 注册同 §8.13；任务创建后自动入队（Redis Streams），worker 常驻消费。
+> 本地/测试无 Redis 时：`TASK_QUEUE_BACKEND=memory`（conftest 已默认注入，pytest 不依赖 Redis）。
+
+# 1) 执行策略（版本化；不传 agent_id 用全局默认；缺省值来自 config）
+curl -X POST http://localhost:8000/api/v1/agent-policies/execution \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_uuid>","max_concurrent":2,"execution_timeout_seconds":300,"approval_timeout_seconds":86400,"max_context_size":20000,"retry_policy_id":"standard","enabled":true}'
+curl http://localhost:8000/api/v1/agent-policies/execution
+
+# 2) 预算策略（worker 在调用模型前拦截；超阈值发 agent.budget_alert）
+curl -X POST http://localhost:8000/api/v1/agent-policies/budget \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<agent_uuid>","monthly_budget":"100.00","max_cost_per_execution":"5.00","alert_threshold":"0.80","currency":"USD","enabled":true}'
+curl http://localhost:8000/api/v1/agent-policies/budget
+
+# 3) 重试策略（版本化；可重试错误类：llm/network/timeout/transient；终态：auth/invalid/budget/unknown）
+curl -X POST http://localhost:8000/api/v1/agent-retry-policies \
+  -H "Content-Type: application/json" \
+  -d '{"retry_policy_id":"standard","name":"standard retry","version":"v1","max_attempts":3,"backoff_base_seconds":2,"backoff_multiplier":"2.0","max_backoff_seconds":60,"retry_on_error_types":["llm","network","timeout","transient"],"enabled":true}'
+curl http://localhost:8000/api/v1/agent-retry-policies
+
+# 4) 工具绑定进程内 handler（handler_name 未注册时执行一律 deny 403 + 审计；L3 仍走人工审批）
+curl -X POST http://localhost:8000/api/v1/agent-tools \
+  -H "Content-Type: application/json" \
+  -d '{"tool_name":"product.read","description":"read product data","permission_level":"L1","enabled":true,"category":"product","handler_name":"product.read","args_schema":{"product_id":"uuid"}}'
+curl http://localhost:8000/api/v1/agent-tools
+
+# 5) 队列统计 + 清扫（L3 审批超时自动 reject / 过期 running 执行失败重试 / pending 任务补入队）
+curl http://localhost:8000/api/v1/agent-queue/stats
+curl -X POST http://localhost:8000/api/v1/agent-sweeper/run -H "Content-Type: application/json" -d '{}'
+
+# 6) Agent 日指标（手动快照 + 查询）
+curl -X POST http://localhost:8000/api/v1/agent-metrics/snapshot -H "Content-Type: application/json" -d '{}'
+curl "http://localhost:8000/api/v1/agent-metrics?from_date=2026-08-12&to_date=2026-08-12"
+
+# 7) 启动 Worker（常驻进程；生产用容器/supervisor 托管，redis 后端）
+cd backend
+set TASK_QUEUE_BACKEND=redis   # 默认即 redis（PowerShell: $env:TASK_QUEUE_BACKEND="redis"）
+python -m app.worker
+# 本地调试（内存队列）：set TASK_QUEUE_BACKEND=memory 后 python -m app.worker

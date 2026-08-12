@@ -80,11 +80,7 @@ def test_readyz_reflects_dependency_health(
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == expected
-        assert body["checks"]["database"] == (
-            "ok" if db_ok else "error: ConnectionError"
-        )
-        assert body["checks"]["redis"] == (
-            "ok" if redis_ok else "error: ConnectionError"
-        )
+        assert body["checks"]["database"] == ("ok" if db_ok else "error: ConnectionError")
+        assert body["checks"]["redis"] == ("ok" if redis_ok else "error: ConnectionError")
     finally:
         app.dependency_overrides.clear()

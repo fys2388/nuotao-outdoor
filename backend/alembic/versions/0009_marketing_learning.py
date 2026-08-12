@@ -1,4 +1,4 @@
-﻿"""M3.2: marketing learning loop - evaluations, creative analysis, knowledge, calibration
+"""M3.2: marketing learning loop - evaluations, creative analysis, knowledge, calibration
 
 Revision ID: 0009
 Revises: 0008
@@ -36,11 +36,15 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Numeric(6, 4), nullable=True),
         sa.Column("confidence_bucket", sa.String(8), nullable=True),
         sa.Column("success_flag", sa.Boolean(), nullable=True),
-        sa.Column("metric_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "metric_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
         sa.Column("human_rating", sa.Integer(), nullable=True),
         sa.Column("notes", sa.String(500), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index(
         "ix_campaign_evaluations_workspace_campaign",
@@ -52,7 +56,9 @@ def upgrade() -> None:
         "campaign_ai_evaluations",
         ["workspace_id", "confidence_bucket"],
     )
-    op.create_index("ix_campaign_evaluations_campaign_id", "campaign_ai_evaluations", ["campaign_id"])
+    op.create_index(
+        "ix_campaign_evaluations_campaign_id", "campaign_ai_evaluations", ["campaign_id"]
+    )
 
     # --- creative_analysis_runs ---------------------------------------------
     op.create_table(
@@ -60,23 +66,36 @@ def upgrade() -> None:
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
         sa.Column(
-            "creative_id", UUID(), sa.ForeignKey("creative_assets.id", ondelete="SET NULL"), nullable=True
+            "creative_id",
+            UUID(),
+            sa.ForeignKey("creative_assets.id", ondelete="SET NULL"),
+            nullable=True,
         ),
         sa.Column("input_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("analysis_output", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("performance_result", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "analysis_output", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
+        sa.Column(
+            "performance_result", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
         sa.Column("model_version", sa.String(32), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, server_default="completed"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index(
         "ix_creative_analysis_workspace_creative",
         "creative_analysis_runs",
         ["workspace_id", "creative_id"],
     )
-    op.create_index("ix_creative_analysis_runs_creative_id", "creative_analysis_runs", ["creative_id"])
+    op.create_index(
+        "ix_creative_analysis_runs_creative_id", "creative_analysis_runs", ["creative_id"]
+    )
 
     # --- marketing_knowledge_entries ----------------------------------------
     op.create_table(
@@ -87,7 +106,10 @@ def upgrade() -> None:
             "campaign_id", UUID(), sa.ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
         ),
         sa.Column(
-            "creative_id", UUID(), sa.ForeignKey("creative_assets.id", ondelete="SET NULL"), nullable=True
+            "creative_id",
+            UUID(),
+            sa.ForeignKey("creative_assets.id", ondelete="SET NULL"),
+            nullable=True,
         ),
         sa.Column("category", sa.String(64), nullable=True),
         sa.Column("entry_type", sa.String(32), nullable=False, server_default="creative_pattern"),
@@ -97,8 +119,12 @@ def upgrade() -> None:
         sa.Column("source", sa.String(32), nullable=False, server_default="manual"),
         sa.Column("confidence", sa.Numeric(6, 4), nullable=False, server_default="0"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index(
         "ix_marketing_knowledge_workspace_cat",
@@ -115,9 +141,15 @@ def upgrade() -> None:
         "marketing_knowledge_entries",
         ["workspace_id", "creative_id"],
     )
-    op.create_index("ix_marketing_knowledge_campaign_id", "marketing_knowledge_entries", ["campaign_id"])
-    op.create_index("ix_marketing_knowledge_creative_id", "marketing_knowledge_entries", ["creative_id"])
-    op.create_index("ix_marketing_knowledge_entry_type", "marketing_knowledge_entries", ["entry_type"])
+    op.create_index(
+        "ix_marketing_knowledge_campaign_id", "marketing_knowledge_entries", ["campaign_id"]
+    )
+    op.create_index(
+        "ix_marketing_knowledge_creative_id", "marketing_knowledge_entries", ["creative_id"]
+    )
+    op.create_index(
+        "ix_marketing_knowledge_entry_type", "marketing_knowledge_entries", ["entry_type"]
+    )
 
     # --- marketing_calibration_runs -----------------------------------------
     op.create_table(
@@ -127,16 +159,24 @@ def upgrade() -> None:
         sa.Column("status", sa.String(16), nullable=False, server_default="proposed"),
         sa.Column("model_version", sa.String(32), nullable=False),
         sa.Column("input_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("successful_patterns", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column("failure_patterns", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "successful_patterns", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
+        sa.Column(
+            "failure_patterns", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
         sa.Column("metrics", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("sample_size", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("rationale", sa.String(2000), nullable=True),
         sa.Column("approved_by", sa.String(64), nullable=True),
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index(
         "ix_marketing_calibration_workspace_status",

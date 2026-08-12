@@ -113,7 +113,9 @@ async def _complete_experiment(
         workspace_id=WORKSPACE,
         experiment_id=experiment.id,
         data=ExperimentStartRequest(
-            quantity=30, channels=["meta"], budget=Decimal("300.00"),
+            quantity=30,
+            channels=["meta"],
+            budget=Decimal("300.00"),
             targets={"roas": Decimal("2.0")},
         ),
     )
@@ -122,9 +124,13 @@ async def _complete_experiment(
         workspace_id=WORKSPACE,
         experiment_id=experiment.id,
         data=ExperimentCompleteRequest(
-            units_sold=12, revenue=Decimal(revenue), orders=11,
-            conversion_rate=Decimal("0.03"), roas=Decimal(roas),
-            return_rate=Decimal("0.05"), margin_rate=Decimal("0.30"),
+            units_sold=12,
+            revenue=Decimal(revenue),
+            orders=11,
+            conversion_rate=Decimal("0.03"),
+            roas=Decimal(roas),
+            return_rate=Decimal("0.05"),
+            margin_rate=Decimal("0.30"),
         ),
     )
 
@@ -167,9 +173,7 @@ async def test_prediction_calibration_classification(db_session, api_client) -> 
     """Evaluations classify success/failure with bucket, error type, metrics."""
     await _seed_product_rules(db_session)
     product_id = await _intake(api_client, "NTO-CAL-001")
-    run_id = await _make_analysis_run(
-        db_session, product_id, confidence="0.78", decision="test"
-    )
+    run_id = await _make_analysis_run(db_session, product_id, confidence="0.78", decision="test")
 
     # Decision matches -> success.
     success = await ai_evaluation.record_evaluation(
@@ -283,14 +287,14 @@ async def test_score_calibration_weight_suggestion(db_session, api_client) -> No
     """Completed experiments drive a deterministic, normalized weight proposal."""
     await _seed_product_rules(db_session)
     # 3 successes on known-cost products + 1 failure on an unknown-cost product.
-    successful = [
-        await _intake(api_client, f"NTO-W-00{i}")
-        for i in range(1, 4)
-    ]
+    successful = [await _intake(api_client, f"NTO-W-00{i}") for i in range(1, 4)]
     failed = await _intake(
-        api_client, "NTO-W-004",
-        purchase_cost="0.00", domestic_shipping="0.00",
-        first_leg_shipping="0.00", last_leg_shipping="0.00",
+        api_client,
+        "NTO-W-004",
+        purchase_cost="0.00",
+        domestic_shipping="0.00",
+        first_leg_shipping="0.00",
+        last_leg_shipping="0.00",
     )
     for product_id in successful:
         await _complete_experiment(db_session, product_id, roas="1.8")
@@ -304,9 +308,7 @@ async def test_score_calibration_weight_suggestion(db_session, api_client) -> No
     assert run.sample_size == 4
     assert "insufficient" not in (run.rationale or "")
 
-    suggested = {
-        key: Decimal(value) for key, value in run.suggested_weights.items()
-    }
+    suggested = {key: Decimal(value) for key, value in run.suggested_weights.items()}
     assert set(suggested) == set(REFERENCE_WEIGHTS)
     assert sum(suggested.values()) == Decimal("1.00")
     # Profit evidence confidence is higher on successes -> profit weight rises.
@@ -339,9 +341,7 @@ async def test_score_calibration_insufficient_samples(db_session, api_client) ->
 
 
 @pytest.mark.asyncio
-async def test_approval_protection_never_auto_modifies_rules(
-    db_session, api_client
-) -> None:
+async def test_approval_protection_never_auto_modifies_rules(db_session, api_client) -> None:
     """Approving a proposal records the decision; rules/code stay untouched."""
     await _seed_product_rules(db_session)
     successful = [await _intake(api_client, f"NTO-AP-00{i}") for i in range(1, 4)]
@@ -352,9 +352,7 @@ async def test_approval_protection_never_auto_modifies_rules(
         await db_session.execute(select(func.count()).select_from(Rule))
     ).scalar_one()
 
-    run = await calibration.run_score_calibration(
-        db_session, workspace_id=WORKSPACE, trace_id="ap"
-    )
+    run = await calibration.run_score_calibration(db_session, workspace_id=WORKSPACE, trace_id="ap")
     approved = await calibration.approve_calibration(
         db_session,
         workspace_id=WORKSPACE,
@@ -377,9 +375,7 @@ async def test_approval_protection_never_auto_modifies_rules(
     # The shipped score weights are unchanged (version update is human work).
     from app.services.product_intelligence import SCORE_WEIGHTS
 
-    assert SCORE_WEIGHTS == {
-        key: float(value) for key, value in REFERENCE_WEIGHTS.items()
-    }
+    assert SCORE_WEIGHTS == {key: float(value) for key, value in REFERENCE_WEIGHTS.items()}
 
     # Re-approval is rejected; a second run can be rejected.
     from app.services.calibration import CalibrationError
@@ -389,9 +385,7 @@ async def test_approval_protection_never_auto_modifies_rules(
             db_session,
             workspace_id=WORKSPACE,
             run_id=run.id,
-            data=CalibrationApproveRequest(
-                actor="other@nuotao.example"
-            ),
+            data=CalibrationApproveRequest(actor="other@nuotao.example"),
         )
 
     second = await calibration.run_score_calibration(
@@ -401,9 +395,7 @@ async def test_approval_protection_never_auto_modifies_rules(
         db_session,
         workspace_id=WORKSPACE,
         run_id=second.id,
-        data=CalibrationApproveRequest(
-            actor="owner@nuotao.example", note="not now"
-        ),
+        data=CalibrationApproveRequest(actor="owner@nuotao.example", note="not now"),
     )
     assert rejected.status == "rejected"
 

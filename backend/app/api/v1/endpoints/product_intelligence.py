@@ -1,4 +1,4 @@
-﻿"""Product intelligence API endpoints (M2.1).
+"""Product intelligence API endpoints (M2.1).
 
 Routes under ``/products`` extend the existing product domain; routes under
 ``/product-decisions`` manage the human approval workflow. No AI agent is
@@ -83,7 +83,9 @@ async def analyze_product(
     """Run Cost -> Logistics -> Profit -> Rules -> Score; persists audit rows."""
     try:
         await pi.analyze_product(
-            db, workspace_id=workspace_id, product_id=product_id,
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
             trace_id=get_trace_id(),
         )
     except pi.ProductIntelligenceError as exc:
@@ -94,9 +96,7 @@ async def analyze_product(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="analysis completed but score not found",
         )
-    evidence = await pi.list_score_evidences(
-        db, workspace_id=workspace_id, score_id=score.id
-    )
+    evidence = await pi.list_score_evidences(db, workspace_id=workspace_id, score_id=score.id)
     out = ProductScoreOut.model_validate(score)
     out.evidence = [ProductScoreEvidenceOut.model_validate(row) for row in evidence]
     return out
@@ -122,9 +122,7 @@ async def get_intelligence(
         )
     ).scalar_one_or_none()
     if product is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="product not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
     score = await pi.latest_score(db, workspace_id=workspace_id, product_id=product_id)
     analysis = await pi.latest_analysis(db, workspace_id=workspace_id, product_id=product_id)
     decision = await pi.latest_decision(db, workspace_id=workspace_id, product_id=product_id)
@@ -162,9 +160,7 @@ async def list_cost_snapshots(
     workspace_id: WorkspaceId,
 ) -> list[ProductCostSnapshotOut]:
     """Return the immutable cost history of a product, newest first."""
-    rows = await pi.list_cost_snapshots(
-        db, workspace_id=workspace_id, product_id=product_id
-    )
+    rows = await pi.list_cost_snapshots(db, workspace_id=workspace_id, product_id=product_id)
     return [ProductCostSnapshotOut.model_validate(row) for row in rows]
 
 
@@ -182,7 +178,9 @@ async def propose_decision(
     """Propose test/hold/reject from the latest score (deterministic)."""
     try:
         decision = await pi.propose_decision(
-            db, workspace_id=workspace_id, product_id=product_id,
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
             trace_id=get_trace_id(),
         )
     except pi.ProductIntelligenceError as exc:
@@ -282,9 +280,7 @@ async def list_sourcing_candidates(
     workspace_id: WorkspaceId,
 ) -> list[SourcingCandidateOut]:
     """Return supplier candidates, newest first."""
-    rows = await pi.list_sourcing_candidates(
-        db, workspace_id=workspace_id, product_id=product_id
-    )
+    rows = await pi.list_sourcing_candidates(db, workspace_id=workspace_id, product_id=product_id)
     return [SourcingCandidateOut.model_validate(row) for row in rows]
 
 
@@ -388,7 +384,5 @@ async def score_evidence(
     workspace_id: WorkspaceId,
 ) -> list[ProductScoreEvidenceOut]:
     """Return the six per-dimension evidence rows of a product score."""
-    rows = await pi.list_score_evidences(
-        db, workspace_id=workspace_id, score_id=score_id
-    )
+    rows = await pi.list_score_evidences(db, workspace_id=workspace_id, score_id=score_id)
     return [ProductScoreEvidenceOut.model_validate(row) for row in rows]

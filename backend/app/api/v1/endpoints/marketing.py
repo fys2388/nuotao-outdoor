@@ -391,9 +391,7 @@ async def get_experiment(
         db, workspace_id=workspace_id, experiment_id=experiment_id
     )
     if experiment is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="experiment not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="experiment not found")
     return ExperimentOut.model_validate(experiment)
 
 

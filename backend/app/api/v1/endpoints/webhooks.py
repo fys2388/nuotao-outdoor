@@ -1,4 +1,4 @@
-﻿"""WooCommerce webhook endpoint.
+"""WooCommerce webhook endpoint.
 
 Implements the ORDER_CREATED delivery channel:
 
@@ -79,9 +79,7 @@ async def receive_woocommerce_order(
     trace_id = get_trace_id()
     body = await request.body()
     if not body:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="empty request body"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty request body")
 
     try:
         raw = json.loads(body)

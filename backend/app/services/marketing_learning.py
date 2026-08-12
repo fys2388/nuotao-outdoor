@@ -1,4 +1,4 @@
-﻿"""Marketing learning loop service (M3.2).
+"""Marketing learning loop service (M3.2).
 
 Turns marketing intelligence into a learning system: campaign predictions are
 evaluated against measured outcomes (deterministic classification), creative
@@ -117,11 +117,7 @@ async def record_campaign_evaluation(
         data.prediction, data.actual_result, decision_match
     )
     prediction_result = (
-        "success"
-        if success_flag is True
-        else "failure"
-        if success_flag is False
-        else "unknown"
+        "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
         ai_evaluation._error_type(data.prediction, data.actual_result, decision_match)  # noqa: SLF001
@@ -166,7 +162,9 @@ async def record_campaign_evaluation(
     )
     logger.info(
         "campaign evaluation %s recorded (%s) trace=%s",
-        evaluation.id, prediction_result, trace_id,
+        evaluation.id,
+        prediction_result,
+        trace_id,
     )
     return evaluation
 
@@ -179,9 +177,7 @@ async def list_campaign_evaluations(
     limit: int = 50,
 ) -> list[CampaignAiEvaluation]:
     """List campaign evaluations, newest first."""
-    stmt = select(CampaignAiEvaluation).where(
-        CampaignAiEvaluation.workspace_id == workspace_id
-    )
+    stmt = select(CampaignAiEvaluation).where(CampaignAiEvaluation.workspace_id == workspace_id)
     if campaign_id is not None:
         stmt = stmt.where(CampaignAiEvaluation.campaign_id == campaign_id)
     stmt = stmt.order_by(CampaignAiEvaluation.created_at.desc()).limit(limit)
@@ -245,9 +241,7 @@ async def list_creative_analysis_runs(
     limit: int = 50,
 ) -> list[CreativeAnalysisRun]:
     """List creative analysis runs, newest first."""
-    stmt = select(CreativeAnalysisRun).where(
-        CreativeAnalysisRun.workspace_id == workspace_id
-    )
+    stmt = select(CreativeAnalysisRun).where(CreativeAnalysisRun.workspace_id == workspace_id)
     if creative_id is not None:
         stmt = stmt.where(CreativeAnalysisRun.creative_id == creative_id)
     stmt = stmt.order_by(CreativeAnalysisRun.created_at.desc()).limit(limit)
@@ -311,7 +305,9 @@ async def create_knowledge_entry(
     )
     logger.info(
         "marketing knowledge entry %s created (%s) trace=%s",
-        entry.id, data.entry_type, trace_id,
+        entry.id,
+        data.entry_type,
+        trace_id,
     )
     return entry
 
@@ -361,9 +357,7 @@ async def build_growth_context(
     feedback plus the campaign's evaluations and knowledge entries - the input
     a future Growth Agent would use, without calling any model.
     """
-    campaign = await _load_campaign(
-        session, workspace_id=workspace_id, campaign_id=campaign_id
-    )
+    campaign = await _load_campaign(session, workspace_id=workspace_id, campaign_id=campaign_id)
     if campaign is None:
         raise MarketingLearningError("campaign not found")
 
@@ -444,10 +438,7 @@ async def build_growth_context(
     )
 
     def _row(row: Any) -> dict:
-        return {
-            key: _jsonable(getattr(row, key))
-            for key in row.__table__.columns.keys()
-        }
+        return {key: _jsonable(getattr(row, key)) for key in row.__table__.columns.keys()}
 
     return {
         "campaign": _row(campaign),
@@ -578,9 +569,7 @@ async def run_marketing_calibration(
             f"not enough evaluations (need >= {MIN_CALIBRATION_SAMPLES}, got {sample_size})"
         )
 
-    successful_patterns, failure_patterns, metrics = _discover_patterns(
-        evaluations, experiments
-    )
+    successful_patterns, failure_patterns, metrics = _discover_patterns(evaluations, experiments)
     run = MarketingCalibrationRun(
         workspace_id=workspace_id,
         status="proposed",
@@ -620,7 +609,9 @@ async def run_marketing_calibration(
     )
     logger.info(
         "marketing calibration run %s proposed (n=%s) trace=%s",
-        run.id, sample_size, trace_id,
+        run.id,
+        sample_size,
+        trace_id,
     )
     return run
 
@@ -648,9 +639,7 @@ async def approve_marketing_calibration(
     trace_id: str | None = None,
 ) -> MarketingCalibrationRun:
     """Approve a marketing calibration proposal (human-only)."""
-    run = await _load_calibration_run(
-        session, workspace_id=workspace_id, run_id=run_id
-    )
+    run = await _load_calibration_run(session, workspace_id=workspace_id, run_id=run_id)
     if run is None:
         raise MarketingLearningError("calibration run not found")
     if run.status != "proposed":
@@ -685,9 +674,7 @@ async def reject_marketing_calibration(
     trace_id: str | None = None,
 ) -> MarketingCalibrationRun:
     """Reject a marketing calibration proposal (human-only)."""
-    run = await _load_calibration_run(
-        session, workspace_id=workspace_id, run_id=run_id
-    )
+    run = await _load_calibration_run(session, workspace_id=workspace_id, run_id=run_id)
     if run is None:
         raise MarketingLearningError("calibration run not found")
     if run.status != "proposed":

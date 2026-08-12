@@ -9,7 +9,7 @@ decision (approve/reject), matching the OS-wide human-in-the-loop rule.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -40,7 +40,7 @@ from app.schemas.agent_runtime import (
     MemoryCreate,
     TaskCreate,
 )
-from app.services import event_service, permission_engine
+from app.services import agent_policies, event_service, permission_engine, tool_gateway
 from app.services.ai_evaluation import compute_accuracy
 
 logger = logging.getLogger(__name__)
@@ -572,9 +572,15 @@ async def fail_execution(
     workspace_id: UUID,
     execution_id: UUID,
     error_message: str,
+    error_type: str | None = None,
+    fail_task: bool = True,
     trace_id: str | None = None,
 ) -> AgentExecution:
-    """Fail a running execution and mark the task failed."""
+    """Fail a running execution and (by default) mark the task failed.
+
+    ``fail_task=False`` lets the worker keep the task open for a retry while
+    the failing attempt is fully audited (execution row + event).
+    """
     execution = await _load_execution(session, workspace_id=workspace_id, execution_id=execution_id)
     if execution is None:
         raise AgentRuntimeError("execution not found")
@@ -582,18 +588,20 @@ async def fail_execution(
         raise AgentRuntimeError(f"execution already {execution.status}; cannot fail")
     execution.status = "failed"
     execution.error_message = error_message[:1000]
+    execution.error_type = (error_type or "unknown")[:32]
     execution.completed_at = datetime.now(UTC)
     await session.flush()
-    await _set_task_status(
-        session, task_id=execution.task_id, status="failed", error_message=error_message[:1000]
-    )
+    if fail_task:
+        await _set_task_status(
+            session, task_id=execution.task_id, status="failed", error_message=error_message[:1000]
+        )
     await event_service.create_event(
         session,
         workspace_id=workspace_id,
         event_type="agent.execution_failed",
         entity_type="agent_execution",
         entity_id=str(execution.id),
-        payload={"error_message": error_message[:1000]},
+        payload={"error_message": error_message[:1000], "error_type": execution.error_type},
         trace_id=trace_id,
     )
     logger.warning("execution %s failed: %s trace=%s", execution.id, error_message, trace_id)
@@ -825,6 +833,14 @@ async def execute_tool_call(
     record["status"] = decision["status"]
     execution.tool_calls = [*execution.tool_calls, record]
     if decision["status"] == "requires_approval":
+        # M5.1: L3 approval deadline comes from the versioned execution policy.
+        policy = await agent_policies.get_execution_policy(
+            session, workspace_id=workspace_id, agent_id=agent.id, trace_id=trace_id
+        )
+        execution.approval_deadline = datetime.now(UTC) + timedelta(
+            seconds=policy.approval_timeout_seconds
+        )
+        await session.flush()
         await _waiting_approval(
             session,
             workspace_id=workspace_id,
@@ -838,7 +854,11 @@ async def execute_tool_call(
             event_type="agent.tool_call_requires_approval",
             entity_type="agent_execution",
             entity_id=str(execution.id),
-            payload={"tool_name": tool_name, "tool_level": tool.permission_level},
+            payload={
+                "tool_name": tool_name,
+                "tool_level": tool.permission_level,
+                "approval_deadline": execution.approval_deadline.isoformat(),
+            },
             trace_id=trace_id,
         )
         return {
@@ -846,7 +866,75 @@ async def execute_tool_call(
             "requires_approval": True,
             "tool_name": tool_name,
             "execution_id": execution.id,
+            "approval_deadline": execution.approval_deadline.isoformat(),
             "message": f"high-risk tool '{tool_name}' requires human approval",
+        }
+
+    # L0-L2: run the bound handler when present; keep M5.0 audit-only passthrough
+    # for whitelist-only tools (no handler bound yet).
+    if tool.handler_name:
+        handler = tool_gateway.get_handler(tool.handler_name)
+        if handler is None:
+            record["status"] = "denied"
+            record["reason"] = f"handler '{tool.handler_name}' is not registered"
+            execution.tool_calls = [*execution.tool_calls, record]
+            await session.flush()
+            await event_service.create_event(
+                session,
+                workspace_id=workspace_id,
+                event_type="agent.tool_call_denied",
+                entity_type="agent_execution",
+                entity_id=str(execution.id),
+                payload={"tool_name": tool_name, "reason": record["reason"]},
+                trace_id=trace_id,
+            )
+            raise ToolPermissionError(record["reason"])
+        try:
+            handler_output = await tool_gateway.execute_handler(
+                session=session,
+                workspace_id=workspace_id,
+                agent=agent,
+                execution=execution,
+                tool=tool,
+                arguments=arguments,
+                trace_id=trace_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - handler errors deny the call
+            record["status"] = "denied"
+            record["reason"] = str(exc)[:400]
+            execution.tool_calls = [*execution.tool_calls, record]
+            await session.flush()
+            await event_service.create_event(
+                session,
+                workspace_id=workspace_id,
+                event_type="agent.tool_call_denied",
+                entity_type="agent_execution",
+                entity_id=str(execution.id),
+                payload={"tool_name": tool_name, "reason": record["reason"]},
+                trace_id=trace_id,
+            )
+            raise ToolPermissionError(record["reason"]) from exc
+        record["handler_name"] = tool.handler_name
+        record["output"] = handler_output
+        execution.tool_calls = [*execution.tool_calls, record]
+        await event_service.create_event(
+            session,
+            workspace_id=workspace_id,
+            event_type="agent.tool_call_executed",
+            entity_type="agent_execution",
+            entity_id=str(execution.id),
+            payload={"tool_name": tool_name, "handler_name": tool.handler_name},
+            trace_id=trace_id,
+        )
+        await session.refresh(execution)
+        return {
+            "status": "allowed",
+            "requires_approval": False,
+            "tool_name": tool_name,
+            "execution_id": execution.id,
+            "handler_name": tool.handler_name,
+            "output": handler_output,
+            "message": f"tool '{tool_name}' executed handler '{tool.handler_name}'",
         }
 
     await event_service.create_event(
@@ -865,7 +953,7 @@ async def execute_tool_call(
         "requires_approval": False,
         "tool_name": tool_name,
         "execution_id": execution.id,
-        "message": f"tool '{tool_name}' passed the gate and was recorded (handler not yet bound)",
+        "message": f"tool '{tool_name}' passed the gate and was recorded (no handler bound)",
     }
 
 
@@ -883,9 +971,11 @@ async def register_tool(
     permission_level: str,
     enabled: bool,
     category: str | None = None,
+    handler_name: str | None = None,
+    args_schema: dict | None = None,
     trace_id: str | None = None,
 ) -> AgentTool:
-    """Register (or update) one tool in the whitelist."""
+    """Register (or update) one tool in the whitelist (M5.1 binds handlers)."""
     if permission_level not in PERMISSION_LEVELS:
         raise AgentRuntimeError(f"invalid permission level '{permission_level}'")
     tool = (
@@ -904,6 +994,8 @@ async def register_tool(
             permission_level=permission_level,
             enabled=enabled,
             category=category,
+            handler_name=handler_name,
+            args_schema=args_schema or {},
             trace_id=trace_id,
         )
         session.add(tool)
@@ -925,6 +1017,9 @@ async def register_tool(
     tool.permission_level = permission_level
     tool.enabled = enabled
     tool.category = category
+    tool.handler_name = handler_name
+    if args_schema is not None:
+        tool.args_schema = args_schema
     await session.flush()
     await event_service.create_event(
         session,
@@ -946,9 +1041,11 @@ async def update_tool_enabled(
     tool_name: str,
     enabled: bool,
     description: str | None = None,
+    handler_name: str | None = None,
+    args_schema: dict[str, Any] | None = None,
     trace_id: str | None = None,
 ) -> AgentTool:
-    """Enable/disable a registered tool (toggle)."""
+    """Enable/disable a registered tool and (optionally) rebind its handler."""
     tool = (
         await session.execute(
             select(AgentTool).where(
@@ -962,6 +1059,10 @@ async def update_tool_enabled(
     tool.enabled = enabled
     if description is not None:
         tool.description = description
+    if handler_name is not None:
+        tool.handler_name = handler_name
+    if args_schema is not None:
+        tool.args_schema = args_schema
     await session.flush()
     await event_service.create_event(
         session,

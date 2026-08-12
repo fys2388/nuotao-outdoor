@@ -1,4 +1,4 @@
-﻿"""Tests for M1.6: order query API and profit cost confidence."""
+"""Tests for M1.6: order query API and profit cost confidence."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -163,9 +163,7 @@ async def test_orders_list_sorting_and_validation(db_session, api_client) -> Non
         total = {"2001": "50.00", "2002": "30.00", "2003": "80.00"}[str(order_id)]
         await _ingest_webhook(db_session, api_client, order_id=order_id, total=total)
 
-    body = api_client.get(
-        ORDERS_URL, params={"sort_by": "total", "sort_order": "asc"}
-    ).json()
+    body = api_client.get(ORDERS_URL, params={"sort_by": "total", "sort_order": "asc"}).json()
     totals = [item["total"] for item in body["items"]]
     assert totals == ["30.00", "50.00", "80.00"]
 

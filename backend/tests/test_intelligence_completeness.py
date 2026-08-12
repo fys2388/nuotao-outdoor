@@ -1,4 +1,4 @@
-﻿"""Tests for M2.1.5 product intelligence data completeness.
+"""Tests for M2.1.5 product intelligence data completeness.
 
 Covers sourcing candidates (one product, many suppliers), the landed cost
 model, per-dimension score evidence, and the prediction -> experiment ->
@@ -135,10 +135,14 @@ async def test_sourcing_candidates_multiple_per_product(db_session, api_client) 
     from app.models.event import EventLog
 
     events = (
-        await db_session.execute(
-            select(EventLog.event_type).where(EventLog.event_type == "product.candidate.added")
+        (
+            await db_session.execute(
+                select(EventLog.event_type).where(EventLog.event_type == "product.candidate.added")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(events) == 2
 
 
@@ -155,9 +159,7 @@ async def test_landed_cost_model_breakdown(db_session, api_client) -> None:
 
     # total_landed = 12 + 1 + 4 + 0.8 + 1.2 + 0.5 = 19.50
     current = (
-        await db_session.execute(
-            select(ProductCost).where(ProductCost.product_id == product_id)
-        )
+        await db_session.execute(select(ProductCost).where(ProductCost.product_id == product_id))
     ).scalar_one()
     assert current.purchase_cost == Decimal("12.00")
     assert current.international_shipping == Decimal("4.00")
@@ -185,12 +187,16 @@ async def test_landed_cost_model_breakdown(db_session, api_client) -> None:
     assert current.version == "v2"
 
     snapshots = (
-        await db_session.execute(
-            select(ProductCostSnapshot)
-            .where(ProductCostSnapshot.product_id == product_id)
-            .order_by(ProductCostSnapshot.valid_from)
+        (
+            await db_session.execute(
+                select(ProductCostSnapshot)
+                .where(ProductCostSnapshot.product_id == product_id)
+                .order_by(ProductCostSnapshot.valid_from)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(snapshots) == 2
     assert [s.total_landed_cost for s in snapshots] == [Decimal("19.50"), Decimal("21.50")]
     assert [s.version for s in snapshots] == ["v1", "v2"]
@@ -206,9 +212,7 @@ async def test_landed_cost_falls_back_to_legacy_legs(db_session, api_client) -> 
     product_id = UUID(response.json()["product"]["id"])
 
     current = (
-        await db_session.execute(
-            select(ProductCost).where(ProductCost.product_id == product_id)
-        )
+        await db_session.execute(select(ProductCost).where(ProductCost.product_id == product_id))
     ).scalar_one()
     # international = first(2) + last(3) = 5 -> landed = 12+1+5+0.8+1.2+0.5 = 20.50
     assert current.international_shipping == Decimal("5.00")
@@ -227,16 +231,25 @@ async def test_score_evidence_per_dimension(db_session, api_client) -> None:
     score_id = UUID(intake["score_id"])
 
     rows = (
-        await db_session.execute(
-            select(ProductScoreEvidence).where(
-                ProductScoreEvidence.product_score_id == score_id
+        (
+            await db_session.execute(
+                select(ProductScoreEvidence).where(
+                    ProductScoreEvidence.product_score_id == score_id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 6
     dims = {row.dimension: row for row in rows}
     assert set(dims) == {
-        "profit", "logistics", "demand", "competition", "differentiation", "compliance",
+        "profit",
+        "logistics",
+        "demand",
+        "competition",
+        "differentiation",
+        "compliance",
     }
     profit = dims["profit"]
     assert profit.score > 0
@@ -335,12 +348,14 @@ async def test_experiment_prediction_loop(db_session, api_client) -> None:
     from app.models.event import EventLog
 
     events = (
-        await db_session.execute(
-            select(EventLog.event_type).where(
-                EventLog.event_type.like("product.experiment.%")
+        (
+            await db_session.execute(
+                select(EventLog.event_type).where(EventLog.event_type.like("product.experiment.%"))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert sorted(events) == [
         "product.experiment.completed",
         "product.experiment.proposed",

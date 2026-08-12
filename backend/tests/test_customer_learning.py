@@ -1,4 +1,4 @@
-﻿"""Tests for M3.4 Customer Intelligence Learning Loop.
+"""Tests for M3.4 Customer Intelligence Learning Loop.
 
 Covers: behavior prediction evaluation + error classification, deterministic
 pattern mining, extended knowledge entry types, cross-domain customer context,
@@ -175,9 +175,7 @@ async def test_pattern_mining_purchase_and_pain(db_session, api_client) -> None:
     assert body["confidence"] == "0.2000"
     assert "customer.pattern_run_completed" in await _event_types(db_session, WORKSPACE)
 
-    pain = api_client.post(
-        "/api/v1/customer-pattern-runs", json={"pattern_type": "pain_pattern"}
-    )
+    pain = api_client.post("/api/v1/customer-pattern-runs", json={"pattern_type": "pain_pattern"})
     assert pain.status_code == 201
     output = pain.json()["output_pattern"]
     assert output["refund_categories"] == {"quality": 2}
@@ -201,9 +199,7 @@ async def test_pattern_mining_churn_from_evaluations(db_session, api_client) -> 
         == 201
     )
 
-    run = api_client.post(
-        "/api/v1/customer-pattern-runs", json={"pattern_type": "churn_pattern"}
-    )
+    run = api_client.post("/api/v1/customer-pattern-runs", json={"pattern_type": "churn_pattern"})
     assert run.status_code == 201, run.text
     output = run.json()["output_pattern"]
     assert output["failure_evaluation_count"] == 1
@@ -231,9 +227,7 @@ async def test_customer_knowledge_extended_types(db_session, api_client) -> None
             },
         )
         assert response.status_code == 201, response.text
-    rows = api_client.get(
-        "/api/v1/customer-knowledge-entries?category=trekking-chair"
-    ).json()
+    rows = api_client.get("/api/v1/customer-knowledge-entries?category=trekking-chair").json()
     assert len(rows) == 3
     assert "customer.knowledge_created" in await _event_types(db_session, WORKSPACE)
 

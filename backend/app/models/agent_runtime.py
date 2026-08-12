@@ -121,6 +121,8 @@ class AgentTask(Base, TimestampMixin, WorkspaceMixin):
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_agent_tasks_workspace_status", "workspace_id", "status"),
@@ -151,7 +153,13 @@ class AgentExecution(Base, TimestampMixin, WorkspaceMixin):
     tool_calls: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     approval: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    approval_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -173,6 +181,8 @@ class AgentTool(Base, TimestampMixin, WorkspaceMixin):
     permission_level: Mapped[str] = mapped_column(String(8), nullable=False, default="L1")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    args_schema: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (

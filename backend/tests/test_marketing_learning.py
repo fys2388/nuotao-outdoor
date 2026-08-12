@@ -1,4 +1,4 @@
-﻿"""Tests for M3.2 Marketing Learning Loop.
+"""Tests for M3.2 Marketing Learning Loop.
 
 Covers: campaign evaluation + error classification, creative analysis audit,
 marketing knowledge retrieval, growth context builder, calibration pattern
@@ -81,9 +81,7 @@ async def test_campaign_evaluation_success(db_session, api_client) -> None:
     assert body["confidence_bucket"] == "HIGH"
     assert body["confidence"] == "0.8"
     assert body["metric_snapshot"]["actual_roas"] == "2.5"
-    assert "marketing.campaign_evaluation.recorded" in await _event_types(
-        db_session, WORKSPACE
-    )
+    assert "marketing.campaign_evaluation.recorded" in await _event_types(db_session, WORKSPACE)
 
 
 @pytest.mark.asyncio
@@ -166,9 +164,7 @@ async def test_creative_analysis_run(db_session, api_client) -> None:
     body = response.json()
     assert body["model_version"] == "creative-insight-v1"
     assert body["analysis_output"]["suggested_angle"] == "weight"
-    assert "marketing.creative_analysis.recorded" in await _event_types(
-        db_session, WORKSPACE
-    )
+    assert "marketing.creative_analysis.recorded" in await _event_types(db_session, WORKSPACE)
 
     listed = api_client.get("/api/v1/creative-analysis-runs")
     assert listed.status_code == 200
@@ -201,12 +197,14 @@ async def test_marketing_knowledge_crud_filters(db_session, api_client) -> None:
         "source": "evaluation",
         "confidence": "0.70",
     }
-    assert api_client.post(
-        "/api/v1/marketing-knowledge-entries", json=creative_entry
-    ).status_code == 201
-    assert api_client.post(
-        "/api/v1/marketing-knowledge-entries", json=failure_entry
-    ).status_code == 201
+    assert (
+        api_client.post("/api/v1/marketing-knowledge-entries", json=creative_entry).status_code
+        == 201
+    )
+    assert (
+        api_client.post("/api/v1/marketing-knowledge-entries", json=failure_entry).status_code
+        == 201
+    )
     assert "marketing.knowledge.created" in await _event_types(db_session, WORKSPACE)
 
     by_type = api_client.get(

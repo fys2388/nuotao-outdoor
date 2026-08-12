@@ -75,9 +75,7 @@ def test_evaluate_conditions_composites() -> None:
         },
         ctx,
     )
-    assert rule_engine.evaluate_conditions(
-        {"not": {"field": "a", "op": "eq", "value": 99}}, ctx
-    )
+    assert rule_engine.evaluate_conditions({"not": {"field": "a", "op": "eq", "value": 99}}, ctx)
     assert not rule_engine.evaluate_conditions(
         {
             "and": [
@@ -112,8 +110,7 @@ async def _seed_rule(
             status="active",
             when_conditions=conditions
             or {"field": "cost.shipping_ratio", "op": "lte", "value": 0.4},
-            then_result=then_result
-            or {"passed_message": "ok", "failed_message": "too high"},
+            then_result=then_result or {"passed_message": "ok", "failed_message": "too high"},
             params=params or {},
             approval_level="L0",
         ),

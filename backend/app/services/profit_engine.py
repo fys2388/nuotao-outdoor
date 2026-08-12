@@ -120,11 +120,7 @@ def calculate_contribution_margin(inputs: ProfitInput) -> ProfitResult:
         + inputs.refund
     )
     contribution_margin = inputs.revenue - total_cost
-    rate = (
-        contribution_margin / inputs.revenue
-        if inputs.revenue != ZERO
-        else ZERO
-    )
+    rate = contribution_margin / inputs.revenue if inputs.revenue != ZERO else ZERO
     return ProfitResult(
         revenue=inputs.revenue,
         total_cost=total_cost,

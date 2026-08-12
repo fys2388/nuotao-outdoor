@@ -1,4 +1,4 @@
-﻿"""Customer intelligence service (M3.3): profiles, interactions, reviews, refunds, knowledge.
+"""Customer intelligence service (M3.3): profiles, interactions, reviews, refunds, knowledge.
 
 Pure data layer for the future Customer Agent. **No Customer Agent, no
 automatic customer support.** PII policy: profiles/interactions/reviews/refunds
@@ -84,9 +84,7 @@ async def _ensure_product(
         return
     exists = (
         await session.execute(
-            select(Product.id).where(
-                Product.workspace_id == workspace_id, Product.id == product_id
-            )
+            select(Product.id).where(Product.workspace_id == workspace_id, Product.id == product_id)
         )
     ).scalar_one_or_none()
     if exists is None:
@@ -100,9 +98,7 @@ async def _ensure_order(
         return
     exists = (
         await session.execute(
-            select(Order.id).where(
-                Order.workspace_id == workspace_id, Order.id == order_id
-            )
+            select(Order.id).where(Order.workspace_id == workspace_id, Order.id == order_id)
         )
     ).scalar_one_or_none()
     if exists is None:
@@ -139,9 +135,7 @@ async def create_profile(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise CustomerError(
-            f"profile '{data.customer_reference_id}' already exists"
-        ) from exc
+        raise CustomerError(f"profile '{data.customer_reference_id}' already exists") from exc
     await event_service.create_event(
         session,
         workspace_id=workspace_id,
@@ -176,9 +170,7 @@ async def get_profile(
     session: AsyncSession, *, workspace_id: UUID, profile_id: UUID
 ) -> CustomerProfile | None:
     """Return one profile or None (workspace-scoped)."""
-    return await _load_profile(
-        session, workspace_id=workspace_id, profile_id=profile_id
-    )
+    return await _load_profile(session, workspace_id=workspace_id, profile_id=profile_id)
 
 
 async def update_profile(
@@ -190,9 +182,7 @@ async def update_profile(
     trace_id: str | None = None,
 ) -> CustomerProfile:
     """Partially update a profile (no PII fields exist)."""
-    profile = await _load_profile(
-        session, workspace_id=workspace_id, profile_id=profile_id
-    )
+    profile = await _load_profile(session, workspace_id=workspace_id, profile_id=profile_id)
     if profile is None:
         raise CustomerError("profile not found")
     for key, value in data.model_dump(exclude_unset=True).items():
@@ -221,9 +211,7 @@ async def list_profiles(
     offset: int = 0,
 ) -> list[CustomerProfile]:
     """List profiles, newest first, with optional segment/country filters."""
-    stmt = select(CustomerProfile).where(
-        CustomerProfile.workspace_id == workspace_id
-    )
+    stmt = select(CustomerProfile).where(CustomerProfile.workspace_id == workspace_id)
     if segment:
         stmt = stmt.where(CustomerProfile.segment == segment)
     if country:
@@ -241,9 +229,7 @@ async def delete_profile(
     trace_id: str | None = None,
 ) -> None:
     """Delete a profile (audited via event)."""
-    profile = await _load_profile(
-        session, workspace_id=workspace_id, profile_id=profile_id
-    )
+    profile = await _load_profile(session, workspace_id=workspace_id, profile_id=profile_id)
     if profile is None:
         raise CustomerError("profile not found")
     await event_service.create_event(
@@ -279,9 +265,7 @@ async def create_interaction(
         )
         if profile is None:
             raise CustomerError("customer profile not found")
-    await _ensure_product(
-        session, workspace_id=workspace_id, product_id=data.product_id
-    )
+    await _ensure_product(session, workspace_id=workspace_id, product_id=data.product_id)
     interaction = CustomerInteraction(
         workspace_id=workspace_id,
         customer_id=data.customer_id,
@@ -368,9 +352,7 @@ async def list_interactions(
     limit: int = 50,
 ) -> list[CustomerInteraction]:
     """List interactions, newest first, with optional filters."""
-    stmt = select(CustomerInteraction).where(
-        CustomerInteraction.workspace_id == workspace_id
-    )
+    stmt = select(CustomerInteraction).where(CustomerInteraction.workspace_id == workspace_id)
     if customer_id is not None:
         stmt = stmt.where(CustomerInteraction.customer_id == customer_id)
     if channel:
@@ -421,9 +403,7 @@ async def create_review(
     trace_id: str | None = None,
 ) -> ProductReview:
     """Record one product review (content immutable afterwards)."""
-    await _ensure_product(
-        session, workspace_id=workspace_id, product_id=data.product_id
-    )
+    await _ensure_product(session, workspace_id=workspace_id, product_id=data.product_id)
     review = ProductReview(
         workspace_id=workspace_id,
         product_id=data.product_id,
@@ -476,9 +456,7 @@ async def update_review(
     trace_id: str | None = None,
 ) -> ProductReview:
     """Update classification; original content stays immutable."""
-    review = await _load_review(
-        session, workspace_id=workspace_id, review_id=review_id
-    )
+    review = await _load_review(session, workspace_id=workspace_id, review_id=review_id)
     if review is None:
         raise CustomerError("review not found")
     for key, value in data.model_dump(exclude_unset=True).items():
@@ -526,9 +504,7 @@ async def delete_review(
     trace_id: str | None = None,
 ) -> None:
     """Delete a review (audited via event)."""
-    review = await _load_review(
-        session, workspace_id=workspace_id, review_id=review_id
-    )
+    review = await _load_review(session, workspace_id=workspace_id, review_id=review_id)
     if review is None:
         raise CustomerError("review not found")
     await event_service.create_event(
@@ -558,9 +534,7 @@ async def create_refund(
 ) -> RefundCase:
     """Record a refund/return case (monetary fields are Decimal)."""
     await _ensure_order(session, workspace_id=workspace_id, order_id=data.order_id)
-    await _ensure_product(
-        session, workspace_id=workspace_id, product_id=data.product_id
-    )
+    await _ensure_product(session, workspace_id=workspace_id, product_id=data.product_id)
     if data.customer_id is not None:
         profile = await _load_profile(
             session, workspace_id=workspace_id, profile_id=data.customer_id
@@ -619,9 +593,7 @@ async def update_refund(
     trace_id: str | None = None,
 ) -> RefundCase:
     """Partially update a refund case."""
-    refund = await _load_refund(
-        session, workspace_id=workspace_id, refund_id=refund_id
-    )
+    refund = await _load_refund(session, workspace_id=workspace_id, refund_id=refund_id)
     if refund is None:
         raise CustomerError("refund not found")
     for key, value in data.model_dump(exclude_unset=True).items():
@@ -662,9 +634,7 @@ async def list_refunds(
     return list(rows)
 
 
-async def refund_stats(
-    session: AsyncSession, *, workspace_id: UUID
-) -> list[dict[str, Any]]:
+async def refund_stats(session: AsyncSession, *, workspace_id: UUID) -> list[dict[str, Any]]:
     """Aggregate refund cases by category: case_count + total_amount."""
     rows = (
         await session.execute(
@@ -696,9 +666,7 @@ async def delete_refund(
     trace_id: str | None = None,
 ) -> None:
     """Delete a refund case (audited via event)."""
-    refund = await _load_refund(
-        session, workspace_id=workspace_id, refund_id=refund_id
-    )
+    refund = await _load_refund(session, workspace_id=workspace_id, refund_id=refund_id)
     if refund is None:
         raise CustomerError("refund not found")
     await event_service.create_event(
@@ -733,9 +701,7 @@ async def create_knowledge_entry(
         )
         if profile is None:
             raise CustomerError("customer profile not found")
-    await _ensure_product(
-        session, workspace_id=workspace_id, product_id=data.product_id
-    )
+    await _ensure_product(session, workspace_id=workspace_id, product_id=data.product_id)
     entry = CustomerKnowledgeEntry(
         workspace_id=workspace_id,
         customer_id=data.customer_id,
@@ -766,7 +732,9 @@ async def create_knowledge_entry(
     )
     logger.info(
         "customer knowledge entry %s created (%s) trace=%s",
-        entry.id, data.entry_type, trace_id,
+        entry.id,
+        data.entry_type,
+        trace_id,
     )
     return entry
 
@@ -782,9 +750,7 @@ async def list_knowledge_entries(
     limit: int = 100,
 ) -> list[CustomerKnowledgeEntry]:
     """Query customer knowledge entries, newest first."""
-    stmt = select(CustomerKnowledgeEntry).where(
-        CustomerKnowledgeEntry.workspace_id == workspace_id
-    )
+    stmt = select(CustomerKnowledgeEntry).where(CustomerKnowledgeEntry.workspace_id == workspace_id)
     if category:
         stmt = stmt.where(CustomerKnowledgeEntry.category == category)
     if entry_type:

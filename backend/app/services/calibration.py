@@ -68,15 +68,19 @@ async def _completed_experiments(
     session: AsyncSession, *, workspace_id: UUID
 ) -> list[ProductExperiment]:
     rows = (
-        await session.execute(
-            select(ProductExperiment)
-            .where(
-                ProductExperiment.workspace_id == workspace_id,
-                ProductExperiment.status == "completed",
+        (
+            await session.execute(
+                select(ProductExperiment)
+                .where(
+                    ProductExperiment.workspace_id == workspace_id,
+                    ProductExperiment.status == "completed",
+                )
+                .order_by(ProductExperiment.created_at)
             )
-            .order_by(ProductExperiment.created_at)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -85,25 +89,33 @@ async def _dimension_confidences(
 ) -> dict[str, Decimal]:
     """Latest per-dimension evidence confidence for a product's newest score."""
     score = (
-        await session.execute(
-            select(ProductScore)
-            .where(
-                ProductScore.workspace_id == workspace_id,
-                ProductScore.product_id == product_id,
+        (
+            await session.execute(
+                select(ProductScore)
+                .where(
+                    ProductScore.workspace_id == workspace_id,
+                    ProductScore.product_id == product_id,
+                )
+                .order_by(ProductScore.scored_at.desc())
             )
-            .order_by(ProductScore.scored_at.desc())
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if score is None:
         return {}
     rows = (
-        await session.execute(
-            select(ProductScoreEvidence).where(
-                ProductScoreEvidence.workspace_id == workspace_id,
-                ProductScoreEvidence.product_score_id == score.id,
+        (
+            await session.execute(
+                select(ProductScoreEvidence).where(
+                    ProductScoreEvidence.workspace_id == workspace_id,
+                    ProductScoreEvidence.product_score_id == score.id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {row.dimension: row.confidence for row in rows}
 
 
@@ -119,14 +131,18 @@ async def generate_confidence_report(
     Evaluations without a confidence bucket or a success signal are excluded.
     """
     rows = (
-        await session.execute(
-            select(ProductAiEvaluation).where(
-                ProductAiEvaluation.workspace_id == workspace_id,
-                ProductAiEvaluation.confidence_bucket.is_not(None),
-                ProductAiEvaluation.success_flag.is_not(None),
+        (
+            await session.execute(
+                select(ProductAiEvaluation).where(
+                    ProductAiEvaluation.workspace_id == workspace_id,
+                    ProductAiEvaluation.confidence_bucket.is_not(None),
+                    ProductAiEvaluation.success_flag.is_not(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     aggregates: dict[str, dict[str, Any]] = {
         "LOW": {"count": 0, "success": 0, "confidence_sum": Decimal("0")},
@@ -146,12 +162,16 @@ async def generate_confidence_report(
             aggregate["confidence_sum"] += confidence
 
     existing = (
-        await session.execute(
-            select(ConfidenceCalibration).where(
-                ConfidenceCalibration.workspace_id == workspace_id
+        (
+            await session.execute(
+                select(ConfidenceCalibration).where(
+                    ConfidenceCalibration.workspace_id == workspace_id
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_bucket = {row.bucket: row for row in existing}
     now = datetime.now(UTC)
     report_rows: list[ConfidenceCalibration] = []
@@ -160,9 +180,7 @@ async def generate_confidence_report(
         success = aggregate["success"]
         row = by_bucket.get(bucket)
         if row is None:
-            row = ConfidenceCalibration(
-                workspace_id=workspace_id, bucket=bucket, trace_id=trace_id
-            )
+            row = ConfidenceCalibration(workspace_id=workspace_id, bucket=bucket, trace_id=trace_id)
             session.add(row)
         row.sample_count = count
         row.success_count = success
@@ -274,11 +292,7 @@ async def run_score_calibration(
         adjusted: dict[str, Decimal] = {}
         for dimension in DIMENSIONS:
             stat = stats[dimension]
-            avg_all = (
-                stat["conf_all"] / Decimal(stat["n_all"])
-                if stat["n_all"]
-                else ZERO
-            )
+            avg_all = stat["conf_all"] / Decimal(stat["n_all"]) if stat["n_all"] else ZERO
             ratio = (
                 stat["conf_success"] / Decimal(stat["n_success"]) / avg_all
                 if stat["n_success"] and avg_all > ZERO
@@ -348,7 +362,9 @@ async def run_score_calibration(
     )
     logger.info(
         "score calibration run %s proposed (n=%s) trace=%s",
-        run.id, sample_size, trace_id,
+        run.id,
+        sample_size,
+        trace_id,
     )
     return run
 

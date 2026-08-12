@@ -1,4 +1,4 @@
-﻿"""Customer intelligence schemas (M3.3).
+"""Customer intelligence schemas (M3.3).
 
 PII policy: no name/email/phone/address fields exist anywhere in these
 schemas - only non-identifying references and behavioral/aggregate data.
@@ -25,8 +25,13 @@ INTERACTION_CHANNELS = ("email", "chat", "review", "social", "other")
 SENTIMENTS = ("positive", "neutral", "negative", "unknown")
 REVIEW_PLATFORMS = ("shopify", "amazon", "google", "facebook", "woocommerce", "other")
 REFUND_CATEGORIES = (
-    "quality", "size", "shipping", "damaged", "changed_mind",
-    "not_as_described", "other",
+    "quality",
+    "size",
+    "shipping",
+    "damaged",
+    "changed_mind",
+    "not_as_described",
+    "other",
 )
 REFUND_RESOLUTIONS = ("refunded", "partial", "rejected", "escalated")
 
@@ -170,9 +175,12 @@ class RefundUpdate(BaseModel):
     """Partial refund update."""
 
     reason: str | None = Field(default=None, max_length=500)
-    category: Literal[
-        "quality", "size", "shipping", "damaged", "changed_mind", "not_as_described", "other"
-    ] | None = None
+    category: (
+        Literal[
+            "quality", "size", "shipping", "damaged", "changed_mind", "not_as_described", "other"
+        ]
+        | None
+    ) = None
     amount: Decimal | None = Field(default=None, ge=0)
     resolution: Literal["refunded", "partial", "rejected", "escalated"] | None = None
 

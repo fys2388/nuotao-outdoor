@@ -1,4 +1,4 @@
-﻿"""M3.1: marketing intelligence - campaigns, creatives, feedback, experiments
+"""M3.1: marketing intelligence - campaigns, creatives, feedback, experiments
 
 Revision ID: 0008
 Revises: 0007
@@ -45,8 +45,12 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_campaigns_workspace_platform", "campaigns", ["workspace_id", "platform"])
     op.create_index("ix_campaigns_workspace_product", "campaigns", ["workspace_id", "product_id"])
@@ -72,14 +76,24 @@ def upgrade() -> None:
         sa.Column("hook", sa.String(500), nullable=True),
         sa.Column("angle", sa.String(255), nullable=True),
         sa.Column("copy", sa.String(2000), nullable=True),
-        sa.Column("performance_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "performance_snapshot", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")
+        ),
         sa.Column("status", sa.String(16), nullable=False, server_default="draft"),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_index("ix_creative_assets_workspace_product", "creative_assets", ["workspace_id", "product_id"])
-    op.create_index("ix_creative_assets_workspace_platform", "creative_assets", ["workspace_id", "platform"])
+    op.create_index(
+        "ix_creative_assets_workspace_product", "creative_assets", ["workspace_id", "product_id"]
+    )
+    op.create_index(
+        "ix_creative_assets_workspace_platform", "creative_assets", ["workspace_id", "platform"]
+    )
     op.create_index("ix_creative_assets_product_id", "creative_assets", ["product_id"])
 
     # --- customer_feedback ---------------------------------------------------
@@ -97,10 +111,16 @@ def upgrade() -> None:
         sa.Column("rating", sa.Integer(), nullable=True),
         sa.Column("metadata", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_index("ix_feedback_workspace_product", "customer_feedback", ["workspace_id", "product_id"])
-    op.create_index("ix_feedback_workspace_sentiment", "customer_feedback", ["workspace_id", "sentiment"])
+    op.create_index(
+        "ix_feedback_workspace_product", "customer_feedback", ["workspace_id", "product_id"]
+    )
+    op.create_index(
+        "ix_feedback_workspace_sentiment", "customer_feedback", ["workspace_id", "sentiment"]
+    )
     op.create_index("ix_feedback_product_id", "customer_feedback", ["product_id"])
 
     # --- marketing_experiments ----------------------------------------------
@@ -119,8 +139,12 @@ def upgrade() -> None:
         sa.Column("result", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("calibration", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index(
         "ix_marketing_experiments_workspace_product",

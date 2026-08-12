@@ -1,4 +1,4 @@
-﻿"""Customer learning loop schemas (M3.4)."""
+"""Customer learning loop schemas (M3.4)."""
 
 from datetime import datetime
 from decimal import Decimal

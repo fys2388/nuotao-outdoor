@@ -1,4 +1,4 @@
-﻿"""Order and WooCommerce webhook schemas.
+"""Order and WooCommerce webhook schemas.
 
 PII policy: webhook payloads are parsed into a minimal, non-identifying
 projection (no customer names/emails/addresses are stored).

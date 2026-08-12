@@ -1,4 +1,4 @@
-﻿"""Tests for M3.1 Marketing Intelligence Foundation.
+"""Tests for M3.1 Marketing Intelligence Foundation.
 
 Covers: ROI / derived metric math, campaign CRUD + event emission, workspace
 data isolation, creative CRUD, feedback query filtering and the experiment
@@ -148,11 +148,14 @@ async def test_workspace_data_isolation(db_session, api_client) -> None:
         "budget": "10.00",
     }
     assert api_client.post("/api/v1/campaigns", json=payload).status_code == 201
-    assert api_client.post(
-        "/api/v1/campaigns",
-        json={**payload, "campaign_id": "iso-002"},
-        headers=_headers(OTHER_WORKSPACE),
-    ).status_code == 201
+    assert (
+        api_client.post(
+            "/api/v1/campaigns",
+            json={**payload, "campaign_id": "iso-002"},
+            headers=_headers(OTHER_WORKSPACE),
+        ).status_code
+        == 201
+    )
 
     mine = api_client.get("/api/v1/campaigns", headers=_headers())
     others = api_client.get("/api/v1/campaigns", headers=_headers(OTHER_WORKSPACE))
@@ -196,9 +199,7 @@ async def test_creative_crud_and_events(db_session, api_client) -> None:
     assert listed.status_code == 200
     assert any(item["id"] == str(creative_id) for item in listed.json())
 
-    updated = api_client.put(
-        f"/api/v1/creatives/{creative_id}", json={"status": "archived"}
-    )
+    updated = api_client.put(f"/api/v1/creatives/{creative_id}", json={"status": "archived"})
     assert updated.status_code == 200
     assert updated.json()["status"] == "archived"
     assert "creative.updated" in await _event_types(db_session, WORKSPACE)
@@ -307,9 +308,7 @@ async def test_experiment_lifecycle_and_calibration(db_session, api_client) -> N
     assert "marketing_experiment.completed" in await _event_types(db_session, WORKSPACE)
 
     # Lifecycle guards: proposed cannot be completed; active cannot restart.
-    guard = api_client.post(
-        "/api/v1/marketing-experiments", json={"hypothesis": "guard"}
-    )
+    guard = api_client.post("/api/v1/marketing-experiments", json={"hypothesis": "guard"})
     assert guard.status_code == 201
     guard_id = UUID(guard.json()["id"])
     guard_complete = api_client.post(
@@ -319,9 +318,7 @@ async def test_experiment_lifecycle_and_calibration(db_session, api_client) -> N
     assert guard_complete.status_code == 400
     assert "not active" in guard_complete.json()["detail"]
 
-    restart = api_client.post(
-        f"/api/v1/marketing-experiments/{experiment_id}/start", json={}
-    )
+    restart = api_client.post(f"/api/v1/marketing-experiments/{experiment_id}/start", json={})
     assert restart.status_code == 400
     assert "not proposed" in restart.json()["detail"]
 
@@ -331,8 +328,6 @@ async def test_experiment_missing_returns_404(db_session, api_client) -> None:
     """Unknown experiment ids map to 404."""
     missing = UUID("00000000-0000-0000-0000-00000000dead")
     assert (
-        api_client.post(
-            f"/api/v1/marketing-experiments/{missing}/start", json={}
-        ).status_code
+        api_client.post(f"/api/v1/marketing-experiments/{missing}/start", json={}).status_code
         == 404
     )

@@ -64,6 +64,4 @@ class RuleExecutionLog(Base, WorkspaceMixin):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_rule_execution_created", "workspace_id", text("created_at DESC")),
-    )
+    __table_args__ = (Index("ix_rule_execution_created", "workspace_id", text("created_at DESC")),)

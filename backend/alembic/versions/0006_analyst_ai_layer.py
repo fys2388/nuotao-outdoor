@@ -54,8 +54,12 @@ def upgrade() -> None:
         sa.Column("status", sa.String(16), nullable=False, server_default="active"),
         sa.Column("description", sa.String(500), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_prompts_workspace_id", "prompts", ["workspace_id"])
     op.create_index("ix_prompts_name", "prompts", ["name"])
@@ -95,21 +99,39 @@ def upgrade() -> None:
         "product_ai_evaluations",
         sa.Column("id", UUID(), primary_key=True),
         sa.Column("workspace_id", UUID(), nullable=False),
-        sa.Column("product_id", UUID(), sa.ForeignKey("products.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("analysis_run_id", UUID(), sa.ForeignKey("product_analysis_runs.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("experiment_id", UUID(), sa.ForeignKey("product_experiments.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "product_id", UUID(), sa.ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+        ),
+        sa.Column(
+            "analysis_run_id",
+            UUID(),
+            sa.ForeignKey("product_analysis_runs.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column(
+            "experiment_id",
+            UUID(),
+            sa.ForeignKey("product_experiments.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
         sa.Column("prediction", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("actual_result", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("accuracy", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("human_rating", sa.Integer(), nullable=True),
         sa.Column("notes", sa.String(500), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_index("ix_product_ai_evaluations_workspace_id", "product_ai_evaluations", ["workspace_id"])
+    op.create_index(
+        "ix_product_ai_evaluations_workspace_id", "product_ai_evaluations", ["workspace_id"]
+    )
     op.create_index("ix_product_ai_evaluations_product", "product_ai_evaluations", ["product_id"])
     op.create_index("ix_product_ai_evaluations_run", "product_ai_evaluations", ["analysis_run_id"])
-    op.create_index("ix_product_ai_evaluations_experiment", "product_ai_evaluations", ["experiment_id"])
+    op.create_index(
+        "ix_product_ai_evaluations_experiment", "product_ai_evaluations", ["experiment_id"]
+    )
 
 
 def downgrade() -> None:

@@ -1,4 +1,4 @@
-﻿"""Customer intelligence endpoints (M3.3): profiles, interactions, reviews, refunds, knowledge.
+"""Customer intelligence endpoints (M3.3): profiles, interactions, reviews, refunds, knowledge.
 
 Data capture only - no Customer Agent, no automatic customer support.
 """
@@ -109,13 +109,9 @@ async def get_profile(
     workspace_id: WorkspaceId,
 ) -> CustomerProfileOut:
     """Return one profile by internal id."""
-    profile = await customer.get_profile(
-        db, workspace_id=workspace_id, profile_id=profile_id
-    )
+    profile = await customer.get_profile(db, workspace_id=workspace_id, profile_id=profile_id)
     if profile is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="profile not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="profile not found")
     return CustomerProfileOut.model_validate(profile)
 
 
@@ -229,9 +225,7 @@ async def get_interaction(
         db, workspace_id=workspace_id, interaction_id=interaction_id
     )
     if interaction is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="interaction not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="interaction not found")
     return InteractionOut.model_validate(interaction)
 
 

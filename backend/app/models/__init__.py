@@ -9,6 +9,13 @@ from app.models.agent_runtime import (
     AgentTask,
     AgentTool,
 )
+from app.models.agent_runtime_hardening import (
+    AgentBudgetPolicy,
+    AgentExecutionPolicy,
+    AgentMetric,
+    AgentRetryPolicy,
+    AgentTaskAttempt,
+)
 from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.customer import (
     CustomerInteraction,
@@ -80,6 +87,11 @@ __all__ = [
     "AgentRegistry",
     "AgentTask",
     "AgentTool",
+    "AgentBudgetPolicy",
+    "AgentExecutionPolicy",
+    "AgentMetric",
+    "AgentRetryPolicy",
+    "AgentTaskAttempt",
     "Order",
     "OrderItem",
     "EventLog",

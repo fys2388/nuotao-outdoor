@@ -1,4 +1,4 @@
-﻿"""Tests for M2.1 product intelligence foundation.
+"""Tests for M2.1 product intelligence foundation.
 
 Covers product source capture, append-only cost snapshots, score persistence,
 analysis audit rows, decision workflow (state machine), intake validation and
@@ -109,8 +109,13 @@ async def test_intake_creates_source_cost_score_and_audit(db_session, api_client
     assert score.scored_at is not None
     assert score.trace_id is not None
     assert set(score.__table__.columns.keys()) >= {
-        "profit", "logistics", "demand", "competition",
-        "differentiation", "compliance", "total",
+        "profit",
+        "logistics",
+        "demand",
+        "competition",
+        "differentiation",
+        "compliance",
+        "total",
     }
 
     # Analysis audit row (deterministic, no LLM).
@@ -138,10 +143,14 @@ async def test_cost_snapshot_history_is_never_overwritten(db_session, api_client
     assert second.status_code == 201
 
     snapshots = (
-        await db_session.execute(
-            select(ProductCostSnapshot).order_by(ProductCostSnapshot.valid_from)
+        (
+            await db_session.execute(
+                select(ProductCostSnapshot).order_by(ProductCostSnapshot.valid_from)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(snapshots) == 2
     assert [s.total_cost for s in snapshots] == [Decimal("16.00"), Decimal("18.00")]
 
@@ -226,9 +235,7 @@ async def test_decision_workflow_state_machine(db_session, api_client) -> None:
     # Events for the full workflow exist.
     from app.models.event import EventLog
 
-    events = (
-        await db_session.execute(select(EventLog.event_type).distinct())
-    ).scalars().all()
+    events = (await db_session.execute(select(EventLog.event_type).distinct())).scalars().all()
     assert "product.decision.proposed" in events
     assert "product.decision.approved" in events
     assert "product.decision.rejected" in events

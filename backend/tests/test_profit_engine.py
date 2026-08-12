@@ -1,4 +1,4 @@
-﻿"""Tests for the profit engine (contribution margin, all Decimal)."""
+"""Tests for the profit engine (contribution margin, all Decimal)."""
 
 from decimal import Decimal
 
