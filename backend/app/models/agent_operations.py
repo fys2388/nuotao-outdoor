@@ -37,13 +37,15 @@ from app.models.base import AI_JSON, Base, TimestampMixin, WorkspaceMixin
 ALERT_STATUSES: tuple[str, ...] = ("open", "acknowledged", "resolved")
 ALERT_SEVERITIES: tuple[str, ...] = ("info", "warning", "critical")
 
-# Approval center lifecycle states (M5.4).
-APPROVAL_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected")
+# Approval center lifecycle states (M5.4 + M5.5 SLA: pending -> warning ->
+# expired; decided states approved/rejected are terminal and immutable).
+APPROVAL_STATUSES: tuple[str, ...] = ("pending", "warning", "expired", "approved", "rejected")
 APPROVAL_TYPES: tuple[str, ...] = (
     "L3_TOOL",
     "RECOMMENDATION",
     "CALIBRATION",
     "DLQ_REPLAY",
+    "AGENT_LIFECYCLE",
 )
 
 
@@ -117,19 +119,26 @@ class AgentApproval(Base, TimestampMixin, WorkspaceMixin):
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # M5.5 approval SLA: when the pending approval crosses the configured
+    # warning threshold it becomes ``warning``; past ``expires_at`` it becomes
+    # ``expired`` (immutable - never auto-approved).
+    sla_warning_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
-        # One pending DLQ replay proposal per task at a time: two approvers
-        # cannot both replay the same dead letter (the row claim + the task
-        # state guard in the replay service protect the execution itself).
+        # One pending/warning DLQ replay proposal per task at a time: two
+        # approvers cannot both replay the same dead letter (the row claim +
+        # the task state guard in the replay service protect the execution).
         Index(
             "uq_agent_approvals_dlq_pending",
             "workspace_id",
             "entity_id",
             unique=True,
-            postgresql_where=text("approval_type = 'DLQ_REPLAY' AND status = 'pending'"),
-            sqlite_where=text("approval_type = 'DLQ_REPLAY' AND status = 'pending'"),
+            postgresql_where=text(
+                "approval_type = 'DLQ_REPLAY' AND status IN ('pending', 'warning')"
+            ),
+            sqlite_where=text("approval_type = 'DLQ_REPLAY' AND status IN ('pending', 'warning')"),
         ),
         Index("ix_agent_approvals_ws_status", "workspace_id", "status"),
         Index("ix_agent_approvals_ws_type", "workspace_id", "approval_type"),

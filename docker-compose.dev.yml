@@ -1,0 +1,53 @@
+# Nuotao AI OS - local development stack (M5.5)
+# Source-mounted hot-reload over the same production services.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+name: nuotao-ai-os-dev
+
+services:
+  api:
+    build:
+      context: ./backend
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./frontend:/app/frontend
+    environment: &dev-env
+      ENVIRONMENT: development
+      DEBUG: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nuotao}:${POSTGRES_PASSWORD:-nuotao_dev_password}@postgres:5432/${POSTGRES_DB:-nuotao}
+      REDIS_URL: redis://redis:6379/0
+      TASK_QUEUE_BACKEND: redis
+      WOOCOMMERCE_WEBHOOK_SECRET: ${WOOCOMMERCE_WEBHOOK_SECRET:-dev-webhook-secret-change-me}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-2}
+      AGENT_ALERT_INTERVAL_SECONDS: ${AGENT_ALERT_INTERVAL_SECONDS:-30}
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - ./backend/app:/app/app
+    environment: *dev-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.scheduler"]
+    volumes:
+      - ./backend/app:/app/app
+    environment: *dev-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

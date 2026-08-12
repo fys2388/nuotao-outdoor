@@ -2,6 +2,7 @@
 
 from app.models.agent import AiAgentRun
 from app.models.agent_operations import AgentAlert, AgentApproval
+from app.models.agent_platform import AgentApprovalRole, AgentApprovalSla, AgentVersion
 from app.models.agent_runtime import (
     AgentEvaluation,
     AgentExecution,
@@ -86,6 +87,9 @@ __all__ = [
     "AgentApproval",
     "AgentEvaluation",
     "AgentExecution",
+    "AgentApprovalRole",
+    "AgentApprovalSla",
+    "AgentVersion",
     "AgentMemory",
     "AgentRegistry",
     "AgentTask",

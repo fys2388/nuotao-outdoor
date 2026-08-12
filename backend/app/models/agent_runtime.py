@@ -42,7 +42,10 @@ AGENT_DOMAINS: tuple[str, ...] = (
     "supply_chain",
     "operations",
 )
-AGENT_STATUSES: tuple[str, ...] = ("active", "inactive", "draft")
+# Registry status (M5.0) extended with the M5.5 lifecycle: ``paused`` blocks
+# new task creation but leaves running executions alone; ``retired`` blocks
+# new tasks too while keeping all history. ``inactive`` is kept for legacy.
+AGENT_STATUSES: tuple[str, ...] = ("active", "inactive", "draft", "paused", "retired")
 
 # Task lifecycle states (M5.0).
 TASK_STATUSES: tuple[str, ...] = (
@@ -96,6 +99,8 @@ class AgentRegistry(Base, TimestampMixin, WorkspaceMixin):
     prompt_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     permission_level: Mapped[str] = mapped_column(String(8), nullable=False, default="L1")
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # M5.5: the currently active configuration version (agent_versions.version).
+    current_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (

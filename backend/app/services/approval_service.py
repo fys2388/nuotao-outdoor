@@ -33,6 +33,8 @@ from app.services import event_service, task_queue
 logger = logging.getLogger(__name__)
 
 APPROVAL_PENDING = "pending"
+APPROVAL_WARNING = "warning"
+APPROVAL_EXPIRED = "expired"
 APPROVAL_APPROVED = "approved"
 APPROVAL_REJECTED = "rejected"
 
@@ -63,7 +65,7 @@ async def _find_pending(
                 AgentApproval.workspace_id == workspace_id,
                 AgentApproval.approval_type == approval_type,
                 AgentApproval.entity_id == entity_id,
-                AgentApproval.status == APPROVAL_PENDING,
+                AgentApproval.status.in_((APPROVAL_PENDING, APPROVAL_WARNING)),
             )
         )
     ).scalar_one_or_none()
@@ -151,7 +153,7 @@ async def sync_approval(
             AgentApproval.workspace_id == workspace_id,
             AgentApproval.approval_type == approval_type,
             AgentApproval.entity_id == entity_id,
-            AgentApproval.status == APPROVAL_PENDING,
+            AgentApproval.status.in_((APPROVAL_PENDING, APPROVAL_WARNING)),
         )
         .values(
             status=decision,
@@ -317,6 +319,38 @@ async def _dispatch(
                 trace_id=trace_id,
             )
         # Rejection of a replay proposal needs no business side effect.
+    elif approval.approval_type == "AGENT_LIFECYCLE":
+        # High-risk lifecycle transitions (retire / rollback) are executed
+        # ONLY after a human approval. The metadata_ carries the action and
+        # the rollback target version; the proposal row itself is immutable.
+        from app.services import agent_lifecycle
+
+        agent_uuid = UUID(approval.entity_id)
+        action = (approval.metadata_ or {}).get("action")
+        if decision == APPROVAL_REJECTED:
+            return  # rejection of a lifecycle proposal needs no side effect
+        if action == "retire":
+            await agent_lifecycle._execute_retire(  # noqa: SLF001 - dispatch boundary
+                session,
+                workspace_id=approval.workspace_id,
+                agent_uuid=agent_uuid,
+                actor=actor,
+                trace_id=trace_id,
+            )
+        elif action == "rollback":
+            target_version = (approval.metadata_ or {}).get("target_version")
+            if not target_version:
+                raise ApprovalError("rollback proposal missing target_version")
+            await agent_lifecycle._execute_rollback(  # noqa: SLF001 - dispatch boundary
+                session,
+                workspace_id=approval.workspace_id,
+                agent_uuid=agent_uuid,
+                target_version=str(target_version),
+                actor=actor,
+                trace_id=trace_id,
+            )
+        else:
+            raise ApprovalError(f"unsupported lifecycle action '{action}'")
     else:  # pragma: no cover - validated on creation
         raise ApprovalError(f"unsupported approval_type '{approval.approval_type}'")
 
@@ -343,16 +377,30 @@ async def _decide(
     approval = await _load_approval(session, workspace_id=workspace_id, approval_id=approval_id)
     if approval is None:
         raise ApprovalError("approval not found")
-    if approval.status != APPROVAL_PENDING:
+    if approval.status == APPROVAL_EXPIRED:
         raise ApprovalError(
-            f"approval already {approval.status}; only pending approvals can be decided"
+            "approval expired; the proposed action was never executed and cannot be decided"
         )
+    if approval.status not in (APPROVAL_PENDING, APPROVAL_WARNING):
+        raise ApprovalError(
+            f"approval already {approval.status}; only pending/warning approvals can be decided"
+        )
+    # M5.5 RBAC: the actor must hold the permission for this approval type.
+    from app.services.approval_rbac import check_approval_permission
+
+    await check_approval_permission(
+        session,
+        workspace_id=workspace_id,
+        actor=actor,
+        approval_type=approval.approval_type,
+        action=decision,
+    )
     claimed = await session.execute(
         update(AgentApproval)
         .where(
             AgentApproval.id == approval.id,
             AgentApproval.workspace_id == workspace_id,
-            AgentApproval.status == APPROVAL_PENDING,
+            AgentApproval.status.in_((APPROVAL_PENDING, APPROVAL_WARNING)),
         )
         .values(
             status=decision,

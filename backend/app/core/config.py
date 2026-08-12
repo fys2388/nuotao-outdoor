@@ -115,6 +115,27 @@ class Settings(BaseSettings):
     # Window (minutes) used for throughput / success / failure rates in stats.
     queue_stats_window_minutes: int = 60
 
+    # --- M5.5 Agent Platform Productionization --------------------------------
+    # Alert Scheduler: a resident background loop that runs the existing
+    # ``evaluate_alerts()`` on a configurable interval. Empty scope lists mean
+    # "all workspaces / all agents"; the scheduler is never a business action.
+    agent_alert_scheduler_enabled: bool = True
+    agent_alert_interval_seconds: int = 60
+    alert_workspace_ids: list[str] = []
+    alert_agent_ids: list[str] = []
+
+    # Approval Center RBAC (M5.5). When enabled, approve/reject checks the
+    # actor's workspace roles server-side (403 when the permission is missing).
+    # A workspace with NO enabled roles stays in the legacy "any operator"
+    # mode for backwards compatibility; production must configure roles.
+    approval_rbac_enabled: bool = True
+
+    # Approval SLA (M5.5): pending -> warning -> expired. Per-type rows in
+    # ``agent_approval_slas`` override these defaults.
+    approval_sla_enabled: bool = True
+    approval_default_warning_seconds: int = 3600
+    approval_default_expire_seconds: int = 86400
+
     # Default agent policies (config-driven; overridable per agent in the DB).
     agent_default_execution_timeout: int = 300
     agent_default_approval_timeout: int = 86400

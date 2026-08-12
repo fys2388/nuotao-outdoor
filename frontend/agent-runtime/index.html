@@ -8,237 +8,225 @@
   :root { --bg:#0f1420; --panel:#171e2e; --line:#2a3448; --text:#dbe4f3; --muted:#8b98ad; --ok:#2ecc71; --warn:#f1c40f; --bad:#e74c3c; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui, sans-serif; }
-  header { display:flex; align-items:center; gap:16px; padding:14px 20px; border-bottom:1px solid var(--line); }
+  header { display:flex; align-items:center; gap:16px; padding:14px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; }
   header h1 { font-size:16px; margin:0; }
   header .sub { color:var(--muted); font-size:12px; }
-  header .actions { margin-left:auto; display:flex; gap:10px; }
-  button { background:#22304a; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 12px; font-size:12px; cursor:pointer; }
+  header .actions { margin-left:auto; display:flex; gap:10px; align-items:center; }
+  button { background:#22304a; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 10px; font-size:12px; cursor:pointer; }
   button:hover { background:#2b3d5e; }
-  button.primary { background:#1d5fa8; }
-  button.primary:hover { background:#236fc0; }
-  main { padding:20px; max-width:1200px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  button.primary { background:#1d5fa8; } button.primary:hover { background:#236fc0; }
+  button.danger { background:#5c1f2e; } button.danger:hover { background:#75303f; }
+  main { padding:20px; max-width:1280px; margin:0 auto; display:grid; grid-template-columns:1fr 1fr; gap:16px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
   .card.full { grid-column:1 / -1; }
-  .card h2 { font-size:13px; margin:0 0 10px; color:#9fb4d8; text-transform:uppercase; letter-spacing:.4px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:#9fb4d8; text-transform:uppercase; letter-spacing:.4px; display:flex; align-items:center; gap:10px; }
+  .card h2 .tabs { margin-left:auto; display:flex; gap:6px; }
+  .card h2 .tabs button { padding:2px 8px; font-size:11px; }
+  .card h2 .tabs button.on { background:#1d5fa8; }
   .kv { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; }
   .kv div { background:rgba(255,255,255,.03); border-radius:6px; padding:6px 8px; font-size:12px; }
-  .kv .k { color:var(--muted); font-size:11px; }
-  .kv .v { color:var(--text); word-break:break-all; }
+  .kv .k { color:var(--muted); font-size:11px; } .kv .v { color:var(--text); word-break:break-all; }
   table { width:100%; border-collapse:collapse; font-size:12px; }
-  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:600; }
-  td { overflow-wrap:anywhere; }
-  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; }
-  .b-ok { background:rgba(46,204,113,.15); color:var(--ok); }
-  .b-warn { background:rgba(241,196,15,.15); color:var(--warn); }
-  .b-bad { background:rgba(231,76,60,.15); color:var(--bad); }
-  .b-mute { background:rgba(139,152,173,.15); color:var(--muted); }
-  .error { color:var(--bad); margin:10px 0; }
-  .row-actions { display:flex; gap:6px; }
+  th, td { text-align:left; padding:5px 7px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; } td { overflow-wrap:anywhere; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; white-space:nowrap; }
+  .b-ok { background:rgba(46,204,113,.15); color:var(--ok); } .b-warn { background:rgba(241,196,15,.15); color:var(--warn); }
+  .b-bad { background:rgba(231,76,60,.15); color:var(--bad); } .b-mute { background:rgba(139,152,173,.15); color:var(--muted); }
   .hint { color:var(--muted); font-size:11px; margin-top:6px; }
   a { color:#5aa7ff; text-decoration:none; }
+  .row-actions { display:flex; gap:5px; flex-wrap:wrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>Agent Runtime Console</h1>
-  <span class="sub">M5.4 ? workspace-scoped ? read-only + human approvals</span>
+  <span class="sub">M5.5 ? workspace-scoped ? RBAC enforced server-side</span>
   <span class="actions">
+    <span id="healthBadge"></span>
     <button id="refreshBtn" class="primary">Refresh</button>
   </span>
 </header>
 <main>
-  <div class="card full" id="overviewCard">
-    <h2>Runtime Overview</h2>
-    <div class="kv" id="overview"></div>
-  </div>
-  <div class="card" id="queueCard">
-    <h2>Queue</h2>
-    <div class="kv" id="queue"></div>
-  </div>
-  <div class="card" id="healthCard">
-    <h2>Queue Health</h2>
-    <div class="kv" id="health"></div>
-  </div>
-  <div class="card full" id="workersCard">
-    <h2>Workers</h2>
-    <div id="workers"></div>
-  </div>
+  <div class="card full" id="overviewCard"><h2>Runtime Overview</h2><div class="kv" id="overview"></div></div>
+  <div class="card" id="metricsCard"><h2>Metrics</h2><div class="kv" id="metrics"></div></div>
+  <div class="card" id="queueCard"><h2>Queue</h2><div class="kv" id="queue"></div></div>
+  <div class="card full" id="workersCard"><h2>Workers</h2><div id="workers"></div></div>
+  <div class="card full" id="agentsCard"><h2>Agents ? Lifecycle</h2><div id="agents"></div></div>
   <div class="card" id="alertsCard">
-    <h2>Active Alerts</h2>
+    <h2>Alerts <span class="tabs"><button data-tab="open" class="on">open</button><button data-tab="acknowledged">ack</button><button data-tab="resolved">resolved</button></span></h2>
     <div id="alerts"></div>
   </div>
   <div class="card" id="approvalsCard">
-    <h2>Pending Approvals</h2>
+    <h2>Approvals <span class="tabs"><button data-tab="pending" class="on">pending</button><button data-tab="warning">warning</button><button data-tab="expired">expired</button><button data-tab="decided">decided</button></span></h2>
     <div id="approvals"></div>
   </div>
-  <div class="card" id="dlqCard">
-    <h2>Dead Letters</h2>
-    <div id="dlq"></div>
-  </div>
-  <div class="card full" id="execCard">
-    <h2>Recent Executions</h2>
-    <div id="executions"></div>
-  </div>
+  <div class="card" id="dlqCard"><h2>Dead Letters</h2><div id="dlq"></div></div>
+  <div class="card full" id="execCard"><h2>Recent Executions</h2><div id="executions"></div></div>
 </main>
 <script>
 const API = "/api/v1";
 const $ = (id) => document.getElementById(id);
+const state = { alertTab: "open", approvalTab: "pending" };
 
-function esc(value) {
-  if (value == null) return "";
-  return String(value).replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-}
-function badge(status) {
-  const s = String(status || "").toLowerCase();
-  if (["completed","approved","ok","healthy","open","active","running","resolved"].includes(s)) return "b-ok";
-  if (["pending","waiting_approval","degraded","acknowledged"].includes(s)) return "b-warn";
-  if (["failed","rejected","unhealthy","dead","cancelled"].includes(s)) return "b-bad";
+function esc(v) { if (v == null) return ""; return String(v).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function badgeClass(s) {
+  const x = String(s || "").toLowerCase();
+  if (["completed","approved","ok","healthy","active","resolved"].includes(x)) return "b-ok";
+  if (["pending","waiting_approval","degraded","acknowledged","warning","draft","paused"].includes(x)) return "b-warn";
+  if (["failed","rejected","unhealthy","dead","cancelled","expired","retired"].includes(x)) return "b-bad";
   return "b-mute";
 }
-function renderBadge(status) {
-  return `<span class="badge ${badge(status)}">${esc(status || "?")}</span>`;
-}
-function kv(items) {
-  return Object.entries(items).map(([k, v]) =>
-    `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("");
-}
+function badge(s) { return `<span class="badge ${badgeClass(s)}">${esc(s || "?")}</span>`; }
+function short(u) { return u ? String(u).slice(0, 8) : "?"; }
+function shortTs(t) { return t ? String(t).replace("T", " ").slice(0, 19) : "?"; }
+function kv(items) { return Object.entries(items).map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join(""); }
+
 async function getJSON(url, opts) {
-  const response = await fetch(API + url, opts);
+  const headers = Object.assign({}, (opts && opts.headers) || {});
+  const response = await fetch(API + url, Object.assign({}, opts, { headers }));
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${response.status}: ${body.detail || "request failed"}`);
   return body;
 }
-function short(uuid) { return uuid ? String(uuid).slice(0, 8) : "?"; }
-function shortTs(ts) { return ts ? String(ts).replace("T", " ").slice(0, 19) : "?"; }
+async function postJSON(url, body) {
+  return getJSON(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Nuotao-Console": "runtime-console" }, body: JSON.stringify(body) });
+}
+async function consoleAudit(action, entityType, entityId, actor) {
+  try {
+    await postJSON("/agent-runtime/console-audit", { action, entity_type: entityType, entity_id: entityId, actor });
+  } catch (e) { console.warn("console audit failed:", e.message); }
+}
 
 async function loadOverview() {
-  const data = await getJSON("/agent-runtime/overview");
-  const d = data || {};
+  const d = await getJSON("/agent-runtime/overview");
   const q = d.queue || {}, w = d.workers || {}, ex = d.executions || {};
   $("overview").innerHTML = kv({
-    "agents": (d.agents && d.agents.total != null) ? d.agents.total : (d.agents ? JSON.stringify(d.agents) : "?"),
-    "workers": w.total != null ? w.total : (w.active != null ? `${w.active} active` : JSON.stringify(w)),
-    "queue_depth": q.queue_depth,
-    "pending": q.pending_count,
-    "running": q.running_count,
-    "waiting_approval": q.waiting_approval_count,
-    "dead_letter": q.dead_letter_count,
-    "executions": ex.total != null ? ex.total : JSON.stringify(ex),
-    "failure_rate": (data.failure_rate != null ? (data.failure_rate * 100).toFixed(2) + "%" : "?"),
-    "success_rate": (data.success_rate != null ? (data.success_rate * 100).toFixed(2) + "%" : "?"),
+    "agents": d.agents && d.agents.total != null ? d.agents.total : "?",
+    "workers": w.active != null ? `${w.active} active` : "?",
+    "queue_depth": q.queue_depth, "pending": q.pending_count, "running": q.running_count,
+    "waiting_approval": q.waiting_approval_count, "dead_letter": q.dead_letter_count,
+    "executions": ex.total != null ? ex.total : "?",
+    "failure_rate": d.failure_rate != null ? (d.failure_rate * 100).toFixed(2) + "%" : "?",
+    "success_rate": d.success_rate != null ? (d.success_rate * 100).toFixed(2) + "%" : "?",
+  });
+}
+
+async function loadMetrics() {
+  const m = await getJSON("/agent-runtime/metrics");
+  const q = m.queue || {};
+  $("metrics").innerHTML = kv({
+    "tasks_created": m.agent_tasks_created_total, "tasks_completed": m.agent_tasks_completed_total,
+    "tasks_failed": m.agent_tasks_failed_total, "executions": m.agent_execution_total,
+    "tokens(today)": m.agent_llm_tokens_total, "cost(today)": m.agent_llm_cost_total,
+    "retry_total": m.agent_retry_total, "dlq_total": m.agent_dlq_total,
+    "approval_pending": m.agent_approval_pending, "alert_open": m.agent_alert_open,
+    "worker_active": m.agent_worker_active, "worker_dead": m.agent_worker_dead,
+    "throughput/min": q.throughput_per_minute != null ? Number(q.throughput_per_minute).toFixed(2) : "?",
   });
 }
 
 async function loadQueue() {
-  const [stats, health] = await Promise.all([
-    getJSON("/agent-queue/stats"),
-    getJSON("/agent-queue/health"),
-  ]);
+  const [stats, health] = await Promise.all([getJSON("/agent-queue/stats"), getJSON("/agent-queue/health")]);
   $("queue").innerHTML = kv({
-    "backend": stats.backend,
-    "stream_length": stats.stream_length,
-    "queue_depth": stats.queue_depth,
-    "pending": stats.pending_count,
-    "running": stats.running_count,
-    "waiting_approval": stats.waiting_approval_count,
-    "retry": stats.retry_count,
-    "dead_letter": stats.dead_letter_count,
-    "oldest_pending_ms": stats.oldest_pending_age_ms,
-    "oldest_running_ms": stats.oldest_running_age_ms,
-    "throughput/min": stats.throughput_per_minute != null ? Number(stats.throughput_per_minute).toFixed(2) : "?",
+    "backend": stats.backend, "stream_length": stats.stream_length, "queue_depth": stats.queue_depth,
+    "pending": stats.pending_count, "running": stats.running_count, "waiting_approval": stats.waiting_approval_count,
+    "retry": stats.retry_count, "dead_letter": stats.dead_letter_count,
+    "oldest_pending_ms": stats.oldest_pending_age_ms, "oldest_running_ms": stats.oldest_running_age_ms,
     "success_rate": stats.success_rate != null ? (stats.success_rate * 100).toFixed(2) + "%" : "?",
     "failure_rate": stats.failure_rate != null ? (stats.failure_rate * 100).toFixed(2) + "%" : "?",
   });
-  $("health").innerHTML = kv(Object.entries(health.checks || {}).map(([k, v]) => [k, v]).concat(
-    [["status", health.status]]
-  ));
+  document.getElementById("healthBadge").innerHTML = `queue: ${badge(health.status)}`;
 }
 
 async function loadWorkers() {
   const workers = await getJSON("/agent-workers");
-  const rows = (workers || []).map((w) => `
-    <tr>
-      <td>${esc(w.worker_id)}</td>
-      <td>${esc(w.hostname || "?")}</td>
-      <td>${renderBadge(w.is_dead ? "dead" : w.status)}</td>
-      <td>${shortTs(w.started_at)}</td>
-      <td>${shortTs(w.last_heartbeat_at)}</td>
-      <td>${esc(w.current_task_id || "?")}</td>
-      <td>${esc(w.processed_count || 0)}</td>
-      <td>${esc(w.failed_count || 0)}</td>
-    </tr>`).join("");
+  const rows = (workers || []).map(w => `<tr>
+    <td>${esc(w.worker_id)}</td><td>${esc(w.hostname || "?")}</td>
+    <td>${badge(w.is_dead ? "dead" : w.status)}</td><td>${shortTs(w.last_heartbeat_at)}</td>
+    <td>${esc(w.current_task_id || "?")}</td><td>${esc(w.processed_count || 0)}</td><td>${esc(w.failed_count || 0)}</td>
+  </tr>`).join("");
   $("workers").innerHTML = (workers || []).length
-    ? `<table><thead><tr><th>worker</th><th>hostname</th><th>status</th><th>started</th><th>heartbeat</th><th>current task</th><th>done</th><th>failed</th></tr></thead><tbody>${rows}</tbody></table>`
+    ? `<table><thead><tr><th>worker</th><th>hostname</th><th>status</th><th>heartbeat</th><th>current task</th><th>done</th><th>failed</th></tr></thead><tbody>${rows}</tbody></table>`
     : `<div class="hint">no workers registered</div>`;
 }
 
-async function loadAlerts() {
-  const data = await getJSON("/agent-alerts?status=open&limit=20");
-  const rows = (data.items || []).map((a) => `
-    <tr>
-      <td>${esc(a.alert_type)}</td>
-      <td>${esc(a.severity)}</td>
-      <td>${esc(a.resource || "?")}</td>
-      <td>${esc((a.message || "").slice(0, 60))}</td>
-      <td>${shortTs(a.created_at)}</td>
-      <td><span class="row-actions">
-        <button onclick="ackAlert('${a.id}')">ack</button>
-        <button onclick="resolveAlert('${a.id}')">resolve</button>
-      </span></td>
-    </tr>`).join("");
-  $("alerts").innerHTML = data.total
-    ? `<table><thead><tr><th>type</th><th>severity</th><th>resource</th><th>message</th><th>created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-    : `<div class="hint">no open alerts</div>`;
+async function loadAgents() {
+  const agents = await getJSON("/agent-registry");
+  const rows = (agents || []).map(a => `<tr>
+    <td>${esc(a.agent_id)}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td>
+    <td>${badge(a.status)}</td><td>${esc(a.current_version || a.version || "?")}</td>
+    <td>${esc(a.permission_level)}</td>
+    <td><span class="row-actions">
+      ${a.status === "active" ? `<button onclick="lifecycle('${a.id}', 'pause')">pause</button>` : ""}
+      ${a.status === "paused" ? `<button class="primary" onclick="lifecycle('${a.id}', 'resume')">resume</button>` : ""}
+      ${a.status !== "retired" ? `<button class="danger" onclick="lifecycle('${a.id}', 'retire')">retire</button>` : ""}
+    </span></td>
+  </tr>`).join("");
+  $("agents").innerHTML = (agents || []).length
+    ? `<table><thead><tr><th>agent</th><th>name</th><th>domain</th><th>status</th><th>version</th><th>perm</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<div class="hint">no registered agents</div>`;
 }
-async function ackAlert(id) {
+async function lifecycle(id, action) {
   const actor = prompt("actor:", "console-user") || "console-user";
-  await getJSON(`/agent-alerts/${id}/ack`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ actor }) });
+  const body = { actor };
+  if (action === "retire") body.note = prompt("retire reason (optional):", "") || null;
+  await postJSON(`/agent-registry/${id}/${action}`, body);
+  await consoleAudit(`lifecycle_${action}`, "agent_registry", id, actor);
   refresh();
 }
-async function resolveAlert(id) {
+
+async function loadAlerts() {
+  const data = await getJSON(`/agent-alerts?status=${state.alertTab}&limit=50`);
+  const rows = (data.items || []).map(a => `<tr>
+    <td>${esc(a.alert_type)}</td><td>${badge(a.severity)}</td><td>${esc(a.resource || "?")}</td>
+    <td>${esc((a.message || "").slice(0, 60))}</td><td>${shortTs(a.created_at)}</td>
+    <td><span class="row-actions">
+      ${a.status === "open" ? `<button onclick="alertAction('${a.id}','ack')">ack</button>` : ""}
+      ${a.status !== "resolved" ? `<button onclick="alertAction('${a.id}','resolve')">resolve</button>` : ""}
+    </span></td>
+  </tr>`).join("");
+  $("alerts").innerHTML = data.total
+    ? `<table><thead><tr><th>type</th><th>severity</th><th>resource</th><th>message</th><th>created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<div class="hint">no ${state.alertTab} alerts</div>`;
+}
+async function alertAction(id, action) {
   const actor = prompt("actor:", "console-user") || "console-user";
-  await getJSON(`/agent-alerts/${id}/resolve`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ actor }) });
+  await postJSON(`/agent-alerts/${id}/${action}`, { actor });
+  await consoleAudit(`alert_${action}`, "agent_alert", id, actor);
   refresh();
 }
 
 async function loadApprovals() {
-  const data = await getJSON("/approvals?status=pending&limit=20");
-  const rows = (data.items || []).map((a) => `
-    <tr>
-      <td>${esc(a.approval_type)}</td>
-      <td>${esc(a.entity_type)}</td>
-      <td>${esc(short(a.entity_id))}</td>
-      <td>${esc(a.target_task_id ? short(a.target_task_id) : "?")}</td>
-      <td>${shortTs(a.created_at)}</td>
-      <td>${esc(a.trace_id ? short(a.trace_id) : "?")}</td>
-      <td><span class="row-actions">
-        <button class="primary" onclick="decide('${a.id}', 'approve')">approve</button>
-        <button onclick="decide('${a.id}', 'reject')">reject</button>
-      </span></td>
-    </tr>`).join("");
+  const status = state.approvalTab === "decided" ? "approved" : state.approvalTab;
+  const data = await getJSON(`/approvals?status=${status}&limit=50`);
+  const rows = (data.items || []).map(a => `<tr>
+    <td>${badge(a.status)}</td><td>${esc(a.approval_type)}</td><td>${esc(a.entity_type)}</td>
+    <td>${esc(short(a.entity_id))}</td><td>${esc(a.target_task_id ? short(a.target_task_id) : "?")}</td>
+    <td>${shortTs(a.created_at)}</td><td>${a.expires_at ? shortTs(a.expires_at) : "?"}</td>
+    <td><span class="row-actions">
+      ${["pending", "warning"].includes(a.status) ? `<button class="primary" onclick="decide('${a.id}','approve')">approve</button><button onclick="decide('${a.id}','reject')">reject</button>` : "?"}
+    </span></td>
+  </tr>`).join("");
   $("approvals").innerHTML = data.total
-    ? `<table><thead><tr><th>type</th><th>entity</th><th>entity id</th><th>task</th><th>created</th><th>trace</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-    : `<div class="hint">no pending approvals</div>`;
+    ? `<table><thead><tr><th>status</th><th>type</th><th>entity</th><th>entity id</th><th>task</th><th>created</th><th>expires</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<div class="hint">no ${status} approvals</div>`;
 }
 async function decide(id, action) {
   const actor = prompt("actor:", "console-user") || "console-user";
   const note = prompt("note (optional):", "") || null;
-  await getJSON(`/approvals/${id}/${action}`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ actor, note }) });
+  await postJSON(`/approvals/${id}/${action}`, { actor, note });
+  await consoleAudit(action === "approve" ? "approved" : "rejected", "agent_approval", id, actor);
   refresh();
 }
 
 async function loadDlq() {
-  const data = await getJSON("/agent-queue/dead-letters?limit=20");
-  const rows = (data.items || []).map((d) => `
-    <tr>
-      <td>${esc(short(d.task_id))}</td>
-      <td>${esc(d.agent_id ? short(d.agent_id) : "?")}</td>
-      <td>${esc(d.error_type || "?")}</td>
-      <td>${esc((d.error_message || "").slice(0, 60))}</td>
-      <td>${shortTs(d.completed_at || d.created_at)}</td>
-      <td><button onclick="proposeReplay('${d.task_id}')">propose replay</button></td>
-    </tr>`).join("");
+  const data = await getJSON("/agent-queue/dead-letters?limit=50");
+  const rows = (data.items || []).map(d => `<tr>
+    <td>${esc(short(d.task_id))}</td><td>${esc(d.agent_id ? short(d.agent_id) : "?")}</td>
+    <td>${esc(d.error_type || "?")}</td><td>${esc((d.error_message || "").slice(0, 70))}</td>
+    <td>${shortTs(d.completed_at || d.created_at)}</td>
+    <td><button onclick="proposeReplay('${d.task_id}')">propose replay</button></td>
+  </tr>`).join("");
   $("dlq").innerHTML = data.total
     ? `<table><thead><tr><th>task</th><th>agent</th><th>error type</th><th>error</th><th>at</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     : `<div class="hint">no dead letters</div>`;
@@ -246,41 +234,48 @@ async function loadDlq() {
 async function proposeReplay(taskId) {
   const reason = prompt("replay reason (required):", "");
   if (!reason) return;
-  await getJSON(`/agent-queue/dead-letters/${taskId}/replay`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ reason }) });
+  const actor = prompt("actor:", "console-user") || "console-user";
+  await postJSON(`/agent-queue/dead-letters/${taskId}/replay`, { reason });
+  await consoleAudit("dlq_replay_proposed", "agent_task", taskId, actor);
   refresh();
 }
 
 async function loadExecutions() {
-  const execs = await getJSON("/agent-executions?limit=10");
-  const rows = (execs || []).map((e) => `
-    <tr>
-      <td><a href="/agent-runtime/traces/${encodeURIComponent(e.trace_id || "")}">${esc(short(e.trace_id || "?"))}</a></td>
-      <td>${esc(e.agent_id ? short(e.agent_id) : "?")}</td>
-      <td>${esc(e.task_id ? short(e.task_id) : "?")}</td>
-      <td>${renderBadge(e.status)}</td>
-      <td>${esc(e.provider || "?")}</td>
-      <td>${esc(e.model || "?")}</td>
-      <td>${esc(e.tokens && e.tokens.total_tokens != null ? e.tokens.total_tokens : "?")}</td>
-      <td>${esc(e.cost != null ? e.cost : "?")}</td>
-      <td>${esc(e.latency_ms != null ? e.latency_ms + "ms" : "?")}</td>
-      <td>${shortTs(e.created_at)}</td>
-    </tr>`).join("");
+  const execs = await getJSON("/agent-executions?limit=12");
+  const rows = (execs || []).map(e => `<tr>
+    <td><a href="/agent-runtime/traces/${encodeURIComponent(e.trace_id || "")}">${esc(short(e.trace_id || "?"))}</a></td>
+    <td>${esc(e.agent_id ? short(e.agent_id) : "?")}</td><td>${badge(e.status)}</td>
+    <td>${esc(e.provider || "?")}</td><td>${esc(e.model || "?")}</td>
+    <td>${esc(e.tokens && e.tokens.total_tokens != null ? e.tokens.total_tokens : "?")}</td>
+    <td>${esc(e.cost != null ? e.cost : "?")}</td><td>${esc(e.latency_ms != null ? e.latency_ms + "ms" : "?")}</td>
+    <td>${shortTs(e.created_at)}</td>
+  </tr>`).join("");
   $("executions").innerHTML = (execs || []).length
-    ? `<table><thead><tr><th>trace</th><th>agent</th><th>task</th><th>status</th><th>provider</th><th>model</th><th>tokens</th><th>cost</th><th>latency</th><th>at</th></tr></thead><tbody>${rows}</tbody></table>`
+    ? `<table><thead><tr><th>trace</th><th>agent</th><th>status</th><th>provider</th><th>model</th><th>tokens</th><th>cost</th><th>latency</th><th>at</th></tr></thead><tbody>${rows}</tbody></table>`
     : `<div class="hint">no executions yet</div>`;
 }
 
 async function refresh() {
-  const errorBox = document.createElement("div");
   try {
-    await Promise.all([loadOverview(), loadQueue(), loadWorkers(), loadAlerts(), loadApprovals(), loadDlq(), loadExecutions()]);
+    await Promise.all([loadOverview(), loadMetrics(), loadQueue(), loadWorkers(), loadAgents(), loadAlerts(), loadApprovals(), loadDlq(), loadExecutions()]);
   } catch (error) {
     console.error(error);
     alert("Refresh failed: " + error.message);
   }
 }
+
 document.getElementById("refreshBtn").addEventListener("click", refresh);
+document.querySelectorAll("#alertsCard .tabs button").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("#alertsCard .tabs button").forEach(b => b.classList.remove("on"));
+  btn.classList.add("on"); state.alertTab = btn.dataset.tab; loadAlerts();
+}));
+document.querySelectorAll("#approvalsCard .tabs button").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("#approvalsCard .tabs button").forEach(b => b.classList.remove("on"));
+  btn.classList.add("on"); state.approvalTab = btn.dataset.tab; loadApprovals();
+}));
+
 refresh();
+consoleAudit("viewed", "runtime_console", "overview", "console-user");
 </script>
 </body>
 </html>

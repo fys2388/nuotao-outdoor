@@ -63,11 +63,11 @@ async def _index_names(conn, table: str) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
-    """The full migration chain applies to real PostgreSQL and ends at 0019 (M5.4)."""
+    """The full migration chain applies to real PostgreSQL and ends at 0020 (M5.5)."""
     conn = await _connect(pg_migrated)
     try:
         version = await conn.fetchval("SELECT version_num FROM alembic_version")
-        assert version == "0019"
+        assert version == "0020"
 
         # Core brain schema tables (M1/M2)
         for table in (
@@ -119,27 +119,48 @@ async def test_alembic_upgrade_head_on_real_postgres(pg_migrated: str) -> None:
             "agent_metrics",
         ):
             assert await _table_exists(conn, table), f"missing table {table}"
+
+        # M5.4 operations + M5.5 platform tables
+        for table in (
+            "agent_alerts",
+            "agent_approvals",
+            "agent_versions",
+            "agent_approval_roles",
+            "agent_approval_slas",
+        ):
+            assert await _table_exists(conn, table), f"missing table {table}"
     finally:
         await conn.close()
 
 
 # --------------------------------------------------------------------------- #
-# 2. Downgrade / upgrade drill (0019 -> 0018 -> 0017 -> 0012 -> head)
+# 2. Downgrade / upgrade drill (0020 -> 0019 -> 0017 -> 0012 -> head)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
 async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> None:
-    """Downgrade drills (0019 -> 0018 -> 0017 -> 0012) then upgrade back to head."""
+    """Downgrade drills (0020 -> 0019 -> 0017 -> 0012) then upgrade back to head."""
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0019"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0020"
         assert await _column_type(conn, "agent_tasks", "idempotency_key") == "varchar"
     finally:
         await conn.close()
 
-    # Downgrade 0019 -> 0018 drops the agent alerts + approvals tables.
+    # Downgrade 0020 -> 0019 drops the M5.5 platform tables.
+    await asyncio.to_thread(run_alembic, pg_database_url, "downgrade", "0019")
+    conn = await _connect(pg_database_url)
+    try:
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0019"
+        assert await _table_exists(conn, "agent_versions") is False
+        assert await _table_exists(conn, "agent_approval_roles") is False
+        assert await _table_exists(conn, "agent_approval_slas") is False
+    finally:
+        await conn.close()
+
+    # Downgrade 0019 -> 0017 drops the agent alerts + approvals tables.
     await asyncio.to_thread(run_alembic, pg_database_url, "downgrade", "0017")
     conn = await _connect(pg_database_url)
     try:
@@ -160,13 +181,15 @@ async def test_downgrade_upgrade_drill_real_postgres(pg_database_url: str) -> No
     finally:
         await conn.close()
 
-    # Upgrade back to head: everything is restored, including migration 0019.
+    # Upgrade back to head: everything is restored, including migration 0020.
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0019"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0020"
         assert await _table_exists(conn, "agents") is True
         assert await _table_exists(conn, "agent_metrics") is True
+        assert await _table_exists(conn, "agent_versions") is True
+        assert await _table_exists(conn, "agent_approval_roles") is True
         assert await _column_type(conn, "agent_tasks", "idempotency_key") == "varchar"
     finally:
         await conn.close()

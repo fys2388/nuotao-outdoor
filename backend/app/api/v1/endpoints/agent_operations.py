@@ -37,6 +37,7 @@ from app.services import (
     runtime_ops,
     task_queue,
 )
+from app.services.approval_rbac import ApprovalRBACError
 
 router = APIRouter(tags=["agent-operations"])
 
@@ -46,7 +47,9 @@ logger = logging.getLogger(__name__)
 
 
 def _error(exc: Exception) -> HTTPException:
-    """Map ops errors: missing resources -> 404, state/validation -> 400."""
+    """Map ops errors: RBAC -> 403, missing resources -> 404, state -> 400."""
+    if isinstance(exc, ApprovalRBACError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     message = str(exc)
     if "not found" in message:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
@@ -266,7 +269,7 @@ async def approve_approval(
             note=body.note,
             trace_id=get_trace_id(),
         )
-    except approval_service.ApprovalError as exc:
+    except (approval_service.ApprovalError, ApprovalRBACError) as exc:
         raise _error(exc) from exc
     return ApprovalOut.model_validate(approval)
 
@@ -294,7 +297,7 @@ async def reject_approval(
             note=body.note,
             trace_id=get_trace_id(),
         )
-    except approval_service.ApprovalError as exc:
+    except (approval_service.ApprovalError, ApprovalRBACError) as exc:
         raise _error(exc) from exc
     return ApprovalOut.model_validate(approval)
 

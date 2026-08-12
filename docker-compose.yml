@@ -1,5 +1,34 @@
-# Nuotao AI OS — local development stack (M0)
+# Nuotao AI OS - production-oriented runtime stack (M5.5)
+# Independent API / Worker / Scheduler processes over PostgreSQL + Redis.
+#   docker compose up -d --build
+#   docker compose up -d --scale worker=4   (horizontal scaling)
 name: nuotao-ai-os
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DEBUG: ${DEBUG:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nuotao}:${POSTGRES_PASSWORD:-nuotao_dev_password}@postgres:5432/${POSTGRES_DB:-nuotao}
+  REDIS_URL: redis://redis:6379/0
+  TASK_QUEUE_BACKEND: redis
+  WOOCOMMERCE_WEBHOOK_SECRET: ${WOOCOMMERCE_WEBHOOK_SECRET:-dev-webhook-secret-change-me}
+  PAYMENT_FEE_RATE: ${PAYMENT_FEE_RATE:-0.029}
+  PAYMENT_FEE_FIXED: ${PAYMENT_FEE_FIXED:-0.30}
+  LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+  LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-deepseek}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-gpt-4o-mini}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+  DEEPSEEK_DEFAULT_MODEL: ${DEEPSEEK_DEFAULT_MODEL:-deepseek-chat}
+  AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-4}
+  AGENT_ALERT_SCHEDULER_ENABLED: ${AGENT_ALERT_SCHEDULER_ENABLED:-true}
+  AGENT_ALERT_INTERVAL_SECONDS: ${AGENT_ALERT_INTERVAL_SECONDS:-60}
+  APPROVAL_RBAC_ENABLED: ${APPROVAL_RBAC_ENABLED:-true}
+  APPROVAL_SLA_ENABLED: ${APPROVAL_SLA_ENABLED:-true}
+  APPROVAL_DEFAULT_WARNING_SECONDS: ${APPROVAL_DEFAULT_WARNING_SECONDS:-3600}
+  APPROVAL_DEFAULT_EXPIRE_SECONDS: ${APPROVAL_DEFAULT_EXPIRE_SECONDS:-86400}
 
 services:
   postgres:
@@ -28,15 +57,11 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
+  api:
     build:
       context: ./backend
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      DEBUG: ${DEBUG:-true}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nuotao}:${POSTGRES_PASSWORD:-nuotao_dev_password}@postgres:5432/${POSTGRES_DB:-nuotao}
-      REDIS_URL: redis://redis:6379/0
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment: *backend-env
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -49,6 +74,39 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    healthcheck:
+      # The worker is alive while its heartbeat key exists in Redis.
+      test: ["CMD", "python", "-c", "import os, redis; r = redis.Redis.from_url('redis://redis:6379/0'); wid = os.environ.get('AGENT_WORKER_ID') or 'worker-1'; raise SystemExit(0 if r.exists('nuotao:agent-worker:' + wid) else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 30s
+
+  scheduler:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.scheduler"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

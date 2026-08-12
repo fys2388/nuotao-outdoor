@@ -490,6 +490,13 @@ async def run_sweeper(db: DbSession, workspace_id: WorkspaceId) -> SweeperRunOut
     approvals_expired = await agent_sweeper.expire_stale_approvals(
         db, workspace_id=workspace_id, trace_id=trace_id
     )
+    # M5.5 approval SLA: pending -> warning -> expired (never auto-approves).
+    from app.services.approval_sla import apply_approval_slas
+
+    _sla_warned, sla_expired = await apply_approval_slas(
+        db, workspace_id=workspace_id, trace_id=trace_id
+    )
+    approvals_expired += sla_expired
     stale_failed, tasks_requeued = await agent_sweeper.fail_stale_executions(
         db, workspace_id=workspace_id, backend=backend, trace_id=trace_id
     )

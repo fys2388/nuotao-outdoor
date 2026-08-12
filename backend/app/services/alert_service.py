@@ -311,12 +311,18 @@ async def evaluate_alerts(
     backend: task_queue.TaskQueueBackend,
     *,
     workspace_id: UUID,
+    agent_ids: list[str] | None = None,
     trace_id: str | None = None,
 ) -> list[AgentAlert]:
     """Evaluate all alert rules against live state; open new alerts only.
 
     Never auto-resolves or auto-executes anything: it only opens alerts when
     a threshold trips. Returns the alerts newly created by this pass.
+
+    ``agent_ids`` (agent codes, e.g. ``product_analyst``) restricts the
+    per-agent rules (budget warnings) to the listed agents; the workspace-wide
+    health rules (queue backlog, dead workers, failure rate, ...) always run
+    so the platform health signal is never suppressed by an agent filter.
     """
     settings = get_settings()
     created: list[AgentAlert] = []
@@ -484,8 +490,11 @@ async def evaluate_alerts(
         if alert is not None:
             created.append(alert)
 
-    # 8. Budget warnings (per agent).
+    # 8. Budget warnings (per agent; ``agent_ids`` restricts the scope).
+    agent_scope = set(agent_ids) if agent_ids else None
     for agent, resource, snapshot in await _budget_warnings(session, workspace_id=workspace_id):
+        if agent_scope is not None and agent.agent_id not in agent_scope:
+            continue
         alert = await _open_alert(
             session,
             workspace_id=workspace_id,
@@ -538,6 +547,38 @@ async def _load_alert(
             )
         )
     ).scalar_one_or_none()
+
+
+async def open_alert(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    agent_id: UUID | None,
+    alert_type: str,
+    severity: str,
+    resource: str,
+    message: str,
+    metadata_: dict[str, Any] | None = None,
+    threshold_snapshot: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+) -> AgentAlert | None:
+    """Public entry point to open an alert (dedup enforced).
+
+    Used by other platform services (e.g. the approval SLA expirer) so a
+    single problem still keeps exactly one active alert.
+    """
+    return await _open_alert(
+        session,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        alert_type=alert_type,
+        severity=severity,
+        resource=resource,
+        message=message,
+        metadata_=metadata_ or {},
+        threshold_snapshot=threshold_snapshot or {},
+        trace_id=trace_id,
+    )
 
 
 async def list_alerts(
