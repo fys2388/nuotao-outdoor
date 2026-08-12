@@ -314,6 +314,17 @@ flowchart LR
 9. Agent Metrics：`agent_metrics` 按 workspace+agent+UTC 日聚合（executions/success/failure/timeout/retried/tokens/cost/avg/p95/error_breakdown），`POST /api/v1/agent-metrics/snapshot` 手动快照、`GET /api/v1/agent-metrics` 查询。
 10. 事件贯穿：`agent.task_*`（enqueued/requeued/deferred/dead_letter）、`agent.execution_*`（timed_out/budget_blocked）、`agent.approval_expired`、`agent.tool_call_*`（executed/denied）、`agent.metrics_snapshotted`、`agent.budget_alert` 全部写入 `event_log`，`trace_id` 贯穿任务 → 执行 → 工具调用 → 审批 → 重试；全部 workspace 隔离。
 
+**Product Analyst Agent 接入运行时（M5.2 已落地：第一个真正业务 Agent）**
+
+1. Agent 注册与 Prompt：`AGENT_PRODUCT_ANALYST v1` Prompt（Prompt Registry 版本化管理，禁止硬编码）+ `product_analyst` Agent（permission_level=L2，openai/gpt-4o-mini 默认）；幂等种子 `ensure_product_analyst_agent`（prompt 缺失则建、agent 缺失则注册），worker 运行时绝不自动注册。
+2. Worker Executor 接入：新增 `app/worker/product_analyst_executor.py`，把 M2.2 `analyze_product` 管线**整体复用**进 M5.1 worker（claim→幂等→策略→预算→并发→attempt→执行→重试→ack 全复用，不复制业务逻辑）；worker 增加按 agent 分发的 executor 注册表，`python -m app.worker` 启动时注册 `product_analyst → product_analyst_executor`，未注册 agent 回退通用 LLM executor；任务输入 `{"product_id": "<uuid>", "action": "analyze"}`。
+3. 上下文快照：Product Context Builder 构建 JSON-safe context → 写入 `product_analysis_runs.input_snapshot`，并合并进 `agent_executions.context_snapshot.product_context`（完整、可 JSON 序列化）。
+4. LLM：统一走 LLM Gateway（OpenAI 主 / DeepSeek 备自动降级）；复用 M5.1 执行超时（`asyncio.wait_for`）、Retry Engine（llm/network/timeout/transient 可重试 + 指数退避；auth/invalid/budget/unknown 终态）、Budget Gate（模型前拦截）、执行审计。
+5. 三层校验：Pydantic `ProductAnalysisOutput` schema → 业务门禁（PROFIT-003：UNKNOWN 成本禁止 `test` 决策且置信度 ≤ 0.5）→ Rule Engine（PRODUCT 组 hard rule 否决强制 `reject`）；LLM 输出保留原始 `decision` + `enforced_decision` 标记，**LLM 不得覆盖 hard rule**。
+6. 审计落库：成功写 `product_analysis_runs`（completed）、`product_decisions`（approval_status=pending）、`product_ai_evaluations`（prediction 快照，供 Learning Loop 实验实际回流）、`ai_agent_runs`、`agent_executions`、`event_log`（product.analyst.analyzed / product.ai_evaluation.recorded）；schema/门禁失败写 failed run + execution/attempt 审计，不产生决策。
+7. 权限边界：Agent 只读产品数据（Context Builder）+ 写 analysis / decision proposal / prediction；不得 approve / publish / purchase / campaign / 库存分配；L3 工具绝不自动执行；决策保持 `pending → 人工 approve/reject`，Agent 无法自动批准。
+8. 全链路：worker 沿用任务创建时的 `trace_id`，task → execution → LLM → analysis → decision → evaluation → event 全部一致；所有调用 workspace 隔离；M5.2 不新增数据表（复用 M2/M5 模型）。
+
 ## 3. 数据库设计
 
 ### 3.1 设计原则
@@ -595,6 +606,7 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 |
+| v0.18 | 2026-08-12 | M5.2 Product Analyst Agent（第一个业务 Agent）：注册 product_analyst（L2）+ AGENT_PRODUCT_ANALYST v1 prompt（幂等种子 ensure_product_analyst_agent），M2.2 分析管线复用接入 M5.1 worker executor（worker 按 agent 分发 executor）；Product Context JSON-safe 快照写入 agent_executions.context_snapshot；LLM Gateway（OpenAI 主/DeepSeek 备）+ M5.1 timeout/retry/budget/audit 全复用；三层校验（Pydantic schema → PROFIT-003 业务门禁 → Rule Engine hard-rule 否决强制 reject）；成功/失败全审计落库（product_analysis_runs / product_decisions pending / product_ai_evaluations prediction / ai_agent_runs / agent_executions / event_log）；worker 沿用任务 trace_id 打通全链路；无新增数据表；新增 14 测试（220 全绿） |
 | v0.17 | 2026-08-12 | M5.1 Agent 运行时生产加固：Redis Streams Task Queue（内存后端适配，模块化单体，不引入 Celery/Kafka）、Worker 流水线（claim→幂等→策略→预算→并发→attempt→执行→重试→ack）、Retry Engine（版本化重试策略 + 指数退避 + agent_task_attempts 只追加审计）、Execution/Budget Policy（版本化、config 默认值 + DB 覆盖）、执行超时 + sweeper 兜底（过期 running 自动 fail/重试）、L3 审批超时自动 reject（绝不自动 approve）、Tool Gateway/Handler（handler_name 绑定，L0-L2 执行，L3 仍人工审批）、Agent Metrics（日聚合 + p95 + 错误分布）、队列统计/清扫 API；事件全量 event_log + trace_id + workspace 隔离；全库 ruff format 归一化（一次性机械变更）；新增 27 测试（206 全绿） |
 | v0.16 | 2026-08-11 | M5.0 Agent 运行时基础：agents 注册表（前置 `AGENT_<ID>` 版本化 prompt，禁止硬编码）、agent_tasks（pending→running→waiting_approval→completed/failed/cancelled + 优先级）、agent_executions 全量审计（context/input/output/model/tokens/cost/latency/tool_calls/trace_id）、agent_tools 白名单 + L0-L3 权限引擎（低等级/禁用直接拒绝，L3 高风险人工审批，二次审批 400）、agent_memory（四知识域 grounding + keyword 检索）、agent_evaluations（预测 vs 实测 + 确定性分类 + 置信度桶）；全部事件集成 + trace_id + 工作区隔离；不开发具体业务 Agent、不自动执行商业动作；新增 19 测试（179 全绿） |
 | v0.15 | 2026-08-11 | M4.3 真实数据接入 + 经营建议层：统一 Connector Framework（validate/transform/sync/audit 四方法），WooCommerce（orders/products/customers 引用哈希，REST 只读 + 批次推送）/ Logistics（tracking + 轨迹事件去重）/ Marketing（campaign 指标）/ Supplier（主数据）四连接器；connector_runs 同步审计（status/records_count/error_message/trace_id + connector.run_completed 事件）；business_recommendations 经营建议（proposed → 人工 approve/reject，二次审批 400，不自动执行商业动作）；全部 workspace 隔离；新增 16 测试（160 全绿） |

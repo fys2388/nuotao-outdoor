@@ -645,3 +645,38 @@ cd backend
 set TASK_QUEUE_BACKEND=redis   # 默认即 redis（PowerShell: $env:TASK_QUEUE_BACKEND="redis"）
 python -m app.worker
 # 本地调试（内存队列）：set TASK_QUEUE_BACKEND=memory 后 python -m app.worker
+### 8.15 Product Analyst Agent（M5.2）
+
+> 第一个业务 Agent：M2.2 分析能力接入 M5.1 worker；无新增数据表（复用 M2/M5 模型）。
+> 前置：产品已录入（§8.2 产品智能 intake）。
+
+# 1) 幂等种子：AGENT_PRODUCT_ANALYST v1 prompt + product_analyst agent（L2）
+# 方式 A：Python（推荐，幂等）
+python -X utf8 -c "import asyncio; from app.agents.agent_seed import ensure_product_analyst_agent; from app.core.database import async_session_factory; from app.core.workspace import DEFAULT_WORKSPACE_ID; async def _m():
+    async with async_session_factory() as s:
+        await ensure_product_analyst_agent(s, workspace_id=DEFAULT_WORKSPACE_ID)
+asyncio.run(_m())"
+# 方式 B：现有 API（prompt 必须先于 agent 注册）
+curl -X POST http://localhost:8000/api/v1/prompts \
+  -H "Content-Type: application/json" \
+  -d '{"prompt_id":"AGENT_PRODUCT_ANALYST","name":"AGENT_PRODUCT_ANALYST","version":"v1","template":"You are the Nuotao Outdoor Product Analyst. Context: {context_json}\nOutput schema: {output_schema}","variables":["context_json","output_schema"],"status":"active","description":"Product Analyst agent runtime prompt v1"}'
+curl -X POST http://localhost:8000/api/v1/agent-registry \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"product_analyst","name":"Product Analyst","domain":"product","version":"v1","status":"active","model_provider":"openai","model_name":"gpt-4o-mini","prompt_version":"v1","permission_level":"L2"}'
+
+# 2) 创建分析任务（自动入队 Redis Streams；worker 消费）
+curl -X POST http://localhost:8000/api/v1/agent-tasks \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<product_analyst_agent_uuid>","input":{"product_id":"<product_uuid>","action":"analyze"},"priority":3}'
+
+# 3) 启动 worker（常驻；启动时自动把 product_analyst 绑定到其 executor）
+cd backend
+python -m app.worker
+
+# 4) 检查结果（任务 / 分析运行 / 决策提案）
+curl http://localhost:8000/api/v1/agent-tasks/<task_uuid>
+curl "http://localhost:8000/api/v1/agents/product-analyst/runs/<product_uuid>"
+
+# 5) 人工审批决策提案（Agent 绝不自动批准；pending -> approve/reject）
+curl -X POST http://localhost:8000/api/v1/product-decisions/<decision_uuid>/approve \
+  -H "Content-Type: application/json" -d '{"actor":"ops-lead","note":"approved"}'

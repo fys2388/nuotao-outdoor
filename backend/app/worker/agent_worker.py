@@ -46,6 +46,21 @@ logger = logging.getLogger(__name__)
 ExecutorFn = Callable[..., Awaitable[ExecutionResult]]
 
 
+# Per-agent executor dispatch (M5.2): registered business agents plug their
+# executor here; unregistered agents fall back to the generic LLM executor.
+_EXECUTORS: dict[str, ExecutorFn] = {}
+
+
+def register_executor(agent_id: str, executor: ExecutorFn) -> None:
+    """Bind an executor to a concrete agent id (M5.2+)."""
+    _EXECUTORS[agent_id] = executor
+
+
+def resolve_executor(agent: AgentRegistry) -> ExecutorFn:
+    """Return the executor bound to an agent (generic LLM fallback)."""
+    return _EXECUTORS.get(agent.agent_id, llm_executor)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -219,7 +234,6 @@ async def process_message(
     ``budget_blocked`` / ``deferred`` / ``skipped`` / ``malformed`` /
     ``failed``.
     """
-    executor = executor or llm_executor
     settings = get_settings()
     worker_id = worker_id or settings.worker_id
     trace_id = trace_id or new_trace_id()
@@ -239,6 +253,10 @@ async def process_message(
 
     async with session_factory() as session:
         task = await session.get(AgentTask, task_id)
+        if task is not None and task.workspace_id == workspace_id and task.trace_id:
+            # Continue the creation-time trace id through the whole chain
+            # (task -> execution -> LLM -> decision -> events).
+            trace_id = task.trace_id
         if task is None or task.workspace_id != workspace_id or task.status != "pending":
             # Redelivery after crash / already handled: idempotent skip.
             await backend.ack(stream, group, message.message_id)
@@ -302,6 +320,7 @@ async def process_message(
             return "deferred"
 
         try:
+            resolved_executor = executor or resolve_executor(agent)
             return await _run_attempt(
                 session=session,
                 backend=backend,
@@ -310,7 +329,7 @@ async def process_message(
                 agent=agent,
                 policy=policy,
                 attempt=attempt,
-                executor=executor,
+                executor=resolved_executor,
                 worker_id=worker_id,
                 trace_id=trace_id,
                 message_id=message.message_id,
@@ -550,7 +569,7 @@ async def run_worker(
     backend = backend or task_queue.get_queue_backend()
     session_factory = session_factory or async_session_factory
     worker_id = worker_id or settings.worker_id
-    executor = executor or llm_executor
+    # executor=None -> per-agent dispatch inside process_message (M5.2).
     gate = ConcurrencyGate()
     stream = task_queue.task_stream()
     group = settings.task_queue_group

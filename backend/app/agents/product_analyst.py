@@ -253,6 +253,8 @@ async def analyze_product(
     product_id: UUID,
     gateway_complete: GatewayComplete | None = None,
     trace_id: str | None = None,
+    prompt_name: str | None = None,
+    re_raise_llm_errors: bool = False,
 ) -> ProductAnalysisResult:
     """Run the Product Analyst Agent v1 pipeline for a product.
 
@@ -261,6 +263,10 @@ async def analyze_product(
 
     Args:
         gateway_complete: optional injected LLM callable (tests mock this).
+        prompt_name: registry prompt to use (defaults to PRODUCT_ANALYST);
+            the M5.2 worker passes the runtime-bound AGENT_<ID> prompt.
+        re_raise_llm_errors: when True, LLM gateway errors propagate
+            unwrapped so the M5.1 worker can classify and retry them.
     """
     await _load_product(session, workspace_id=workspace_id, product_id=product_id)
 
@@ -271,13 +277,14 @@ async def analyze_product(
     context = _json_safe(context)
 
     # 2. Prompt from the registry (never hardcoded).
+    prompt_name = prompt_name or PROMPT_NAME
     prompt = await prompt_registry.get_active_prompt(
-        session, workspace_id=workspace_id, name=PROMPT_NAME
+        session, workspace_id=workspace_id, name=prompt_name
     )
     rendered = await prompt_registry.render_prompt(
         session,
         workspace_id=workspace_id,
-        name=PROMPT_NAME,
+        name=prompt_name,
         variables={
             "context_json": json.dumps(context, ensure_ascii=False),
             "output_schema": json.dumps(
@@ -307,6 +314,9 @@ async def analyze_product(
     try:
         response = await caller(request, trace_id=trace_id)
     except LLMError as exc:
+        if re_raise_llm_errors:
+            # Let the M5.1 worker classify and retry provider/network/timeout.
+            raise
         raise ProductAnalystError(f"LLM call failed: {exc}") from exc
 
     # 4. Structured output + validation.
