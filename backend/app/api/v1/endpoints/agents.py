@@ -7,11 +7,12 @@ remain the human-only workflow under ``/product-decisions``.
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import product_analyst
 from app.agents.product_analyst import ProductAnalystError
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -131,6 +132,7 @@ async def list_evaluations(
 )
 async def pilot_analysis(
     body: PilotRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> PilotOut:
@@ -146,7 +148,7 @@ async def pilot_analysis(
             db,
             workspace_id=workspace_id,
             product_id=body.product_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor) if body.actor else None,
             trace_id=trace_id,
         )
         await db.commit()

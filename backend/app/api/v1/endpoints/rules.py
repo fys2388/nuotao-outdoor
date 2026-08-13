@@ -3,9 +3,10 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.workspace import get_workspace_id
 from app.schemas.rule import (
@@ -140,6 +141,7 @@ async def suggest(
 @router.post("/override", response_model=OverrideResult, summary="Record a rule override")
 async def override(
     body: RuleOverrideRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> OverrideResult:
@@ -151,7 +153,7 @@ async def override(
             rule_id=body.rule_id,
             context=body.context,
             reason=body.reason,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
         )
     except rule_engine.RuleEngineError as exc:
         raise _http_error(exc) from exc

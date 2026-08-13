@@ -740,6 +740,7 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 
 
 | 版本 | 日期 | 变更 |
+| v0.24 | 2026-08-13 | M5.8 Production Staging Activation：AUTHENTICATION_GAP 记录 + staging-safe Actor Provider 扩展点（``actor_provider=body`` 默认，保留字 agent/system 拒绝 + 安全字符集校验；``header`` 为未来 SSO/JWT 接入缝，header 优先/body 兜底；RBAC 服务端强制，绝不因 provider 绕过）；全部审批/操作审计端点改为 ``resolve_actor(request, body.actor)``（decision/experiment/calibration/approval/alert/lifecycle/execution/recommendation/learning/rule override/console）；全局 ActorResolutionError→400 映射；无 schema 变更（head 0022）；新增 19 测试，435 全绿；真实 staging 无 LLM key/无真实产品 → readiness 保持 BLOCKED，状态 "Pilot waiting for real business result" |
 | v0.23 | 2026-08-13 | M5.7-REAL Product Analyst First Real Business Loop：真实 PostgreSQL（pgserver PG16）完整迁移链 0001→0022 + downgrade drill + FK/UNIQUE/JSONB 验证；真实 Redis worker/consumer group/dedup/retry/XAUTOCLAIM/DLQ/heartbeat 验证；真实 PG+Redis 下 Product Analyst readiness gate / dry-run 零写入 / pending decision / approval→experiment→complete(manual)→evaluation→calibration→knowledge→second-context 技术闭环集成测试；无 LLM key 时 readiness 如实 BLOCKED，不伪造 PASS；真实业务结果未到位，状态保持 "Pilot waiting for real business result"；新增 4 集成测试，418 全绿 |
 | v0.22 | 2026-08-12 | M5.7 Product Analyst Real Business Validation：真实业务验证闭环（staging）；`product_validation_cases`（source CHECK staging_real/staging_synthetic，区分真实与 synthetic 数据）；experiment `result_history` 追加式 actual_result（actor + source manual/external/connector 必填，ai/predicted 拒绝，禁止覆盖历史）；dry-run 零写入（context→LLM→schema→gates）；provider 选择 + fallback 落库；calibration 样本不足显式标记（MIN=3）且永不自动改权重；rejected calibration 禁止同步 knowledge；scorecard 新增 blocked_runs / experiment_waiting_for_result / total_tokens / p95_latency / provider_fallback_rate / calibration / knowledge；ROI 无归因时保持 null（"ROI attribution unavailable"）；readiness CLI 15 项 Phase 0 检查（缺项 BLOCKED，不伪造成功）；迁移 0022；新增 23 测试 |
 | v0.20 | 2026-08-12 | M5.3 Agent Runtime 可观测性与 Exactly-Once 加固：消息级 dedup（Redis SET NX EX token，idempotency_key+attempt 稳定身份，绝不随机 UUID，fresh 阻止并发、stale 可接管支持 crash 恢复）、明确 at-least-once/effectively-once 交付语义（DB 为业务事实源，dedup 为优化）、Queue Observability（`GET /agent-queue/stats`：深度/分状态计数/age/吞吐/成功率，Redis+PG 实测）、Queue Health（`GET /agent-queue/health`：redis/stream/group/workers/pending/DLQ/长期 running，阈值 config 化）、Worker Registry/Heartbeat（Redis hash + `POST /agent-workers/heartbeat`、`GET /agent-workers`，dead 由 heartbeat 超时派生）、DLQ 只读查询（无自动 replay）、Trace 全链路查询（`GET /agent-traces/{trace_id}`，404 + JSON-safe + 时间排序）、复用 agent_metrics 不建新表、新增 agent.queue.* 审计事件；**零新增迁移（alembic head 0018）**；新增 29 测试（273 全绿） |
@@ -1034,3 +1035,44 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 - **诚实边界**：synthetic 测试数据永不标记为真实业务数据；ROI 保持
   `revenue_impact / margin_impact / roas_impact = null` +
   "ROI attribution unavailable: no verified business attribution source."。
+
+## 3.23 M5.8 Production Staging Activation
+
+> 目标：把 Product Analyst 从 "Pilot waiting for real business result" 推进到
+> "Production Staging Ready + 可执行真实第一轮业务 Run" 的**前置条件**；本阶段只做
+> staging 安全基座（Actor Provider）与真实 readiness 验证，不开发第二个 Agent、
+> 不伪造真实业务数据/LLM/实验结果。
+
+### 1. AUTHENTICATION_GAP（已记录，已提供扩展点）
+
+- **现状**：审批/审计 actor 由 request body 直接声明（`body.actor`）。
+- **边界**：RBAC 永不绕过——解析出的 actor 仍必须通过 workspace 级角色/权限校验（403）。
+- **扩展点**：`app/core/actor.py` 提供 `ActorProvider` 协议 + `resolve_actor(request, body_actor)`。
+  - `actor_provider=body`（默认，staging-safe）：校验非空、≤64 字符、安全字符集
+    `[A-Za-z0-9_.@+-]`、拒绝保留身份 `agent` / `system`。
+  - `actor_provider=header`（未来 SSO/JWT 缝）：`actor_header_name` 头优先，缺失时回退 body。
+  - 未来接入真实 SSO/JWT 时只需替换 provider 实现，endpoint 代码不变。
+- **覆盖范围**：product decision approve/reject、experiment start/complete、calibration
+  approve/reject、统一 Approval Center、alert ack/resolve、agent lifecycle、L3 execution
+  approval、business recommendation、customer/marketing/supply-chain learning、rule override、
+  Runtime Console audit——全部改为 `resolve_actor`。
+- **错误映射**：`ActorResolutionError` → 400 `{code: ACTOR_RESOLUTION}`（全局 handler）。
+
+### 2. Secret / Identity 安全检查（staging）
+
+- API key 只允许来自 staging secret / environment；只做存在性检查，不输出内容。
+- readiness 输出 `llm_keys` 无 key 时如实 BLOCKED，禁止 fake key / synthetic credential。
+- 本环境未配置 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` → `overall=NOT_READY`（如实）。
+
+### 3. Staging 真实基础设施验证（pgserver PG16 + 真实 Redis）
+
+- 真实 PostgreSQL：`0001→0022` 完整迁移链 + readiness 全部基础设施项 PASS。
+- 真实 Redis：ping + Stream XADD/XREADGROUP/XACK 通过。
+- readiness 15 项中 14 项 PASS；`llm_keys` BLOCKED；`overall=NOT_READY`（诚实反映，不伪造）。
+
+### 4. 真实业务 Run 状态
+
+- `REAL_PRODUCT = BLOCKED`（staging 无真实产品数据）。
+- `REAL_LLM = BLOCKED`（无真实 key）。
+- 真实决策/实验/结果回填未发生；不生成 synthetic decision/experiment/actual_result。
+- 状态保持 **"Pilot waiting for real business result"**。

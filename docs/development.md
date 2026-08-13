@@ -973,6 +973,41 @@ cd backend
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
 .venv\Scripts\python -m alembic heads          # 0022 (head)
+
+## 8.22 M5.8 Production Staging Activation
+
+### 1) Actor Provider（AUTHENTICATION_GAP 扩展点）
+
+```powershell
+# 默认（staging-safe）：actor 来自 request body，RBAC 服务端强制
+ACTOR_PROVIDER=body
+# 未来 SSO/JWT 接入缝：actor 优先取 header，缺失回退 body
+ACTOR_PROVIDER=header
+ACTOR_HEADER_NAME=X-Actor
+```
+
+- 所有审批/操作审计端点统一走 `app/core/actor.py::resolve_actor(request, body.actor)`。
+- 保留身份 `agent` / `system` 永远不能冒充操作者（400 `ACTOR_RESOLUTION`）。
+- 换 provider 不需要改 endpoint；RBAC 永不绕过。
+
+### 2) Staging Readiness（真实 PG + 真实 Redis）
+
+```powershell
+cd backend
+.venv\Scripts\python -m alembic heads            # 0022 (head)
+# 真实 PG（pgserver 嵌入 PG16）+ 真实 Redis 下执行 readiness（无 key 时 llm_keys=BLOCKED）
+.venv\Scripts\python -m pytest tests/integration/test_product_analyst_real_pg.py -q
+.venv\Scripts\python -m pytest tests/test_actor_provider.py -q    # M5.8 actor adapter（19 测试）
+```
+
+- 基础设施项（alembic/postgres/redis/worker/scheduler/agent/prompt/policies/RBAC/SLA/audit）PASS。
+- `llm_keys` 无真实 key 时如实 BLOCKED；`overall=NOT_READY`；禁止 fake key / mock 冒充。
+
+### 3) 真实业务 Run 边界
+
+- `REAL_PRODUCT = BLOCKED`：staging 无真实产品 → 停止真实 Run，不创建 fake decision。
+- 真实 dry-run / run / approval / experiment / result 需要：真实 key + 真实产品 + 真实 operator。
+- 状态保持 **"Pilot waiting for real business result"**。
 ```
 
 真实 LLM（OpenAI/DeepSeek）验证仅在 staging 手动执行；API key 不进入 DB / event_log / trace / console / logs。没有真实实验结果时输出 "Pilot waiting for real business result"。

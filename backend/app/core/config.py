@@ -133,6 +133,14 @@ class Settings(BaseSettings):
     # Approval SLA (M5.5): pending -> warning -> expired. Per-type rows in
     # ``agent_approval_slas`` override these defaults.
     approval_sla_enabled: bool = True
+
+    # Actor identity (M5.8). AUTHENTICATION_GAP: approval/audit actors are
+    # declared in the request body (staging-safe, RBAC still enforced
+    # server-side). ``body`` is the default provider; switch to ``header`` and
+    # set ``actor_header_name`` when a real SSO/JWT identity layer is wired
+    # up. Secrets must never live here.
+    actor_provider: str = "body"  # body | header
+    actor_header_name: str = "X-Actor"
     approval_default_warning_seconds: int = 3600
     approval_default_expire_seconds: int = 86400
 

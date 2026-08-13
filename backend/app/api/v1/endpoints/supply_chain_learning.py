@@ -7,9 +7,10 @@ no automatic business rule changes.
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -282,6 +283,7 @@ async def list_calibration_runs(
 async def approve_calibration_run(
     run_id: UUID,
     body: CalibrationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> SupplyChainCalibrationOut:
@@ -291,7 +293,7 @@ async def approve_calibration_run(
             db,
             workspace_id=workspace_id,
             run_id=run_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -308,6 +310,7 @@ async def approve_calibration_run(
 async def reject_calibration_run(
     run_id: UUID,
     body: CalibrationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> SupplyChainCalibrationOut:
@@ -317,7 +320,7 @@ async def reject_calibration_run(
             db,
             workspace_id=workspace_id,
             run_id=run_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )

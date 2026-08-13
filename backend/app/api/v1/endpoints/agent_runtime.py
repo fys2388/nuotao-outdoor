@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -409,6 +410,7 @@ async def fail_execution(
 async def approve_execution(
     execution_id: UUID,
     body: ExecutionApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ExecutionOut:
@@ -418,7 +420,7 @@ async def approve_execution(
             db,
             workspace_id=workspace_id,
             execution_id=execution_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -435,6 +437,7 @@ async def approve_execution(
 async def reject_execution(
     execution_id: UUID,
     body: ExecutionApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ExecutionOut:
@@ -444,7 +447,7 @@ async def reject_execution(
             db,
             workspace_id=workspace_id,
             execution_id=execution_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )

@@ -6,6 +6,7 @@ Exposes the FastAPI application with:
 - ``GET /api/v1/readyz``: readiness probe (PostgreSQL + Redis checks)
 """
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
+from app.core.actor import ActorResolutionError
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.redis import create_redis_client
@@ -57,6 +59,16 @@ app.mount(
     StaticFiles(directory=str(_runtime_console_dir), html=True, check_dir=False),
     name="runtime-console",
 )
+
+
+@app.exception_handler(ActorResolutionError)
+async def _actor_resolution_error_handler(request: Request, exc: ActorResolutionError) -> Response:
+    """Map actor resolution failures (missing/invalid body actor or header)."""
+    return Response(
+        status_code=400,
+        media_type="application/json",
+        content=json.dumps({"detail": str(exc), "code": "ACTOR_RESOLUTION"}),
+    )
 
 
 @app.middleware("http")

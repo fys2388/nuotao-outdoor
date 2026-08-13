@@ -21,9 +21,10 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -99,6 +100,7 @@ def _version_out(version: agent_lifecycle.AgentVersion) -> VersionOut:
 async def pause_agent(
     agent_uuid: UUID,
     body: LifecycleActionRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict:
@@ -108,7 +110,7 @@ async def pause_agent(
             db,
             workspace_id=workspace_id,
             agent_uuid=agent_uuid,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             trace_id=get_trace_id(),
         )
     except agent_lifecycle.AgentLifecycleError as exc:
@@ -124,6 +126,7 @@ async def pause_agent(
 async def resume_agent(
     agent_uuid: UUID,
     body: LifecycleActionRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict:
@@ -133,7 +136,7 @@ async def resume_agent(
             db,
             workspace_id=workspace_id,
             agent_uuid=agent_uuid,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             trace_id=get_trace_id(),
         )
     except agent_lifecycle.AgentLifecycleError as exc:
@@ -199,6 +202,7 @@ async def activate_version(
     agent_uuid: UUID,
     version: str,
     body: LifecycleActionRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> VersionOut:
@@ -209,7 +213,7 @@ async def activate_version(
             workspace_id=workspace_id,
             agent_uuid=agent_uuid,
             version=version,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             trace_id=get_trace_id(),
         )
     except agent_lifecycle.AgentLifecycleError as exc:
@@ -226,6 +230,7 @@ async def activate_version(
 async def rollback_agent(
     agent_uuid: UUID,
     body: RollbackRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict:
@@ -237,7 +242,7 @@ async def rollback_agent(
             workspace_id=workspace_id,
             agent_uuid=agent_uuid,
             target_version=body.target_version,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -261,6 +266,7 @@ async def rollback_agent(
 async def retire_agent(
     agent_uuid: UUID,
     body: LifecycleActionRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict:
@@ -271,7 +277,7 @@ async def retire_agent(
             db,
             workspace_id=workspace_id,
             agent_uuid=agent_uuid,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -448,6 +454,7 @@ async def get_runtime_metrics(db: DbSession, workspace_id: WorkspaceId) -> dict:
 )
 async def console_audit(
     body: ConsoleAuditRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
     x_nuotao_console: Annotated[str | None, Header(alias="X-Nuotao-Console")] = None,
@@ -462,6 +469,8 @@ async def console_audit(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="missing X-Nuotao-Console header (runtime console only)",
         )
+    if body.actor:
+        body.actor = resolve_actor(request, body.actor)
     await event_service.create_event(
         db,
         workspace_id=workspace_id,

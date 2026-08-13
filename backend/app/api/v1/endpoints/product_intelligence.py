@@ -8,10 +8,11 @@ involved in this phase - all processing is deterministic.
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -207,6 +208,7 @@ async def propose_decision(
 async def approve_decision(
     decision_id: UUID,
     body: DecisionApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDecisionOut:
@@ -226,7 +228,7 @@ async def approve_decision(
             backend,
             workspace_id=workspace_id,
             approval_id=approval.id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -250,6 +252,7 @@ async def approve_decision(
 async def reject_decision(
     decision_id: UUID,
     body: DecisionApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDecisionOut:
@@ -264,7 +267,7 @@ async def reject_decision(
             backend,
             workspace_id=workspace_id,
             approval_id=approval.id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -438,10 +441,13 @@ async def list_experiments(
 async def start_experiment(
     experiment_id: UUID,
     body: ExperimentStartRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductExperimentOut:
     """Activate the experiment (proposed -> active)."""
+    if body.started_by:
+        body.started_by = resolve_actor(request, body.started_by)
     try:
         experiment = await pi.start_experiment(
             db,
@@ -463,6 +469,7 @@ async def start_experiment(
 async def complete_experiment(
     experiment_id: UUID,
     body: ExperimentCompleteRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductExperimentOut:
@@ -472,6 +479,8 @@ async def complete_experiment(
     (``product_ai_evaluations`` + agent evaluation mirror) so M2.3
     calibration consumes real results. Append-only; no rule is changed.
     """
+    if body.actor:
+        body.actor = resolve_actor(request, body.actor)
     try:
         from app.services import pilot_product_analyst
 

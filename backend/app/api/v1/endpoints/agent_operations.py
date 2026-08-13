@@ -12,9 +12,10 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -138,6 +139,7 @@ async def get_alert(
 async def acknowledge_alert(
     alert_id: UUID,
     body: AlertAckRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> AlertOut:
@@ -147,7 +149,7 @@ async def acknowledge_alert(
             db,
             workspace_id=workspace_id,
             alert_id=alert_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -164,6 +166,7 @@ async def acknowledge_alert(
 async def resolve_alert(
     alert_id: UUID,
     body: AlertResolveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> AlertOut:
@@ -173,7 +176,7 @@ async def resolve_alert(
             db,
             workspace_id=workspace_id,
             alert_id=alert_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -254,6 +257,7 @@ async def get_approval(
 async def approve_approval(
     approval_id: UUID,
     body: ApprovalDecideRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ApprovalOut:
@@ -265,7 +269,7 @@ async def approve_approval(
             backend,
             workspace_id=workspace_id,
             approval_id=approval_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -282,6 +286,7 @@ async def approve_approval(
 async def reject_approval(
     approval_id: UUID,
     body: ApprovalDecideRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ApprovalOut:
@@ -293,7 +298,7 @@ async def reject_approval(
             backend,
             workspace_id=workspace_id,
             approval_id=approval_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )

@@ -8,9 +8,10 @@ proposals that require human approval. No automatic business actions.
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -157,6 +158,7 @@ async def list_recommendations(
 async def approve_recommendation(
     recommendation_id: UUID,
     body: RecommendationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RecommendationOut:
@@ -166,7 +168,7 @@ async def approve_recommendation(
             db,
             workspace_id=workspace_id,
             recommendation_id=recommendation_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )
@@ -183,6 +185,7 @@ async def approve_recommendation(
 async def reject_recommendation(
     recommendation_id: UUID,
     body: RecommendationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RecommendationOut:
@@ -192,7 +195,7 @@ async def reject_recommendation(
             db,
             workspace_id=workspace_id,
             recommendation_id=recommendation_id,
-            actor=body.actor,
+            actor=resolve_actor(request, body.actor),
             note=body.note,
             trace_id=get_trace_id(),
         )

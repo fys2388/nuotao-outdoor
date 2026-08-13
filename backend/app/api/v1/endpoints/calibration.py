@@ -3,9 +3,10 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -94,10 +95,12 @@ async def list_calibration_runs(
 async def approve_calibration_run(
     run_id: UUID,
     body: CalibrationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ScoreCalibrationRunOut:
     """Approve the proposal; rules/code are never modified automatically."""
+    body.actor = resolve_actor(request, body.actor)
     try:
         run = await calibration.approve_calibration(
             db,
@@ -119,10 +122,12 @@ async def approve_calibration_run(
 async def reject_calibration_run(
     run_id: UUID,
     body: CalibrationApproveRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ScoreCalibrationRunOut:
     """Reject the proposal; no weight changes."""
+    body.actor = resolve_actor(request, body.actor)
     try:
         run = await calibration.reject_calibration(
             db,
