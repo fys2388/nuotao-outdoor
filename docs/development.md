@@ -1146,6 +1146,8 @@ curl -X GET "http://localhost:8000/api/v1/agents/product-analyst/roi" -H "X-Work
 cd backend
 .venv\Scripts\python -m pytest tests/test_product_analyst_validation.py -q   # M5.7（23 测试）
 .venv\Scripts\python -m pytest tests/integration/test_postgres_migrations.py -q   # 真实 PG：0022 head + downgrade drill
+.venv\Scripts\python -m pytest tests/integration/test_runtime_real_infra.py -q    # 真实 Redis：consumer group / dedup / retry / XAUTOCLAIM / DLQ / heartbeat
+.venv\Scripts\python -m pytest tests/integration/test_product_analyst_real_pg.py -q  # M5.7-REAL：真实 PG+Redis readiness / dry-run 零写入 / pending decision / 闭环 second-context
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
 .venv\Scripts\python -m alembic heads          # 0022 (head)

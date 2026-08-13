@@ -81,6 +81,14 @@ def _restore_runtime_settings() -> None:
         "worker_heartbeat_timeout_seconds",
         "worker_heartbeat_interval_seconds",
         "worker_registry_ttl_seconds",
+        # LLM gateway tests mutate these on the settings singleton; without a
+        # restore the fake keys leak into readiness/other checks.
+        "openai_api_key",
+        "deepseek_api_key",
+        "llm_provider",
+        "llm_fallback_provider",
+        "database_url",
+        "redis_url",
     )
     yield
     for key in keys:

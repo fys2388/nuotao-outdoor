@@ -116,10 +116,10 @@ async def _db_checks(workspace_id: UUID) -> dict:
 
             # 7. product_analyst agent active
 
-            agent = (
+            agent_row = (
                 await session.execute(
                     text(
-                        "SELECT agent_id, status FROM agents "
+                        "SELECT id, agent_id, status FROM agents "
                         "WHERE workspace_id = :ws AND agent_id = 'product_analyst'"
                     ),
                     {"ws": str(workspace_id)},
@@ -128,9 +128,9 @@ async def _db_checks(workspace_id: UUID) -> dict:
             agent_active = (
                 {
                     "status": "PASS",
-                    "detail": f"status={agent[1]}",
+                    "detail": f"status={agent_row[2]}",
                 }
-                if agent and agent[1] == "active"
+                if agent_row and agent_row[2] == "active"
                 else {"status": "BLOCKED", "detail": "product_analyst agent missing/inactive"}
             )
 
@@ -148,17 +148,25 @@ async def _db_checks(workspace_id: UUID) -> dict:
             except Exception as exc:  # noqa: BLE001
                 prompt_active = {"status": "BLOCKED", "detail": str(exc)[:200]}
 
-            # 9-11. policies
+            # 9-11. policies (execution/budget are agent-scoped)
             from app.services import agent_policies
 
+            agent_uuid = str(agent_row[0]) if agent_row else None
             policy_checks = {}
             for label, getter in (
                 ("execution_policy", agent_policies.get_execution_policy),
                 ("budget_policy", agent_policies.get_budget_policy),
-                ("retry_policy", agent_policies.get_retry_policy),
             ):
+                if agent_uuid is None:
+                    policy_checks[label] = {
+                        "status": "BLOCKED",
+                        "detail": "product_analyst agent missing",
+                    }
+                    continue
                 try:
-                    policy = await getter(session, workspace_id=workspace_id)
+                    policy = await getter(
+                        session, workspace_id=workspace_id, agent_id=UUID(agent_uuid)
+                    )
                     policy_checks[label] = (
                         {"status": "PASS", "detail": "configured"}
                         if policy is not None
@@ -166,6 +174,15 @@ async def _db_checks(workspace_id: UUID) -> dict:
                     )
                 except Exception as exc:  # noqa: BLE001
                     policy_checks[label] = {"status": "BLOCKED", "detail": str(exc)[:200]}
+            try:
+                policy = await agent_policies.get_retry_policy(session, workspace_id=workspace_id)
+                policy_checks["retry_policy"] = (
+                    {"status": "PASS", "detail": "configured"}
+                    if policy is not None
+                    else {"status": "BLOCKED", "detail": "no policy row"}
+                )
+            except Exception as exc:  # noqa: BLE001
+                policy_checks["retry_policy"] = {"status": "BLOCKED", "detail": str(exc)[:200]}
 
             # 12. approval RBAC roles
             from app.services import approval_rbac

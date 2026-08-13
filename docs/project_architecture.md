@@ -740,6 +740,7 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 
 
 | 版本 | 日期 | 变更 |
+| v0.23 | 2026-08-13 | M5.7-REAL Product Analyst First Real Business Loop：真实 PostgreSQL（pgserver PG16）完整迁移链 0001→0022 + downgrade drill + FK/UNIQUE/JSONB 验证；真实 Redis worker/consumer group/dedup/retry/XAUTOCLAIM/DLQ/heartbeat 验证；真实 PG+Redis 下 Product Analyst readiness gate / dry-run 零写入 / pending decision / approval→experiment→complete(manual)→evaluation→calibration→knowledge→second-context 技术闭环集成测试；无 LLM key 时 readiness 如实 BLOCKED，不伪造 PASS；真实业务结果未到位，状态保持 "Pilot waiting for real business result"；新增 4 集成测试，418 全绿 |
 | v0.22 | 2026-08-12 | M5.7 Product Analyst Real Business Validation：真实业务验证闭环（staging）；`product_validation_cases`（source CHECK staging_real/staging_synthetic，区分真实与 synthetic 数据）；experiment `result_history` 追加式 actual_result（actor + source manual/external/connector 必填，ai/predicted 拒绝，禁止覆盖历史）；dry-run 零写入（context→LLM→schema→gates）；provider 选择 + fallback 落库；calibration 样本不足显式标记（MIN=3）且永不自动改权重；rejected calibration 禁止同步 knowledge；scorecard 新增 blocked_runs / experiment_waiting_for_result / total_tokens / p95_latency / provider_fallback_rate / calibration / knowledge；ROI 无归因时保持 null（"ROI attribution unavailable"）；readiness CLI 15 项 Phase 0 检查（缺项 BLOCKED，不伪造成功）；迁移 0022；新增 23 测试 |
 | v0.20 | 2026-08-12 | M5.3 Agent Runtime 可观测性与 Exactly-Once 加固：消息级 dedup（Redis SET NX EX token，idempotency_key+attempt 稳定身份，绝不随机 UUID，fresh 阻止并发、stale 可接管支持 crash 恢复）、明确 at-least-once/effectively-once 交付语义（DB 为业务事实源，dedup 为优化）、Queue Observability（`GET /agent-queue/stats`：深度/分状态计数/age/吞吐/成功率，Redis+PG 实测）、Queue Health（`GET /agent-queue/health`：redis/stream/group/workers/pending/DLQ/长期 running，阈值 config 化）、Worker Registry/Heartbeat（Redis hash + `POST /agent-workers/heartbeat`、`GET /agent-workers`，dead 由 heartbeat 超时派生）、DLQ 只读查询（无自动 replay）、Trace 全链路查询（`GET /agent-traces/{trace_id}`，404 + JSON-safe + 时间排序）、复用 agent_metrics 不建新表、新增 agent.queue.* 审计事件；**零新增迁移（alembic head 0018）**；新增 29 测试（273 全绿） |
 | v0.19 | 2026-08-12 | M5.2.1 生产验证：真实 PostgreSQL（pgserver 嵌入 PG16）完整迁移链 0001→0018 + downgrade/upgrade 演练 + FK/UNIQUE/JSONB/Numeric/BIGINT/UUID/workspace 隔离/事务 rollback 一致性；真实 Redis Streams（XADD/XREADGROUP/XACK + consumer group + PEL crash reclaim + 延迟重试 ZSET + dead-letter + 幂等）；修复 redis-py `BLOCK 0` 永久阻塞语义陷阱（block_ms=0 不再传 BLOCK）；LLM Gateway 真实/可 mock 验证（OpenAI 主/DeepSeek 备 fallback、401 终态、双 provider 失败 dead-letter、tokens/cost/latency/provider/model 审计）；Evaluation/Calibration 统一桥 `app/services/evaluation_bridge.py`（M5 agent_evaluations ↔ M2.3 product_ai_evaluations 单一分类来源，actual 回填进入 M2.3 calibration，仅人工批准可同步知识）；agent_tasks.idempotency_key 幂等（迁移 0018，API/服务层去重不二次入队）；新增 24 集成测试（244 全绿） |
@@ -1005,3 +1006,31 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 - 真实 LLM（OpenAI/DeepSeek）只通过 staging 手动执行验证；无 key 时 readiness 输出 BLOCKED。
 - 没有真实业务结果时，M5.7 只完成 A/B（Readiness + 代码/测试/文档），状态为
   **"Pilot waiting for real business result"**，绝不虚报已完成。
+
+### 9. M5.7-REAL 基础设施验证结果（2026-08-13）
+
+> 本阶段只做**真实基础设施闭环验证**，不扩展平台能力；真实业务数据/真实实验结果未到位，
+> 所有业务级结论保持 **"Pilot waiting for real business result"**，不伪造 PASS。
+
+- **真实 PostgreSQL（PASS）**：pgserver 嵌入式 PG16 执行完整迁移链 0001→0022、
+  downgrade/upgrade 演练，FK / UNIQUE / JSONB / Numeric / BIGINT / workspace isolation /
+  transaction rollback 一致（`tests/integration/test_postgres_migrations.py`，5 tests）。
+- **真实 Redis（PASS）**：自动下载真实 Redis 实例验证 Stream XADD/XREADGROUP/XACK、
+  consumer group、PEL 崩溃 reclaim（XAUTOCLAIM）、retry ZSET 到期重入队、message dedup、
+  DLQ、worker heartbeat 与 workspace isolation（`tests/integration/test_runtime_real_infra.py`，8 tests）。
+- **真实 PG + Redis Product Analyst 技术闭环（PASS，LLM 为 mock）**：
+  `tests/integration/test_product_analyst_real_pg.py`（4 tests）：
+  1. readiness gate：基础设施项 PASS、`llm_keys` 无 key 时如实 BLOCKED、overall NOT_READY；
+  2. dry-run 零业务写入（不创建 analysis run / decision / approval / experiment / evaluation）；
+  3. 真实 run 创建 pending decision + approval（Agent 不得 approve）；
+  4. 完整技术闭环：run → 人工 approve → experiment → 人工 start → complete(source=manual) →
+     evaluation → calibration 样本门（<3 时 insufficient_sample）→ 人工 approve calibration →
+     knowledge 写入 → 第二次 context 读取到 knowledge。
+- **真实 LLM（BLOCKED）**：staging 未配置 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`，不伪造 PASS；
+  `--dry-run --provider auto` 未在真实 LLM 上执行，readiness 明确输出 BLOCKED。
+- **真实业务闭环（BLOCKED / waiting）**：无真实产品业务数据与真实实验结果，decision 未在
+  真实业务环境审批、实验未真实启动、actual_result 未回填；状态保持
+  **"Pilot waiting for real business result"**。
+- **诚实边界**：synthetic 测试数据永不标记为真实业务数据；ROI 保持
+  `revenue_impact / margin_impact / roas_impact = null` +
+  "ROI attribution unavailable: no verified business attribution source."。
