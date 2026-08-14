@@ -18,6 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.actor import ActorResolutionError
 from app.core.config import get_settings
+from app.core.identity import (
+    JwtAuthenticationError,
+    PermissionDeniedError,
+    WorkspaceAccessError,
+)
 from app.core.logging import setup_logging
 from app.core.redis import create_redis_client
 from app.core.tracing import (
@@ -63,11 +68,43 @@ app.mount(
 
 @app.exception_handler(ActorResolutionError)
 async def _actor_resolution_error_handler(request: Request, exc: ActorResolutionError) -> Response:
-    """Map actor resolution failures (missing/invalid body actor or header)."""
+    """Map actor resolution failures (missing/invalid body actor, body mode)."""
     return Response(
         status_code=400,
         media_type="application/json",
         content=json.dumps({"detail": str(exc), "code": "ACTOR_RESOLUTION"}),
+    )
+
+
+@app.exception_handler(JwtAuthenticationError)
+async def _jwt_auth_error_handler(request: Request, exc: JwtAuthenticationError) -> Response:
+    """Map identity-token failures to 401 (never a body-actor fallback)."""
+    return Response(
+        status_code=401,
+        media_type="application/json",
+        content=json.dumps({"detail": str(exc), "code": "IDENTITY_AUTH"}),
+    )
+
+
+@app.exception_handler(WorkspaceAccessError)
+async def _workspace_access_error_handler(request: Request, exc: WorkspaceAccessError) -> Response:
+    """Map identity workspace failures to 403."""
+    return Response(
+        status_code=403,
+        media_type="application/json",
+        content=json.dumps({"detail": str(exc), "code": "WORKSPACE_ACCESS"}),
+    )
+
+
+@app.exception_handler(PermissionDeniedError)
+async def _permission_denied_error_handler(
+    request: Request, exc: PermissionDeniedError
+) -> Response:
+    """Map permission failures to 403."""
+    return Response(
+        status_code=403,
+        media_type="application/json",
+        content=json.dumps({"detail": str(exc), "code": "PERMISSION_DENIED"}),
     )
 
 

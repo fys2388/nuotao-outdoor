@@ -38,6 +38,9 @@ APPROVAL_PERMISSION_PREFIX: dict[str, str] = {
     "DLQ_REPLAY": "dlq_replay",
     "AGENT_LIFECYCLE": "agent.lifecycle",
     "PRODUCT_DECISION": "product.decision",
+    # M5.14: candidate/experiment namespaces (M5.13 design; APIs land later).
+    "PRODUCT_CANDIDATE": "product.candidate",
+    "PRODUCT_EXPERIMENT": "product.experiment",
 }
 
 # lifecycle actions need an explicit action discriminator.
@@ -115,6 +118,39 @@ async def check_approval_permission(
 # --------------------------------------------------------------------------- #
 # Role CRUD (workspace-scoped, audit-light: used by ops and tests)
 # --------------------------------------------------------------------------- #
+
+
+async def check_actor_permission(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    actor: str,
+    permission: str,
+) -> bool:
+    """Generic actor -> permission check for the M5.14 identity chain.
+
+    Reuses the same role table and legacy open-operator rule as
+    :func:`check_approval_permission` so RBAC logic stays in one place.
+    Raises :class:`ApprovalRBACError` (mapped to 403) when the actor is not
+    allowed; returns True in the legacy open mode (no enabled roles) or when
+    RBAC is globally disabled.
+    """
+    settings = get_settings()
+    if not settings.approval_rbac_enabled:
+        return True
+    roles = await _enabled_roles(session, workspace_id=workspace_id)
+    if not roles:
+        logger.info(
+            "approval RBAC: workspace %s has no enabled roles - legacy open mode",
+            workspace_id,
+        )
+        return True
+    for role in roles:
+        if actor in (role.actors or []) and permission in (role.permissions or []):
+            return True
+    raise ApprovalRBACError(
+        f"actor '{actor}' lacks permission '{permission}' (workspace {workspace_id})"
+    )
 
 
 async def create_role(

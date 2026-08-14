@@ -97,6 +97,10 @@ async def test_readiness_gate_real_pg_redis(pg_engine, redis_url: str, monkeypat
     settings = get_settings()
     monkeypatch.setattr(settings, "database_url", str(pg_engine.url))
     monkeypatch.setattr(settings, "redis_url", redis_url)
+    # This integration test pins the no-key scenario: readiness must report
+    # BLOCKED and never fabricate a PASS, regardless of a local .env.
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
 
     result = await readiness.run_checks(WORKSPACE)
     checks = result["checks"]

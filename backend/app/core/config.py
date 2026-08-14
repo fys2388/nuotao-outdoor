@@ -134,13 +134,28 @@ class Settings(BaseSettings):
     # ``agent_approval_slas`` override these defaults.
     approval_sla_enabled: bool = True
 
-    # Actor identity (M5.8). AUTHENTICATION_GAP: approval/audit actors are
-    # declared in the request body (staging-safe, RBAC still enforced
-    # server-side). ``body`` is the default provider; switch to ``header`` and
-    # set ``actor_header_name`` when a real SSO/JWT identity layer is wired
-    # up. Secrets must never live here.
+    # Actor identity (M5.8/M5.14). AUTHENTICATION_GAP: with ``body`` the
+    # approval/audit actor is declared in the request body (staging-safe,
+    # RBAC still enforced server-side). With ``header`` the actor MUST come
+    # from a cryptographically verified RS256 JWT (Clerk, injected by
+    # Cloudflare Access / a trusted proxy) - request body actors and raw
+    # ``X-Actor`` values are never accepted. Secrets must never live here.
     actor_provider: str = "body"  # body | header
-    actor_header_name: str = "X-Actor"
+    actor_header_name: str = "X-Actor"  # deprecated legacy seam; unused in header mode
+
+    # --- M5.14 Identity Foundation (STAGING ONLY) ----------------------------
+    # Trusted identity header injected by Cloudflare Access / trusted proxy.
+    # Its value MUST be a signed RS256 JWT (Clerk) - never a raw actor string.
+    trusted_identity_header: str = "CF-Access-Jwt-Assertion"
+    # Clerk JWKS / issuer / audience. Empty in dev: the header provider fails
+    # closed (401) until staging identity is configured - there is NO fallback
+    # to the request body actor. Defaults never hardcode a real Clerk URL.
+    clerk_jwks_url: str = ""
+    clerk_issuer: str = ""
+    clerk_audience: str = ""
+    jwt_clock_skew_seconds: int = 30
+    jwks_cache_ttl_seconds: int = 300
+    jwks_fetch_timeout_seconds: float = 5.0
     approval_default_warning_seconds: int = 3600
     approval_default_expire_seconds: int = 86400
 

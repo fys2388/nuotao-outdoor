@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     customer_learning,
     events,
     health,
+    identity,
     knowledge,
     marketing,
     marketing_learning,
@@ -30,6 +31,7 @@ from app.api.v1.endpoints import (
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(events.router)
+api_router.include_router(identity.router)
 api_router.include_router(rules.router)
 api_router.include_router(products.router)
 api_router.include_router(webhooks.router)

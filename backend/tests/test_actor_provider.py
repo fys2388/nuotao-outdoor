@@ -1,31 +1,42 @@
 """M5.8 actor resolution extension point tests (AUTHENTICATION_GAP).
 
-The approval/audit actor is currently declared in the request body
-(staging-safe default provider). Server-side RBAC is never bypassed; the
-resolved actor must still pass the workspace role/permission checks. A
-``header`` provider is the future SSO/JWT seam.
+The approval/audit actor is declared in the request body (staging-safe
+default provider, ``body``). Server-side RBAC is never bypassed; the resolved
+actor must still pass the workspace role/permission checks. Under the M5.14
+``header`` provider the actor comes ONLY from a verified RS256 JWT; raw
+``X-Actor`` headers and request body actors are never accepted.
 
-Covers: body provider validation, reserved identities, header provider
-precedence + fallback, provider configuration and API-level guarantees
-(reserved actor -> 400, header actor source, RBAC not bypassed).
+Covers: body provider validation, reserved identities, JWT provider behavior,
+provider configuration and API-level guarantees (reserved actor -> 400,
+JWT actor source, X-Actor -> 401, RBAC not bypassed).
 """
 
 import pytest
 from app.core.actor import (
     ActorResolutionError,
     BodyActorProvider,
-    HeaderActorProvider,
+    JwtActorProvider,
     get_actor_provider,
     resolve_actor,
 )
 from app.core.config import get_settings
+from app.core.identity import JwtAuthenticationError
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product_intelligence import ProductDecision
 from app.schemas.rule import RuleCreate
 from app.services import approval_rbac, rule_engine
+from app.services.clerk_jwks import ClerkJwksClient
 from fastapi import Request
 from sqlalchemy import select
 from starlette.datastructures import Headers, QueryParams
+from tests.identity_helpers import (
+    AUDIENCE,
+    ISSUER,
+    KID,
+    make_key_pair,
+    mint_token,
+    public_key_pem,
+)
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 
@@ -98,32 +109,66 @@ def test_body_provider_strips_whitespace() -> None:
     assert provider.resolve(_request(), "  ops@nuotao.example  ") == "ops@nuotao.example"
 
 
+TRUSTED_HEADER = "CF-Access-Jwt-Assertion"
+
+
+def _configure_header_jwt(monkeypatch, private_pem: str) -> None:
+    """Point the header provider at a preloaded ephemeral JWKS client."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "actor_provider", "header")
+    monkeypatch.setattr(
+        settings,
+        "clerk_jwks_url",
+        "https://staging.clerk.accounts.dev/.well-known/jwks.json",
+    )
+    monkeypatch.setattr(settings, "clerk_issuer", ISSUER)
+    monkeypatch.setattr(settings, "clerk_audience", AUDIENCE)
+    monkeypatch.setattr(settings, "jwt_clock_skew_seconds", 30)
+    client = ClerkJwksClient.from_keys({KID: public_key_pem(private_pem)})
+    monkeypatch.setattr("app.core.identity.get_jwks_client", lambda **kw: client)
+
+
 # --------------------------------------------------------------------------- #
-# Unit: header provider (SSO/JWT seam)
+# Unit: JWT provider (M5.14 identity foundation)
 # --------------------------------------------------------------------------- #
 
 
-def test_header_provider_prefers_header_over_body() -> None:
-    provider = HeaderActorProvider("X-Actor")
-    request = _request({"X-Actor": "sso-user@nuotao.example"})
-    assert provider.resolve(request, "body-user") == "sso-user@nuotao.example"
+def test_header_provider_requires_jwt_token(monkeypatch) -> None:
+    """No JWT -> authentication failure; there is NO body-actor fallback."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    provider = JwtActorProvider(TRUSTED_HEADER)
+    with pytest.raises(JwtAuthenticationError):
+        provider.resolve(_request(), "body-user")
 
 
-def test_header_provider_falls_back_to_body() -> None:
-    provider = HeaderActorProvider("X-Actor")
-    assert provider.resolve(_request(), "body-user") == "body-user"
+def test_header_provider_valid_jwt_wins_over_body(monkeypatch) -> None:
+    """A verified JWT resolves the actor; the body actor is ignored."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    token = mint_token(private_pem=private_pem, sub="user_jwt")
+    provider = JwtActorProvider(TRUSTED_HEADER)
+    request = _request({TRUSTED_HEADER: token, "X-Actor": "raw-header"})
+    assert provider.resolve(request, "untrusted-body") == "user_jwt"
 
 
-def test_header_provider_rejects_invalid_header() -> None:
-    provider = HeaderActorProvider("X-Actor")
-    with pytest.raises(ActorResolutionError):
-        provider.resolve(_request({"X-Actor": "not allowed"}), "body-user")
+def test_header_provider_ignores_x_actor(monkeypatch) -> None:
+    """A raw X-Actor header alone never authenticates."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    provider = JwtActorProvider(TRUSTED_HEADER)
+    with pytest.raises(JwtAuthenticationError):
+        provider.resolve(_request({"X-Actor": "ops@nuotao.example"}), "body-user")
 
 
-def test_header_provider_rejects_reserved_header() -> None:
-    provider = HeaderActorProvider("X-Actor")
-    with pytest.raises(ActorResolutionError):
-        provider.resolve(_request({"X-Actor": "agent"}), "body-user")
+def test_header_provider_rejects_reserved_actor(monkeypatch) -> None:
+    """Agent/system identities cannot impersonate an operator via JWT."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    token = mint_token(private_pem=private_pem, sub="agent")
+    provider = JwtActorProvider(TRUSTED_HEADER)
+    with pytest.raises(JwtAuthenticationError):
+        provider.resolve(_request({TRUSTED_HEADER: token}), "body-user")
 
 
 # --------------------------------------------------------------------------- #
@@ -137,15 +182,16 @@ def test_get_actor_provider_follows_settings(monkeypatch) -> None:
     assert isinstance(get_actor_provider(), BodyActorProvider)
     monkeypatch.setattr(settings, "actor_provider", "header")
     provider = get_actor_provider()
-    assert isinstance(provider, HeaderActorProvider)
-    assert provider.header_name == settings.actor_header_name
+    assert isinstance(provider, JwtActorProvider)
+    assert provider.header_name == settings.trusted_identity_header
 
 
 def test_resolve_actor_uses_configured_provider(monkeypatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "actor_provider", "header")
-    request = _request({"X-Actor": "sso-user@nuotao.example"})
-    assert resolve_actor(request, "body-user") == "sso-user@nuotao.example"
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    token = mint_token(private_pem=private_pem, sub="sso-user")
+    assert resolve_actor(_request({TRUSTED_HEADER: token}), "body-user") == "sso-user"
     monkeypatch.setattr(settings, "actor_provider", "body")
     assert resolve_actor(_request(), "body-user") == "body-user"
 
@@ -232,19 +278,20 @@ async def test_api_reserved_actor_returns_400(db_session, api_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_api_header_provider_takes_actor_from_header(
+async def test_api_header_provider_takes_actor_from_jwt(
     db_session, api_client, monkeypatch
 ) -> None:
-    """Header provider: the SSO header wins over the (ignored) body actor."""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "actor_provider", "header")
+    """Header provider: a verified JWT resolves the actor (body ignored)."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    token = mint_token(private_pem=private_pem, sub="ops@nuotao.example")
     product_id = await _seed_and_intake(db_session, api_client)
     decision = _propose_decision(api_client, product_id)
 
     response = api_client.post(
         APPROVE_URL.format(decision_id=decision["id"]),
-        json={"actor": "untrusted-body-actor", "note": "approved via header"},
-        headers={**_headers(), "X-Actor": "ops@nuotao.example"},
+        json={"actor": "untrusted-body-actor", "note": "approved via jwt"},
+        headers={**_headers(), TRUSTED_HEADER: token},
     )
     assert response.status_code == 200, response.text
     assert response.json()["approval_status"] == "approved"
@@ -254,10 +301,29 @@ async def test_api_header_provider_takes_actor_from_header(
 
 
 @pytest.mark.asyncio
+async def test_api_header_provider_x_actor_rejected(db_session, api_client, monkeypatch) -> None:
+    """A raw X-Actor header is never an identity source under header mode."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
+    product_id = await _seed_and_intake(db_session, api_client)
+    decision = _propose_decision(api_client, product_id)
+
+    response = api_client.post(
+        APPROVE_URL.format(decision_id=decision["id"]),
+        json={"actor": "ops@nuotao.example", "note": "attempt"},
+        headers={**_headers(), "X-Actor": "ops@nuotao.example"},
+    )
+    assert response.status_code == 401, response.text
+
+    rows = (await db_session.execute(select(ProductDecision))).scalars().all()
+    assert rows[0].approval_status == "pending"
+
+
+@pytest.mark.asyncio
 async def test_api_header_provider_rbac_not_bypassed(db_session, api_client, monkeypatch) -> None:
-    """Server-side RBAC still applies to the resolved header actor (403)."""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "actor_provider", "header")
+    """Server-side RBAC still applies to the resolved JWT actor (403)."""
+    private_pem, _ = make_key_pair()
+    _configure_header_jwt(monkeypatch, private_pem)
     await approval_rbac.create_role(
         db_session,
         workspace_id=WORKSPACE,
@@ -273,6 +339,9 @@ async def test_api_header_provider_rbac_not_bypassed(db_session, api_client, mon
     response = api_client.post(
         APPROVE_URL.format(decision_id=decision["id"]),
         json={"actor": "reviewer@nuotao.example", "note": "no permission"},
-        headers={**_headers(), "X-Actor": "reviewer@nuotao.example"},
+        headers={
+            **_headers(),
+            TRUSTED_HEADER: mint_token(private_pem=private_pem, sub="reviewer@nuotao.example"),
+        },
     )
     assert response.status_code == 403, response.text

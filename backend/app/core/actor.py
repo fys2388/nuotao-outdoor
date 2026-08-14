@@ -1,22 +1,24 @@
-"""M5.8 staging-safe actor resolution extension point.
+"""M5.8/M5.14 actor resolution.
 
-AUTHENTICATION_GAP: approval/audit actors are currently declared in the
-request body. Server-side RBAC is never bypassed: the resolved actor must
-still pass the workspace-scoped role/permission checks (403 otherwise). This
-module is the explicit seam where a real SSO/JWT identity layer can replace
-the body provider without touching endpoint code.
+AUTHENTICATION_GAP history: approval/audit actors used to be declared in the
+request body. Server-side RBAC is never bypassed - the resolved actor must
+still pass the workspace-scoped role/permission checks (403 otherwise).
 
 Providers (``settings.actor_provider``):
 
 - ``body``   (default, staging-safe): actor comes from the request body and is
              validated (non-empty, bounded length, safe charset, no reserved
              system/agent identity).
-- ``header`` (SSO/JWT seam): actor comes from ``settings.actor_header_name``
-             when the header is present, otherwise falls back to the
-             validated body actor so staging keeps working.
+- ``header`` (M5.14 identity foundation): actor comes ONLY from a
+             cryptographically verified RS256 JWT carried in
+             ``settings.trusted_identity_header`` (Clerk JWKS). Raw headers
+             like ``X-Actor`` and request body actors are never accepted, and
+             there is NO fallback to the body actor.
 
-Endpoints call ``resolve_actor(request, body.actor)`` instead of trusting the
-body directly; swapping providers later requires no endpoint changes.
+Endpoints call ``resolve_actor(request, body.actor)``; swapping providers
+later requires no endpoint changes. The richer identity (actor + organization
++ workspace mapping + permissions) lives in ``app/core/identity.py`` and
+``app/api/deps.py`` for new endpoints.
 """
 
 from __future__ import annotations
@@ -71,29 +73,39 @@ class BodyActorProvider:
         return _validate_actor(body_actor)
 
 
-class HeaderActorProvider:
-    """SSO/JWT seam: prefer the identity header, fall back to the body."""
+class JwtActorProvider:
+    """M5.14: the actor comes from a verified RS256 JWT identity header.
+
+    ``settings.trusted_identity_header`` (default ``CF-Access-Jwt-Assertion``)
+    must carry a Clerk-signed JWT. Missing/invalid tokens raise
+    :class:`app.core.identity.JwtAuthenticationError` (mapped to 401 by the
+    API layer); the request body actor is always ignored.
+    """
 
     def __init__(self, header_name: str) -> None:
         self.header_name = header_name
 
     def resolve(self, request: Request, body_actor: str | None) -> str:
-        header_value = request.headers.get(self.header_name)
-        if header_value:
-            return _validate_actor(header_value)
-        if body_actor is None:
-            raise ActorResolutionError("actor is required")
-        return _validate_actor(body_actor)
+        # Local import breaks the actor <-> identity import cycle.
+        from app.core.identity import authenticate_request_sync
+
+        identity = authenticate_request_sync(request, header_name=self.header_name)
+        return identity.actor_id
 
 
 def get_actor_provider() -> ActorProvider:
     """Return the configured provider (``settings.actor_provider``)."""
     settings = get_settings()
     if settings.actor_provider == "header":
-        return HeaderActorProvider(settings.actor_header_name)
+        return JwtActorProvider(settings.trusted_identity_header)
     return BodyActorProvider()
 
 
 def resolve_actor(request: Request, body_actor: str | None = None) -> str:
     """Resolve + validate the acting principal (RBAC still applies)."""
     return get_actor_provider().resolve(request, body_actor)
+
+
+def validate_actor(raw: str) -> str:
+    """Public alias used by the identity layer to normalize actor ids."""
+    return _validate_actor(raw)

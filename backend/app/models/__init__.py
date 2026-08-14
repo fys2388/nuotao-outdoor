@@ -32,6 +32,7 @@ from app.models.customer_learning import (
     CustomerPatternRun,
 )
 from app.models.event import EventLog
+from app.models.identity import WorkspaceIdentityLink
 from app.models.marketing import (
     Campaign,
     CreativeAsset,
@@ -102,6 +103,7 @@ __all__ = [
     "Order",
     "OrderItem",
     "EventLog",
+    "WorkspaceIdentityLink",
     "Campaign",
     "CreativeAsset",
     "CustomerFeedback",

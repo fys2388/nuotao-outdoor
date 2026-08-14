@@ -52,6 +52,10 @@ APPROVAL_PERMISSIONS: tuple[str, ...] = (
     "dlq_replay.approve",
     "dlq_replay.reject",
     "agent.lifecycle.approve",
+    "product.decision.approve",
+    "product.decision.reject",
+    "product.candidate.promote",
+    "product.experiment.start",
 )
 
 

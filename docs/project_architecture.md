@@ -740,6 +740,7 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 
 
 | 版本 | 日期 | 变更 |
+| v0.25 | 2026-08-14 | Identity Architecture (IDENTITY-001)????? Clerk / Enterprise Identity + Cloudflare Access + Nuotao RBAC ????????????????? = ? Cloudflare Access + Clerk ????? JWT??? request body actor / ? X-Actor / Agent ??????`ACTOR_PROVIDER=header` ????? + JWT ???workspace ???? org?workspace ?????Staging ? Production ?????????????/ADR???????? migration???????? `docs/identity_architecture.md` |
 | v0.24 | 2026-08-13 | M5.8 Production Staging Activation：AUTHENTICATION_GAP 记录 + staging-safe Actor Provider 扩展点（``actor_provider=body`` 默认，保留字 agent/system 拒绝 + 安全字符集校验；``header`` 为未来 SSO/JWT 接入缝，header 优先/body 兜底；RBAC 服务端强制，绝不因 provider 绕过）；全部审批/操作审计端点改为 ``resolve_actor(request, body.actor)``（decision/experiment/calibration/approval/alert/lifecycle/execution/recommendation/learning/rule override/console）；全局 ActorResolutionError→400 映射；无 schema 变更（head 0022）；新增 19 测试，435 全绿；真实 staging 无 LLM key/无真实产品 → readiness 保持 BLOCKED，状态 "Pilot waiting for real business result" |
 | v0.23 | 2026-08-13 | M5.7-REAL Product Analyst First Real Business Loop：真实 PostgreSQL（pgserver PG16）完整迁移链 0001→0022 + downgrade drill + FK/UNIQUE/JSONB 验证；真实 Redis worker/consumer group/dedup/retry/XAUTOCLAIM/DLQ/heartbeat 验证；真实 PG+Redis 下 Product Analyst readiness gate / dry-run 零写入 / pending decision / approval→experiment→complete(manual)→evaluation→calibration→knowledge→second-context 技术闭环集成测试；无 LLM key 时 readiness 如实 BLOCKED，不伪造 PASS；真实业务结果未到位，状态保持 "Pilot waiting for real business result"；新增 4 集成测试，418 全绿 |
 | v0.22 | 2026-08-12 | M5.7 Product Analyst Real Business Validation：真实业务验证闭环（staging）；`product_validation_cases`（source CHECK staging_real/staging_synthetic，区分真实与 synthetic 数据）；experiment `result_history` 追加式 actual_result（actor + source manual/external/connector 必填，ai/predicted 拒绝，禁止覆盖历史）；dry-run 零写入（context→LLM→schema→gates）；provider 选择 + fallback 落库；calibration 样本不足显式标记（MIN=3）且永不自动改权重；rejected calibration 禁止同步 knowledge；scorecard 新增 blocked_runs / experiment_waiting_for_result / total_tokens / p95_latency / provider_fallback_rate / calibration / knowledge；ROI 无归因时保持 null（"ROI attribution unavailable"）；readiness CLI 15 项 Phase 0 检查（缺项 BLOCKED，不伪造成功）；迁移 0022；新增 23 测试 |
@@ -1076,3 +1077,16 @@ M5.0 表扩展列：`agent_executions` + `error_type / approval_deadline / worke
 - `REAL_LLM = BLOCKED`（无真实 key）。
 - 真实决策/实验/结果回填未发生；不生成 synthetic decision/experiment/actual_result。
 - 状态保持 **"Pilot waiting for real business result"**。
+
+
+### 3.24 Identity Architecture?Clerk + Cloudflare Access + Nuotao RBAC?
+
+- ?????ADR `IDENTITY-001`??Nuotao ???????????? = **Clerk / Enterprise Identity**?Login/User/Organization/JWT?+ **Cloudflare Access**?Zero Trust/SSO/Edge JWT propagation?+ **Nuotao Identity Layer**?JWT verification / identity normalization / workspace mapping?+ **Nuotao RBAC**?????/??/workspace isolation??
+- ?????`Internet ? Cloudflare Access ? JWT(authenticated identity) ? FastAPI ? JWT verification ? Identity mapping ? Nuotao RBAC ? Business Permission`?
+- ?????`ACTOR_PROVIDER=header`?header ???? Cloudflare Access / trusted proxy ?????? JWT?`CF-Access-Jwt-Assertion`???? Clerk JWKS ??/claims ???iss/aud/exp/nbf/sub??
+- **??**?request body actor ?????????????? `X-Actor`?Agent ??? actor/admin/operator????????
+- **RBAC ??**?`actor ? workspace roles ? permissions`?????? 403??????? `product.decision.*`?`product.candidate.*`?M5.13??`calibration.*`?`tool.*` ??Agent ? L0-L3 ?????L3 ???????
+- **Workspace ??**?JWT claim `org` ? ??? `workspace_id`?Phase 1 ???/??????? DB ? + Clerk org webhook ????`X-Workspace-Id` ?????????????
+- **??**?S0 ???`ACTOR_PROVIDER=body`?staging ?? `BLOCKED_REAL_OPERATOR`?? S1 ?????JwtActorProvider + JWT ????? S2 Staging?Clerk Test Instance + CF staging ???`ACTOR_PROVIDER=header`?? S3 Production?Clerk production + CF production policy??? JWT??Staging ? Production ???????
+- ?????`docs/identity_architecture.md`?ADR?`docs/business_decisions/ADR/IDENTITY-001.md`?
+- ??????/ADR???????? migration?????????? SSO???? Clerk/Cloudflare production ???

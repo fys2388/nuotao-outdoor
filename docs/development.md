@@ -972,7 +972,7 @@ cd backend
 .venv\Scripts\python -m pytest tests/integration/test_operations_integration.py -q -s  # 真实 Redis + Worker
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
-.venv\Scripts\python -m alembic heads          # 0022 (head)
+.venv\Scripts\python -m alembic heads          # 0023 (head)
 
 ## 8.22 M5.8 Production Staging Activation
 
@@ -1185,5 +1185,80 @@ cd backend
 .venv\Scripts\python -m pytest tests/integration/test_product_analyst_real_pg.py -q  # M5.7-REAL：真实 PG+Redis readiness / dry-run 零写入 / pending decision / 闭环 second-context
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m ruff format --check .
-.venv\Scripts\python -m alembic heads          # 0022 (head)
+.venv\Scripts\python -m alembic heads          # 0023 (head)
 ```
+
+
+---
+
+## 9. Staging Identity Setup?M5.14?STAGING ONLY?
+
+> ???`ACTOR_PROVIDER=header` + ?? JWT?Clerk Test Instance?+ workspace ?? + RBAC?
+> ????? `ACTOR_PROVIDER=body`?staging ???????????????? header?
+
+### 9.1 Clerk Test Instance
+
+1. ? Clerk Dashboard ?? **Test Instance**????? production application??
+2. ???
+   - `CLERK_JWKS_URL`?Test Instance ? JWKS ???`https://<instance>.<region>.clerk.accounts.dev/.well-known/jwks.json`?
+   - `CLERK_ISSUER`?Test Instance ???
+   - `CLERK_AUDIENCE`???? audience??? `nuotao-staging`?
+3. JWT ?? / ????? claims?`sub`??? id??`org`??? id??
+   - `org` ?????? token ?????401?fail-closed??
+
+### 9.2 Cloudflare Access
+
+- ? Nuotao Staging ???? Cloudflare Access?Application Access Policy??
+  ? Access ?? `CF-Access-Jwt-Assertion`???? JWT??
+- ??? Cloudflare ???? staging ??????????? JWT???? Clerk ????
+
+### 9.3 backend/.env
+
+```bash
+ACTOR_PROVIDER=header
+TRUSTED_IDENTITY_HEADER=CF-Access-Jwt-Assertion
+CLERK_JWKS_URL=<staging jwks url>
+CLERK_ISSUER=<staging issuer>
+CLERK_AUDIENCE=nuotao-staging
+JWT_CLOCK_SKEW_SECONDS=30
+JWKS_CACHE_TTL_SECONDS=300
+JWKS_FETCH_TIMEOUT_SECONDS=5
+```
+
+????? secret ?? git / README / ?? / event_log / trace?
+
+### 9.4 Workspace mapping
+
+```bash
+# ??? Clerk org ?????upsert?
+# workspace_identity_links: (workspace_id, organization_id) ??
+# ??? -> 403?X-Workspace-Id ?????? -> 403
+```
+
+### 9.5 RBAC roles
+
+? `agent_approval_roles` ??? workspace ?? operator role?actor ?? JWT `sub`?
+
+```text
+product.decision.approve
+product.decision.reject
+calibration.approve
+product.candidate.promote      # M5.13 ??
+product.experiment.start       # M5.13 ??
+```
+
+### 9.6 ??
+
+```powershell
+cd backend
+.venv\Scripts\python -m pytest tests/test_identity_jwt.py tests/test_identity_api.py tests/test_actor_provider.py -q
+.venv\Scripts\python -m pytest tests/integration/test_identity_pg.py -q    # ?? PG?0023 + mapping
+# ???????? JWT??
+# GET /api/v1/identity/me -> 200 {actor_id, organization_id, workspace_id}
+```
+
+### 9.7 ????
+
+- 401?JWT ?? / ???? / claims ?? / provider ????fail-closed?? fallback body??
+- 403?????? workspace ?? / ??? / X-Workspace-Id ???????
+- 404?? workspace ?????????????
