@@ -24,6 +24,9 @@ _REAL_ENV_NAMES = (
     "WOOCOMMERCE_BASE_URL",
     "WOOCOMMERCE_CONSUMER_KEY",
     "WOOCOMMERCE_CONSUMER_SECRET",
+    "CLERK_JWKS_URL",
+    "CLERK_ISSUER",
+    "CLERK_AUDIENCE",
 )
 
 
@@ -37,6 +40,9 @@ def _clean_real_env(monkeypatch) -> None:
     monkeypatch.setattr(settings, "redis_url", activation_gate._DEFAULT_REDIS_URL)
     monkeypatch.setattr(settings, "openai_api_key", "")
     monkeypatch.setattr(settings, "deepseek_api_key", "")
+    monkeypatch.setattr(settings, "clerk_jwks_url", "")
+    monkeypatch.setattr(settings, "clerk_issuer", "")
+    monkeypatch.setattr(settings, "clerk_audience", "")
 
 
 @pytest.mark.asyncio
@@ -101,19 +107,84 @@ async def test_gate_real_llm_provider_call(monkeypatch) -> None:
     assert "openai" in check["detail"]
 
 
-def test_gate_operator_body_blocked(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_gate_operator_body_blocked(monkeypatch) -> None:
     """ACTOR_PROVIDER=body is a declared identity gap -> BLOCKED_REAL_OPERATOR."""
     monkeypatch.setattr(get_settings(), "actor_provider", "body")
-    check = activation_gate._check_operator(get_settings())
+    check = await activation_gate._check_operator(get_settings())
     assert check["status"] == "BLOCKED"
     assert "BLOCKED_REAL_OPERATOR" in check["detail"]
 
 
-def test_gate_operator_header_passes(monkeypatch) -> None:
-    """A server-side actor provider is required for a production identity."""
-    monkeypatch.setattr(get_settings(), "actor_provider", "header")
-    check = activation_gate._check_operator(get_settings())
+@pytest.mark.asyncio
+async def test_gate_operator_header_without_clerk_blocked(monkeypatch) -> None:
+    """ACTOR_PROVIDER=header without a real Clerk provider fails closed -> BLOCKED."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "actor_provider", "header")
+    check = await activation_gate._check_operator(settings)
+    assert check["status"] == "BLOCKED"
+    assert "BLOCKED_REAL_OPERATOR" in check["detail"]
+
+
+@pytest.mark.asyncio
+async def test_gate_operator_header_with_clerk_passes(monkeypatch) -> None:
+    """Header + configured Clerk JWKS (live read-only fetch) -> PASS."""
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"keys": [{"kid": "k1", "kty": "RSA"}]}
+
+    class _FakeClient:
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def get(self, url: str, headers: dict | None = None) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(activation_gate.httpx, "AsyncClient", lambda **kwargs: _FakeClient())
+    settings = get_settings()
+    monkeypatch.setattr(settings, "actor_provider", "header")
+    monkeypatch.setattr(
+        settings, "clerk_jwks_url", "https://staging.clerk.accounts.dev/.well-known/jwks.json"
+    )
+    monkeypatch.setattr(settings, "clerk_issuer", "https://staging.clerk.accounts.dev")
+    monkeypatch.setattr(settings, "clerk_audience", "nuotao-staging")
+    check = await activation_gate._check_operator(settings)
     assert check["status"] == "PASS"
+    assert "Clerk JWKS reachable" in check["detail"]
+
+
+@pytest.mark.asyncio
+async def test_gate_operator_jwks_fetch_failure_failed(monkeypatch) -> None:
+    """Configured Clerk URL that cannot be reached -> FAILED, never PASS."""
+
+    class _FakeClient:
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def get(self, url: str, headers: dict | None = None) -> object:
+            raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(activation_gate.httpx, "AsyncClient", lambda **kwargs: _FakeClient())
+    settings = get_settings()
+    monkeypatch.setattr(settings, "actor_provider", "header")
+    monkeypatch.setattr(settings, "clerk_jwks_url", "https://unreachable.invalid/jwks")
+    monkeypatch.setattr(settings, "clerk_issuer", "https://unreachable.invalid")
+    monkeypatch.setattr(settings, "clerk_audience", "nuotao-staging")
+    check = await activation_gate._check_operator(settings)
+    assert check["status"] == "FAILED"
+    assert "JWKS verification failed" in check["detail"]
 
 
 @pytest.mark.asyncio

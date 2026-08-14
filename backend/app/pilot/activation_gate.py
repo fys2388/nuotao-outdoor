@@ -104,17 +104,53 @@ def _explicit_env(env_name: str, settings_value: str, default: str) -> bool:
     return settings_value != default
 
 
-def _check_operator(settings) -> dict:
-    """Actor identity must come from the server side, never the request body."""
+def _identity_provider_configured(settings) -> bool:
+    """True when the real Clerk identity provider is fully configured.
+
+    Presence-only: the three values are required for the header provider to
+    verify tokens at runtime; without them the API fails closed (401) and the
+    operator gate must report BLOCKED, never a fabricated PASS. Values are
+    never printed.
+    """
+    return bool(settings.clerk_jwks_url and settings.clerk_issuer and settings.clerk_audience)
+
+
+async def _check_operator(settings) -> dict:
+    """Operator identity must come from a real verified JWT, never the body.
+
+    ``ACTOR_PROVIDER=header`` alone is NOT enough: without a configured Clerk
+    JWKS/issuer/audience the runtime rejects every request (401), so the gate
+    stays BLOCKED_REAL_OPERATOR until the real identity provider exists.
+    When configured, a real read-only JWKS GET proves the endpoint is
+    reachable and parseable (public keys only - no secrets involved).
+    """
     if settings.actor_provider == "body":
         return _blocked(
             "ACTOR_PROVIDER=body (AUTHENTICATION_GAP): actor declared in the request "
             "body is not a real identity -> BLOCKED_REAL_OPERATOR"
         )
+    if not _identity_provider_configured(settings):
+        return _blocked(
+            "ACTOR_PROVIDER=header but Clerk identity provider is not configured "
+            "(CLERK_JWKS_URL/CLERK_ISSUER/CLERK_AUDIENCE required) -> BLOCKED_REAL_OPERATOR"
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(settings.clerk_jwks_url)
+            response.raise_for_status()
+            payload = response.json()
+        keys = payload.get("keys") if isinstance(payload, dict) else None
+        if not isinstance(keys, list) or not keys:
+            return _failed("JWKS endpoint reachable but returned no keys")
+    except Exception as exc:  # noqa: BLE001
+        return _failed(f"JWKS verification failed: {str(exc)[:160]}")
     return {
         "status": "PASS",
         "layer": PRODUCTION_LAYER,
-        "detail": f"ACTOR_PROVIDER={settings.actor_provider} (server-side identity)",
+        "detail": (
+            "ACTOR_PROVIDER=header + Clerk JWKS reachable "
+            "(CLERK_JWKS_URL/CLERK_ISSUER/CLERK_AUDIENCE configured)"
+        ),
     }
 
 
@@ -502,7 +538,7 @@ async def run_gate(workspace_id: UUID) -> dict:
         "scheduler": _technical(readiness._check_importable("app.services.alert_scheduler")),
         "llm": await _check_real_llm(settings),
         "woocommerce": await _check_real_woocommerce(),
-        "operator": _check_operator(settings),
+        "operator": await _check_operator(settings),
         "pii": _check_pii_guard(),
         "secret_guard": _check_secret_guard(),
         "workspace_isolation": _check_workspace_isolation(),
