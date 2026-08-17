@@ -216,6 +216,37 @@ def test_missing_org_rejected(monkeypatch) -> None:
         _auth(_request({TRUSTED_HEADER: token}), private_pem=private_pem, monkeypatch=monkeypatch)
 
 
+def test_clerk_v2_token_without_aud_authenticates(monkeypatch) -> None:
+    """Real Clerk v2 JWTs omit ``aud`` and carry org under ``o.id``."""
+    private_pem, _ = make_key_pair()
+    token = _token(private_pem, clerk_v2=True, org="org_3I2BX9YWjD3F7756kiOsEA5KmYj")
+    identity = _auth(
+        _request({TRUSTED_HEADER: token}), private_pem=private_pem, monkeypatch=monkeypatch
+    )
+    assert identity.actor_id == "user_2abc123"
+    assert identity.organization_id == "org_3I2BX9YWjD3F7756kiOsEA5KmYj"
+
+
+def test_clerk_v2_token_with_wrong_aud_rejected(monkeypatch) -> None:
+    """When ``aud`` IS present it must match the configured audience."""
+    private_pem, _ = make_key_pair()
+    token = _token(
+        private_pem,
+        clerk_v2=True,
+        extra={"aud": "some-other-app"},
+    )
+    with pytest.raises(JwtAuthenticationError):
+        _auth(_request({TRUSTED_HEADER: token}), private_pem=private_pem, monkeypatch=monkeypatch)
+
+
+def test_clerk_v2_missing_org_object_rejected(monkeypatch) -> None:
+    """No ``o.id`` and no legacy ``org`` means no workspace mapping - 401."""
+    private_pem, _ = make_key_pair()
+    token = _token(private_pem, clerk_v2=True, extra={"o": {}})
+    with pytest.raises(JwtAuthenticationError):
+        _auth(_request({TRUSTED_HEADER: token}), private_pem=private_pem, monkeypatch=monkeypatch)
+
+
 # --------------------------------------------------------------------------- #
 # Reserved identities
 # --------------------------------------------------------------------------- #

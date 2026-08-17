@@ -56,17 +56,33 @@ def mint_token(
     exp_delta: timedelta | None = timedelta(minutes=5),
     nbf_delta: timedelta | None = None,
     extra: dict | None = None,
+    clerk_v2: bool = False,
+    org_role: str = "admin",
 ) -> str:
-    """Mint an RS256 JWT signed with the ephemeral private key."""
+    """Mint an RS256 JWT signed with the ephemeral private key.
+
+    ``clerk_v2=True`` mimics a real Clerk v2 session token: the compact
+    ``o`` claim carries ``{id, rol}`` and no ``aud`` claim is emitted (Clerk
+    v2 leaves the audience implicit in the issuer).
+    """
     now = datetime.now(UTC)
-    claims: dict = {
-        "sub": sub,
-        "org": org,
-        "iss": issuer,
-        "aud": audience,
-        "iat": now,
-        "exp": now + exp_delta if exp_delta is not None else now - timedelta(hours=1),
-    }
+    if clerk_v2:
+        claims: dict = {
+            "sub": sub,
+            "o": {"id": org, "rol": org_role},
+            "iss": issuer,
+            "iat": now,
+            "exp": now + exp_delta if exp_delta is not None else now - timedelta(hours=1),
+        }
+    else:
+        claims = {
+            "sub": sub,
+            "org": org,
+            "iss": issuer,
+            "aud": audience,
+            "iat": now,
+            "exp": now + exp_delta if exp_delta is not None else now - timedelta(hours=1),
+        }
     if nbf_delta is not None:
         claims["nbf"] = now + nbf_delta
     if email is not None:

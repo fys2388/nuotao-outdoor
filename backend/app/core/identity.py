@@ -106,14 +106,19 @@ def _header(token: str) -> dict:
 
 def _decode(token: str, pem: str, settings: Settings) -> dict:
     try:
-        return jwt.decode(
+        payload = jwt.decode(
             token,
             key=pem,
             algorithms=["RS256"],
             issuer=settings.clerk_issuer,
-            audience=settings.clerk_audience,
             leeway=settings.jwt_clock_skew_seconds,
-            options={"require": ["sub", "exp", "iat"]},
+            options={
+                "require": ["sub", "exp", "iat"],
+                # Clerk v2 session JWTs do not carry an ``aud`` claim (the
+                # audience is implicit in the issuer); when ``aud`` IS present
+                # it must still match our configured audience exactly.
+                "verify_aud": False,
+            },
         )
     except jwt.ExpiredSignatureError:
         raise JwtAuthenticationError("identity token expired") from None
@@ -121,6 +126,10 @@ def _decode(token: str, pem: str, settings: Settings) -> dict:
         raise JwtAuthenticationError("identity token not yet valid") from None
     except jwt.InvalidTokenError as exc:
         raise JwtAuthenticationError("identity token verification failed") from exc
+    audience = payload.get("aud")
+    if audience is not None and audience != settings.clerk_audience:
+        raise JwtAuthenticationError("identity token audience mismatch")
+    return payload
 
 
 def _normalize(payload: dict) -> Identity:
@@ -133,7 +142,13 @@ def _normalize(payload: dict) -> Identity:
     if actor_id is None:
         raise JwtAuthenticationError("identity token missing sub")
 
-    org = payload.get("org")
+    # Clerk v2 keeps the organization under the compact ``o`` claim
+    # (``o.id`` / ``o.rol``); v1 used the top-level ``org`` claim. Accept
+    # both so the same identity layer works across Clerk versions.
+    org_obj = payload.get("o")
+    org = (
+        org_obj.get("id") if isinstance(org_obj, dict) and org_obj.get("id") else payload.get("org")
+    )
     if org is None or not str(org).strip():
         raise JwtAuthenticationError("identity token missing organization claim")
     organization_id = str(org).strip()

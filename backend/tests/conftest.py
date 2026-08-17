@@ -50,6 +50,22 @@ def api_client(db_session):
 
 
 @pytest.fixture(autouse=True)
+def _default_actor_provider_body() -> None:
+    """Business tests default to the body actor provider.
+
+    Staging config sets ACTOR_PROVIDER=header in backend/.env; identity
+    tests opt into the JWT/header path by explicitly setting
+    ``actor_provider=header`` on the settings singleton. This fixture keeps
+    the pre-M5.14 business tests (state machines, pilot, supply chain,
+    runtime) running under their original body-actor semantics.
+    """
+    from app.core.config import get_settings
+
+    get_settings().actor_provider = "body"
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _memory_queue_backend() -> None:
     """Force the in-memory task queue backend for all tests (no Redis)."""
     from app.core.config import get_settings
