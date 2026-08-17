@@ -47,6 +47,7 @@ APPROVAL_TYPES: tuple[str, ...] = (
     "DLQ_REPLAY",
     "AGENT_LIFECYCLE",
     "PRODUCT_DECISION",
+    "PRODUCT_CANDIDATE",
 )
 
 

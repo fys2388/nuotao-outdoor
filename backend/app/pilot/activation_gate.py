@@ -367,26 +367,46 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
             except Exception as exc:  # noqa: BLE001
                 checks["postgres"] = _failed(f"postgres check failed: {str(exc)[:160]}")
 
-            # real products: workspace-scoped product master rows by source
+            # real products (M5.13): a Product Candidate (candidate_status
+            # NOT NULL) or a WooCommerce-synced commerce product satisfies the
+            # gate. WooCommerce published products are NOT a prerequisite for
+            # the Product Analyst - WooCommerce is the downstream commerce
+            # source. real_product_source = candidate when candidates exist.
             try:
                 rows = await session.execute(
                     text(
-                        "SELECT source, COUNT(*) FROM products "
-                        "WHERE workspace_id = :ws GROUP BY source ORDER BY source"
+                        "SELECT candidate_status, source, COUNT(*) FROM products "
+                        "WHERE workspace_id = :ws "
+                        "GROUP BY candidate_status, source "
+                        "ORDER BY candidate_status, source"
                     ),
                     {"ws": str(workspace_id)},
                 )
-                sources = {str(r[0]): int(r[1]) for r in rows}
-                total = sum(sources.values())
-                if total > 0:
+                candidates = 0
+                commerce = 0
+                details: list[str] = []
+                for candidate_status, source, count in rows:
+                    count = int(count)
+                    if candidate_status is not None:
+                        candidates += count
+                    else:
+                        commerce += count
+                    details.append(f"{candidate_status or 'null'}/{source}={count}")
+                if candidates > 0 or commerce > 0:
+                    source_label = "candidate" if candidates > 0 else "woocommerce"
                     checks["real_products"] = {
                         "status": "PASS",
                         "layer": PRODUCTION_LAYER,
-                        "detail": (f"{total} product(s) in workspace; sources={sources or 'none'}"),
+                        "detail": (
+                            f"{candidates + commerce} product(s); "
+                            f"real_product_source={source_label}; "
+                            f"breakdown={', '.join(details)}"
+                        ),
                     }
                 else:
                     checks["real_products"] = _blocked(
-                        "no products in workspace -> BLOCKED_REAL_PRODUCT"
+                        "no Product Candidates and no WooCommerce products in "
+                        "workspace -> BLOCKED_REAL_PRODUCT"
                     )
             except Exception as exc:  # noqa: BLE001
                 checks["real_products"] = _failed(f"products check failed: {str(exc)[:160]}")

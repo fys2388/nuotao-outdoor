@@ -37,6 +37,7 @@ class ProductOut(BaseModel):
     category: str | None
     brand: str | None
     status: str
+    candidate_status: str | None = None
     source: str
     source_url: str | None
     tags: list[Any]

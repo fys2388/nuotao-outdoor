@@ -318,6 +318,30 @@ async def _dispatch(
                 task_id=task_id,
                 trace_id=trace_id,
             )
+    elif approval.approval_type == "PRODUCT_CANDIDATE":
+        from app.services import product_intelligence
+
+        product_id = UUID(approval.entity_id)
+        if decision == APPROVAL_APPROVED:
+            # Phase 1: generate the WooCommerce draft payload ONLY. The
+            # WooCommerce write API is never called from here.
+            await product_intelligence.finalize_promote(
+                session,
+                workspace_id=approval.workspace_id,
+                product_id=product_id,
+                actor=actor,
+                trace_id=trace_id,
+            )
+        else:
+            await event_service.create_event(
+                session,
+                workspace_id=approval.workspace_id,
+                event_type="product.candidate.promote_rejected",
+                entity_type="product",
+                entity_id=str(product_id),
+                payload={"rejected_by": actor, "note": note},
+                trace_id=trace_id,
+            )
         # Rejection of a replay proposal needs no business side effect.
     elif approval.approval_type == "AGENT_LIFECYCLE":
         # High-risk lifecycle transitions (retire / rollback) are executed

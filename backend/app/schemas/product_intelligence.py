@@ -20,7 +20,8 @@ class ProductIntakeRequest(BaseModel):
     sku: str | None = Field(default=None, max_length=64)
     title: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
-    source_type: Literal["1688", "MANUAL", "OTHER"] = "MANUAL"
+    category: str | None = Field(default=None, max_length=128)
+    source_type: Literal["1688", "MANUAL", "CSV", "OTHER"] = "MANUAL"
     source_url: str | None = Field(default=None, max_length=512)
     supplier_code: str | None = Field(default=None, max_length=64)
     purchase_cost: Decimal = Field(default=Decimal("0"), ge=0)
@@ -347,3 +348,72 @@ class ExperimentProposalOut(ProductExperimentOut):
 
     decision_id: UUID
     source_trace_id: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# M5.13 Product Candidate lifecycle + commerce boundary
+# --------------------------------------------------------------------------- #
+
+
+class CandidateStatusUpdateRequest(BaseModel):
+    """Move a Product Candidate through the human-judged lifecycle.
+
+    Allowed transitions (state machine enforced server-side):
+    candidate -> approved -> testing -> winner; any (non-winner/non-rejected)
+    state -> rejected. winner/rejected are terminal.
+    """
+
+    status: Literal["candidate", "approved", "testing", "winner", "rejected"]
+    actor: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PromoteCandidateRequest(BaseModel):
+    """Request the human approval that promotes a winner to a WooCommerce draft.
+
+    Phase 1 only generates the draft payload after approval; the WooCommerce
+    write API is never called by the OS.
+    """
+
+    actor: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class WooCommerceDraftOut(BaseModel):
+    """One generated WooCommerce draft payload (read-only)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    product_id: UUID
+    sku: str
+    name: str
+    payload: dict[str, Any]
+    status: str
+    created_by: str | None
+    approved_by: str | None
+    approved_at: datetime | None
+    trace_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CandidateCsvRowResult(BaseModel):
+    """Per-row result of the candidate CSV intake."""
+
+    row: int
+    status: str  # imported | updated | failed
+    product_id: UUID | None = None
+    sku: str | None = None
+    message: str | None = None
+
+
+class CandidateCsvIntakeResult(BaseModel):
+    """Summary of a candidate CSV intake run (every row is audited)."""
+
+    imported: int
+    updated: int
+    failed: int
+    results: list[CandidateCsvRowResult] = Field(default_factory=list)
+    trace_id: str | None = None

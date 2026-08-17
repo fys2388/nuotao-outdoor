@@ -10,12 +10,15 @@ Scoring follows docs/product_strategy.md §6 (weights 30/20/15/10/15/10,
 (PROD-SEL / PROFIT domains, loaded from the rules registry, never hardcoded).
 """
 
+import csv
 import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from io import StringIO
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_runtime import AgentRegistry
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
+    SOURCE_TYPES,
     ProductAnalysisRun,
     ProductCostSnapshot,
     ProductDecision,
@@ -32,9 +36,12 @@ from app.models.product_intelligence import (
     ProductScoreEvidence,
     ProductSource,
     SourcingCandidate,
+    WooCommerceDraft,
 )
 from app.models.supplier import Supplier
 from app.schemas.product_intelligence import (
+    CandidateCsvIntakeResult,
+    CandidateCsvRowResult,
     ExperimentCompleteRequest,
     ExperimentStartRequest,
     ProductIntakeRequest,
@@ -699,8 +706,12 @@ async def intake_product(
             sku=sku,
             name=data.title,
             status="candidate",
+            # M5.13: every intake row is a Product Candidate; the commerce
+            # status is decoupled and managed by later human-approved stages.
+            candidate_status="candidate",
             source="intake",
             source_url=data.source_url,
+            category=data.category,
             weight_kg=data.weight_kg,
             dimensions=data.dimensions,
             target_market=data.target_market,
@@ -710,10 +721,15 @@ async def intake_product(
     else:
         product.name = data.title
         product.description = data.description
+        product.category = data.category
         product.source_url = data.source_url
         product.weight_kg = data.weight_kg
         product.dimensions = data.dimensions
         product.target_market = data.target_market
+        # A re-intake does not overwrite a judged lifecycle state; it only
+        # promotes a commerce-synced row (NULL) into the candidate flow.
+        if product.candidate_status is None:
+            product.candidate_status = "candidate"
 
     source = ProductSource(
         workspace_id=workspace_id,
@@ -979,6 +995,7 @@ async def approve_decision(
         ).scalar_one_or_none()
         if product is not None:
             product.status = "test"
+            product.candidate_status = "approved"
 
     await session.flush()
     await event_service.create_event(
@@ -1028,6 +1045,18 @@ async def reject_decision(
     decision.approved_by = actor
     decision.approved_at = now
     decision.updated_at = now  # onupdate is SQL-side; keep the attribute current
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == decision.product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is not None and product.candidate_status not in ("winner", "rejected"):
+        # A rejected decision rejects the candidate; winner is terminal and is
+        # never downgraded to rejected (M5.13 state machine).
+        product.candidate_status = "rejected"
     await session.flush()
     await event_service.create_event(
         session,
@@ -1490,6 +1519,16 @@ async def start_experiment(
         # M5.6 second human gate: agents (reserved names or registered rows)
         # are never allowed to start an experiment.
         await _assert_human_actor(session, workspace_id=workspace_id, actor=data.started_by)
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == experiment.product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is not None and product.candidate_status not in ("winner", "rejected"):
+        product.candidate_status = "testing"
     experiment.status = "active"
     experiment.started_by = data.started_by
     experiment.experiment = {
@@ -1679,3 +1718,444 @@ def _compute_calibration(prediction: dict, actual: dict) -> dict:
             continue
         deltas[key] = str(delta.quantize(Decimal("0.0001")))
     return deltas
+
+
+# --------------------------------------------------------------------------- #
+# M5.13 Product Candidate lifecycle + WooCommerce draft boundary
+# --------------------------------------------------------------------------- #
+
+# Allowed candidate_status transitions (winner/rejected are terminal unless a
+# future explicit human override is added).
+_CANDIDATE_TRANSITIONS: dict[str | None, set[str]] = {
+    None: {"candidate"},
+    "candidate": {"approved", "rejected"},
+    "approved": {"testing", "rejected"},
+    "testing": {"winner", "rejected"},
+    "winner": set(),
+    "rejected": set(),
+}
+
+
+async def update_candidate_status(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    new_status: str,
+    actor: str,
+    trace_id: str | None = None,
+) -> Product:
+    """Move a Product Candidate through the lifecycle (human-judged).
+
+    State machine (M5.13): candidate -> approved -> testing -> winner; any
+    non-terminal state -> rejected. winner -> candidate and winner ->
+    rejected are forbidden. Every change records actor + trace_id + event_log.
+    """
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise ProductIntelligenceError("product not found")
+    current = product.candidate_status
+    if current == new_status:
+        return product
+    allowed = _CANDIDATE_TRANSITIONS.get(current, set())
+    if new_status not in allowed:
+        raise ProductIntelligenceError(
+            f"candidate_status transition '{current}' -> '{new_status}' is not allowed"
+        )
+    product.candidate_status = new_status
+    product.updated_at = datetime.now(UTC)  # keep the attribute current
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.status_changed",
+        entity_type="product",
+        entity_id=str(product.id),
+        payload={
+            "from": current,
+            "to": new_status,
+            "actor": actor,
+        },
+        trace_id=trace_id,
+    )
+    return product
+
+
+async def request_promote(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    actor: str,
+    note: str | None = None,
+    trace_id: str | None = None,
+) -> Any:
+    """Request the human approval that promotes a winner to WooCommerce draft.
+
+    Only ``winner`` candidates may be promoted (400 otherwise). The call
+    creates a ``PRODUCT_CANDIDATE`` approval proposal; nothing is generated
+    and no WooCommerce write happens until a human approves.
+    """
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise ProductIntelligenceError("product not found")
+    if product.candidate_status != "winner":
+        raise ProductIntelligenceError(
+            "only a winner candidate can be promoted; current candidate_status="
+            f"{product.candidate_status!r}"
+        )
+    approval = await approval_service.ensure_approval(
+        session,
+        workspace_id=workspace_id,
+        approval_type="PRODUCT_CANDIDATE",
+        entity_type="product",
+        entity_id=str(product_id),
+        metadata_={
+            "product_id": str(product_id),
+            "sku": product.sku,
+            "name": product.name,
+            "requested_by": actor,
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.promote_requested",
+        entity_type="product",
+        entity_id=str(product.id),
+        payload={
+            "approval_id": str(approval.id),
+            "requested_by": actor,
+            "note": note,
+        },
+        trace_id=trace_id,
+    )
+    return approval
+
+
+def _json_draft_number(value) -> str | None:
+    """Serialize a Decimal to a string (JSON-safe) or None."""
+    if value is None:
+        return None
+    return str(value)
+
+
+async def _latest_source_type(
+    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
+) -> str | None:
+    """Return the source_type of the newest ProductSource row (if any)."""
+    row = (
+        (
+            await session.execute(
+                select(ProductSource.source_type)
+                .where(
+                    ProductSource.workspace_id == workspace_id,
+                    ProductSource.product_id == product_id,
+                )
+                .order_by(ProductSource.captured_at.desc(), ProductSource.created_at.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    return row
+
+
+async def finalize_promote(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    actor: str,
+    trace_id: str | None = None,
+) -> WooCommerceDraft:
+    """Generate the WooCommerce draft payload after human approval.
+
+    Phase 1 boundary: this ONLY builds and persists the hand-off payload
+    (``woocommerce_draft_payloads``). The WooCommerce write API is never
+    called - a human operator creates the draft in the WooCommerce admin
+    from this payload. Unknown fields stay null/UNKNOWN; nothing is guessed.
+    """
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise ProductIntelligenceError("product not found")
+    if product.candidate_status != "winner":
+        raise ProductIntelligenceError(
+            "promote finalized for a non-winner candidate; candidate_status="
+            f"{product.candidate_status!r}"
+        )
+    cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
+    total_cost = _landed_cost(cost)
+    recommended_price = _recommended_price(total_cost) if total_cost > ZERO else None
+    source_type = await _latest_source_type(
+        session, workspace_id=workspace_id, product_id=product_id
+    )
+    weight_kg = product.weight_kg
+    payload = {
+        "sku": product.sku,
+        "name": product.name,
+        "description": product.description,
+        "short_description": None,
+        "price": _json_draft_number(recommended_price),
+        "regular_price": None,
+        "images": [],
+        "categories": [{"name": product.category}] if product.category else [],
+        "inventory": {"manage_stock": False, "stock_quantity": None},
+        "weight": _json_draft_number(weight_kg),
+        "dimensions": product.dimensions,
+        "metadata": {
+            "source_type": source_type,
+            "source_url": product.source_url,
+            "product_id": str(product.id),
+            "trace_id": trace_id,
+        },
+    }
+    draft = WooCommerceDraft(
+        workspace_id=workspace_id,
+        product_id=product.id,
+        sku=product.sku,
+        name=product.name,
+        payload=payload,
+        status="generated",
+        created_by=actor,
+        approved_by=actor,
+        approved_at=datetime.now(UTC),
+        trace_id=trace_id,
+    )
+    session.add(draft)
+    await session.flush()
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.promoted",
+        entity_type="product",
+        entity_id=str(product.id),
+        payload={
+            "draft_id": str(draft.id),
+            "approved_by": actor,
+            "sku": product.sku,
+            "price": _json_draft_number(recommended_price),
+        },
+        trace_id=trace_id,
+    )
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="agent.approval.dispatch.promoted",
+        entity_type="woocommerce_draft_payload",
+        entity_id=str(draft.id),
+        payload={
+            "product_id": str(product.id),
+            "sku": product.sku,
+            "approved_by": actor,
+        },
+        trace_id=trace_id,
+    )
+    return draft
+
+
+async def list_woocommerce_drafts(
+    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
+) -> list[WooCommerceDraft]:
+    """Return the generated draft payloads of a product (newest first)."""
+    rows = (
+        (
+            await session.execute(
+                select(WooCommerceDraft)
+                .where(
+                    WooCommerceDraft.workspace_id == workspace_id,
+                    WooCommerceDraft.product_id == product_id,
+                )
+                .order_by(WooCommerceDraft.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+# Columns accepted by the candidate CSV intake (superset of the single intake).
+_CSV_INTAKE_FIELDS = (
+    "source_type",
+    "source_url",
+    "title",
+    "sku",
+    "category",
+    "description",
+    "supplier_code",
+    "purchase_cost",
+    "domestic_shipping",
+    "first_leg_shipping",
+    "last_leg_shipping",
+    "international_shipping",
+    "packaging",
+    "tax_estimate",
+    "handling",
+    "weight_kg",
+    "dimensions",
+    "target_market",
+    "currency",
+)
+
+
+def _csv_decimal(raw: str | None) -> Decimal | None:
+    """Parse an optional CSV numeric field (None when empty)."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = Decimal(text)
+    except Exception as exc:  # noqa: BLE001 - row-level validation
+        raise ValueError(f"invalid number: {text!r}") from exc
+    return value
+
+
+def _csv_row_to_intake(row: dict[str, str]) -> ProductIntakeRequest:
+    """Build a ProductIntakeRequest from one CSV row (missing = null/UNKNOWN)."""
+    title = (row.get("title") or "").strip()
+    if not title:
+        raise ValueError("title is required")
+    source_type = (row.get("source_type") or "CSV").strip().upper()
+    if source_type not in SOURCE_TYPES:
+        raise ValueError(f"source_type must be one of {SOURCE_TYPES}")
+    dimensions: dict | None = None
+    dims_raw = (row.get("dimensions") or "").strip()
+    if dims_raw:
+        import json as _json
+
+        try:
+            parsed = _json.loads(dims_raw)
+        except Exception as exc:  # noqa: BLE001 - row-level validation
+            raise ValueError(f"dimensions must be a JSON object: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("dimensions must be a JSON object")
+        dimensions = parsed
+    purchase_cost = _csv_decimal(row.get("purchase_cost")) or Decimal("0")
+    return ProductIntakeRequest(
+        sku=(row.get("sku") or "").strip() or None,
+        title=title,
+        description=(row.get("description") or "").strip() or None,
+        category=(row.get("category") or "").strip() or None,
+        source_type=source_type,
+        source_url=(row.get("source_url") or "").strip() or None,
+        supplier_code=(row.get("supplier_code") or "").strip() or None,
+        purchase_cost=purchase_cost,
+        domestic_shipping=_csv_decimal(row.get("domestic_shipping")) or Decimal("0"),
+        first_leg_shipping=_csv_decimal(row.get("first_leg_shipping")) or Decimal("0"),
+        last_leg_shipping=_csv_decimal(row.get("last_leg_shipping")) or Decimal("0"),
+        international_shipping=_csv_decimal(row.get("international_shipping")),
+        packaging=_csv_decimal(row.get("packaging")) or Decimal("0"),
+        tax_estimate=_csv_decimal(row.get("tax_estimate")) or Decimal("0"),
+        handling=_csv_decimal(row.get("handling")) or Decimal("0"),
+        weight_kg=_csv_decimal(row.get("weight_kg")),
+        dimensions=dimensions,
+        target_market=(row.get("target_market") or "US").strip() or "US",
+        currency=(row.get("currency") or "USD").strip() or "USD",
+    )
+
+
+async def intake_products_csv(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    csv_content: str,
+    trace_id: str | None = None,
+) -> CandidateCsvIntakeResult:
+    """Bulk candidate intake from UTF-8 CSV content (single transaction).
+
+    Every row reuses :func:`intake_product` (source + cost snapshot + score +
+    audit). Bad rows are isolated and reported; good rows are never rolled
+    back by a bad row. No new product table is created.
+    """
+    reader = csv.DictReader(StringIO(csv_content))
+    results: list[CandidateCsvRowResult] = []
+    imported = 0
+    updated = 0
+    failed = 0
+    existing_skus: set[str] = set()
+    for raw_row in reader:
+        row_number = reader.line_num
+        try:
+            data = _csv_row_to_intake(dict(raw_row))
+        except ValueError as exc:
+            failed += 1
+            results.append(
+                CandidateCsvRowResult(
+                    row=row_number,
+                    status="failed",
+                    message=str(exc),
+                )
+            )
+            continue
+        try:
+            result = await intake_product(
+                session,
+                workspace_id=workspace_id,
+                data=data,
+                trace_id=trace_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - row-level isolation
+            failed += 1
+            results.append(
+                CandidateCsvRowResult(
+                    row=row_number,
+                    status="failed",
+                    sku=data.sku,
+                    message=str(exc),
+                )
+            )
+            continue
+        sku = result.product.sku
+        if sku in existing_skus:
+            updated += 1
+        else:
+            existing_skus.add(sku)
+            imported += 1
+        results.append(
+            CandidateCsvRowResult(
+                row=row_number,
+                status="imported",
+                product_id=result.product.id,
+                sku=sku,
+            )
+        )
+
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.csv_intaked",
+        entity_type="product",
+        entity_id="*",
+        payload={"imported": imported, "updated": updated, "failed": failed},
+        trace_id=trace_id,
+    )
+    return CandidateCsvIntakeResult(
+        imported=imported,
+        updated=updated,
+        failed=failed,
+        results=results,
+        trace_id=trace_id,
+    )

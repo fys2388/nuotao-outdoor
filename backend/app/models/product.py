@@ -31,6 +31,11 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft")
+    # M5.13 Product Candidate lifecycle (candidate|approved|testing|winner|
+    # rejected). NULL means the row is a downstream commerce product (e.g.
+    # WooCommerce-synced), not a candidate. Decoupled from `status` which
+    # stays the commerce/execution status.
+    candidate_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)

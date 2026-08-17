@@ -60,6 +60,7 @@ from app.models.product_intelligence import (
     ProductScoreEvidence,
     ProductSource,
     SourcingCandidate,
+    WooCommerceDraft,
 )
 from app.models.prompt import Prompt
 from app.models.rule import Rule, RuleExecutionLog
@@ -134,6 +135,7 @@ __all__ = [
     "ProductScoreEvidence",
     "ProductSource",
     "SourcingCandidate",
+    "WooCommerceDraft",
     "Prompt",
     "Rule",
     "RuleExecutionLog",

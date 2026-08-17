@@ -25,8 +25,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import AI_JSON, Base, CreatedAtMixin, TimestampMixin, WorkspaceMixin
 
-# Source types supported in Phase 1 (1688 / manual / other).
-SOURCE_TYPES: tuple[str, ...] = ("1688", "MANUAL", "OTHER")
+# Source types supported in Phase 1 (1688 / manual / CSV / other).
+SOURCE_TYPES: tuple[str, ...] = ("1688", "MANUAL", "CSV", "OTHER")
+
+# Product Candidate lifecycle (M5.13): decoupled from the commerce status.
+# WooCommerce-synced commerce rows keep candidate_status = NULL.
+CANDIDATE_STATUSES: tuple[str, ...] = (
+    "candidate",
+    "approved",
+    "testing",
+    "winner",
+    "rejected",
+)
+
+# Commerce draft payload lifecycle (M5.13 Phase 1: generated only).
+DRAFT_PAYLOAD_STATUSES: tuple[str, ...] = ("generated",)
 
 # Decision states (product lifecycle, see docs/product_strategy.md §8).
 DECISION_TYPES: tuple[str, ...] = ("test", "hold", "reject")
@@ -474,3 +487,34 @@ class ProductKnowledgeEntry(Base, TimestampMixin, WorkspaceMixin):
         Index("ix_knowledge_entries_workspace_cat", "workspace_id", "category"),
         Index("ix_knowledge_entries_workspace_product", "workspace_id", "product_id"),
     )
+
+
+class WooCommerceDraft(Base, TimestampMixin, WorkspaceMixin):
+    """Generated WooCommerce draft payload (M5.13 commerce boundary).
+
+    Created ONLY after a human promotes a ``winner`` candidate through the
+    Approval Center (``approval_type=PRODUCT_CANDIDATE``). Phase 1 never
+    calls the WooCommerce write API - this row is the hand-off artifact a
+    human operator uses to create the draft in the WooCommerce admin. The
+    payload is JSON-safe and never contains credentials or PII.
+    """
+
+    __tablename__ = "woocommerce_draft_payloads"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sku: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="generated")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (Index("ix_woocommerce_drafts_ws_product", "workspace_id", "product_id"),)

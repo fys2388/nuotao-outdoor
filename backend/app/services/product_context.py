@@ -20,6 +20,7 @@ from app.models.product_intelligence import (
     ProductExperiment,
     ProductScore,
     ProductScoreEvidence,
+    ProductSource,
     SourcingCandidate,
 )
 from app.models.rule import Rule
@@ -134,6 +135,23 @@ async def build_product_context(
         .all()
     )
 
+    # M5.13: newest captured source type (1688/MANUAL/CSV/OTHER) is part of
+    # the candidate identity passed to the Product Analyst.
+    source_type = (
+        (
+            await session.execute(
+                select(ProductSource.source_type)
+                .where(
+                    ProductSource.workspace_id == workspace_id,
+                    ProductSource.product_id == product_id,
+                )
+                .order_by(ProductSource.captured_at.desc(), ProductSource.created_at.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+
     score = (
         (
             await session.execute(
@@ -208,7 +226,9 @@ async def build_product_context(
             "category": product.category,
             "brand": product.brand,
             "status": product.status,
+            "candidate_status": product.candidate_status,
             "source": product.source,
+            "source_type": source_type,
             "source_url": product.source_url,
             "tags": product.tags,
             "attributes": product.attributes,

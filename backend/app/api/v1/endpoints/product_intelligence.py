@@ -8,7 +8,7 @@ involved in this phase - all processing is deterministic.
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +17,11 @@ from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
 from app.models.product import Product
+from app.schemas.agent_operations import ApprovalOut
 from app.schemas.product import ProductOut
 from app.schemas.product_intelligence import (
+    CandidateCsvIntakeResult,
+    CandidateStatusUpdateRequest,
     DecisionApproveRequest,
     ExperimentCompleteRequest,
     ExperimentProposeFromDecisionRequest,
@@ -33,8 +36,10 @@ from app.schemas.product_intelligence import (
     ProductScoreEvidenceOut,
     ProductScoreOut,
     ProductSourceOut,
+    PromoteCandidateRequest,
     SourcingCandidateCreate,
     SourcingCandidateOut,
+    WooCommerceDraftOut,
 )
 from app.services import (
     approval_service,
@@ -43,14 +48,17 @@ from app.services import (
 from app.services import (
     product_intelligence as pi,
 )
-from app.services.approval_rbac import ApprovalRBACError
+from app.services.approval_rbac import ApprovalRBACError, check_actor_permission
 from app.services.product_intelligence import ProductDecisionActorError
 
 product_router = APIRouter(prefix="/products", tags=["product-intelligence"])
 decision_router = APIRouter(prefix="/product-decisions", tags=["product-decisions"])
+candidate_router = APIRouter(prefix="/product-candidates", tags=["product-candidates"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+
+MAX_CSV_INTAKE_BYTES = 5 * 1024 * 1024  # 5 MiB
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -80,6 +88,42 @@ async def intake_product(
         )
     except pi.ProductIntelligenceError as exc:
         raise _http_error(exc) from exc
+
+
+@product_router.post(
+    "/intake/csv",
+    response_model=CandidateCsvIntakeResult,
+    status_code=status.HTTP_200_OK,
+    summary="Bulk Product Candidate intake from UTF-8 CSV (1688/MANUAL/CSV rows)",
+)
+async def intake_candidates_csv(
+    file: UploadFile,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> CandidateCsvIntakeResult:
+    """Parse a UTF-8/BOM CSV (<=5 MiB) and run every row through the candidate
+    intake (source + cost snapshot + score + audit). Bad rows are isolated and
+    reported; nothing is guessed and no product table is duplicated.
+    """
+    content = await file.read(MAX_CSV_INTAKE_BYTES + 1)
+    if len(content) > MAX_CSV_INTAKE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="CSV file exceeds the 5 MiB limit",
+        )
+    try:
+        csv_text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV must be UTF-8 encoded",
+        ) from exc
+    return await pi.intake_products_csv(
+        db,
+        workspace_id=workspace_id,
+        csv_content=csv_text,
+        trace_id=get_trace_id(),
+    )
 
 
 @product_router.post(
@@ -528,3 +572,106 @@ async def score_evidence(
     """Return the six per-dimension evidence rows of a product score."""
     rows = await pi.list_score_evidences(db, workspace_id=workspace_id, score_id=score_id)
     return [ProductScoreEvidenceOut.model_validate(row) for row in rows]
+
+
+# --------------------------------------------------------------------------- #
+# M5.13 Product Candidate lifecycle + commerce boundary
+# --------------------------------------------------------------------------- #
+
+
+@candidate_router.post(
+    "/{product_id}/status",
+    response_model=ProductOut,
+    summary="Move a Product Candidate through the lifecycle (human-judged)",
+)
+async def set_candidate_status(
+    product_id: UUID,
+    body: CandidateStatusUpdateRequest,
+    request: Request,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductOut:
+    """Update ``candidate_status`` with the M5.13 state machine.
+
+    Agent actors are rejected (403); the actor must hold
+    ``product.candidate.manage`` when RBAC roles are configured.
+    """
+    try:
+        actor = resolve_actor(request, body.actor)
+        await pi._assert_human_actor(  # noqa: SLF001 - agent boundary
+            db, workspace_id=workspace_id, actor=actor
+        )
+        await check_actor_permission(
+            db,
+            workspace_id=workspace_id,
+            actor=actor,
+            permission="product.candidate.manage",
+        )
+        product = await pi.update_candidate_status(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            new_status=body.status,
+            actor=actor,
+            trace_id=get_trace_id(),
+        )
+    except (pi.ProductIntelligenceError, ProductDecisionActorError, ApprovalRBACError) as exc:
+        raise _http_error(exc) from exc
+    return ProductOut.model_validate(product)
+
+
+@candidate_router.post(
+    "/{product_id}/promote",
+    response_model=ApprovalOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Request human approval to promote a winner to a WooCommerce draft",
+)
+async def promote_candidate(
+    product_id: UUID,
+    body: PromoteCandidateRequest,
+    request: Request,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ApprovalOut:
+    """Create the ``PRODUCT_CANDIDATE`` approval proposal for a winner.
+
+    Phase 1: nothing is written to WooCommerce. After human approval the
+    draft payload is generated for a human operator to use in the admin.
+    """
+    try:
+        actor = resolve_actor(request, body.actor)
+        await pi._assert_human_actor(  # noqa: SLF001 - agent boundary
+            db, workspace_id=workspace_id, actor=actor
+        )
+        await check_actor_permission(
+            db,
+            workspace_id=workspace_id,
+            actor=actor,
+            permission="product.candidate.promote",
+        )
+        approval = await pi.request_promote(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            actor=actor,
+            note=body.note,
+            trace_id=get_trace_id(),
+        )
+    except (pi.ProductIntelligenceError, ProductDecisionActorError, ApprovalRBACError) as exc:
+        raise _http_error(exc) from exc
+    return ApprovalOut.model_validate(approval)
+
+
+@candidate_router.get(
+    "/{product_id}/drafts",
+    response_model=list[WooCommerceDraftOut],
+    summary="List generated WooCommerce draft payloads (read-only)",
+)
+async def list_woocommerce_drafts(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> list[WooCommerceDraftOut]:
+    """Return the generated draft payloads of a product (newest first)."""
+    rows = await pi.list_woocommerce_drafts(db, workspace_id=workspace_id, product_id=product_id)
+    return [WooCommerceDraftOut.model_validate(row) for row in rows]
