@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://nuotao:nuotao_dev_password@localhost:5432/nuotao"
     redis_url: str = "redis://localhost:6379/0"
 
+    # WooCommerce REST API credentials (read-only consumer). Kept as Settings
+    # fields so gates/readiness checks read the SAME .env-backed config as the
+    # rest of the app instead of only process environment variables.
+    woocommerce_base_url: str = ""
+    woocommerce_consumer_key: str = ""
+    woocommerce_consumer_secret: str = ""
+
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
     # MUST be overridden in staging/production environments.
     woocommerce_webhook_secret: str = "dev-webhook-secret-change-me"

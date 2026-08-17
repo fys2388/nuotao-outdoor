@@ -48,7 +48,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import setup_logging
 from app.pilot import readiness
 
@@ -258,11 +258,11 @@ async def _check_real_llm(settings) -> dict:
     return _failed(f"real LLM provider check failed: {', '.join(failed)}")
 
 
-async def _check_real_woocommerce() -> dict:
+async def _check_real_woocommerce(settings: Settings) -> dict:
     """Real WooCommerce read-only reachability when credentials are present."""
-    base = os.environ.get("WOOCOMMERCE_BASE_URL", "").strip()
-    consumer_key = os.environ.get("WOOCOMMERCE_CONSUMER_KEY", "").strip()
-    consumer_secret = os.environ.get("WOOCOMMERCE_CONSUMER_SECRET", "").strip()
+    base = (settings.woocommerce_base_url or "").strip()
+    consumer_key = (settings.woocommerce_consumer_key or "").strip()
+    consumer_secret = (settings.woocommerce_consumer_secret or "").strip()
     if not (base and consumer_key and consumer_secret):
         return _blocked(
             "WOOCOMMERCE_BASE_URL / CONSUMER_KEY / CONSUMER_SECRET not configured "
@@ -537,7 +537,7 @@ async def run_gate(workspace_id: UUID) -> dict:
         "worker": _technical(readiness._check_importable("app.worker.agent_worker")),
         "scheduler": _technical(readiness._check_importable("app.services.alert_scheduler")),
         "llm": await _check_real_llm(settings),
-        "woocommerce": await _check_real_woocommerce(),
+        "woocommerce": await _check_real_woocommerce(settings),
         "operator": await _check_operator(settings),
         "pii": _check_pii_guard(),
         "secret_guard": _check_secret_guard(),

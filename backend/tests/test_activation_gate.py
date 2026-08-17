@@ -43,6 +43,9 @@ def _clean_real_env(monkeypatch) -> None:
     monkeypatch.setattr(settings, "clerk_jwks_url", "")
     monkeypatch.setattr(settings, "clerk_issuer", "")
     monkeypatch.setattr(settings, "clerk_audience", "")
+    monkeypatch.setattr(settings, "woocommerce_base_url", "")
+    monkeypatch.setattr(settings, "woocommerce_consumer_key", "")
+    monkeypatch.setattr(settings, "woocommerce_consumer_secret", "")
 
 
 @pytest.mark.asyncio
@@ -190,7 +193,7 @@ async def test_gate_operator_jwks_fetch_failure_failed(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_gate_woocommerce_blocked_without_credentials(monkeypatch) -> None:
     """Missing WooCommerce credentials -> BLOCKED_REAL_PRODUCT."""
-    check = await activation_gate._check_real_woocommerce()
+    check = await activation_gate._check_real_woocommerce(get_settings())
     assert check["status"] == "BLOCKED"
     assert "BLOCKED_REAL_PRODUCT" in check["detail"]
 
