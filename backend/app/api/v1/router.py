@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     agent_runtime,
     agent_runtime_hardening,
     agents,
+    agents_generic,
     calibration,
     connectors,
     customer,
@@ -43,6 +44,7 @@ api_router.include_router(product_intelligence.candidate_router)
 api_router.include_router(scraping.router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
+api_router.include_router(agents_generic.router)
 api_router.include_router(prompts.router)
 api_router.include_router(calibration.router)
 api_router.include_router(customer.router)
