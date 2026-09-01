@@ -48,9 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
+    description="Nuotao AI OS - 户外电商智能运营系统 API 接口文档",
     lifespan=lifespan,
     docs_url="/docs" if not settings.is_production else None,
     redoc_url="/redoc" if not settings.is_production else None,
+    swagger_ui_parameters={
+        "lang": "zh-CN",
+        "docExpansion": "list",
+        "defaultModelsExpandDepth": 1,
+        "displayRequestDuration": True,
+        "showExtensions": True,
+    },
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)
@@ -159,14 +167,19 @@ def _custom_openapi() -> dict:
         "type": "apiKey",
         "in": "header",
         "name": "X-Actor",
-        "description": "Development mode (ACTOR_PROVIDER=body): actor identity declared in request header. "
+        "description": "开发模式（ACTOR_PROVIDER=body）：在请求头中声明操作者身份。"
+        "使用任意安全标识符（如 'dev-user-001'）。也可以在请求体中以 'actor' 字段提供。\n"
+        "Development mode (ACTOR_PROVIDER=body): actor identity declared in request header. "
         "Use any safe identifier (e.g. 'dev-user-001'). Also accepted in request body as 'actor'.",
     }
     schema["components"]["securitySchemes"]["BearerAuth"] = {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Production mode (ACTOR_PROVIDER=header): RS256-signed JWT from Clerk, "
+        "description": "生产模式（ACTOR_PROVIDER=header）：来自 Clerk 的 RS256 签名 JWT，"
+        "携带在受信身份头中（默认为 CF-Access-Jwt-Assertion）。"
+        "需要配置 CLERK_JWKS_URL、CLERK_ISSUER、CLERK_AUDIENCE。\n"
+        "Production mode (ACTOR_PROVIDER=header): RS256-signed JWT from Clerk, "
         "carried in the trusted identity header (CF-Access-Jwt-Assertion by default). "
         "Requires CLERK_JWKS_URL, CLERK_ISSUER, CLERK_AUDIENCE configured.",
     }

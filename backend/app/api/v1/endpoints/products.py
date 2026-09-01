@@ -11,7 +11,7 @@ from app.core.workspace import get_workspace_id
 from app.schemas.product import ProductImportResult, ProductOut
 from app.services import product_service
 
-router = APIRouter(prefix="/products", tags=["products"])
+router = APIRouter(prefix="/products", tags=["products 产品管理"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
@@ -23,7 +23,7 @@ MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MiB
     "/import",
     response_model=ProductImportResult,
     status_code=status.HTTP_200_OK,
-    summary="Import products from CSV",
+    summary="导入产品 / Import products from CSV",
 )
 async def import_products(
     file: UploadFile,
@@ -63,7 +63,7 @@ async def import_products(
         ) from exc
 
 
-@router.get("", response_model=list[ProductOut], summary="List products")
+@router.get("", response_model=list[ProductOut], summary="产品列表 / List products")
 async def list_products(
     db: DbSession,
     workspace_id: WorkspaceId,

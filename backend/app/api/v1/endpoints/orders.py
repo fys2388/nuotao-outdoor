@@ -12,7 +12,7 @@ from app.core.workspace import get_workspace_id
 from app.schemas.order import OrderDetailOut, OrderListOut, OrderOut
 from app.services import order_service
 
-router = APIRouter(prefix="/orders", tags=["orders"])
+router = APIRouter(prefix="/orders", tags=["orders 订单管理"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
@@ -31,7 +31,7 @@ def _parse_datetime(value: str | None, field: str) -> datetime | None:
         ) from exc
 
 
-@router.get("", response_model=OrderListOut, summary="List orders")
+@router.get("", response_model=OrderListOut, summary="订单列表 / List orders")
 async def list_orders(
     db: DbSession,
     workspace_id: WorkspaceId,
@@ -72,7 +72,7 @@ async def list_orders(
     )
 
 
-@router.get("/{order_id}", response_model=OrderDetailOut, summary="Get an order")
+@router.get("/{order_id}", response_model=OrderDetailOut, summary="获取订单 / Get an order")
 async def get_order(
     order_id: UUID,
     db: DbSession,

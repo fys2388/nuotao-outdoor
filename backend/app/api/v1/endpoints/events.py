@@ -11,19 +11,19 @@ from app.core.workspace import get_workspace_id
 from app.schemas.event import EventCreate, EventListOut, EventOut
 from app.services import event_service
 
-router = APIRouter(prefix="/events", tags=["events"])
+router = APIRouter(prefix="/events", tags=["events 事件日志"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 
-@router.post("", response_model=EventOut, status_code=201, summary="Create an event")
+@router.post("", response_model=EventOut, status_code=201, summary="创建事件 / Create an event")
 async def create_event(
     body: EventCreate,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> EventOut:
-    """Append an event to the workspace event log."""
+    """向工作区事件日志追加一条事件。 / Append an event to the workspace event log."""
     event = await event_service.create_event(
         db,
         workspace_id=workspace_id,
@@ -36,7 +36,7 @@ async def create_event(
     return EventOut.model_validate(event)
 
 
-@router.get("", response_model=EventListOut, summary="Query events")
+@router.get("", response_model=EventListOut, summary="查询事件 / Query events")
 async def list_events(
     db: DbSession,
     workspace_id: WorkspaceId,

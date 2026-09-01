@@ -23,7 +23,7 @@ from app.schemas.rule import (
 )
 from app.services import rule_engine
 
-router = APIRouter(prefix="/rules", tags=["rules"])
+router = APIRouter(prefix="/rules", tags=["rules 规则引擎"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
@@ -36,7 +36,7 @@ def _http_error(exc: rule_engine.RuleEngineError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
-@router.post("", response_model=RuleOut, status_code=201, summary="Create a rule")
+@router.post("", response_model=RuleOut, status_code=201, summary="创建规则 / Create a rule")
 async def create_rule(
     body: RuleCreate,
     db: DbSession,
@@ -50,7 +50,7 @@ async def create_rule(
     return RuleOut.model_validate(rule)
 
 
-@router.get("", response_model=list[RuleOut], summary="List rules")
+@router.get("", response_model=list[RuleOut], summary="规则列表 / List rules")
 async def list_rules(
     db: DbSession,
     workspace_id: WorkspaceId,
@@ -71,7 +71,7 @@ async def list_rules(
     return [RuleOut.model_validate(rule) for rule in rules]
 
 
-@router.get("/{rule_id}", response_model=RuleOut, summary="Get a rule")
+@router.get("/{rule_id}", response_model=RuleOut, summary="获取规则 / Get a rule")
 async def get_rule(
     rule_id: str,
     db: DbSession,
@@ -85,7 +85,7 @@ async def get_rule(
     return RuleOut.model_validate(rule)
 
 
-@router.post("/check", response_model=CheckResult, summary="Check rules against context")
+@router.post("/check", response_model=CheckResult, summary="检查规则 / Check rules against context")
 async def check(
     body: RuleCheckRequest,
     db: DbSession,
@@ -104,7 +104,7 @@ async def check(
         raise _http_error(exc) from exc
 
 
-@router.post("/evaluate", response_model=RuleResult, summary="Evaluate a single rule")
+@router.post("/evaluate", response_model=RuleResult, summary="评估规则 / Evaluate a single rule")
 async def evaluate(
     body: RuleEvaluateRequest,
     db: DbSession,
@@ -123,7 +123,7 @@ async def evaluate(
         raise _http_error(exc) from exc
 
 
-@router.post("/suggest", response_model=SuggestResult, summary="Score a soft rule group")
+@router.post("/suggest", response_model=SuggestResult, summary="规则评分 / Score a soft rule group")
 async def suggest(
     body: RuleSuggestRequest,
     db: DbSession,
@@ -138,7 +138,7 @@ async def suggest(
     )
 
 
-@router.post("/override", response_model=OverrideResult, summary="Record a rule override")
+@router.post("/override", response_model=OverrideResult, summary="规则覆盖 / Record a rule override")
 async def override(
     body: RuleOverrideRequest,
     request: Request,

@@ -14,19 +14,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.redis import get_redis
 
-router = APIRouter(tags=["health"])
+router = APIRouter(tags=["health 健康检查"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 RedisClient = Annotated[Redis, Depends(get_redis)]
 
 
-@router.get("/healthz", summary="Liveness probe")
+@router.get("/healthz", summary="存活检查 / Liveness probe")
 async def healthz() -> dict[str, str]:
-    """Return OK when the process is alive; never touches external services."""
+    """返回 OK 表示进程存活；不访问任何外部服务。 / Return OK when the process is alive; never touches external services."""
     return {"status": "ok"}
 
 
-@router.get("/readyz", summary="Readiness probe")
+@router.get("/readyz", summary="就绪检查 / Readiness probe")
 async def readyz(
     db: DbSession,
     redis_client: RedisClient,
