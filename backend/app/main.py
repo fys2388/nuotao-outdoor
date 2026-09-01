@@ -6,6 +6,7 @@ Exposes the FastAPI application with:
 - ``GET /api/v1/readyz``: readiness probe (PostgreSQL + Redis checks)
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.actor import ActorResolutionError
 from app.core.config import get_settings
+from app.core.database import async_session_factory
 from app.core.identity import (
     JwtAuthenticationError,
     PermissionDeniedError,
@@ -31,6 +33,8 @@ from app.core.tracing import (
     reset_trace_id,
     set_trace_id,
 )
+from app.services.alert_scheduler import AlertScheduler
+from app.worker.agent_worker import run_worker
 
 setup_logging()
 
@@ -39,10 +43,15 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifecycle: create the shared Redis client on startup."""
+    """Application lifecycle: Redis client (Worker/Scheduler disabled for API stability)."""
     app.state.redis = create_redis_client()
-    yield
-    await app.state.redis.aclose()
+
+    # NOTE: Worker + Scheduler temporarily disabled in-process for API stability.
+    # Run them separately via run_worker.py when Redis Stream support is available.
+    try:
+        yield
+    finally:
+        await app.state.redis.aclose()
 
 
 app = FastAPI(
