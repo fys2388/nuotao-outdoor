@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     products,
     prompts,
     rules,
+    scraping,
     supply_chain,
     supply_chain_learning,
     webhooks,
@@ -39,6 +40,7 @@ api_router.include_router(orders.router)
 api_router.include_router(product_intelligence.product_router)
 api_router.include_router(product_intelligence.decision_router)
 api_router.include_router(product_intelligence.candidate_router)
+api_router.include_router(scraping.router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(prompts.router)

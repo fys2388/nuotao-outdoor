@@ -41,6 +41,23 @@ class Settings(BaseSettings):
     # MUST be overridden in staging/production environments.
     woocommerce_webhook_secret: str = "dev-webhook-secret-change-me"
 
+    # --- M5.16 Scrapling scraping capability (compliance-gated) --------------
+    # Compliance review (docs/M5.16) approved a low-frequency, robots.txt-
+    # respecting, public-fields-only scrape. This is DISABLED by default; the
+    # code skeleton exists but never runs unless explicitly enabled + domains
+    # are allowlisted. A domain whitelist with a single proxy-less plain
+    # request is used - no stealth / Cloudflare bypass / login-wall scraping.
+    scraping_enabled: bool = False
+    scraping_allowed_domains: list[str] = []  # e.g. ["detail.1688.com"]
+    scraping_qps_per_domain: float = 0.5  # min 2s between requests per domain
+    scraping_max_urls_per_job: int = 50
+    scraping_global_concurrency: int = 2
+    scraping_connect_timeout_seconds: float = 10.0
+    scraping_read_timeout_seconds: float = 30.0
+    scraping_max_retries: int = 2  # idempotent GET retries, exponential backoff
+    scraping_circuit_failures: int = 5  # consecutive failures before circuit opens
+    scraping_circuit_cooldown_seconds: int = 600
+
     # Payment fee estimation used when the payment provider fee is unknown.
     payment_fee_rate: Decimal = Decimal("0.029")
     payment_fee_fixed: Decimal = Decimal("0.30")
