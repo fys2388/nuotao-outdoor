@@ -26,6 +26,7 @@ from app.core.identity import (
     WorkspaceAccessError,
 )
 from app.core.logging import setup_logging
+from app.core.metrics import setup_metrics
 from app.core.redis import create_redis_client
 from app.core.tracing import (
     TRACE_ID_HEADER,
@@ -71,6 +72,9 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)
+
+# Set up Prometheus metrics (middleware + /metrics endpoint)
+setup_metrics(app)
 
 # M5.4 Runtime Console (static pages under /agent-runtime). The directory is
 # served as-is when it exists; check_dir=False keeps the API usable in

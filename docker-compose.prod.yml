@@ -1,0 +1,303 @@
+# ============================================
+# Nuotao AI OS Production Override
+# ============================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# This override adds:
+# - Nginx reverse proxy with HTTPS
+# - Frontend static file serving
+# - Prometheus metrics collection
+# - Grafana dashboard
+# - Database backup service
+# - Resource limits and health checks
+
+services:
+  # ============================================
+  # Nginx Reverse Proxy + Frontend
+  # ============================================
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./data/certbot/conf:/etc/letsencrypt:ro
+      - ./data/certbot/www:/var/www/certbot:ro
+      - ./data/nginx/logs:/var/log/nginx
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Certbot (Let's Encrypt SSL)
+  # ============================================
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Prometheus Metrics
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./data/prometheus:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Grafana Dashboard
+  # ============================================
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_INSTALL_PLUGINS: "grafana-piechart-panel"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Database Backup Service
+  # ============================================
+  backup:
+    image: postgres:16-alpine
+    volumes:
+      - ./data/backups:/backups
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-nuotao}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nuotao_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-nuotao}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    entrypoint: |
+      sh -c '
+        echo "Backup service started. Running first backup in 60 seconds..."
+        sleep 60
+        while true; do
+          TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+          echo "[$${TIMESTAMP}] Starting database backup..."
+          PGPASSWORD=$$POSTGRES_PASSWORD pg_dump -h $$POSTGRES_HOST -U $$POSTGRES_USER -d $$POSTGRES_DB | gzip > /backups/postgres_$${TIMESTAMP}.sql.gz
+          if [ $$? -eq 0 ]; then
+            BACKUP_SIZE=$$(du -h /backups/postgres_$${TIMESTAMP}.sql.gz | cut -f1)
+            echo "[$${TIMESTAMP}] Backup completed successfully. Size: $$BACKUP_SIZE"
+          else
+            echo "[$${TIMESTAMP}] Backup FAILED!"
+          fi
+          echo "[$${TIMESTAMP}] Cleaning up backups older than $$BACKUP_RETENTION_DAYS days..."
+          find /backups -name "postgres_*.sql.gz" -type f -mtime +$$BACKUP_RETENTION_DAYS -delete
+          echo "[$${TIMESTAMP}] Next backup in 24 hours."
+          sleep 86400
+        done
+      '
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # API Service Overrides (Production)
+  # ============================================
+  api:
+    # Don't expose port directly in production - Nginx handles it
+    ports: []
+    environment:
+      <<: *backend-env
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://your-domain.com}
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Worker Service Overrides (Production)
+  # ============================================
+  worker:
+    environment:
+      <<: *backend-env
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Scheduler Service Overrides (Production)
+  # ============================================
+  scheduler:
+    environment:
+      <<: *backend-env
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # PostgreSQL Overrides (Production)
+  # ============================================
+  postgres:
+    # Don't expose port in production for security
+    ports: []
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres/backups:/backups
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nuotao}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-strong-password}
+      POSTGRES_DB: ${POSTGRES_DB:-nuotao}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=1.5GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=5242kB
+      -c huge_pages=off
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Redis Overrides (Production)
+  # ============================================
+  redis:
+    # Don't expose port in production for security
+    ports: []
+    command: >
+      redis-server
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --timeout 300
+      --tcp-keepalive 60
+    volumes:
+      - redisdata:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1.5G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - nuotao-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  nuotao-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
