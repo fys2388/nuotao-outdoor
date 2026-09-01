@@ -108,6 +108,50 @@ services:
       - nuotao-network
 
   # ============================================
+  # Alertmanager
+  # ============================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./infra/alertmanager/templates:/etc/alertmanager/templates:ro
+      - ./data/alertmanager:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.external-url=http://localhost:9093"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nuotao-network
+
+  # ============================================
+  # Feishu Alert Adapter
+  # ============================================
+  feishu-adapter:
+    build:
+      context: ./infra/alertmanager
+      dockerfile: Dockerfile.feishu
+    ports:
+      - "8060:8060"
+    environment:
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-https://open.feishu.cn/open-apis/bot/v2/hook/1035e5f2-8984-44d1-83f4-9fb60f274371}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8060/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - nuotao-network
+
+  # ============================================
   # Database Backup Service
   # ============================================
   backup:

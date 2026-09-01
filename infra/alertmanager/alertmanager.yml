@@ -80,6 +80,11 @@ route:
 receivers:
   # 默认接收者
   - name: 'default-receiver'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
     email_configs:
       - to: 'admin@nuotaooutdoor.com'
         send_resolved: true
@@ -88,6 +93,11 @@ receivers:
 
   # 严重告警接收者
   - name: 'critical-alerts'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
     # 邮件
     email_configs:
       - to: 'admin@nuotaooutdoor.com,ops@nuotaooutdoor.com'
@@ -152,6 +162,11 @@ receivers:
 
   # 警告告警接收者
   - name: 'warning-alerts'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
     email_configs:
       - to: 'ops@nuotaooutdoor.com'
         send_resolved: true
