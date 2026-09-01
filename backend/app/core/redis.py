@@ -20,6 +20,7 @@ def create_redis_client() -> Redis:
         decode_responses=True,
         socket_connect_timeout=3,
         socket_timeout=3,
+        protocol=2,  # RESP2 for broad compatibility (Redis 3.0+; avoids HELLO on old servers)
     )
 
 
