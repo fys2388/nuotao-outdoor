@@ -63,9 +63,9 @@ export function Dashboard() {
       ]);
 
       if (healthRes.data) setHealth(healthRes.data.checks);
-      if (productsRes.data) setProducts(productsRes.data);
-      if (agentsRes.data) setAgents(agentsRes.data);
-      if (eventsRes.data) setEvents(eventsRes.data);
+      if (productsRes.data) setProducts(Array.isArray(productsRes.data) ? productsRes.data : (productsRes.data.items || []));
+      if (agentsRes.data) setAgents(Array.isArray(agentsRes.data) ? agentsRes.data : (agentsRes.data.items || []));
+      if (eventsRes.data) setEvents(Array.isArray(eventsRes.data) ? eventsRes.data : (eventsRes.data.items || eventsRes.data.events || []));
       setLoading(false);
     }
     loadData();

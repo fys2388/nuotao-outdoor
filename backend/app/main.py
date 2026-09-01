@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
@@ -69,6 +70,23 @@ app = FastAPI(
         "displayRequestDuration": True,
         "showExtensions": True,
     },
+)
+
+# CORS 中间件配置 - 允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "https://nuotaooutdoor.com",
+        "https://www.nuotaooutdoor.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Trace-Id"],
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)

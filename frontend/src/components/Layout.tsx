@@ -9,6 +9,8 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: "dashboard", label: "仪表盘", icon: "📊" },
   { id: "products", label: "产品管理", icon: "📦" },
+  { id: "orders", label: "订单管理", icon: "🛒" },
+  { id: "users", label: "用户权限", icon: "👥" },
   { id: "ai-analysis", label: "AI 分析", icon: "🤖" },
   { id: "agents", label: "Agent 管理", icon: "⚙️" },
   { id: "events", label: "事件日志", icon: "📋" },
