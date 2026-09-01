@@ -121,6 +121,15 @@ async def trace_middleware(request: Request, call_next) -> Response:
     return response
 
 
+# ---------------------------------------------------------------------------
+# OpenAPI security schemes for Swagger UI Authorize button
+# ---------------------------------------------------------------------------
+# Two authentication modes are documented:
+# - ApiKeyAuth (X-Actor header): development body-actor mode (ACTOR_PROVIDER=body)
+# - BearerAuth (Authorization: Bearer <JWT>): production identity mode (ACTOR_PROVIDER=header)
+# These are documentation-only; actual enforcement lives in app/core/actor.py
+# and app/api/deps.py. Adding them here makes the Swagger UI "Authorize"
+# button appear so operators can pre-fill credentials for endpoint testing.
 @app.get("/", summary="Service information", tags=["meta"])
 async def root() -> dict[str, str]:
     """Return basic service metadata for operators."""
@@ -130,3 +139,39 @@ async def root() -> dict[str, str]:
         "environment": settings.environment,
         "docs": "/docs",
     }
+
+
+def _custom_openapi() -> dict:
+    """Inject securitySchemes into the generated OpenAPI spec."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        openapi_version=app.openapi_version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["ApiKeyAuth"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Actor",
+        "description": "Development mode (ACTOR_PROVIDER=body): actor identity declared in request header. "
+        "Use any safe identifier (e.g. 'dev-user-001'). Also accepted in request body as 'actor'.",
+    }
+    schema["components"]["securitySchemes"]["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Production mode (ACTOR_PROVIDER=header): RS256-signed JWT from Clerk, "
+        "carried in the trusted identity header (CF-Access-Jwt-Assertion by default). "
+        "Requires CLERK_JWKS_URL, CLERK_ISSUER, CLERK_AUDIENCE configured.",
+    }
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi  # type: ignore[method-assign]
