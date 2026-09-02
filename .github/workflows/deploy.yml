@@ -40,16 +40,16 @@ jobs:
 
             echo "=== 2. Installing backend dependencies ==="
             cd /opt/nuotao/backend
-            source venv/bin/activate
-            pip install -r requirements.txt --quiet
+            source .venv/bin/activate
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet 2>/dev/null || true
 
             echo "=== 3. Running database migrations ==="
             alembic upgrade head
 
             echo "=== 4. Restarting backend service ==="
-            sudo systemctl restart nuotao-backend
+            systemctl restart nuotao-backend
             sleep 3
-            sudo systemctl status nuotao-backend --no-pager
+            systemctl status nuotao-backend --no-pager
 
             echo "=== 5. Building frontend ==="
             cd /opt/nuotao/frontend
@@ -57,9 +57,9 @@ jobs:
             npm run build
 
             echo "=== 6. Deploying frontend ==="
-            sudo rm -rf /var/www/nuotao/*
-            sudo cp -r dist/* /var/www/nuotao/
-            sudo chown -R www-data:www-data /var/www/nuotao
+            rm -rf /var/www/nuotao/*
+            cp -r dist/* /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
 
             echo "=== 7. Health check ==="
             sleep 5
