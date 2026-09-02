@@ -1,0 +1,47 @@
+{
+  "id": "5a1ad151-c098-4eb0-882b-50f63374e9f5",
+  "type": "refund_rate_high",
+  "severity": "warning",
+  "title": "退款率预警: 当前 4.5%",
+  "description": "退款率 4.5% 超过警戒线。总订单 200 单，退款 9 单。上期退款率 2.0%。",
+  "metric_data": {
+    "current_refund_rate": 4.5,
+    "previous_refund_rate": 2.0,
+    "total_orders": 200,
+    "refunded_orders": 9,
+    "threshold": 3.0
+  },
+  "recommended_action": "立即审查退款订单原因，联系退款客户了解具体问题。检查产品质量、物流时效、产品描述准确性。建立退款原因追踪机制。",
+  "source": "auto_check",
+  "status": "resolved",
+  "created_at": "2026-09-01T17:00:10.834060",
+  "updated_at": "2026-09-02T01:33:06.725891",
+  "acknowledged_at": "2026-09-02T01:32:57.233828",
+  "resolved_at": "2026-09-02T01:33:06.725891",
+  "acknowledged_by": "admin",
+  "resolved_by": "admin",
+  "resolution_notes": "问题已解决",
+  "history": [
+    {
+      "action": "created",
+      "timestamp": "2026-09-01T17:00:10.834060",
+      "details": "Alert created by auto_check"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-02T01:32:57.233828",
+      "old_status": "new",
+      "new_status": "acknowledged",
+      "updated_by": "admin",
+      "notes": "已确认，开始处理"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-02T01:33:06.725891",
+      "old_status": "acknowledged",
+      "new_status": "resolved",
+      "updated_by": "admin",
+      "notes": "问题已解决"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "f02eaaf7-185c-465d-b9ad-c7d4b7626f4d",
+  "type": "alert_critical",
+  "alert_type": "margin_decline",
+  "severity": "critical",
+  "title": "?????????",
+  "description": "????? 25%,?????? 30%,???? 40.48%",
+  "metric_data": {
+    "previous_margin": 42,
+    "change_percent": -40.48,
+    "current_margin": 25
+  },
+  "recommended_action": "????????,??????,??????",
+  "status": "sent",
+  "send_result": {
+    "success": true,
+    "response": {
+      "StatusCode": 0,
+      "StatusMessage": "success",
+      "code": 0,
+      "data": {},
+      "msg": "success"
+    },
+    "message": "富文本消息发送成功"
+  },
+  "created_at": "2026-09-02T00:58:44.203349",
+  "sent_at": "2026-09-02T00:58:44.203349"
+}

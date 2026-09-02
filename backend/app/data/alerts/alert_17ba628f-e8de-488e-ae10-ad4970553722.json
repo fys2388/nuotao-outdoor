@@ -1,0 +1,37 @@
+{
+  "id": "17ba628f-e8de-488e-ae10-ad4970553722",
+  "type": "customer_complaint",
+  "severity": "warning",
+  "title": "??????",
+  "description": "????????????? 50%,?????????",
+  "metric_data": {
+    "increase_percent": 50,
+    "current_complaints": 15,
+    "previous_complaints": 10
+  },
+  "recommended_action": "????????????,???????,????????",
+  "source": "manual",
+  "status": "resolved",
+  "created_at": "2026-09-01T17:01:25.533271",
+  "updated_at": "2026-09-01T17:01:25.555455",
+  "acknowledged_at": null,
+  "resolved_at": "2026-09-01T17:01:25.555455",
+  "acknowledged_by": null,
+  "resolved_by": "admin",
+  "resolution_notes": "?????,?????,??????",
+  "history": [
+    {
+      "action": "created",
+      "timestamp": "2026-09-01T17:01:25.533271",
+      "details": "Alert created by manual"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-01T17:01:25.555455",
+      "old_status": "new",
+      "new_status": "resolved",
+      "updated_by": "admin",
+      "notes": "?????,?????,??????"
+    }
+  ]
+}

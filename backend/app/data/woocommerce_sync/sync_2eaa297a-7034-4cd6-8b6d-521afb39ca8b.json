@@ -1,0 +1,88 @@
+{
+  "id": "2eaa297a-7034-4cd6-8b6d-521afb39ca8b",
+  "sync_time": "2026-09-02T16:28:00.135617",
+  "date_range": {
+    "start": "2026-08-03",
+    "end": "2026-09-02"
+  },
+  "total_orders": 1,
+  "total_revenue": 79.98,
+  "total_items": 2,
+  "avg_order_value": 79.98,
+  "new_customers": 1,
+  "refunded_orders": 0,
+  "country_stats": {
+    "US": {
+      "orders": 1,
+      "revenue": 79.98
+    }
+  },
+  "top_products": [
+    {
+      "name": "Inflatable Camping Sleeping Pad - Thick",
+      "quantity": 1,
+      "revenue": 44.99
+    },
+    {
+      "name": "Portable Camping Stove - Butane",
+      "quantity": 1,
+      "revenue": 34.99
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "862",
+      "order_number": "862",
+      "status": "completed",
+      "currency": "USD",
+      "total_amount": 79.98,
+      "subtotal": 0.0,
+      "total_tax": 0.0,
+      "shipping_total": 0.0,
+      "discount_total": 0.0,
+      "items_count": 2,
+      "line_items": [
+        {
+          "product_id": 861,
+          "name": "Portable Camping Stove - Butane",
+          "sku": "NT-STOVE-001",
+          "quantity": 1,
+          "price": 34.99,
+          "total": 34.99
+        },
+        {
+          "product_id": 860,
+          "name": "Inflatable Camping Sleeping Pad - Thick",
+          "sku": "NT-PAD-002",
+          "quantity": 1,
+          "price": 44.99,
+          "total": 44.99
+        }
+      ],
+      "customer": {
+        "customer_id": 0,
+        "email": "test.customer@nuotaooutdoor.com",
+        "first_name": "Test",
+        "last_name": "Customer",
+        "phone": "+1-555-0123",
+        "country": "US",
+        "city": "San Jose"
+      },
+      "shipping_address": {
+        "first_name": "Test",
+        "last_name": "Customer",
+        "address_1": "123 Test Street",
+        "city": "San Jose",
+        "state": "CA",
+        "postcode": "95110",
+        "country": "US"
+      },
+      "payment_method": "",
+      "payment_method_title": "",
+      "date_created": "2026-09-01T22:34:16",
+      "date_modified": "2026-09-01T22:34:27",
+      "date_completed": "2026-09-01T22:34:24",
+      "is_new_customer": true
+    }
+  ]
+}

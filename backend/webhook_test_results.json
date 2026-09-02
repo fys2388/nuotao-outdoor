@@ -1,0 +1,57 @@
+{
+  "test_time": "2026-09-01T15:02:27.213669+00:00",
+  "api_base": "http://localhost:8000/api/v1",
+  "total_tests": 8,
+  "success_count": 8,
+  "fail_count": 0,
+  "results": [
+    {
+      "test_case": "订单创建事件",
+      "event_type": "order.created",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "订单更新事件",
+      "event_type": "order.updated",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "产品创建事件",
+      "event_type": "product.created",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "产品更新事件",
+      "event_type": "product.updated",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "客户创建事件",
+      "event_type": "customer.created",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "客户更新事件",
+      "event_type": "customer.updated",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "优惠券创建事件",
+      "event_type": "coupon.created",
+      "success": true,
+      "status_code": 200
+    },
+    {
+      "test_case": "订单笔记创建事件",
+      "event_type": "order_note.created",
+      "success": true,
+      "status_code": 200
+    }
+  ]
+}

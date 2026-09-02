@@ -1,0 +1,49 @@
+{
+  "margin_decline": {
+    "enabled": true,
+    "threshold_percent": -5,
+    "absolute_threshold": 30,
+    "severity": "critical",
+    "check_frequency": "daily"
+  },
+  "refund_rate_high": {
+    "enabled": true,
+    "threshold_percent": 3.0,
+    "warning_threshold": 2.0,
+    "severity": "warning",
+    "check_frequency": "daily"
+  },
+  "stockout_risk": {
+    "enabled": true,
+    "safety_stock_days": 14,
+    "critical_stock_days": 7,
+    "severity": "warning",
+    "check_frequency": "daily"
+  },
+  "order_anomaly": {
+    "enabled": true,
+    "drop_threshold_percent": -30,
+    "spike_threshold_percent": 50,
+    "severity": "warning",
+    "check_frequency": "daily"
+  },
+  "revenue_decline": {
+    "enabled": true,
+    "threshold_percent": -20,
+    "severity": "critical",
+    "check_frequency": "daily"
+  },
+  "roas_decline": {
+    "enabled": true,
+    "threshold_percent": -15,
+    "absolute_threshold": 3.0,
+    "severity": "warning",
+    "check_frequency": "daily"
+  },
+  "inventory_overstock": {
+    "enabled": true,
+    "overstock_days": 90,
+    "severity": "info",
+    "check_frequency": "weekly"
+  }
+}

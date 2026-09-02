@@ -1,0 +1,26 @@
+{
+  "2f9d6d33-be38-4bf0-8497-a76efa376ae4": {
+    "id": "2f9d6d33-be38-4bf0-8497-a76efa376ae4",
+    "username": "admin",
+    "email": "admin@nuotao.com",
+    "full_name": "系统管理员",
+    "hashed_password": "$2b$12$iZmD7EygfG1TD/OF9qxu3.r2Eht3vY7CXxGaXGHdGjXQTyjtUu0a6",
+    "role": "admin",
+    "is_active": true,
+    "created_at": "2026-09-02T01:35:33.820365+00:00",
+    "updated_at": "2026-09-02T01:35:33.820365+00:00",
+    "last_login_at": "2026-09-02T01:36:20.818433+00:00"
+  },
+  "39d2568b-0d56-4115-b752-c3c4be8edcfe": {
+    "id": "39d2568b-0d56-4115-b752-c3c4be8edcfe",
+    "username": "test_operator",
+    "email": "test@nuotao.com",
+    "full_name": "????",
+    "hashed_password": "$2b$12$8oNtfG.xLzrmv.UM8n2JneI0dls.5Ph8aWsgWVKSLrh3tCRhZ0jSO",
+    "role": "viewer",
+    "is_active": true,
+    "created_at": "2026-09-02T01:36:20.935800+00:00",
+    "updated_at": "2026-09-02T01:36:20.935800+00:00",
+    "last_login_at": null
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "auto_purchase_enabled": true,
+  "min_stock_threshold": 10,
+  "default_purchase_quantity": 50,
+  "max_purchase_amount": "10000.0",
+  "cost_variance_threshold": "0.20",
+  "require_approval_above": "500.0",
+  "supplier_blacklist": [],
+  "auto_approve_low_value": true
+}

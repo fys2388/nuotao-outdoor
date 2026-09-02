@@ -1,0 +1,50 @@
+{
+  "id": "0e0d8230-4d02-4356-aa6a-e4f8dc3d794e",
+  "order_number": "B2B-20260902-0E0D8230",
+  "agent_id": "323abac9-312b-45b3-81c8-d032678a6b9c",
+  "agent_name": "Outdoor Pro USA",
+  "status": "pending",
+  "payment_status": "partial",
+  "items": [
+    {
+      "quantity": 10,
+      "name": "Premium Camping Tent",
+      "unit_price": 135,
+      "sku": "NT-TENT-004"
+    },
+    {
+      "quantity": 20,
+      "name": "Hiking Backpack",
+      "unit_price": 80,
+      "sku": "NT-BACK-002"
+    }
+  ],
+  "subtotal": 2950,
+  "discount_percent": 10.0,
+  "discount_amount": 295.0,
+  "total": 2655.0,
+  "commission": 212.4,
+  "shipping_address": {
+    "country": "USA",
+    "city": "New York",
+    "address": ""
+  },
+  "payment_due_date": "2026-10-02",
+  "notes": "????",
+  "created_at": "2026-09-02T00:45:34.261548",
+  "updated_at": "2026-09-02T00:45:34.285214",
+  "history": [
+    {
+      "action": "created",
+      "timestamp": "2026-09-02T00:45:34.261548"
+    }
+  ],
+  "paid_amount": 1327.5,
+  "payments": [
+    {
+      "amount": 1327.5,
+      "method": "bank_transfer",
+      "timestamp": "2026-09-02T00:45:34.285214"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "id": "2b6af271-efb8-4f7a-8e1d-dcae606786e0",
+  "content_type": "product_selling_points",
+  "title": "Premium Camping Tent 4-Person - Premium Tents for Family Campers",
+  "content": {
+    "title": "Premium Camping Tent 4-Person - Premium Tents for Family Campers",
+    "bullet_points": [
+      "✓ Waterproof 3000mm - Designed for family campers",
+      "✓ Premium Quick setup 5 mins for enhanced performance",
+      "✓ Lightweight 3.5kg - Built to last in any condition",
+      "✓ UV protection 50+ - Designed for family campers"
+    ],
+    "description": "Discover the Premium Camping Tent 4-Person, a premium tents designed specifically for family campers. Featuring Waterproof 3000mm、Quick setup 5 mins、Lightweight 3.5kg, this product delivers outstanding performance in any outdoor environment.",
+    "value_proposition": "Experience the perfect blend of quality, performance, and value with the Premium Camping Tent 4-Person. Whether you're a seasoned adventurer or just starting out, this tents is designed to exceed your expectations.",
+    "target_audience": "family campers",
+    "price": 149.99
+  },
+  "product_id": null,
+  "product_name": "Premium Camping Tent 4-Person",
+  "status": "approved",
+  "created_by": "system",
+  "created_at": "2026-09-01T16:44:22.553113",
+  "updated_at": "2026-09-01T16:44:22.623313",
+  "review_history": [
+    {
+      "action": "submitted",
+      "by": "system",
+      "timestamp": "2026-09-01T16:44:22.608908",
+      "comment": "Submitted for review"
+    },
+    {
+      "action": "approve",
+      "by": "admin",
+      "timestamp": "2026-09-01T16:44:22.623313",
+      "comment": "??????,????"
+    }
+  ],
+  "quality_score": 100,
+  "quality_issues": []
+}

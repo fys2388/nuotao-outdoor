@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-02",
+  "generated_at": "2026-09-02T01:09:37.470096",
+  "orders": {
+    "total_orders": 3,
+    "total_items": 4,
+    "avg_order_value": 146.66,
+    "refunded_orders": 0,
+    "refund_rate_percent": 0.0
+  },
+  "revenue": {
+    "total_revenue": 439.97,
+    "estimated_cost": 263.98,
+    "gross_profit": 175.99,
+    "gross_margin_percent": 40.0
+  },
+  "marketing": {
+    "ad_spend": 50,
+    "roas": 8.8,
+    "roi_percent": 779.94
+  },
+  "customers": {
+    "new_customers": 1,
+    "returning_customers": 2,
+    "new_customer_rate_percent": 33.33
+  },
+  "data_quality": {
+    "orders_count": 3,
+    "has_real_data": true,
+    "note": "Metrics based on provided orders data. Cost is estimated at 60% of revenue."
+  }
+}

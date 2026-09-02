@@ -1,0 +1,49 @@
+{
+  "id": "21d36402-a731-4354-b7d1-f1d2099395f3",
+  "type": "stockout_risk",
+  "severity": "critical",
+  "title": "断货风险: Hiking Backpack (NT-BACK-002)",
+  "description": "产品 Hiking Backpack 当前库存 10 件，日均销量 2.5 件，库存可维持 4.0 天。严重不足！",
+  "metric_data": {
+    "product_name": "Hiking Backpack",
+    "sku": "NT-BACK-002",
+    "current_stock": 10,
+    "daily_sales_rate": 2.5,
+    "days_of_stock": 4.0,
+    "safety_stock_days": 14,
+    "critical_stock_days": 7
+  },
+  "recommended_action": "立即采购补货，建议采购量至少 75 件（30 天销量）。联系供应商确认交货时间，必要时启动紧急采购流程。",
+  "source": "auto_check",
+  "status": "resolved",
+  "created_at": "2026-09-01T17:00:10.850755",
+  "updated_at": "2026-09-02T01:33:10.280851",
+  "acknowledged_at": "2026-09-02T01:33:01.351353",
+  "resolved_at": "2026-09-02T01:33:10.280851",
+  "acknowledged_by": "admin",
+  "resolved_by": "admin",
+  "resolution_notes": "问题已解决",
+  "history": [
+    {
+      "action": "created",
+      "timestamp": "2026-09-01T17:00:10.850755",
+      "details": "Alert created by auto_check"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-02T01:33:01.351353",
+      "old_status": "new",
+      "new_status": "acknowledged",
+      "updated_by": "admin",
+      "notes": "已确认，开始处理"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-02T01:33:10.280851",
+      "old_status": "acknowledged",
+      "new_status": "resolved",
+      "updated_by": "admin",
+      "notes": "问题已解决"
+    }
+  ]
+}

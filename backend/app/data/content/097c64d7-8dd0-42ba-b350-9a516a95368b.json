@@ -1,0 +1,32 @@
+{
+  "id": "097c64d7-8dd0-42ba-b350-9a516a95368b",
+  "content_type": "edm_abandoned_cart",
+  "title": "Hi John, you left something in your cart!",
+  "content": {
+    "email_type": "abandoned_cart",
+    "subject": "Hi John, you left something in your cart!",
+    "preview_text": "Your Tents are waiting. Complete your order and get 15% off!",
+    "body": [
+      "Hi John,",
+      "We noticed you left some items in your shopping cart. Don't miss out on the Premium Camping Tent you were interested in!",
+      "As a special offer, use code WELCOMEBACK15 to get 15% off your order today.",
+      "Your cart is saved and ready for checkout. Simply click the link below to complete your purchase.",
+      "If you have any questions, our customer support team is here to help.",
+      "Happy shopping!",
+      "The Nuotao Outdoor Team"
+    ],
+    "cta_button": "Complete Your Purchase",
+    "urgency": "This offer expires in 48 hours. Don't wait!",
+    "discount_percent": 15,
+    "abandoned_cart_value": 149.99
+  },
+  "product_id": null,
+  "product_name": "",
+  "status": "draft",
+  "created_by": "system",
+  "created_at": "2026-09-01T16:44:22.593262",
+  "updated_at": "2026-09-01T16:44:22.593262",
+  "review_history": [],
+  "quality_score": 100,
+  "quality_issues": []
+}

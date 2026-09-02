@@ -1,0 +1,54 @@
+[project]
+name = "nuotao-ai-os-backend"
+version = "0.1.0"
+description = "Nuotao Outdoor AI OS - backend service (M0 engineering foundation)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "sqlalchemy[asyncio]>=2.0.31",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.2",
+    "redis>=5.0.8",
+    "greenlet>=3.0.3",
+    "python-multipart>=0.0.9",
+    "PyJWT>=2.9.0",
+    "cryptography>=42.0.0",
+    "httpx>=0.27.0",
+    "prometheus-client>=0.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "httpx>=0.27.0",
+    "aiosqlite>=0.20.0",
+    "ruff>=0.5.0",
+    "pgserver>=0.1.4",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ASYNC"]
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*.py" = ["E501"]

@@ -1,0 +1,82 @@
+# ============================================
+# Ruff - Python Linter & Formatter 配置
+# ============================================
+# 安装: pip install ruff
+# 使用: ruff check . / ruff format .
+# ============================================
+
+line-length = 120
+target-version = "py312"
+
+# 规则选择
+# E/W: pycodestyle errors/warnings
+# F: pyflakes
+# I: isort (import sorting)
+# N: pep8-naming
+# UP: pyupgrade
+# B: flake8-bugbear
+# C4: flake8-comprehensions
+# SIM: flake8-simplify
+# TCH: flake8-type-checking
+# PTH: flake8-use-pathlib
+# RUF: ruff-specific rules
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "TCH", "PTH", "RUF",
+]
+
+# 忽略的规则
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "E402",  # module level import not at top of file
+    "B008",  # do not perform function call in argument defaults
+    "C901",  # too complex
+    "RUF012",  # mutable class attributes require type annotation
+    "PTH",  # use pathlib (project uses os.path extensively)
+    "TC001",  # typing-only first-party import (false positives)
+    "UP017",  # datetime.timezone.utc (keep for compatibility)
+    "F541",  # f-string missing placeholders (false positives)
+]
+
+# 排除的目录
+exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    ".git",
+    "migrations",
+    "alembic",
+]
+
+# 格式化配置
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# isort 配置
+[lint.isort]
+known-first-party = ["app"]
+known-third-party = []
+force-single-line = false
+force-wrap-aliases = true
+combine-as-imports = true
+
+# pyupgrade 配置
+[lint.pyupgrade]
+keep-runtime-typing = true
+
+# flake8-bugbear 配置
+[lint.flake8-bugbear]
+extend-immutable-calls = ["lru_cache", "cached_property"]
+
+# per-file-ignores
+[lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/*" = ["E501", "B011", "S101"]
+"app/models/*" = ["RUF012"]
+"app/schemas/*" = ["RUF012"]
+"migrations/*" = ["E501", "E402"]

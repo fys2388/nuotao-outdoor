@@ -1,0 +1,22 @@
+{
+  "id": "553d8d92-45b8-4318-8b1d-11a42bbb960f",
+  "type": "weekly_report",
+  "report_title": "2026??36?????",
+  "total_revenue": 23456.78,
+  "total_orders": 156,
+  "gross_margin": 42.0,
+  "alerts_count": 2,
+  "status": "sent",
+  "send_result": {
+    "success": true,
+    "response": {
+      "StatusCode": 0,
+      "StatusMessage": "success",
+      "code": 0,
+      "data": {},
+      "msg": "success"
+    },
+    "message": "富文本消息发送成功"
+  },
+  "created_at": "2026-09-02T00:58:47.221778"
+}

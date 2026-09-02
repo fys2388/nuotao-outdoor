@@ -1,0 +1,36 @@
+{
+  "id": "e04c370e-e7a0-422f-8966-493bb8d17dd0",
+  "order_id": "ORDER-871",
+  "tracking_number": "TRK20260902001",
+  "carrier": "DHL eCommerce",
+  "destination_country": "US",
+  "shipping_method": "standard",
+  "status": "in_transit",
+  "created_at": "2026-09-01T16:41:47.770404",
+  "updated_at": "2026-09-01T16:41:47.810909",
+  "shipped_at": "2026-09-01T16:41:47.795118",
+  "expected_delivery_at": "2026-09-11T16:41:47.770404",
+  "delivered_at": null,
+  "tracking_history": [
+    {
+      "timestamp": "2026-09-01T16:41:47.770404",
+      "status": "created",
+      "location": "Origin warehouse",
+      "description": "Shipment created, waiting for pickup"
+    },
+    {
+      "timestamp": "2026-09-01T16:41:47.795118",
+      "status": "picked_up",
+      "location": "Shenzhen, China",
+      "description": "Shipment picked up from warehouse"
+    },
+    {
+      "timestamp": "2026-09-01T16:41:47.810909",
+      "status": "in_transit",
+      "location": "Hong Kong Hub",
+      "description": "In transit to destination country"
+    }
+  ],
+  "alerts": [],
+  "expected_delivery_days": 10
+}

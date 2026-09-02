@@ -1,0 +1,25 @@
+{
+  "id": "87563ec4-cfbd-4b4b-bc0a-4fb76cc7bb1c",
+  "name": "??????",
+  "type": "overseas",
+  "status": "active",
+  "location": {
+    "country": "USA",
+    "city": "Los Angeles",
+    "address": "CA 90001"
+  },
+  "contact": {
+    "person": "Mike",
+    "phone": "",
+    "email": "mike@nuotao-us.com"
+  },
+  "shipping_methods": [
+    "UPS",
+    "FedEx",
+    "USPS"
+  ],
+  "handling_days": 2,
+  "inventory": {},
+  "created_at": "2026-09-02T00:45:34.140213",
+  "updated_at": "2026-09-02T00:45:34.140213"
+}

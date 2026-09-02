@@ -1,0 +1,47 @@
+{
+  "id": "ff7d8d8d-0ae9-48ae-b6f8-47130162bc50",
+  "type": "margin_decline",
+  "severity": "critical",
+  "title": "毛利率预警: 当前 25.0%",
+  "description": "毛利率从 42.0% 下降到 25.0%，环比变化 -40.48%。低于安全阈值 30%。",
+  "metric_data": {
+    "current_margin": 25.0,
+    "previous_margin": 42.0,
+    "change_percent": -40.48,
+    "threshold": -5,
+    "absolute_threshold": 30
+  },
+  "recommended_action": "立即分析成本结构，检查产品成本、运费、折扣力度。优化采购价格，调整定价策略，减少低毛利产品促销。",
+  "source": "auto_check",
+  "status": "resolved",
+  "created_at": "2026-09-01T17:00:10.816009",
+  "updated_at": "2026-09-02T01:32:48.678571",
+  "acknowledged_at": "2026-09-01T17:01:25.487903",
+  "resolved_at": "2026-09-02T01:32:48.678571",
+  "acknowledged_by": "admin",
+  "resolved_by": "admin",
+  "resolution_notes": "问题已解决",
+  "history": [
+    {
+      "action": "created",
+      "timestamp": "2026-09-01T17:00:10.816009",
+      "details": "Alert created by auto_check"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-01T17:01:25.487903",
+      "old_status": "new",
+      "new_status": "acknowledged",
+      "updated_by": "admin",
+      "notes": "???,????"
+    },
+    {
+      "action": "status_change",
+      "timestamp": "2026-09-02T01:32:48.678571",
+      "old_status": "acknowledged",
+      "new_status": "resolved",
+      "updated_by": "admin",
+      "notes": "问题已解决"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Nuotao AI OS Backend API Server
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=nuotao
+Group=nuotao
+WorkingDirectory=/opt/nuotao-ai-os/backend
+Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin"
+EnvironmentFile=/opt/nuotao-ai-os/.env
+ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nuotao-backend
+
+# 安全限制
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs
+
+[Install]
+WantedBy=multi-user.target
