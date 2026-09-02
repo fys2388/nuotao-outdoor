@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+*.secret
+webhook_secret.txt
+
+# Node
+node_modules/
+frontend/dist/
+.npm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.dump
+*.log
+/var/backups/
+app/data/
+
+# Generated images
+backend/data/generated_images/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
