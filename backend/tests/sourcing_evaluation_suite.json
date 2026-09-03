@@ -1,0 +1,553 @@
+{
+  "version": "1.0.0",
+  "name": "Nuotao 选品决策评测集",
+  "description": "用于评估选品 Agent / 选品决策模型准确性的标准化测试集，覆盖户外露营品类",
+  "created_at": "2026-09-03",
+  "scoring_dimensions": [
+    {"name": "profitability", "weight": 0.30, "description": "利润空间评估准确性"},
+    {"name": "demand", "weight": 0.20, "description": "市场需求判断准确性"},
+    {"name": "competition", "weight": 0.15, "description": "竞争度评估准确性"},
+    {"name": "logistics", "weight": 0.15, "description": "物流可行性评估准确性"},
+    {"name": "compliance", "weight": 0.10, "description": "合规风险识别准确性"},
+    {"name": "differentiation", "weight": 0.10, "description": "差异化机会识别准确性"}
+  ],
+  "pass_threshold": 70.0,
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "category": "camping_tent",
+      "difficulty": "easy",
+      "input": {
+        "name": "2人户外露营帐篷",
+        "cost_price": 120.0,
+        "retail_price": 299.0,
+        "weight": 2.5,
+        "category": "camping tent",
+        "supplier_rating": 4.5,
+        "supplier_years": 5,
+        "monthly_sales_est": 500,
+        "competitor_count": 25,
+        "season": "all_year",
+        "certifications": ["CE", "RoHS"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 75,
+        "key_factors": ["高利润率", "稳定需求", "合规齐全"],
+        "risk_flags": []
+      },
+      "tags": ["tent", "profit", "easy"]
+    },
+    {
+      "id": "TC-002",
+      "category": "camping_stove",
+      "difficulty": "medium",
+      "input": {
+        "name": "便携式卡式炉",
+        "cost_price": 45.0,
+        "retail_price": 89.0,
+        "weight": 1.2,
+        "category": "camping stove",
+        "supplier_rating": 4.2,
+        "supplier_years": 3,
+        "monthly_sales_est": 1200,
+        "competitor_count": 50,
+        "season": "all_year",
+        "certifications": ["CE"],
+        "hazardous": true,
+        "shipping_restriction": "气罐不可空运"
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 60,
+        "key_factors": ["高需求", "中等利润"],
+        "risk_flags": ["危险品物流限制", "竞争激烈"]
+      },
+      "tags": ["stove", "hazardous", "logistics"]
+    },
+    {
+      "id": "TC-003",
+      "category": "sleeping_bag",
+      "difficulty": "easy",
+      "input": {
+        "name": "-15度羽绒睡袋",
+        "cost_price": 280.0,
+        "retail_price": 599.0,
+        "weight": 1.8,
+        "category": "sleeping bag",
+        "supplier_rating": 4.8,
+        "supplier_years": 8,
+        "monthly_sales_est": 300,
+        "competitor_count": 15,
+        "season": "winter",
+        "certifications": ["CE", "OEKO-TEX"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 80,
+        "key_factors": ["高客单价", "高利润", "优质供应商", "差异化"],
+        "risk_flags": ["季节性强"]
+      },
+      "tags": ["sleeping_bag", "premium", "seasonal"]
+    },
+    {
+      "id": "TC-004",
+      "category": "camping_light",
+      "difficulty": "medium",
+      "input": {
+        "name": "太阳能露营灯",
+        "cost_price": 35.0,
+        "retail_price": 79.0,
+        "weight": 0.5,
+        "category": "camping light",
+        "supplier_rating": 4.0,
+        "supplier_years": 2,
+        "monthly_sales_est": 2000,
+        "competitor_count": 80,
+        "season": "all_year",
+        "certifications": ["CE", "FCC", "RoHS"],
+        "battery": true
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 65,
+        "key_factors": ["高增长需求", "轻小件", "合规齐全"],
+        "risk_flags": ["竞争极度激烈", "电池物流限制", "新供应商风险"]
+      },
+      "tags": ["light", "solar", "competition", "battery"]
+    },
+    {
+      "id": "TC-005",
+      "category": "outdoor_chair",
+      "difficulty": "easy",
+      "input": {
+        "name": "折叠露营椅",
+        "cost_price": 65.0,
+        "retail_price": 159.0,
+        "weight": 3.5,
+        "category": "outdoor chair",
+        "supplier_rating": 4.6,
+        "supplier_years": 6,
+        "monthly_sales_est": 800,
+        "competitor_count": 35,
+        "season": "spring_summer",
+        "certifications": ["CE"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 72,
+        "key_factors": ["稳定利润", "中等竞争", "优质供应商"],
+        "risk_flags": ["体积较大物流成本高"]
+      },
+      "tags": ["chair", "stable", "logistics"]
+    },
+    {
+      "id": "TC-006",
+      "category": "water_filter",
+      "difficulty": "hard",
+      "input": {
+        "name": "户外便携式净水器",
+        "cost_price": 85.0,
+        "retail_price": 199.0,
+        "weight": 0.3,
+        "category": "water filter",
+        "supplier_rating": 4.3,
+        "supplier_years": 4,
+        "monthly_sales_est": 400,
+        "competitor_count": 20,
+        "season": "all_year",
+        "certifications": ["NSF", "CE"],
+        "patent_risk": "过滤技术可能涉及专利",
+        "regulatory": "饮用水接触材料需FDA认证"
+      },
+      "expected": {
+        "decision": "pending_review",
+        "min_score": 50,
+        "key_factors": ["高利润", "轻小件", "差异化"],
+        "risk_flags": ["专利侵权风险", "FDA认证缺失", "监管复杂"]
+      },
+      "tags": ["water_filter", "patent", "compliance", "hard"]
+    },
+    {
+      "id": "TC-007",
+      "category": "camping_cooler",
+      "difficulty": "medium",
+      "input": {
+        "name": "20L保温冷藏箱",
+        "cost_price": 150.0,
+        "retail_price": 299.0,
+        "weight": 5.0,
+        "category": "camping cooler",
+        "supplier_rating": 4.1,
+        "supplier_years": 3,
+        "monthly_sales_est": 250,
+        "competitor_count": 30,
+        "season": "summer",
+        "certifications": ["CE"],
+        "size": "large"
+      },
+      "expected": {
+        "decision": "reject",
+        "max_score": 55,
+        "key_factors": [],
+        "risk_flags": ["体积大重量高物流成本高", "季节性强", "利润率偏低", "需求有限"]
+      },
+      "tags": ["cooler", "reject", "logistics", "seasonal"]
+    },
+    {
+      "id": "TC-008",
+      "category": "hiking_backpack",
+      "difficulty": "easy",
+      "input": {
+        "name": "40L徒步登山背包",
+        "cost_price": 95.0,
+        "retail_price": 229.0,
+        "weight": 1.5,
+        "category": "hiking backpack",
+        "supplier_rating": 4.7,
+        "supplier_years": 10,
+        "monthly_sales_est": 1500,
+        "competitor_count": 60,
+        "season": "all_year",
+        "certifications": ["CE", "OEKO-TEX"],
+        "brand_competition": "强品牌竞争（Osprey/Deuter）"
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 62,
+        "key_factors": ["高需求", "优质供应商", "稳定利润"],
+        "risk_flags": ["品牌竞争激烈", "需要差异化定位"]
+      },
+      "tags": ["backpack", "brand_competition", "high_demand"]
+    },
+    {
+      "id": "TC-009",
+      "category": "camping_hammock",
+      "difficulty": "easy",
+      "input": {
+        "name": "双人露营吊床",
+        "cost_price": 28.0,
+        "retail_price": 69.0,
+        "weight": 0.8,
+        "category": "camping hammock",
+        "supplier_rating": 4.4,
+        "supplier_years": 5,
+        "monthly_sales_est": 900,
+        "competitor_count": 40,
+        "season": "spring_summer",
+        "certifications": ["CE"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 70,
+        "key_factors": ["轻小件", "高利润率", "稳定需求"],
+        "risk_flags": ["季节性"]
+      },
+      "tags": ["hammock", "lightweight", "profit"]
+    },
+    {
+      "id": "TC-010",
+      "category": "outdoor_solar_charger",
+      "difficulty": "hard",
+      "input": {
+        "name": "20W户外太阳能充电器",
+        "cost_price": 120.0,
+        "retail_price": 259.0,
+        "weight": 1.0,
+        "category": "solar charger",
+        "supplier_rating": 3.8,
+        "supplier_years": 2,
+        "monthly_sales_est": 600,
+        "competitor_count": 45,
+        "season": "all_year",
+        "certifications": ["CE", "FCC", "RoHS"],
+        "battery": true,
+        "tech_uncertainty": "太阳能板效率参差不齐",
+        "return_rate_est": "高（技术期望不匹配）"
+      },
+      "expected": {
+        "decision": "pending_review",
+        "min_score": 45,
+        "key_factors": ["高增长趋势", "高客单价"],
+        "risk_flags": ["供应商评分低", "技术不确定性高", "退货率预估高", "电池物流限制"]
+      },
+      "tags": ["solar", "tech", "risk", "hard"]
+    },
+    {
+      "id": "TC-011",
+      "category": "cooking_set",
+      "difficulty": "easy",
+      "input": {
+        "name": "户外露营锅具套装",
+        "cost_price": 55.0,
+        "retail_price": 129.0,
+        "weight": 2.0,
+        "category": "cooking set",
+        "supplier_rating": 4.5,
+        "supplier_years": 7,
+        "monthly_sales_est": 700,
+        "competitor_count": 30,
+        "season": "all_year",
+        "certifications": ["CE", "FDA"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 74,
+        "key_factors": ["稳定需求", "合规齐全", "优质供应商", "中等利润"],
+        "risk_flags": []
+      },
+      "tags": ["cooking", "stable", "compliant"]
+    },
+    {
+      "id": "TC-012",
+      "category": "first_aid_kit",
+      "difficulty": "medium",
+      "input": {
+        "name": "户外急救包",
+        "cost_price": 18.0,
+        "retail_price": 49.0,
+        "weight": 0.5,
+        "category": "first aid kit",
+        "supplier_rating": 4.3,
+        "supplier_years": 6,
+        "monthly_sales_est": 1100,
+        "competitor_count": 55,
+        "season": "all_year",
+        "certifications": ["CE", "FDA"],
+        "regulatory": "含药品成分需药监审批",
+        "content_restriction": "部分国家禁止进口含特定药品的急救包"
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 58,
+        "key_factors": ["轻小件", "高复购", "稳定需求"],
+        "risk_flags": ["药监审批复杂", "跨境内容限制", "竞争激烈"]
+      },
+      "tags": ["first_aid", "regulatory", "lightweight"]
+    },
+    {
+      "id": "TC-013",
+      "category": "trekking_poles",
+      "difficulty": "easy",
+      "input": {
+        "name": "碳纤维登山杖",
+        "cost_price": 75.0,
+        "retail_price": 179.0,
+        "weight": 0.6,
+        "category": "trekking poles",
+        "supplier_rating": 4.6,
+        "supplier_years": 8,
+        "monthly_sales_est": 650,
+        "competitor_count": 28,
+        "season": "spring_fall",
+        "certifications": ["CE"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 76,
+        "key_factors": ["超轻小件", "高利润", "优质供应商", "差异化材质"],
+        "risk_flags": ["季节性"]
+      },
+      "tags": ["trekking", "carbon", "lightweight", "premium"]
+    },
+    {
+      "id": "TC-014",
+      "category": "camping_table",
+      "difficulty": "medium",
+      "input": {
+        "name": "折叠露营桌",
+        "cost_price": 88.0,
+        "retail_price": 199.0,
+        "weight": 4.5,
+        "category": "camping table",
+        "supplier_rating": 4.2,
+        "supplier_years": 4,
+        "monthly_sales_est": 350,
+        "competitor_count": 25,
+        "season": "spring_summer",
+        "certifications": ["CE"],
+        "size": "large"
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 58,
+        "key_factors": ["中等利润", "中等竞争"],
+        "risk_flags": ["体积大重量高", "季节性强", "需求有限"]
+      },
+      "tags": ["table", "logistics", "seasonal"]
+    },
+    {
+      "id": "TC-015",
+      "category": "outdoor_blanket",
+      "difficulty": "easy",
+      "input": {
+        "name": "防水户外野餐毯",
+        "cost_price": 22.0,
+        "retail_price": 59.0,
+        "weight": 0.7,
+        "category": "outdoor blanket",
+        "supplier_rating": 4.4,
+        "supplier_years": 5,
+        "monthly_sales_est": 1300,
+        "competitor_count": 45,
+        "season": "spring_summer",
+        "certifications": ["CE", "OEKO-TEX"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 71,
+        "key_factors": ["轻小件", "高利润率", "高需求", "合规齐全"],
+        "risk_flags": ["季节性", "竞争中等"]
+      },
+      "tags": ["blanket", "lightweight", "high_demand", "profit"]
+    },
+    {
+      "id": "TC-016",
+      "category": "camping_tarp",
+      "difficulty": "medium",
+      "input": {
+        "name": "3x3m户外天幕",
+        "cost_price": 68.0,
+        "retail_price": 159.0,
+        "weight": 1.8,
+        "category": "camping tarp",
+        "supplier_rating": 4.5,
+        "supplier_years": 6,
+        "monthly_sales_est": 550,
+        "competitor_count": 22,
+        "season": "all_year",
+        "certifications": ["CE", "UV50+"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 73,
+        "key_factors": ["高利润", "差异化功能", "中等竞争", "优质供应商"],
+        "risk_flags": []
+      },
+      "tags": ["tarp", "differentiation", "stable"]
+    },
+    {
+      "id": "TC-017",
+      "category": "inflatable_couch",
+      "difficulty": "hard",
+      "input": {
+        "name": "户外充气沙发",
+        "cost_price": 35.0,
+        "retail_price": 89.0,
+        "weight": 1.2,
+        "category": "inflatable couch",
+        "supplier_rating": 3.9,
+        "supplier_years": 3,
+        "monthly_sales_est": 800,
+        "competitor_count": 70,
+        "season": "summer",
+        "certifications": ["CE"],
+        "quality_issue": "漏气投诉率高",
+        "return_rate_est": "15%+"
+      },
+      "expected": {
+        "decision": "reject",
+        "max_score": 45,
+        "key_factors": [],
+        "risk_flags": ["质量问题高发", "退货率高", "竞争激烈", "季节性强", "供应商评分低"]
+      },
+      "tags": ["inflatable", "reject", "quality", "high_return"]
+    },
+    {
+      "id": "TC-018",
+      "category": "headlamp",
+      "difficulty": "easy",
+      "input": {
+        "name": "USB充电户外头灯",
+        "cost_price": 25.0,
+        "retail_price": 59.0,
+        "weight": 0.15,
+        "category": "headlamp",
+        "supplier_rating": 4.5,
+        "supplier_years": 7,
+        "monthly_sales_est": 2000,
+        "competitor_count": 65,
+        "season": "all_year",
+        "certifications": ["CE", "FCC", "RoHS"],
+        "battery": true
+      },
+      "expected": {
+        "decision": "approve_with_caution",
+        "min_score": 66,
+        "key_factors": ["超轻小件", "高需求", "高利润率", "优质供应商"],
+        "risk_flags": ["竞争激烈", "电池物流限制"]
+      },
+      "tags": ["headlamp", "lightweight", "high_demand", "battery"]
+    },
+    {
+      "id": "TC-019",
+      "category": "camping_pillow",
+      "difficulty": "easy",
+      "input": {
+        "name": "充气露营枕头",
+        "cost_price": 12.0,
+        "retail_price": 35.0,
+        "weight": 0.2,
+        "category": "camping pillow",
+        "supplier_rating": 4.3,
+        "supplier_years": 5,
+        "monthly_sales_est": 1500,
+        "competitor_count": 50,
+        "season": "all_year",
+        "certifications": ["CE", "OEKO-TEX"]
+      },
+      "expected": {
+        "decision": "approve",
+        "min_score": 72,
+        "key_factors": ["超轻小件", "极高利润率", "高需求", "合规齐全"],
+        "risk_flags": ["竞争中等"]
+      },
+      "tags": ["pillow", "ultralight", "high_margin", "high_demand"]
+    },
+    {
+      "id": "TC-020",
+      "category": "survival_knife",
+      "difficulty": "hard",
+      "input": {
+        "name": "户外生存直刀",
+        "cost_price": 65.0,
+        "retail_price": 159.0,
+        "weight": 0.4,
+        "category": "survival knife",
+        "supplier_rating": 4.4,
+        "supplier_years": 10,
+        "monthly_sales_est": 400,
+        "competitor_count": 35,
+        "season": "all_year",
+        "certifications": [],
+        "regulated": true,
+        "shipping_restriction": "刀具在多国受限",
+        "platform_policy": "部分电商平台禁售"
+      },
+      "expected": {
+        "decision": "reject",
+        "max_score": 40,
+        "key_factors": [],
+        "risk_flags": ["管制物品", "跨境物流限制", "平台禁售", "合规风险极高"]
+      },
+      "tags": ["knife", "reject", "regulated", "compliance"]
+    }
+  ],
+  "edge_cases": [
+    {"id": "EDGE-001", "description": "零成本价产品", "input": {"cost_price": 0}, "expected_behavior": "标记数据异常，拒绝评分"},
+    {"id": "EDGE-002", "description": "超高零售价（10倍成本）", "input": {"cost_price": 10, "retail_price": 1000}, "expected_behavior": "标记定价异常，需人工审核"},
+    {"id": "EDGE-003", "description": "缺失关键字段", "input": {"name": "测试产品"}, "expected_behavior": "返回字段缺失错误，不进行评分"},
+    {"id": "EDGE-004", "description": "超大件产品（>20kg）", "input": {"weight": 25}, "expected_behavior": "物流评分极低，建议拒绝"},
+    {"id": "EDGE-005", "description": "新供应商（<1年）+ 高风险品类", "input": {"supplier_years": 0, "hazardous": true}, "expected_behavior": "风险评分极高，建议拒绝或深度审核"}
+  ],
+  "evaluation_protocol": {
+    "steps": [
+      "1. 加载测试集，逐条输入到选品决策模型",
+      "2. 记录模型输出的 decision、score、key_factors、risk_flags",
+      "3. 与 expected 对比，计算各维度准确率",
+      "4. 计算综合得分（decision_match * 40 + score_accuracy * 30 + factor_match * 20 + risk_match * 10）",
+      "5. 生成评测报告，包含错误案例分析和改进建议"
+    ],
+    "decision_match_weights": {"approve": 1.0, "approve_with_caution": 0.8, "pending_review": 0.6, "reject": 1.0}
+  }
+}

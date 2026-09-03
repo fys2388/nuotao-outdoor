@@ -50,6 +50,7 @@ from app.api.v1.endpoints import (
     selection,
     seo,
     sourcing,
+    sourcing_enhanced,
     supply_chain,
     supply_chain_learning,
     webhooks,
@@ -81,6 +82,7 @@ api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
 api_router.include_router(seo.router)
 api_router.include_router(sourcing.router)
+api_router.include_router(sourcing_enhanced.router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(agents_generic.router)
