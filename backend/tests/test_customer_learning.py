@@ -9,12 +9,13 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.order import Order
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

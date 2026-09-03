@@ -9,6 +9,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import func, select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product_intelligence import (
     ConfidenceCalibration,
@@ -28,12 +30,9 @@ from app.services import (
     ai_evaluation,
     calibration,
     knowledge,
+    product_intelligence as pi,
     rule_engine,
 )
-from app.services import (
-    product_intelligence as pi,
-)
-from sqlalchemy import func, select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 INTAKE_URL = "/api/v1/products/intake"
@@ -377,7 +376,7 @@ async def test_approval_protection_never_auto_modifies_rules(db_session, api_cli
     # The shipped score weights are unchanged (version update is human work).
     from app.services.product_intelligence import SCORE_WEIGHTS
 
-    assert SCORE_WEIGHTS == {key: float(value) for key, value in REFERENCE_WEIGHTS.items()}
+    assert {key: float(value) for key, value in REFERENCE_WEIGHTS.items()} == SCORE_WEIGHTS
 
     # Re-approval is rejected; a second run can be rejected.
     from app.services.calibration import CalibrationError

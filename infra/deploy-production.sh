@@ -1,231 +1,271 @@
 #!/bin/bash
-# Nuotao AI OS Production Deployment Script
-# Usage: ./deploy-production.sh [--initial]
-#   --initial: Run initial setup (database migrations, agent initialization)
+# ============================================
+# Nuotao AI OS - 生产环境部署脚本
+# ============================================
+# 功能：
+#   1. 克隆/更新代码
+#   2. 安装 Python 依赖
+#   3. 安装前端依赖并构建
+#   4. 配置环境变量
+#   5. 数据库迁移
+#   6. 配置 systemd 服务
+#   7. 配置 Nginx
+#   8. 启动服务
+#
+# 前置条件：
+#   - 已运行 server-setup.sh
+#   - 已配置 SSH 密钥或 Git 访问权限
+#   - 已准备好生产环境配置
+#
+# 用法：
+#   sudo bash deploy-production.sh
+# ============================================
 
-set -euo pipefail
+set -e
 
-# Configuration
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
-ENV_FILE="${PROJECT_DIR}/.env"
-BACKUP_DIR="${PROJECT_DIR}/backups"
+# 配置
+APP_DIR="/opt/nuotao-ai-os"
+APP_USER="nuotao"
+BACKEND_DIR="$APP_DIR/backend"
+FRONTEND_DIR="$APP_DIR/frontend"
+LOG_DIR="/var/log/nuotao"
+BACKUP_DIR="/var/backups/nuotao"
+GIT_REPO="git@github.com:your-org/nuotao-ai-os.git"  # 替换为实际仓库地址
+DOMAIN="nuotaooutdoor.com"
 
-# Colors
+# 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Logging functions
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Check prerequisites
-check_prerequisites() {
-    log_info "Checking prerequisites..."
+# 检查是否为 root
+if [ "$EUID" -ne 0 ]; then
+    log_error "请使用 root 权限运行: sudo bash $0"
+    exit 1
+fi
 
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed. Please install Docker first."
-        exit 1
-    fi
+echo "============================================"
+echo " Nuotao AI OS - Production Deployment"
+echo "============================================"
+echo ""
 
-    if ! command -v docker compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose is not installed. Please install Docker Compose first."
-        exit 1
-    fi
+# ============================================
+# 1. 克隆/更新代码
+# ============================================
+log_info "Step 1/8: 克隆/更新代码..."
 
-    if [ ! -f "$ENV_FILE" ]; then
-        log_error "Environment file .env not found. Please create it from .env.example."
-        exit 1
-    fi
+if [ -d "$APP_DIR/.git" ]; then
+    log_info "更新现有代码..."
+    cd $APP_DIR
+    sudo -u $APP_USER git pull origin main
+else
+    log_info "克隆代码仓库..."
+    mkdir -p $APP_DIR
+    chown $APP_USER:$APP_USER $APP_DIR
+    sudo -u $APP_USER git clone $GIT_REPO $APP_DIR
+fi
 
-    log_success "All prerequisites checked."
-}
+log_success "代码更新完成"
 
-# Backup current state
-backup_state() {
-    log_info "Creating backup of current state..."
-    mkdir -p "$BACKUP_DIR"
-    local timestamp=$(date +%Y%m%d_%H%M%S)
+# ============================================
+# 2. 安装 Python 依赖
+# ============================================
+log_info "Step 2/8: 安装 Python 依赖..."
 
-    # Backup database
-    if docker compose -f "$COMPOSE_FILE" ps postgres &> /dev/null; then
-        log_info "Backing up PostgreSQL database..."
-        docker compose -f "$COMPOSE_FILE" exec -T postgres pg_dump -U "${POSTGRES_USER:-nuotao}" "${POSTGRES_DB:-nuotao}" | gzip > "${BACKUP_DIR}/postgres_${timestamp}.sql.gz"
-        log_success "Database backed up."
-    fi
+cd $BACKEND_DIR
 
-    # Backup .env
-    cp "$ENV_FILE" "${BACKUP_DIR}/env_${timestamp}.bak"
-    log_success "Environment file backed up."
+# 创建虚拟环境
+if [ ! -d "$BACKEND_DIR/.venv" ]; then
+    sudo -u $APP_USER python3.12 -m venv .venv
+fi
 
-    log_success "Backup completed: ${BACKUP_DIR}"
-}
+# 安装依赖
+sudo -u $APP_USER $BACKEND_DIR/.venv/bin/pip install --upgrade pip
+sudo -u $APP_USER $BACKEND_DIR/.venv/bin/pip install -r requirements.txt
+sudo -u $APP_USER $BACKEND_DIR/.venv/bin/pip install gunicorn uvicorn[standard]
 
-# Pull latest images
-pull_images() {
-    log_info "Pulling latest Docker images..."
-    docker compose -f "$COMPOSE_FILE" pull
-    log_success "Images pulled."
-}
+log_success "Python 依赖安装完成"
 
-# Build images
-build_images() {
-    log_info "Building Docker images..."
-    docker compose -f "$COMPOSE_FILE" build
-    log_success "Images built."
-}
+# ============================================
+# 3. 安装前端依赖并构建
+# ============================================
+log_info "Step 3/8: 前端构建..."
 
-# Stop existing containers
-stop_containers() {
-    log_info "Stopping existing containers..."
-    docker compose -f "$COMPOSE_FILE" down
-    log_success "Containers stopped."
-}
+cd $FRONTEND_DIR
 
-# Start containers
-start_containers() {
-    log_info "Starting containers..."
-    docker compose -f "$COMPOSE_FILE" up -d
-    log_success "Containers started."
-}
+sudo -u $APP_USER npm ci
+sudo -u $APP_USER npm run build
 
-# Wait for services to be healthy
-wait_for_health() {
-    log_info "Waiting for services to become healthy..."
-    local max_attempts=30
-    local attempt=1
+log_success "前端构建完成"
 
-    while [ $attempt -le $max_attempts ]; do
-        local api_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/healthz 2>/dev/null || echo "000")
+# ============================================
+# 4. 配置环境变量
+# ============================================
+log_info "Step 4/8: 配置环境变量..."
 
-        if [ "$api_status" = "200" ]; then
-            log_success "API service is healthy (attempt ${attempt}/${max_attempts})."
-            return 0
-        fi
+if [ ! -f "$BACKEND_DIR/.env" ]; then
+    log_warning "未找到 .env 文件，从模板复制..."
+    sudo -u $APP_USER cp $BACKEND_DIR/.env.production.template $BACKEND_DIR/.env
+    log_warning "请编辑 $BACKEND_DIR/.env 配置生产环境密钥"
+else
+    log_info ".env 文件已存在"
+fi
 
-        log_warning "API service not healthy yet (attempt ${attempt}/${max_attempts}, status=${api_status})..."
-        sleep 5
-        attempt=$((attempt + 1))
-    done
+log_success "环境变量配置完成"
 
-    log_error "API service did not become healthy within ${max_attempts} attempts."
-    log_info "Showing container logs for debugging:"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 api
-    return 1
-}
+# ============================================
+# 5. 数据库迁移
+# ============================================
+log_info "Step 5/8: 数据库迁移..."
 
-# Run database migrations
-run_migrations() {
-    log_info "Running database migrations..."
-    docker compose -f "$COMPOSE_FILE" exec -T api alembic upgrade head
-    log_success "Migrations completed."
-}
+cd $BACKEND_DIR
 
-# Initialize agents
-initialize_agents() {
-    log_info "Initializing AI agents..."
-    docker compose -f "$COMPOSE_FILE" exec -T api python init_all_agents.py
-    log_success "Agents initialized."
-}
+# 创建数据库表（使用 SQLAlchemy create_all）
+sudo -u $APP_USER $BACKEND_DIR/.venv/bin/python -c "
+import asyncio
+from app.core.database import Base, _engine
+async def init():
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print('Database tables created successfully')
+asyncio.run(init())
+"
 
-# Show status
-show_status() {
-    log_info "Current deployment status:"
-    echo ""
-    docker compose -f "$COMPOSE_FILE" ps
-    echo ""
+log_success "数据库迁移完成"
 
-    # API health check
-    local api_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/healthz 2>/dev/null || echo "000")
-    local ready_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/readyz 2>/dev/null || echo "000")
+# ============================================
+# 6. 配置 systemd 服务
+# ============================================
+log_info "Step 6/8: 配置 systemd 服务..."
 
-    echo "API Health: ${api_status}"
-    echo "API Ready: ${ready_status}"
-    echo ""
+# 后端服务
+cat > /etc/systemd/system/nuotao-backend.service <<EOF
+[Unit]
+Description=Nuotao AI OS Backend
+After=network.target postgresql.service redis-server.service
 
-    if [ "$api_status" = "200" ]; then
-        log_success "Deployment is running successfully!"
-        echo ""
-        echo "API Documentation: http://localhost:8000/docs"
-        echo "API Health: http://localhost:8000/api/v1/healthz"
-        echo "API Ready: http://localhost:8000/api/v1/readyz"
-    else
-        log_warning "API service may not be fully ready. Check logs with: docker compose logs -f api"
-    fi
-}
+[Service]
+Type=simple
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$BACKEND_DIR
+Environment="PATH=$BACKEND_DIR/.venv/bin"
+ExecStart=$BACKEND_DIR/.venv/bin/gunicorn app.main:app \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:8000 \
+    --timeout 120 \
+    --access-logfile $LOG_DIR/backend-access.log \
+    --error-logfile $LOG_DIR/backend-error.log
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=$BACKEND_DIR $LOG_DIR $BACKUP_DIR
 
-# Main deployment flow
-main() {
-    local initial_setup=false
+[Install]
+WantedBy=multi-user.target
+EOF
 
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --initial)
-                initial_setup=true
-                shift
-                ;;
-            *)
-                log_error "Unknown argument: $1"
-                exit 1
-                ;;
-        esac
-    done
+# 监控服务
+cat > /etc/systemd/system/nuotao-monitor.service <<EOF
+[Unit]
+Description=Nuotao AI OS Monitor
+After=network.target
 
-    echo ""
-    echo "=========================================="
-    echo "  Nuotao AI OS Production Deployment"
-    echo "=========================================="
-    echo ""
+[Service]
+Type=simple
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+ExecStart=$BACKEND_DIR/.venv/bin/python $APP_DIR/scripts/monitor_service.py
+Restart=always
+RestartSec=10
 
-    # Step 1: Check prerequisites
-    check_prerequisites
+[Install]
+WantedBy=multi-user.target
+EOF
 
-    # Step 2: Backup current state
-    backup_state
+systemctl daemon-reload
+systemctl enable nuotao-backend
+systemctl enable nuotao-monitor
 
-    # Step 3: Pull and build images
-    pull_images
-    build_images
+log_success "systemd 服务配置完成"
 
-    # Step 4: Stop and start containers
-    stop_containers
-    start_containers
+# ============================================
+# 7. 配置 Nginx
+# ============================================
+log_info "Step 7/8: 配置 Nginx..."
 
-    # Step 5: Wait for health
-    wait_for_health
+# 复制 Nginx 配置
+cp $APP_DIR/infra/nginx/nginx-cdn.conf /etc/nginx/sites-available/nuotao.conf
 
-    # Step 6: Initial setup if requested
-    if [ "$initial_setup" = true ]; then
-        log_info "Running initial setup..."
-        run_migrations
-        initialize_agents
-        log_success "Initial setup completed."
-    else
-        # Always run migrations on deployment
-        run_migrations
-    fi
+# 替换域名和路径
+sed -i "s|nuotaooutdoor.com|$DOMAIN|g" /etc/nginx/sites-available/nuotao.conf
+sed -i "s|/opt/nuotao-ai-os/frontend/dist|$FRONTEND_DIR/dist|g" /etc/nginx/sites-available/nuotao.conf
 
-    # Step 7: Show status
-    show_status
+# 启用站点
+ln -sf /etc/nginx/sites-available/nuotao.conf /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
 
-    echo ""
-    log_success "Deployment completed successfully!"
-    echo ""
-    echo "Useful commands:"
-    echo "  View logs:        docker compose -f ${COMPOSE_FILE} logs -f"
-    echo "  View API logs:    docker compose -f ${COMPOSE_FILE} logs -f api"
-    echo "  View Worker logs: docker compose -f ${COMPOSE_FILE} logs -f worker"
-    echo "  Stop services:    docker compose -f ${COMPOSE_FILE} down"
-    echo "  Start services:   docker compose -f ${COMPOSE_FILE} up -d"
-    echo "  Scale workers:    docker compose -f ${COMPOSE_FILE} up -d --scale worker=4"
-    echo ""
-}
+# 测试 Nginx 配置
+nginx -t
 
-# Run main
-main "$@"
+log_success "Nginx 配置完成"
+
+# ============================================
+# 8. 启动服务
+# ============================================
+log_info "Step 8/8: 启动服务..."
+
+systemctl restart nuotao-backend
+systemctl restart nuotao-monitor
+systemctl restart nginx
+
+# 等待服务启动
+sleep 3
+
+# 检查服务状态
+echo ""
+log_info "服务状态检查："
+systemctl is-active nuotao-backend && log_success "后端服务: 运行中" || log_error "后端服务: 未运行"
+systemctl is-active nuotao-monitor && log_success "监控服务: 运行中" || log_warning "监控服务: 未运行"
+systemctl is-active nginx && log_success "Nginx: 运行中" || log_error "Nginx: 未运行"
+systemctl is-active postgresql && log_success "PostgreSQL: 运行中" || log_error "PostgreSQL: 未运行"
+systemctl is-active redis-server && log_success "Redis: 运行中" || log_error "Redis: 未运行"
+
+# ============================================
+# 完成
+# ============================================
+echo ""
+echo "============================================"
+echo " Production Deployment Complete!"
+echo "============================================"
+echo ""
+echo "访问地址："
+echo "  前端: http://$DOMAIN"
+echo "  API:  http://$DOMAIN/api/v1"
+echo "  文档: http://$DOMAIN/docs"
+echo ""
+echo "服务管理："
+echo "  启动: sudo systemctl start nuotao-backend"
+echo "  停止: sudo systemctl stop nuotao-backend"
+echo "  重启: sudo systemctl restart nuotao-backend"
+echo "  状态: sudo systemctl status nuotao-backend"
+echo "  日志: sudo journalctl -u nuotao-backend -f"
+echo ""
+echo "后续步骤："
+echo "  1. 配置 SSL 证书: sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN"
+echo "  2. 验证 .env 配置: sudo nano $BACKEND_DIR/.env"
+echo "  3. 修改默认密码（数据库/Redis/管理员）"
+echo "  4. 配置数据库自动备份"
+echo "  5. 配置监控告警"
+echo "============================================"

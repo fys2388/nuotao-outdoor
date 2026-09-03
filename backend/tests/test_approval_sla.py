@@ -10,13 +10,14 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_operations import AgentAlert, AgentApproval
 from app.models.agent_platform import AgentApprovalSla
 from app.models.event import EventLog
 from app.services import approval_service, approval_sla, task_queue
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

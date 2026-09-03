@@ -16,6 +16,9 @@ from functools import partial
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent import AiAgentRun
 from app.models.agent_runtime import AgentExecution, AgentRegistry, AgentTask
@@ -41,8 +44,6 @@ from app.services import (
 from app.services.llm_gateway import LLMError, LLMResponse
 from app.worker.agent_worker import run_worker_once
 from app.worker.product_analyst_executor import product_analyst_executor
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

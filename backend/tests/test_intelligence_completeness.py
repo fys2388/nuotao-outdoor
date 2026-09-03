@@ -10,6 +10,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product, ProductCost
@@ -19,7 +21,6 @@ from app.models.product_intelligence import (
 )
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 INTAKE_URL = "/api/v1/products/intake"

@@ -1,377 +1,239 @@
-# Nuotao AI OS 云服务器部署指南
+# Nuotao AI OS - 云服务器选择与部署指南
 
-## 1. 云服务器选择建议
+## 一、云服务商推荐
 
-### 推荐配置
-| 配置项 | 最低要求 | 推荐配置 |
-|---|---|---|
-| CPU | 2 核 | 4 核 |
-| 内存 | 4 GB | 8 GB |
-| 硬盘 | 40 GB SSD | 80 GB SSD |
-| 带宽 | 5 Mbps | 10 Mbps |
-| 操作系统 | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS |
+### 1.1 国内云服务商（推荐国内用户）
 
-### 推荐云服务商
-- **阿里云**: 轻量应用服务器（性价比高）
-- **腾讯云**: 轻量应用服务器（新人优惠）
-- **华为云**: 弹性云服务器
-- **AWS**: EC2 t3.medium（海外业务）
-- **DigitalOcean**: Droplet（海外业务）
+| 服务商 | 最低配置 | 月费（约） | 优势 | 劣势 |
+|--------|----------|------------|------|------|
+| **阿里云** | 2核4G 40G SSD | ¥60-100 | 稳定、生态完善、国内访问快 | 需备案、价格较高 |
+| **腾讯云** | 2核4G 50G SSD | ¥50-90 | 性价比高、轻量应用服务器 | 需备案、生态略逊 |
+| **华为云** | 2核4G 40G SSD | ¥60-100 | 企业级稳定、安全合规 | 需备案、文档较少 |
 
----
+### 1.2 海外云服务商（推荐海外用户/无需备案）
 
-## 2. 部署前准备
+| 服务商 | 最低配置 | 月费（约） | 优势 | 劣势 |
+|--------|----------|------------|------|------|
+| **Vultr** | 1核1G 25G SSD | $5-6 | 按小时计费、全球节点多、支持支付宝 | 国内访问可能较慢 |
+| **DigitalOcean** | 1核1G 25G SSD | $5-6 | 简单易用、文档完善 | 国内访问较慢、不支持支付宝 |
+| **AWS Lightsail** | 1核2G 40G SSD | $5-10 | 稳定、可升级到EC2 | 配置复杂、超额收费 |
+| **Hetzner** | 2核4G 40G SSD | €4-6 | 性价比极高、欧洲节点 | 仅欧洲节点、需信用卡 |
 
-### 2.1 域名解析
-1. 登录域名管理面板（如阿里云、Cloudflare）
-2. 添加 A 记录：`your-domain.com` → 服务器 IP
-3. 添加 A 记录：`www.your-domain.com` → 服务器 IP
-4. 等待 DNS 生效（通常 5-30 分钟）
+### 1.3 免费套餐（适合测试/小流量）
 
-### 2.2 安全组配置
-在云服务商控制台开放以下端口：
-| 端口 | 协议 | 用途 |
-|---|---|---|
-| 22 | TCP | SSH 远程登录 |
-| 80 | TCP | HTTP |
-| 443 | TCP | HTTPS |
-| 9090 | TCP | Prometheus（仅内网） |
-| 3000 | TCP | Grafana（仅内网） |
+| 服务商 | 免费额度 | 限制 |
+|--------|----------|------|
+| **Oracle Cloud** | 4核24G 永久免费 | 需信用卡验证、注册严格（之前被拒） |
+| **AWS Free Tier** | 1核1G 12个月 | 需信用卡、超额收费 |
+| **Google Cloud** | $300 额度 90天 | 需信用卡、地区限制 |
+| **阿里云免费试用** | 3个月 2核2G | 新用户专享、需实名 |
 
 ---
 
-## 3. 服务器初始化
+## 二、服务器配置建议
 
-### 3.1 连接服务器
+### 2.1 最低配置（测试/小流量）
+
+| 组件 | 配置 |
+|------|------|
+| CPU | 1核 |
+| 内存 | 2GB |
+| 硬盘 | 25GB SSD |
+| 带宽 | 1Mbps |
+| 系统 | Ubuntu 22.04 LTS |
+
+**适用场景**：开发测试、日访问量 < 1000
+
+### 2.2 推荐配置（生产环境）
+
+| 组件 | 配置 |
+|------|------|
+| CPU | 2核 |
+| 内存 | 4GB |
+| 硬盘 | 50GB SSD |
+| 带宽 | 3-5Mbps |
+| 系统 | Ubuntu 22.04 LTS |
+
+**适用场景**：日访问量 1000-10000，中小型电商
+
+### 2.3 高性能配置（大流量）
+
+| 组件 | 配置 |
+|------|------|
+| CPU | 4核 |
+| 内存 | 8GB |
+| 硬盘 | 100GB SSD |
+| 带宽 | 10Mbps+ |
+| 系统 | Ubuntu 22.04 LTS |
+
+**适用场景**：日访问量 > 10000，大型促销活动
+
+---
+
+## 三、部署步骤
+
+### 3.1 购买服务器
+
+1. 选择云服务商，注册账号
+2. 选择配置（推荐 2核4G 50G SSD）
+3. 选择系统（Ubuntu 22.04 LTS）
+4. 设置 SSH 密钥或 root 密码
+5. 购买并等待服务器启动
+
+### 3.2 域名解析（如使用域名）
+
+1. 在域名服务商处添加 A 记录：
+   - `@` → 服务器 IP
+   - `www` → 服务器 IP
+2. 等待 DNS 生效（通常 5-30 分钟）
+
+### 3.3 服务器初始化
+
 ```bash
+# SSH 登录服务器
 ssh root@your-server-ip
+
+# 上传部署脚本（或直接复制内容）
+# 方法1: 使用 scp
+scp infra/server-setup.sh root@your-server-ip:/root/
+scp infra/deploy-production.sh root@your-server-ip:/root/
+
+# 方法2: 直接在服务器上创建文件
+nano server-setup.sh
+# 粘贴内容，保存退出
+
+# 运行服务器初始化脚本
+chmod +x server-setup.sh
+sudo bash server-setup.sh
 ```
 
-### 3.2 上传初始化脚本
-在本地执行：
+### 3.4 应用部署
+
 ```bash
-scp infra/setup-server.sh root@your-server-ip:/root/
+# 编辑部署脚本，修改 GIT_REPO 为实际仓库地址
+nano deploy-production.sh
+
+# 运行部署脚本
+chmod +x deploy-production.sh
+sudo bash deploy-production.sh
 ```
 
-### 3.3 执行初始化脚本
+### 3.5 配置生产环境
+
 ```bash
-chmod +x /root/setup-server.sh
-/root/setup-server.sh
+# 编辑环境变量
+sudo nano /opt/nuotao-ai-os/backend/.env
+
+# 必须修改的配置：
+# - DATABASE_URL（数据库密码）
+# - REDIS_URL（Redis 密码）
+# - JWT_SECRET_KEY（强随机密钥）
+# - WOOCOMMERCE_*（店铺密钥）
+# - LLM_API_KEY（AI 模型密钥）
+# - FEISHU_WEBHOOK_URL（飞书通知）
+
+# 重启服务
+sudo systemctl restart nuotao-backend
 ```
 
-脚本会自动完成：
-- ✅ 系统更新
-- ✅ 安装 Docker + Docker Compose
-- ✅ 配置防火墙（UFW）
-- ✅ 安装 Fail2Ban
-- ✅ 安装 Node Exporter（监控）
-- ✅ 创建应用目录
-- ✅ 优化系统参数
+### 3.6 SSL 证书配置
 
-### 3.4 验证初始化
 ```bash
-docker --version
-docker compose version
-ufw status
-systemctl status node_exporter
+# 使用 Certbot 申请免费 SSL 证书
+sudo certbot --nginx -d nuotaooutdoor.com -d www.nuotaooutdoor.com
+
+# 证书自动续期（Certbox 会自动配置）
+sudo certbot renew --dry-run
+```
+
+### 3.7 验证部署
+
+```bash
+# 检查服务状态
+sudo systemctl status nuotao-backend
+sudo systemctl status nginx
+sudo systemctl status postgresql
+sudo systemctl status redis-server
+
+# 检查端口
+sudo netstat -tlnp | grep -E '80|443|8000|5432|6379'
+
+# 查看日志
+sudo journalctl -u nuotao-backend -f
+sudo tail -f /var/log/nginx/access.log
+
+# 测试 API
+curl http://localhost:8000/health
+curl https://your-domain.com/api/v1/health
 ```
 
 ---
 
-## 4. 部署应用
+## 四、安全配置清单
 
-### 4.1 上传代码
-方式一：使用 Git（推荐）
-```bash
-cd /opt/nuotao-ai-os
-git clone https://github.com/your-username/nuotao-ai-os.git .
-```
+部署完成后，必须完成以下安全配置：
 
-方式二：使用 SCP
-```bash
-# 在本地执行
-scp -r nuotao-ai-os/* root@your-server-ip:/opt/nuotao-ai-os/
-```
-
-### 4.2 配置环境变量
-```bash
-cd /opt/nuotao-ai-os
-cp .env.production.example .env
-nano .env
-```
-
-**必须修改的配置项**：
-```env
-# 应用配置
-APP_ENV=production
-APP_SECRET_KEY=your-secret-key-here（用 openssl rand -hex 32 生成）
-
-# 数据库配置
-POSTGRES_PASSWORD=your-strong-password
-POSTGRES_USER=nuotao
-POSTGRES_DB=nuotao
-
-# Redis 配置
-REDIS_PASSWORD=your-redis-password
-
-# LLM 配置
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxx
-
-# WooCommerce 配置
-WOOCOMMERCE_BASE_URL=https://your-domain.com
-WOOCOMMERCE_CONSUMER_KEY=ck_xxxxxxxxxxxxxxxx
-WOOCOMMERCE_CONSUMER_SECRET=cs_xxxxxxxxxxxxxxxx
-
-# 域名配置（用于 SSL 证书）
-DOMAIN=your-domain.com
-SSL_EMAIL=your-email@example.com
-```
-
-### 4.3 启动应用
-```bash
-cd /opt/nuotao-ai-os
-chmod +x infra/deploy.sh
-./infra/deploy.sh deploy
-```
-
-部署脚本会自动完成：
-1. ✅ 备份数据库
-2. ✅ 构建 Docker 镜像
-3. ✅ 停止旧服务
-4. ✅ 启动新服务
-5. ✅ 运行数据库迁移
-6. ✅ 健康检查
-
-### 4.4 查看服务状态
-```bash
-./infra/deploy.sh status
-```
-
-预期输出：
-```
-NAME                STATUS
-nuotao-api          running
-nuotao-worker       running
-nuotao-postgres     running
-nuotao-redis        running
-nuotao-nginx        running
-nuotao-prometheus   running
-nuotao-grafana      running
-nuotao-alertmanager running
-```
+- [ ] 修改 PostgreSQL 默认密码
+- [ ] 修改 Redis 默认密码
+- [ ] 修改管理员账号默认密码（admin/Admin@2026）
+- [ ] 配置 JWT 强随机密钥
+- [ ] 配置 SSH 密钥登录，禁用密码登录
+- [ ] 配置防火墙（仅开放 22/80/443）
+- [ ] 配置 Fail2ban 防暴力破解
+- [ ] 配置数据库自动备份
+- [ ] 配置监控告警
+- [ ] 配置 SSL 证书自动续期
+- [ ] 配置系统自动安全更新
+- [ ] 定期更新系统和依赖包
 
 ---
 
-## 5. SSL 证书配置
+## 五、成本估算
 
-### 5.1 使用 Certbot 自动申请
-```bash
-docker compose -f docker-compose.prod.yml run --rm certbot certonly --webroot --webroot-path /var/www/certbot -d your-domain.com -d www.your-domain.com
-```
+### 5.1 服务器成本
 
-### 5.2 配置 Nginx 使用 SSL
-编辑 `infra/nginx/nginx.conf`，取消 HTTPS 配置注释：
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name your-domain.com;
+| 配置 | 月费（国内） | 月费（海外） |
+|------|--------------|--------------|
+| 最低（1核2G） | ¥40-60 | $5-6 |
+| 推荐（2核4G） | ¥60-100 | $10-15 |
+| 高性能（4核8G） | ¥150-250 | $25-40 |
 
-    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+### 5.2 其他成本
 
-    # ... 其他配置
-}
-```
+| 项目 | 费用 |
+|------|------|
+| 域名 | ¥50-100/年 |
+| SSL 证书 | 免费（Let's Encrypt） |
+| CDN | ¥0-50/月（按需） |
+| 对象存储 | ¥0-20/月（按需） |
+| LLM API | $10-50/月（按需） |
+| 邮件服务 | $0-10/月（按需） |
 
-### 5.3 重启 Nginx
-```bash
-docker compose -f docker-compose.prod.yml restart nginx
-```
+### 5.3 月度总成本估算
 
----
-
-## 6. 验证部署
-
-### 6.1 健康检查
-```bash
-curl https://your-domain.com/api/v1/healthz
-```
-预期输出：`{"status":"ok"}`
-
-### 6.2 访问前端
-在浏览器中打开：`https://your-domain.com`
-
-### 6.3 访问 API 文档
-在浏览器中打开：`https://your-domain.com/docs`
-
-### 6.4 访问 Grafana
-在浏览器中打开：`https://your-domain.com/grafana`
-- 默认账号：`admin`
-- 默认密码：`admin`（首次登录后修改）
-
-### 6.5 访问 Prometheus
-在浏览器中打开：`https://your-domain.com/prometheus`
+| 规模 | 服务器 | 其他 | 总计 |
+|------|--------|------|------|
+| 起步 | ¥60 | ¥50 | **¥110/月** |
+| 成长 | ¥100 | ¥100 | **¥200/月** |
+| 成熟 | ¥200 | ¥200 | **¥400/月** |
 
 ---
 
-## 7. 日常运维
+## 六、常见问题
 
-### 7.1 查看日志
-```bash
-# 查看所有服务日志
-./infra/deploy.sh logs
+### Q: 国内服务器必须备案吗？
+A: 使用国内服务器 + 域名访问网站，必须完成 ICP 备案（约 7-20 个工作日）。使用海外服务器无需备案。
 
-# 查看特定服务日志
-./infra/deploy.sh logs api
-./infra/deploy.sh logs worker
-./infra/deploy.sh logs postgres
-```
+### Q: 可以先在本地运行，后期再部署到云服务器吗？
+A: 可以。项目支持本地开发和生产部署两种模式。准备好后运行部署脚本即可上线。
 
-### 7.2 重启服务
-```bash
-# 重启所有服务
-./infra/deploy.sh restart
+### Q: 如何从本地迁移到云服务器？
+A: 1) 在云服务器运行部署脚本；2) 导出本地数据库；3) 导入到云服务器；4) 修改配置指向云服务器。
 
-# 重启特定服务
-./infra/deploy.sh restart api
-```
-
-### 7.3 停止服务
-```bash
-./infra/deploy.sh stop
-```
-
-### 7.4 备份数据库
-```bash
-./infra/deploy.sh backup
-```
-
-备份文件位置：`/opt/nuotao-ai-os/backups/`
-
-### 7.5 恢复数据库
-```bash
-./infra/deploy.sh restore backups/nuotao_20240101_120000.sql.gz
-```
-
-### 7.6 更新应用
-```bash
-cd /opt/nuotao-ai-os
-git pull
-./infra/deploy.sh deploy
-```
-
-### 7.7 回滚到上一版本
-```bash
-./infra/deploy.sh rollback
-```
+### Q: 服务器被攻击了怎么办？
+A: 1) 立即断开网络或关闭服务器；2) 查看日志分析攻击来源；3) 恢复备份；4) 加强安全配置；5) 考虑使用 CDN 和 WAF。
 
 ---
 
-## 8. 监控告警配置
-
-### 8.1 导入 Grafana 仪表盘
-1. 登录 Grafana
-2. 进入 Dashboards → New → Import
-3. 上传 `infra/grafana/dashboards/nuotao-ai-os.json`
-4. 选择 Prometheus 数据源
-5. 点击 Import
-
-### 8.2 配置 Alertmanager
-编辑 `infra/alertmanager/alertmanager.yml`，填写通知渠道：
-```yaml
-global:
-  smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'alerts@your-domain.com'
-  smtp_auth_username: 'alerts@your-domain.com'
-  smtp_auth_password: 'your-email-password'
-
-  dingtalk_api_url: 'https://oapi.dingtalk.com/robot/send?access_token=your-token'
-  wechat_api_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-key'
-```
-
-重启 Alertmanager：
-```bash
-docker compose -f docker-compose.prod.yml restart alertmanager
-```
-
----
-
-## 9. 常见问题
-
-### Q1: 部署后无法访问网站
-**检查清单**：
-1. 安全组是否开放 80/443 端口
-2. 防火墙是否开放 80/443 端口：`ufw status`
-3. Nginx 是否正常运行：`docker ps | grep nginx`
-4. Nginx 日志：`docker logs nuotao-nginx`
-5. DNS 是否解析正确：`nslookup your-domain.com`
-
-### Q2: 数据库连接失败
-**检查清单**：
-1. PostgreSQL 是否运行：`docker ps | grep postgres`
-2. 数据库密码是否正确：检查 `.env` 文件
-3. 数据库日志：`docker logs nuotao-postgres`
-4. 手动测试连接：`docker exec -it nuotao-postgres psql -U nuotao -d nuotao`
-
-### Q3: LLM API 调用失败
-**检查清单**：
-1. API Key 是否正确：检查 `.env` 文件
-2. 网络是否能访问 API 服务商：`curl https://api.deepseek.com`
-3. API 额度是否充足：登录服务商控制台查看
-4. 后端日志：`docker logs nuotao-api`
-
-### Q4: WooCommerce 同步失败
-**检查清单**：
-1. Consumer Key/Secret 是否正确
-2. WooCommerce REST API 是否启用
-3. 店铺是否能正常访问：`curl https://your-shop.com`
-4. 后端日志：`docker logs nuotao-api`
-
-### Q5: 如何查看系统资源使用
-```bash
-# 查看 Docker 容器资源使用
-docker stats
-
-# 查看系统内存使用
-free -h
-
-# 查看磁盘使用
-df -h
-
-# 查看 CPU 使用
-top
-```
-
----
-
-## 10. 安全建议
-
-1. **修改默认密码**：Grafana、数据库、Redis 都要修改默认密码
-2. **启用 HTTPS**：所有外部访问都使用 HTTPS
-3. **定期备份**：配置每日自动备份
-4. **限制 SSH 访问**：使用密钥登录，禁用密码登录
-5. **更新系统**：定期更新系统补丁
-6. **监控告警**：配置告警通知，及时发现问题
-7. **日志审计**：定期检查访问日志和错误日志
-
----
-
-## 11. 联系支持
-
-如遇问题，请检查：
-1. 后端日志：`docker logs nuotao-api`
-2. Worker 日志：`docker logs nuotao-worker`
-3. Nginx 日志：`docker logs nuotao-nginx`
-4. 系统状态：`./infra/deploy.sh status`
-5. 健康检查：`./infra/deploy.sh health`
-
----
-
-**部署完成后，请记录以下信息**：
-- 服务器 IP：__________
-- 域名：__________
-- 数据库密码：__________（妥善保管）
-- Redis 密码：__________
-- Grafana 账号：__________
-- SSH 密钥：__________（妥善保管）
+**文档版本**：v1.0
+**最后更新**：2026-09-02

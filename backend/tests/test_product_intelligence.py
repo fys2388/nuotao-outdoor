@@ -8,6 +8,8 @@ deterministic scoring.
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import ProductCost
 from app.models.product_intelligence import (
@@ -18,7 +20,6 @@ from app.models.product_intelligence import (
 )
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
-from sqlalchemy import func, select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 INTAKE_URL = "/api/v1/products/intake"

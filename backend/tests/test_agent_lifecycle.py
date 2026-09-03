@@ -10,6 +10,8 @@ version and never mutates history. Every transition is audited with
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_platform import AgentVersion
 from app.models.agent_runtime import AgentRegistry
@@ -23,7 +25,6 @@ from app.services import (
     prompt_registry,
     task_queue,
 )
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

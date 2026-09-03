@@ -11,12 +11,13 @@ candidate_status=NULL.
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product
 from app.models.product_intelligence import ProductSource, WooCommerceDraft
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = uuid4()

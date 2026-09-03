@@ -2,14 +2,14 @@
 批量添加 WooCommerce 测试产品
 """
 import os
-import sys
+
 import requests
 from requests.auth import HTTPBasicAuth
 
 # WooCommerce 配置
 WC_BASE_URL = os.getenv("WOOCOMMERCE_BASE_URL", "https://nuotaooutdoor.com")
-WC_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "ck_f8e1e408e04211106f48421b3fd4ad06a0251ccc")
-WC_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "cs_089cc21c1b7c9c7dbbdecca54911c60deb76869a")
+WC_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "")
+WC_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "")
 
 API_URL = f"{WC_BASE_URL}/wp-json/wc/v3"
 AUTH = HTTPBasicAuth(WC_CONSUMER_KEY, WC_CONSUMER_SECRET)

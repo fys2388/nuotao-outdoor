@@ -15,6 +15,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
+
 from app.core.config import get_settings
 from app.services import llm_gateway
 from app.services.llm_gateway import LLMError, LLMRequest

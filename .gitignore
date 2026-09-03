@@ -28,3 +28,53 @@ Thumbs.db
 # Data / logs
 *.log
 data/
+
+# ============================================================
+# 服务器一次性运维脚本（含硬编码密钥，禁止入库）
+# 项目级部署脚本保留在 infra/ 目录下
+# ============================================================
+/*.sh
+!infra/*.sh
+!infra/**/*.sh
+
+# 根目录一次性 Python 脚本（含硬编码密钥）
+/import-woocommerce-orders*.py
+/woocommerce-solar-lantern.py
+/check-payment-gateways.py
+/test_order_flow.py
+/business-alert-monitor.py
+/fulfill-orders.py
+/order-notifications.py
+/add-sentry-init.py
+/fix_order_id.py
+/fix_webhook_*.py
+/test-*.py
+/weekly-report-feishu.py
+
+# 密钥与敏感文件
+*.key
+*secret*.txt
+brevo-smtp-key*.txt
+webhook_secret.txt
+*.pem
+*.p12
+
+# 临时分析与下载文件
+/analyze_deploy.py
+/list_wc_products.py
+/server_openapi.json
+/wc_products.json
+/wc_all.json
+/nuotao-ai-os-deploy.tar.gz
+/*.png
+/*.jpg
+/*.jpeg
+
+# 测试结果与运行时产物
+/backend/agent_test_results.json
+/backend/*.json
+!/backend/pyproject.toml
+!/backend/alembic.ini
+
+# 备份目录
+/backups/

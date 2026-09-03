@@ -271,7 +271,7 @@ async def process_message(
 
     try:
         data = task_queue.parse_message(message.fields)
-    except Exception:  # noqa: BLE001 - malformed messages are acked and logged
+    except Exception:
         logger.warning("malformed queue message %s (trace=%s)", message.message_id, trace_id)
         await backend.ack(stream, group, message.message_id)
         return "malformed"
@@ -536,7 +536,7 @@ async def _run_attempt(
             trace_id=trace_id,
             message_id=message_id,
         )
-    except Exception as exc:  # noqa: BLE001 - classify and retry/dead-letter
+    except Exception as exc:
         error_type = retry_engine.classify_error(exc)
         logger.warning(
             "execution failed (task=%s, error=%s, trace=%s): %s", task.id, error_type, trace_id, exc
@@ -760,7 +760,7 @@ async def run_worker(
                             gate=gate,
                             runtime=runtime,
                         )
-                    except Exception:  # noqa: BLE001 - never kill the loop
+                    except Exception:
                         logger.exception(
                             "worker message error (message=%s, worker=%s)",
                             message.message_id,
@@ -768,7 +768,7 @@ async def run_worker(
                         )
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - keep the worker alive
+            except Exception:
                 logger.exception("worker loop error (worker=%s)", worker_id)
                 await asyncio.sleep(1)
     finally:

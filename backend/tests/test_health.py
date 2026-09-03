@@ -4,10 +4,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.database import get_db
 from app.core.redis import get_redis
 from app.main import app
-from fastapi.testclient import TestClient
 
 
 class _FakeSession:

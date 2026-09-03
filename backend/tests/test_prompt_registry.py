@@ -1,6 +1,7 @@
 """Tests for the Prompt Registry (M2.2): versioning + rendering."""
 
 import pytest
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.schemas.prompt import PromptCreate
 from app.services import prompt_registry

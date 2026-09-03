@@ -10,13 +10,14 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from app.services.workspace_identity import (
     link_workspace_identity,
     resolve_workspace_from_identity,
 )
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 WS_A = UUID("00000000-0000-0000-0000-00000000aa01")
 WS_B = UUID("00000000-0000-0000-0000-00000000aa02")

@@ -1,6 +1,7 @@
 """Tests for the event log service."""
 
 import pytest
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.services import event_service
 

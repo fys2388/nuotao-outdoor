@@ -11,6 +11,9 @@ import json
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_runtime import AgentRegistry
 from app.models.rule import Rule
@@ -19,8 +22,6 @@ from app.schemas.rule import RuleCreate
 from app.services import agent_policies, product_intelligence, rule_engine
 from app.services.llm_gateway import LLMResponse
 from app.worker.agent_worker import run_worker_once
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 

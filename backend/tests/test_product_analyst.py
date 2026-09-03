@@ -10,6 +10,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.agents import product_analyst
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent import AiAgentRun
@@ -24,7 +26,6 @@ from app.schemas.prompt import PromptCreate
 from app.schemas.rule import RuleCreate
 from app.services import prompt_registry, rule_engine
 from app.services.llm_gateway import LLMResponse
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 INTAKE_URL = "/api/v1/products/intake"

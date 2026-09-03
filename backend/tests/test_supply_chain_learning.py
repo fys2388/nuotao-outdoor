@@ -8,11 +8,12 @@ workspace isolation and event audit.
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.supplier import Supplier
 from app.models.supply_chain import ShipmentRecord, SupplierProfile
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

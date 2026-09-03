@@ -178,7 +178,7 @@ class RedisStreamBackend:
     async def ensure_group(self, stream: str, group: str) -> None:
         try:
             await self.redis.xgroup_create(stream, group, id="0", mkstream=True)
-        except Exception:  # noqa: BLE001 - group already exists
+        except Exception:
             pass
 
     async def add_delayed(self, key: str, member: str, score: float) -> None:
@@ -227,7 +227,7 @@ class RedisStreamBackend:
         """Return True when the Redis server answers PING."""
         try:
             return bool(await self.redis.ping())
-        except Exception:  # noqa: BLE001 - health checks must not raise
+        except Exception:
             return False
 
     async def healthcheck(self) -> dict[str, Any]:
@@ -247,14 +247,14 @@ class RedisStreamBackend:
             return info
         try:
             info["stream_exists"] = bool(await self.redis.exists(stream))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return info
         if not info["stream_exists"]:
             return info
         try:
             groups = await self.redis.xinfo_groups(stream)
             info["group_exists"] = any(str(group_row.get("name")) == group for group_row in groups)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         try:
             pending = await self.redis.xpending(stream, group)
@@ -262,7 +262,7 @@ class RedisStreamBackend:
                 info["pending_count"] = int(pending.get("pending", 0) or 0)
             elif isinstance(pending, (list, tuple)):
                 info["pending_count"] = len(pending)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         try:
             stale = await self.redis.xpending(
@@ -274,7 +274,7 @@ class RedisStreamBackend:
                 count=10,
             )
             info["stale_pending_count"] = len(stale)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return info
 

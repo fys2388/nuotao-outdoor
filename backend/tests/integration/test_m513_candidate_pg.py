@@ -16,6 +16,7 @@ import asyncpg
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from tests.integration.conftest import run_alembic
 
 WORKSPACE = UUID("10000000-0000-0000-0000-000000000001")
@@ -116,7 +117,7 @@ async def test_activation_gate_real_products_candidate_source(pg_migrated: str) 
     original_url = settings.database_url
     settings.database_url = pg_migrated
     try:
-        checks = await activation_gate._db_gate_checks(WORKSPACE, settings)  # noqa: SLF001
+        checks = await activation_gate._db_gate_checks(WORKSPACE, settings)
     finally:
         settings.database_url = original_url
     await engine.dispose()
@@ -135,7 +136,7 @@ async def test_activation_gate_blocked_without_products(pg_migrated: str) -> Non
     original_url = settings.database_url
     settings.database_url = pg_migrated
     try:
-        checks = await activation_gate._db_gate_checks(WORKSPACE, settings)  # noqa: SLF001
+        checks = await activation_gate._db_gate_checks(WORKSPACE, settings)
     finally:
         settings.database_url = original_url
 

@@ -207,7 +207,7 @@ async def create_task(
             payload={"attempt": 1},
             trace_id=get_trace_id(),
         )
-    except Exception as exc:  # noqa: BLE001 - degrade, never fail task creation
+    except Exception as exc:
         logging.getLogger(__name__).warning(
             "task %s enqueue failed (%s) trace=%s; reconciliation will retry",
             task.id,

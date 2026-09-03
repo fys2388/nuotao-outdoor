@@ -10,6 +10,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import func, select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.connector import ConnectorRun
 from app.models.customer import CustomerProfile
@@ -19,7 +21,6 @@ from app.models.order import Order
 from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.supply_chain import LogisticsEvent, ShipmentRecord
-from sqlalchemy import func, select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

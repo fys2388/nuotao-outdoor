@@ -4,10 +4,13 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.schemas.product_intelligence import SourcingCandidateCreate
-from app.services import product_context
-from app.services import product_intelligence as pi
+from app.services import (
+    product_context,
+    product_intelligence as pi,
+)
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 INTAKE_URL = "/api/v1/products/intake"

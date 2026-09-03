@@ -241,7 +241,7 @@ async def get_approval(
     workspace_id: WorkspaceId,
 ) -> ApprovalOut:
     """Return one approval request (workspace-scoped)."""
-    approval = await approval_service._load_approval(  # noqa: SLF001
+    approval = await approval_service._load_approval(
         db, workspace_id=workspace_id, approval_id=approval_id
     )
     if approval is None:

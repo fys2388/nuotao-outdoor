@@ -335,7 +335,7 @@ async def feedback_knowledge(
         decision_match = None
         if "decision" in prediction and "decision" in actual:
             decision_match = prediction["decision"] == actual["decision"]
-        success = ai_evaluation._determine_success(  # noqa: SLF001
+        success = ai_evaluation._determine_success(
             prediction, actual, decision_match
         )
         if success is None:
@@ -613,7 +613,7 @@ async def roi(session: AsyncSession, *, workspace_id: UUID) -> dict[str, Any]:
         decision_match = None
         if "decision" in prediction and "decision" in actual:
             decision_match = prediction["decision"] == actual["decision"]
-        success = ai_evaluation._determine_success(  # noqa: SLF001
+        success = ai_evaluation._determine_success(
             prediction, actual, decision_match
         )
         if success is True:

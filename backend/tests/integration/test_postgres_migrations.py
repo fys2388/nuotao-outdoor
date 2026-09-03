@@ -16,6 +16,7 @@ import asyncpg
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+
 from tests.integration.conftest import run_alembic
 
 
@@ -386,7 +387,7 @@ async def test_transaction_rollback_consistency(pg_migrated: str) -> None:
             await conn.execute(text("SELECT 1/0"))  # force rollback
 
         raise AssertionError("transaction should have raised")
-    except Exception as exc:  # noqa: BLE001 - SQLAlchemy wraps the asyncpg error
+    except Exception as exc:
         assert "division by zero" in str(exc).lower()
     finally:
         async with engine.begin() as conn:
@@ -422,7 +423,7 @@ async def test_fk_enforcement_on_real_postgres(pg_migrated: str) -> None:
                 },
             )
             raise AssertionError("orphan agent_execution should violate the FK")
-    except Exception as exc:  # noqa: BLE001 - SQLAlchemy wraps the asyncpg error
+    except Exception as exc:
         assert "foreign key" in str(exc).lower()
     finally:
         await engine.dispose()

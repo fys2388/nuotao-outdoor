@@ -60,7 +60,7 @@ class SupplyChainLearningError(Exception):
 
 
 def _decimal(value: Any) -> Decimal | None:
-    return ai_evaluation._decimal(value)  # noqa: SLF001
+    return ai_evaluation._decimal(value)
 
 
 async def _load_supplier(
@@ -92,7 +92,7 @@ async def _load_shipment(
 def _supply_metric_snapshot(prediction: dict, actual: dict, decision_match: bool | None) -> dict:
     """JSON-safe metric summary for supply chain evaluations."""
     snapshot: dict[str, Any] = {}
-    confidence = ai_evaluation._prediction_confidence(prediction)  # noqa: SLF001
+    confidence = ai_evaluation._prediction_confidence(prediction)
     if confidence is not None:
         snapshot["confidence"] = str(confidence)
     for key in ("decision", "delivery_time_days", "defect_rate", "on_time_rate", "quality_score"):
@@ -129,20 +129,20 @@ async def record_supplier_evaluation(
 
     accuracy = ai_evaluation.compute_accuracy(data.prediction, data.actual_result)
     decision_match = accuracy.get("decision_match")
-    success_flag = ai_evaluation._determine_success(  # noqa: SLF001
+    success_flag = ai_evaluation._determine_success(
         data.prediction, data.actual_result, decision_match
     )
     prediction_result = (
         "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
-        ai_evaluation._error_type(  # noqa: SLF001
+        ai_evaluation._error_type(
             data.prediction, data.actual_result, decision_match
         )
         if success_flag is False
         else None
     )
-    confidence = ai_evaluation._prediction_confidence(data.prediction)  # noqa: SLF001
+    confidence = ai_evaluation._prediction_confidence(data.prediction)
 
     evaluation = SupplierAiEvaluation(
         workspace_id=workspace_id,
@@ -153,7 +153,7 @@ async def record_supplier_evaluation(
         prediction_result=prediction_result,
         error_type=error_type,
         confidence=confidence,
-        confidence_bucket=ai_evaluation._confidence_bucket(confidence),  # noqa: SLF001
+        confidence_bucket=ai_evaluation._confidence_bucket(confidence),
         success_flag=success_flag,
         metric_snapshot=_supply_metric_snapshot(
             data.prediction, data.actual_result, decision_match
@@ -232,20 +232,20 @@ async def record_logistics_evaluation(
 
     accuracy = ai_evaluation.compute_accuracy(data.prediction, data.actual_result)
     decision_match = accuracy.get("decision_match")
-    success_flag = ai_evaluation._determine_success(  # noqa: SLF001
+    success_flag = ai_evaluation._determine_success(
         data.prediction, data.actual_result, decision_match
     )
     prediction_result = (
         "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
-        ai_evaluation._error_type(  # noqa: SLF001
+        ai_evaluation._error_type(
             data.prediction, data.actual_result, decision_match
         )
         if success_flag is False
         else None
     )
-    confidence = ai_evaluation._prediction_confidence(data.prediction)  # noqa: SLF001
+    confidence = ai_evaluation._prediction_confidence(data.prediction)
 
     evaluation = LogisticsAiEvaluation(
         workspace_id=workspace_id,
@@ -259,7 +259,7 @@ async def record_logistics_evaluation(
         prediction_result=prediction_result,
         error_type=error_type,
         confidence=confidence,
-        confidence_bucket=ai_evaluation._confidence_bucket(confidence),  # noqa: SLF001
+        confidence_bucket=ai_evaluation._confidence_bucket(confidence),
         success_flag=success_flag,
         metric_snapshot=_supply_metric_snapshot(
             data.prediction, data.actual_result, decision_match

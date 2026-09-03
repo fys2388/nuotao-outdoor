@@ -6,12 +6,13 @@ fields in responses, console header required for audit events).
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.schemas.agent_runtime import AgentRegisterRequest
 from app.schemas.prompt import PromptCreate
 from app.services import agent_runtime, prompt_registry
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

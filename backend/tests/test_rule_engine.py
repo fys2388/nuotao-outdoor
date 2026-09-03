@@ -1,11 +1,12 @@
 """Tests for the rule engine (condition evaluator + database-backed flows)."""
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.rule import RuleExecutionLog
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 

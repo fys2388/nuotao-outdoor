@@ -12,6 +12,10 @@ JWT actor source, X-Actor -> 401, RBAC not bypassed).
 """
 
 import pytest
+from fastapi import Request
+from sqlalchemy import select
+from starlette.datastructures import Headers, QueryParams
+
 from app.core.actor import (
     ActorResolutionError,
     BodyActorProvider,
@@ -26,9 +30,6 @@ from app.models.product_intelligence import ProductDecision
 from app.schemas.rule import RuleCreate
 from app.services import approval_rbac, rule_engine
 from app.services.clerk_jwks import ClerkJwksClient
-from fastapi import Request
-from sqlalchemy import select
-from starlette.datastructures import Headers, QueryParams
 from tests.identity_helpers import (
     AUDIENCE,
     ISSUER,

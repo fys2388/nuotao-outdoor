@@ -1,176 +1,200 @@
-import { useEffect, useState } from "react";
-import { healthApi, productApi, agentApi, eventApi, Product, Agent, Event } from "../api/client";
+import { useEffect, useState } from 'react'
+import { Row, Col, Card, Statistic, Table, Tag, Spin, Alert, Progress } from 'antd'
+import {
+  DollarOutlined,
+  ShoppingCartOutlined,
+  RiseOutlined,
+  FallOutlined,
+  TeamOutlined,
+  WarningOutlined,
+  TruckOutlined,
+} from '@ant-design/icons'
+import { api } from '../api/client'
 
-interface StatCardProps {
-  title: string;
-  value: string | number;
-  subtitle?: string;
-  icon: string;
-  color: string;
+interface KeyMetrics {
+  today_revenue: number
+  today_orders: number
+  today_gross_margin: number
+  today_roas: number
+  week_revenue: number
+  week_orders: number
+  month_revenue: number
+  month_orders: number
 }
 
-function StatCard({ title, value, subtitle, icon, color }: StatCardProps) {
-  return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: "0.75rem",
-        padding: "1.5rem",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-        display: "flex",
-        alignItems: "center",
-        gap: "1rem",
-      }}
-    >
-      <div
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: "0.5rem",
-          background: color,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "1.5rem",
-        }}
-      >
-        {icon}
-      </div>
-      <div>
-        <div style={{ fontSize: "0.8rem", color: "#666", marginBottom: "0.25rem" }}>{title}</div>
-        <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#333" }}>{value}</div>
-        {subtitle && <div style={{ fontSize: "0.7rem", color: "#999", marginTop: "0.25rem" }}>{subtitle}</div>}
-      </div>
-    </div>
-  );
+interface Trend {
+  change_percent: number
+  direction: string
 }
 
-export function Dashboard() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [events, setEvents] = useState<Event[]>([]);
-  const [health, setHealth] = useState<{ database: string; redis: string } | null>(null);
-  const [loading, setLoading] = useState(true);
+interface Product {
+  rank: number
+  name: string
+  sku: string
+  units_sold: number
+  revenue: number
+  gross_margin: number
+  trend: string
+}
+
+export default function DashboardPage() {
+  const [loading, setLoading] = useState(true)
+  const [metrics, setMetrics] = useState<KeyMetrics | null>(null)
+  const [trends, setTrends] = useState<Record<string, Trend>>({})
+  const [products, setProducts] = useState<Product[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      const [healthRes, productsRes, agentsRes, eventsRes] = await Promise.all([
-        healthApi.readyz(),
-        productApi.list(),
-        agentApi.list(),
-        eventApi.list(10),
-      ]);
-
-      if (healthRes.data) setHealth(healthRes.data.checks);
-      if (productsRes.data) setProducts(Array.isArray(productsRes.data) ? productsRes.data : (productsRes.data.items || []));
-      if (agentsRes.data) setAgents(Array.isArray(agentsRes.data) ? agentsRes.data : (agentsRes.data.items || []));
-      if (eventsRes.data) setEvents(Array.isArray(eventsRes.data) ? eventsRes.data : (eventsRes.data.items || eventsRes.data.events || []));
-      setLoading(false);
+    const fetchData = async () => {
+      try {
+        setLoading(true)
+        const [keyData, productData] = await Promise.all([
+          api.getKeyMetrics(),
+          api.getProductPerformance(5),
+        ]) as any
+        setMetrics(keyData.key_metrics)
+        setTrends(keyData.trends)
+        setProducts(productData.performance?.products || [])
+      } catch (e: any) {
+        setError(e.message)
+      } finally {
+        setLoading(false)
+      }
     }
-    loadData();
-  }, []);
+    fetchData()
+  }, [])
 
-  if (loading) {
-    return <div style={{ padding: "2rem", color: "#666" }}>加载中...</div>;
-  }
+  if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />
+  if (error) return <Alert type="error" message={`加载失败: ${error}`} description="请确保后端服务运行在 http://localhost:8000" showIcon />
 
-  const activeAgents = agents.filter((a) => a.status === "active").length;
+  const revenueTrend = trends?.revenue_week_over_week
+  const ordersTrend = trends?.orders_week_over_week
+
+  const columns = [
+    { title: '排名', dataIndex: 'rank', key: 'rank', width: 60 },
+    { title: '产品名称', dataIndex: 'name', key: 'name' },
+    { title: 'SKU', dataIndex: 'sku', key: 'sku' },
+    { title: '销量', dataIndex: 'units_sold', key: 'units_sold', sorter: (a: Product, b: Product) => a.units_sold - b.units_sold },
+    { title: '收入', dataIndex: 'revenue', key: 'revenue', render: (v: number) => `$${v.toLocaleString()}`, sorter: (a: Product, b: Product) => a.revenue - b.revenue },
+    { title: '毛利率', dataIndex: 'gross_margin', key: 'gross_margin', render: (v: number) => `${v}%` },
+    {
+      title: '趋势',
+      dataIndex: 'trend',
+      key: 'trend',
+      render: (v: string) => {
+        const colorMap: Record<string, string> = { up: 'green', down: 'red', flat: 'default' }
+        const iconMap: Record<string, any> = { up: <RiseOutlined />, down: <FallOutlined />, flat: '-' }
+        return <Tag color={colorMap[v]} icon={iconMap[v]}>{v === 'up' ? '上升' : v === 'down' ? '下降' : '持平'}</Tag>
+      },
+    },
+  ]
 
   return (
     <div>
-      {/* Stats */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "1rem",
-          marginBottom: "2rem",
-        }}
-      >
-        <StatCard title="产品总数" value={products.length} subtitle="已注册产品" icon="📦" color="#e3f2fd" />
-        <StatCard title="AI Agent" value={activeAgents} subtitle={`共 ${agents.length} 个已注册`} icon="🤖" color="#f3e5f5" />
-        <StatCard title="数据库" value={health?.database === "ok" ? "正常" : "异常"} subtitle="PostgreSQL 16" icon="🗄️" color="#e8f5e9" />
-        <StatCard title="Redis" value={health?.redis === "ok" ? "正常" : "异常"} subtitle="缓存 + 任务队列" icon="⚡" color="#fff3e0" />
-      </div>
-
-      {/* Recent Events & Agents */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-        {/* Recent Events */}
-        <div style={{ background: "#fff", borderRadius: "0.75rem", padding: "1.5rem", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}>
-          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1rem", color: "#333" }}>最近事件</h3>
-          <div style={{ maxHeight: 300, overflowY: "auto" }}>
-            {events.length === 0 ? (
-              <div style={{ color: "#999", fontSize: "0.85rem" }}>暂无事件</div>
-            ) : (
-              events.slice(0, 10).map((event) => (
-                <div
-                  key={event.id}
-                  style={{
-                    padding: "0.75rem 0",
-                    borderBottom: "1px solid #f0f0f0",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "0.85rem", fontWeight: 500, color: "#333" }}>{event.event_type}</div>
-                    <div style={{ fontSize: "0.75rem", color: "#999" }}>
-                      {event.entity_type}: {event.entity_id?.slice(0, 8)}...
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "0.7rem", color: "#bbb" }}>
-                    {event.created_at ? new Date(event.created_at).toLocaleTimeString() : ""}
-                  </div>
-                </div>
-              ))
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="stat-card">
+            <Statistic
+              title="今日收入"
+              value={metrics?.today_revenue || 0}
+              prefix={<DollarOutlined />}
+              precision={2}
+              suffix="USD"
+              valueStyle={{ color: '#3f8600' }}
+            />
+            {revenueTrend && (
+              <div style={{ marginTop: 8 }}>
+                <Tag color={revenueTrend.direction === 'up' ? 'green' : 'red'}>
+                  周环比 {revenueTrend.change_percent}%
+                </Tag>
+              </div>
             )}
-          </div>
-        </div>
-
-        {/* Agent Status */}
-        <div style={{ background: "#fff", borderRadius: "0.75rem", padding: "1.5rem", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}>
-          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1rem", color: "#333" }}>AI Agent 状态</h3>
-          <div>
-            {agents.length === 0 ? (
-              <div style={{ color: "#999", fontSize: "0.85rem" }}>暂无 Agent</div>
-            ) : (
-              agents.map((agent) => (
-                <div
-                  key={agent.id}
-                  style={{
-                    padding: "0.75rem 0",
-                    borderBottom: "1px solid #f0f0f0",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "0.85rem", fontWeight: 500, color: "#333" }}>{agent.name}</div>
-                    <div style={{ fontSize: "0.75rem", color: "#999" }}>
-                      {agent.model_provider}/{agent.model_name}
-                    </div>
-                  </div>
-                  <span
-                    style={{
-                      background: agent.status === "active" ? "#e8f5e9" : "#ffebee",
-                      color: agent.status === "active" ? "#2e7d32" : "#c62828",
-                      padding: "0.25rem 0.75rem",
-                      borderRadius: "1rem",
-                      fontSize: "0.7rem",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {agent.status}
-                  </span>
-                </div>
-              ))
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="stat-card">
+            <Statistic
+              title="今日订单"
+              value={metrics?.today_orders || 0}
+              prefix={<ShoppingCartOutlined />}
+              valueStyle={{ color: '#1677ff' }}
+            />
+            {ordersTrend && (
+              <div style={{ marginTop: 8 }}>
+                <Tag color={ordersTrend.direction === 'up' ? 'green' : 'red'}>
+                  周环比 {ordersTrend.change_percent}%
+                </Tag>
+              </div>
             )}
-          </div>
-        </div>
-      </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="stat-card">
+            <Statistic
+              title="毛利率"
+              value={metrics?.today_gross_margin || 0}
+              suffix="%"
+              valueStyle={{ color: metrics && metrics.today_gross_margin >= 30 ? '#3f8600' : '#cf1322' }}
+            />
+            <div style={{ marginTop: 8 }}>
+              <Progress percent={metrics?.today_gross_margin || 0} size="small" status={metrics && metrics.today_gross_margin >= 30 ? 'success' : 'exception'} />
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card className="stat-card">
+            <Statistic
+              title="广告 ROAS"
+              value={metrics?.today_roas || 0}
+              precision={2}
+              valueStyle={{ color: '#722ed1' }}
+            />
+            <div style={{ marginTop: 8 }}>
+              <Tag color="blue">行业基准 3.0</Tag>
+            </div>
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} lg={16}>
+          <Card title="畅销产品 TOP 5" extra={<Tag color="blue">本周</Tag>}>
+            <Table
+              dataSource={products}
+              columns={columns}
+              rowKey="rank"
+              pagination={false}
+              size="small"
+            />
+          </Card>
+        </Col>
+        <Col xs={24} lg={8}>
+          <Card title="经营概览">
+            <Row gutter={[16, 16]}>
+              <Col span={12}>
+                <Statistic title="本周收入" value={metrics?.week_revenue || 0} prefix={<DollarOutlined />} precision={2} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="本周订单" value={metrics?.week_orders || 0} prefix={<ShoppingCartOutlined />} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="本月收入" value={metrics?.month_revenue || 0} prefix={<DollarOutlined />} precision={2} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="本月订单" value={metrics?.month_orders || 0} prefix={<ShoppingCartOutlined />} />
+              </Col>
+            </Row>
+          </Card>
+          <Card title="快捷入口" style={{ marginTop: 16 }}>
+            <Row gutter={[8, 8]}>
+              <Col span={12}><Tag icon={<WarningOutlined />} color="red">3 个待处理预警</Tag></Col>
+              <Col span={12}><Tag icon={<TeamOutlined />} color="blue">1 个活跃代理商</Tag></Col>
+              <Col span={12}><Tag icon={<ShoppingCartOutlined />} color="green">2 个仓库运营中</Tag></Col>
+              <Col span={12}><Tag icon={<TruckOutlined />} color="orange">1 个在途入库单</Tag></Col>
+            </Row>
+          </Card>
+        </Col>
+      </Row>
     </div>
-  );
+  )
 }

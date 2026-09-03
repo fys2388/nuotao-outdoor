@@ -292,14 +292,10 @@ async def queue_health(
     # Stale PEL messages (delivered but never acked past the reclaim idle).
     stale_pending = int(raw.get("stale_pending_count") or 0)
     details["stale_pending_count"] = stale_pending
-    if stale_pending > 0:
-        checks["pending"] = "degraded"
-    elif (
+    if stale_pending > 0 or (
         oldest_pending_ms is not None
         and oldest_pending_ms > settings.queue_health_oldest_pending_ms
-    ):
-        checks["pending"] = "degraded"
-    elif pending_count > settings.queue_health_max_pending:
+    ) or pending_count > settings.queue_health_max_pending:
         checks["pending"] = "degraded"
     else:
         checks["pending"] = "ok"
@@ -334,9 +330,7 @@ async def queue_health(
             payload={"last_heartbeat_at": worker["last_heartbeat_at"]},
             trace_id=trace_id,
         )
-    if len(dead_workers) > settings.queue_health_max_stale_workers:
-        checks["workers"] = "degraded"
-    elif not live_workers and (pending_count > 0 or running_count > 0):
+    if len(dead_workers) > settings.queue_health_max_stale_workers or (not live_workers and (pending_count > 0 or running_count > 0)):
         checks["workers"] = "degraded"
     else:
         checks["workers"] = "ok"

@@ -142,7 +142,7 @@ async def _check_operator(settings) -> dict:
         keys = payload.get("keys") if isinstance(payload, dict) else None
         if not isinstance(keys, list) or not keys:
             return _failed("JWKS endpoint reachable but returned no keys")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _failed(f"JWKS verification failed: {str(exc)[:160]}")
     return {
         "status": "PASS",
@@ -157,8 +157,10 @@ async def _check_operator(settings) -> dict:
 def _check_pii_guard() -> dict:
     """PII rejection + minimal JSON-safe product context are in place."""
     try:
-        from app.services import customer as customer_svc
-        from app.services import product_context as product_ctx
+        from app.services import (
+            customer as customer_svc,
+            product_context as product_ctx,
+        )
 
         ok = (
             hasattr(customer_svc, "_assert_no_pii")
@@ -173,7 +175,7 @@ def _check_pii_guard() -> dict:
                 }
             )
         return _technical({"status": "BLOCKED", "detail": "PII guard symbols missing"})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _technical(
             {"status": "BLOCKED", "detail": f"PII guard import failed: {str(exc)[:160]}"}
         )
@@ -182,9 +184,11 @@ def _check_pii_guard() -> dict:
 def _check_secret_guard() -> dict:
     """Secret guard rails (config/tracing/logging) are importable and wired."""
     try:
-        from app.core import config as config_mod
-        from app.core import logging as logging_mod
-        from app.core import tracing as tracing_mod
+        from app.core import (
+            config as config_mod,
+            logging as logging_mod,
+            tracing as tracing_mod,
+        )
 
         ok = (
             hasattr(config_mod, "Settings")
@@ -199,7 +203,7 @@ def _check_secret_guard() -> dict:
                 }
             )
         return _technical({"status": "BLOCKED", "detail": "secret guard symbols missing"})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _technical(
             {"status": "BLOCKED", "detail": f"secret guard import failed: {str(exc)[:160]}"}
         )
@@ -219,7 +223,7 @@ def _check_workspace_isolation() -> dict:
                 }
             )
         return _technical({"status": "BLOCKED", "detail": "workspace helpers missing"})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _technical(
             {"status": "BLOCKED", "detail": f"workspace import failed: {str(exc)[:160]}"}
         )
@@ -241,7 +245,7 @@ async def _check_real_llm(settings) -> dict:
             url = base.rstrip("/") + "/models"
             try:
                 resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failed.append(f"{name}:{type(exc).__name__}")
                 continue
             if resp.status_code == 200:
@@ -272,12 +276,12 @@ async def _check_real_woocommerce(settings: Settings) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, auth=(consumer_key, consumer_secret))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _failed(f"woocommerce unreachable: {type(exc).__name__}")
     if resp.status_code == 200:
         try:
             preview = len(resp.json())
-        except Exception:  # noqa: BLE001
+        except Exception:
             preview = 0
         return {
             "status": "PASS",
@@ -310,12 +314,12 @@ async def _check_redis(settings) -> dict:
                 id="0",
                 mkstream=True,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if "BUSYGROUP" not in str(exc):
                 return _failed(f"consumer group init failed: {str(exc)[:160]}")
         try:
             pending = await client.xpending(settings.task_queue_stream, settings.task_queue_group)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pending = None
         return {
             "status": "PASS",
@@ -325,7 +329,7 @@ async def _check_redis(settings) -> dict:
                 f"group={settings.task_queue_group}; pending={pending}"
             ),
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return _failed(f"redis unreachable: {str(exc)[:160]}")
     finally:
         await client.aclose()
@@ -364,7 +368,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                     checks["postgres"] = _failed(
                         f"alembic at {db_version}, expected one of {heads}"
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["postgres"] = _failed(f"postgres check failed: {str(exc)[:160]}")
 
             # real products (M5.13): a Product Candidate (candidate_status
@@ -408,7 +412,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                         "no Product Candidates and no WooCommerce products in "
                         "workspace -> BLOCKED_REAL_PRODUCT"
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["real_products"] = _failed(f"products check failed: {str(exc)[:160]}")
 
             # rbac: enabled roles must grant product.decision approve + reject
@@ -439,7 +443,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                     }
                 else:
                     checks["rbac"] = _blocked(f"missing permissions: {', '.join(sorted(missing))}")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["rbac"] = _failed(f"rbac check failed: {str(exc)[:160]}")
 
             # sla: per-type rows; config-driven defaults apply when absent
@@ -464,7 +468,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                     }
                 else:
                     checks["sla"] = _blocked("approval SLA disabled")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["sla"] = _failed(f"sla check failed: {str(exc)[:160]}")
 
             # budget / retry: product_analyst agent policies
@@ -489,7 +493,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                         budget_policy = await agent_policies.get_budget_policy(
                             session, workspace_id=workspace_id, agent_id=agent_uuid
                         )
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         budget_policy = None
                         checks["budget"] = _failed(f"budget policy check failed: {str(exc)[:160]}")
                     if budget_policy is not None:
@@ -504,7 +508,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                         retry_policy = await agent_policies.get_retry_policy(
                             session, workspace_id=workspace_id
                         )
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         retry_policy = None
                         checks["retry"] = _failed(f"retry policy check failed: {str(exc)[:160]}")
                     if retry_policy is not None:
@@ -515,7 +519,7 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                         }
                     elif "retry" not in checks:
                         checks["retry"] = _blocked("no retry policy row")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["budget"] = _failed(f"budget check failed: {str(exc)[:160]}")
                 checks["retry"] = _failed(f"retry check failed: {str(exc)[:160]}")
 
@@ -538,11 +542,11 @@ async def _db_gate_checks(workspace_id: UUID, settings) -> dict:
                     "layer": PRODUCTION_LAYER,
                     "detail": "event_log writable",
                 }
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 checks["audit"] = _failed(f"event_log write failed: {str(exc)[:160]}")
 
             return checks
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         base = _failed(f"database unreachable: {str(exc)[:160]}")
         return {key: dict(base) for key in _DB_GATE_IDS}
     finally:

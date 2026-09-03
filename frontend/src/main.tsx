@@ -1,10 +1,19 @@
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { App } from "./App";
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import { ConfigProvider } from 'antd'
+import zhCN from 'antd/locale/zh_CN'
+import App from './App'
+import './index.css'
 
-// M0 placeholder entrypoint; real console routes arrive in M1.
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ConfigProvider locale={zhCN} theme={{
+      token: {
+        colorPrimary: '#1677ff',
+        borderRadius: 6,
+      },
+    }}>
+      <App />
+    </ConfigProvider>
+  </React.StrictMode>,
+)

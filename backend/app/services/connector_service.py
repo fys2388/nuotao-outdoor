@@ -71,7 +71,7 @@ async def run_connector_sync(
         summary = await connector.sync(
             session, workspace_id=workspace_id, source=source, trace_id=trace_id
         )
-    except Exception as exc:  # noqa: BLE001 - the run log must capture every failure
+    except Exception as exc:
         # A nested service may have rolled the session back (e.g. duplicate
         # create), detaching the run instance; re-load it from the database.
         failed = await session.get(ConnectorRun, run.id)

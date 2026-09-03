@@ -71,7 +71,7 @@ def _normalize_row(row: dict[str, str]) -> dict[str, Any]:
     if weight_raw:
         try:
             parsed = Decimal(weight_raw)
-        except Exception as exc:  # noqa: BLE001 - row-level validation
+        except Exception as exc:
             raise ValueError("weight_kg must be a positive number") from exc
         if parsed <= 0:
             raise ValueError("weight_kg must be positive")
@@ -82,7 +82,7 @@ def _normalize_row(row: dict[str, str]) -> dict[str, Any]:
     if cost_raw:
         try:
             parsed = Decimal(cost_raw)
-        except Exception as exc:  # noqa: BLE001 - row-level validation
+        except Exception as exc:
             raise ValueError("purchase_cost must be a number") from exc
         if parsed < 0:
             raise ValueError("purchase_cost must be >= 0")

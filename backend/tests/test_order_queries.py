@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product, ProductCost

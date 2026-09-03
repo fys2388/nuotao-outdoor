@@ -52,7 +52,7 @@ def _normalize_weights(weights: dict[str, Decimal]) -> dict[str, Decimal]:
     """Quantize to 0.01 and force the total to exactly 1.00."""
     total = sum(weights.values(), Decimal("0"))
     if total <= ZERO:
-        return {key: ZERO for key in DIMENSIONS}
+        return dict.fromkeys(DIMENSIONS, ZERO)
     quantized = {
         key: (value / total * Decimal("1")).quantize(Decimal("0.01"), ROUND_HALF_UP)
         for key, value in weights.items()
@@ -157,7 +157,7 @@ async def generate_confidence_report(
         aggregate["count"] += 1
         if row.success_flag:
             aggregate["success"] += 1
-        confidence = ai_evaluation._prediction_confidence(row.prediction)  # noqa: SLF001
+        confidence = ai_evaluation._prediction_confidence(row.prediction)
         if confidence is not None:
             aggregate["confidence_sum"] += confidence
 
@@ -252,7 +252,7 @@ async def run_score_calibration(
         decision_match = None
         if "decision" in prediction and "decision" in actual:
             decision_match = prediction["decision"] == actual["decision"]
-        success = ai_evaluation._determine_success(  # noqa: SLF001
+        success = ai_evaluation._determine_success(
             prediction, actual, decision_match
         )
         confidences = await _dimension_confidences(

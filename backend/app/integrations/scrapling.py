@@ -268,7 +268,7 @@ class ScraplingAdapter:
         """
         try:
             from scrapling.fetchers import Fetcher
-        except Exception as exc:  # noqa: BLE001 - missing optional dependency
+        except Exception as exc:
             raise ScrapingError("scrapling library is not installed") from exc
 
         try:
@@ -277,7 +277,7 @@ class ScraplingAdapter:
                 url,
                 timeout=self._settings.scraping_read_timeout_seconds,
             )
-        except Exception as exc:  # noqa: BLE001 - library raises broad errors
+        except Exception as exc:
             raise ScrapingError(f"request failed: {exc}") from exc
 
         status = getattr(page, "status", None)
@@ -293,7 +293,7 @@ class ScraplingAdapter:
                 # fall back to the body renderer if the page exposes it
                 text = page.get_text() if hasattr(page, "get_text") else None
             return {"html": text or ""}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ScrapingError(f"failed to extract page text: {exc}") from exc
 
     def _sanitize(

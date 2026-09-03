@@ -354,7 +354,7 @@ async def _dispatch(
         if decision == APPROVAL_REJECTED:
             return  # rejection of a lifecycle proposal needs no side effect
         if action == "retire":
-            await agent_lifecycle._execute_retire(  # noqa: SLF001 - dispatch boundary
+            await agent_lifecycle._execute_retire(
                 session,
                 workspace_id=approval.workspace_id,
                 agent_uuid=agent_uuid,
@@ -365,7 +365,7 @@ async def _dispatch(
             target_version = (approval.metadata_ or {}).get("target_version")
             if not target_version:
                 raise ApprovalError("rollback proposal missing target_version")
-            await agent_lifecycle._execute_rollback(  # noqa: SLF001 - dispatch boundary
+            await agent_lifecycle._execute_rollback(
                 session,
                 workspace_id=approval.workspace_id,
                 agent_uuid=agent_uuid,

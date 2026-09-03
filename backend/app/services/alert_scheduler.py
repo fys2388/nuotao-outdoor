@@ -114,7 +114,7 @@ class AlertScheduler:
                         },
                         trace_id=trace_id,
                     )
-                except Exception as exc:  # noqa: BLE001 - one workspace must
+                except Exception as exc:
                     # never take the scheduler down.
                     result.error = str(exc)
                     logger.exception(
@@ -156,7 +156,7 @@ class AlertScheduler:
             while not self._stop.is_set():
                 try:
                     await self.run_once()
-                except Exception:  # noqa: BLE001 - never kill the loop
+                except Exception:
                     logger.exception("alert scheduler tick failed")
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
@@ -177,7 +177,7 @@ class AlertScheduler:
                 self._task.cancel()
                 try:
                     await self._task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                except (asyncio.CancelledError, Exception):
                     logger.debug("alert scheduler task joined after cancel")
             self._task = None
             self._stop = None

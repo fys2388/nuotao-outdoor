@@ -1,12 +1,13 @@
 """Tests for the product CSV import service and API."""
 
 import pytest
+from sqlalchemy import func, select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.product import Product
 from app.schemas.product import ProductImportResult
 from app.services import product_service
-from sqlalchemy import func, select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 

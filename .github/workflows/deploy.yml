@@ -1,0 +1,69 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  deploy:
+    name: Deploy to Hetzner Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deployment info
+        run: |
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deploying to: ${{ env.SERVER_HOST }}"
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/nuotao
+
+            echo "=== 1. Pulling latest code ==="
+            git pull origin ${{ github.ref_name }}
+
+            echo "=== 2. Installing backend dependencies ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet 2>/dev/null || true
+
+            echo "=== 3. Running database migrations ==="
+            alembic upgrade head
+
+            echo "=== 4. Restarting backend service ==="
+            systemctl restart nuotao-backend
+            sleep 3
+            systemctl status nuotao-backend --no-pager
+
+            echo "=== 5. Building frontend ==="
+            cd /opt/nuotao/frontend
+            npm install --silent
+            npm run build
+
+            echo "=== 6. Deploying frontend ==="
+            rm -rf /var/www/nuotao/*
+            cp -r dist/* /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+
+            echo "=== 7. Health check ==="
+            sleep 5
+            curl -s -o /dev/null -w "Backend API: %{http_code}\n" http://127.0.0.1:8000/docs
+            curl -s -o /dev/null -w "Frontend: %{http_code}\n" http://127.0.0.1/
+
+            echo "=== Deployment completed successfully ==="

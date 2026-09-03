@@ -10,13 +10,14 @@ import asyncio
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_operations import AgentAlert
 from app.models.event import EventLog
 from app.models.workspace import Workspace
 from app.services import alert_scheduler, alert_service, task_queue
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

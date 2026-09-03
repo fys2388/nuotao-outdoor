@@ -19,6 +19,9 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_runtime import AgentExecution, AgentTask
@@ -36,8 +39,6 @@ from app.services import (
 from app.services.llm_gateway import LLMError
 from app.worker.agent_worker import run_worker_once
 from app.worker.executor import ExecutionResult
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.integration.conftest import enable_redis_queue
 
 WORKSPACE = DEFAULT_WORKSPACE_ID

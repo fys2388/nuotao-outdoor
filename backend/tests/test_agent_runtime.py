@@ -9,13 +9,14 @@ workspace-scoped, all events + trace_id.
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_runtime import AgentExecution, AgentTask
 from app.models.event import EventLog
 from app.models.product_intelligence import ProductKnowledgeEntry
 from app.schemas.prompt import PromptCreate
 from app.services import prompt_registry
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

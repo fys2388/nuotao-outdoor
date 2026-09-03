@@ -9,12 +9,13 @@ The API layer maps ``ApprovalRBACError`` to 403 - the frontend never decides.
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_operations import AgentApproval
 from app.models.agent_platform import AgentApprovalRole
 from app.services import approval_rbac, approval_service, task_queue
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

@@ -75,7 +75,7 @@ def _check_alembic_head() -> dict:
     try:
         heads = _alembic_heads()
         return {"status": "PASS", "detail": ",".join(heads), "heads": heads}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"status": "BLOCKED", "detail": f"cannot resolve alembic heads: {exc}"}
 
 
@@ -145,7 +145,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                     "status": "PASS",
                     "detail": f"version={prompt.version}",
                 }
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 prompt_active = {"status": "BLOCKED", "detail": str(exc)[:200]}
 
             # 9-11. policies (execution/budget are agent-scoped)
@@ -172,7 +172,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                         if policy is not None
                         else {"status": "BLOCKED", "detail": "no policy row"}
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     policy_checks[label] = {"status": "BLOCKED", "detail": str(exc)[:200]}
             try:
                 policy = await agent_policies.get_retry_policy(session, workspace_id=workspace_id)
@@ -181,7 +181,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                     if policy is not None
                     else {"status": "BLOCKED", "detail": "no policy row"}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 policy_checks["retry_policy"] = {"status": "BLOCKED", "detail": str(exc)[:200]}
 
             # 12. approval RBAC roles
@@ -194,7 +194,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                     if roles
                     else {"status": "BLOCKED", "detail": "no approval roles configured"}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 rbac = {"status": "BLOCKED", "detail": str(exc)[:200]}
 
             # 13. approval SLA
@@ -236,7 +236,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                 )
                 await session.flush()
                 audit = {"status": "PASS", "detail": "event_log writable"}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 audit = {"status": "BLOCKED", "detail": f"event_log write failed: {exc}"[:200]}
 
             return {
@@ -248,7 +248,7 @@ async def _db_checks(workspace_id: UUID) -> dict:
                 "approval_sla": sla,
                 "audit": audit,
             }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         base = {"status": "BLOCKED", "detail": f"database unreachable: {str(exc)[:200]}"}
         return {
             "postgres_migration": base,
@@ -274,7 +274,7 @@ async def _check_redis() -> dict:
     try:
         pong = await client.ping()
         return {"status": "PASS" if pong else "BLOCKED", "detail": "pong"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"status": "BLOCKED", "detail": f"redis unreachable: {str(exc)[:200]}"}
     finally:
         await client.aclose()
@@ -286,7 +286,7 @@ def _check_importable(module: str) -> dict:
     try:
         importlib.import_module(module)
         return {"status": "PASS", "detail": f"{module} importable"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"status": "BLOCKED", "detail": f"{module} import failed: {str(exc)[:200]}"}
 
 

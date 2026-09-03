@@ -14,6 +14,8 @@ Covers the compliance-gated scraping surface:
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.integrations.scrapling import (
@@ -25,7 +27,6 @@ from app.models.event import EventLog
 from app.models.product import Product
 from app.services import scraping
 from app.services.scraping import _build_intake
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 JOBS_URL = "/api/v1/scraping/jobs"

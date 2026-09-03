@@ -102,7 +102,7 @@ def resolve_redis_server() -> Path | None:
     try:
         _download_redis(binary)
         return binary
-    except Exception as exc:  # noqa: BLE001 - offline environments skip
+    except Exception as exc:
         print(f"Redis binary unavailable: {exc}")
         return None
 
@@ -130,7 +130,7 @@ def _redis_ping(url: str) -> bool:
 def redis_url(redis_server_bin: Path) -> Iterator[str]:
     """Start one real Redis server; yields its URL (fresh instance per test)."""
     port = _free_port()
-    proc = subprocess.Popen(  # noqa: S603 - trusted local binary
+    proc = subprocess.Popen(
         [
             str(redis_server_bin),
             "--port",
@@ -158,7 +158,7 @@ def redis_url(redis_server_bin: Path) -> Iterator[str]:
                 if _redis_ping(url):
                     ready = True
                     break
-            except Exception:  # noqa: BLE001 - server still booting
+            except Exception:
                 time.sleep(0.3)
         if not ready:
             raise RuntimeError("redis server did not become ready")
@@ -236,8 +236,9 @@ def run_alembic(url: str, command: str, revision: str) -> None:
     Alembic's env.py reads the target URL from the app settings singleton;
     this runs in a worker thread so a test event loop is never re-entered.
     """
-    from alembic import command as alembic_command
     from alembic.config import Config
+
+    from alembic import command as alembic_command
     from app.core.config import get_settings
 
     settings = get_settings()

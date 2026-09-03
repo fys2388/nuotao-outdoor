@@ -13,6 +13,9 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent_operations import AgentAlert
@@ -34,8 +37,6 @@ from app.services import (
 )
 from app.worker.agent_worker import run_worker_once
 from app.worker.executor import ExecutionResult
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")
@@ -385,7 +386,7 @@ async def _make_waiting_approval(
     execution = await agent_runtime.start_execution(
         db_session, workspace_id=workspace, task_id=task.id, trace_id="trace-l3"
     )
-    await agent_runtime._waiting_approval(  # noqa: SLF001 - private runtime helper
+    await agent_runtime._waiting_approval(
         db_session,
         workspace_id=workspace,
         execution=execution,

@@ -956,7 +956,7 @@ async def execute_tool_call(
                 arguments=arguments,
                 trace_id=trace_id,
             )
-        except Exception as exc:  # noqa: BLE001 - handler errors deny the call
+        except Exception as exc:
             record["status"] = "denied"
             record["reason"] = str(exc)[:400]
             execution.tool_calls = [*execution.tool_calls, record]

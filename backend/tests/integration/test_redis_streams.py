@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pytest
 import redis.asyncio as aioredis
+
 from app.services import task_queue
 from app.services.task_queue import RedisStreamBackend
 from tests.integration.conftest import enable_redis_queue

@@ -367,7 +367,7 @@ async def backfill_experiment_evaluation(
         prediction = mirror.prediction or {}
         accuracy = ai_evaluation.compute_accuracy(prediction, actual_result)
         decision_match = accuracy.get("decision_match")
-        success_flag = ai_evaluation._determine_success(  # noqa: SLF001
+        success_flag = ai_evaluation._determine_success(
             prediction, actual_result, decision_match
         )
         mirror.actual_result = actual_result
@@ -376,7 +376,7 @@ async def backfill_experiment_evaluation(
             "success" if success_flag is True else "failure" if success_flag is False else "unknown"
         )
         mirror.error_type = (
-            ai_evaluation._error_type(prediction, actual_result, decision_match)  # noqa: SLF001
+            ai_evaluation._error_type(prediction, actual_result, decision_match)
             if success_flag is False
             else None
         )

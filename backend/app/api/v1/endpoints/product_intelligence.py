@@ -43,10 +43,8 @@ from app.schemas.product_intelligence import (
 )
 from app.services import (
     approval_service,
-    task_queue,
-)
-from app.services import (
     product_intelligence as pi,
+    task_queue,
 )
 from app.services.approval_rbac import ApprovalRBACError, check_actor_permission
 from app.services.product_intelligence import ProductDecisionActorError
@@ -598,7 +596,7 @@ async def set_candidate_status(
     """
     try:
         actor = resolve_actor(request, body.actor)
-        await pi._assert_human_actor(  # noqa: SLF001 - agent boundary
+        await pi._assert_human_actor(
             db, workspace_id=workspace_id, actor=actor
         )
         await check_actor_permission(
@@ -640,7 +638,7 @@ async def promote_candidate(
     """
     try:
         actor = resolve_actor(request, body.actor)
-        await pi._assert_human_actor(  # noqa: SLF001 - agent boundary
+        await pi._assert_human_actor(
             db, workspace_id=workspace_id, actor=actor
         )
         await check_actor_permission(

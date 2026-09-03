@@ -11,6 +11,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from fastapi import Request
+from starlette.datastructures import Headers, QueryParams
+
 from app.core.actor import JwtActorProvider
 from app.core.config import get_settings
 from app.core.identity import (
@@ -19,8 +22,6 @@ from app.core.identity import (
     authenticate_request_sync,
 )
 from app.services.clerk_jwks import ClerkJwksClient
-from fastapi import Request
-from starlette.datastructures import Headers, QueryParams
 from tests.identity_helpers import (
     AUDIENCE,
     ISSUER,

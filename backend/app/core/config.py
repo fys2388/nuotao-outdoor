@@ -199,6 +199,26 @@ class Settings(BaseSettings):
     retry_standard_backoff_multiplier: Decimal = Decimal("2.0")
     retry_standard_max_backoff: int = 60
 
+    # --- Cache / Redis 缓存配置 ---
+    cache_enabled: bool = True
+    cache_max_connections: int = 20
+    cache_default_ttl: int = 300  # 5 分钟
+
+    # --- M6 Image Generation (pluggable gateway, cost-guarded) --------------
+    # Default model: doubao-seedream-4-0-250828 (Volcengine Ark, 200 free images quota, ¥0.20/img).
+    image_gen_default_model: str = "doubao-seedream-4-0-250828"
+    image_gen_monthly_budget_cny: Decimal = Decimal("100.00")
+    image_gen_high_cost_threshold_cny: Decimal = Decimal("0.15")
+    image_gen_storage_dir: str = "data/generated_images"
+    image_gen_timeout_seconds: float = 60.0
+    image_gen_max_retries: int = 2
+
+    # Image generation API keys (read from .env; never hardcode).
+    dashscope_api_key: str = ""
+    dashscope_workspace_id: str = ""
+    volcengine_api_key: str = ""
+    volcengine_ark_endpoint: str = ""
+
     @property
     def is_production(self) -> bool:
         """Return True when running in a production environment."""

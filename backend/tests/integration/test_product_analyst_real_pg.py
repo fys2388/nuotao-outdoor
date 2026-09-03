@@ -24,6 +24,9 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from app.agents import product_analyst
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
@@ -41,10 +44,10 @@ from app.schemas.product_intelligence import (
     ExperimentCompleteRequest,
     ExperimentStartRequest,
 )
-from app.services import pilot_product_analyst
-from app.services import product_intelligence as pi
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine
+from app.services import (
+    pilot_product_analyst,
+    product_intelligence as pi,
+)
 from tests.integration.runtime_helpers import (
     VALID_OUTPUT,
     factory,

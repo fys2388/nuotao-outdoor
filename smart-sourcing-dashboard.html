@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nuotao AI OS - 智能选品工作台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 14px; }
+        .workflow-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 20px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .step {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .step.active { background: rgba(255,255,255,0.4); font-weight: 600; }
+        .step-number {
+            background: white;
+            color: #667eea;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .main-grid {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 24px;
+        }
+        @media (max-width: 1024px) { .main-grid { grid-template-columns: 1fr; } }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f0f0f0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #555;
+        }
+        .form-label .required { color: #e74c3c; }
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102,126,234,0.1);
+        }
+        .form-textarea { resize: vertical; min-height: 80px; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 100%;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #219a52; }
+        .btn-outline { background: white; color: #667eea; border: 2px solid #667eea; }
+        .btn-outline:hover { background: #f0f2ff; }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+        .loading.active { display: block; }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f0f0f0;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: #666; font-size: 14px; }
+        .result-section { display: none; }
+        .result-section.active { display: block; }
+        .score-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .score-card {
+            background: #f8f9ff;
+            padding: 16px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .score-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .score-label { font-size: 12px; color: #888; margin-top: 4px; }
+        .score-card.overall { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .score-card.overall .score-value, .score-card.overall .score-label { color: white; }
+        .recommendation {
+            padding: 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .recommendation.approve { background: #e8f8f0; border-left: 4px solid #27ae60; }
+        .recommendation.pending { background: #fff8e6; border-left: 4px solid #f39c12; }
+        .recommendation.reject { background: #fde8e8; border-left: 4px solid #e74c3c; }
+        .recommendation-icon { font-size: 32px; }
+        .recommendation-text { flex: 1; }
+        .recommendation-title { font-weight: 600; font-size: 16px; }
+        .recommendation-desc { font-size: 13px; color: #666; margin-top: 2px; }
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .info-item {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+        }
+        .info-label { font-size: 12px; color: #888; }
+        .info-value { font-size: 15px; font-weight: 600; margin-top: 2px; }
+        .content-block { margin-bottom: 24px; }
+        .content-block h4 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .content-box {
+            background: #f8f9fa;
+            padding: 14px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tag {
+            background: #e8f0fe;
+            color: #1a73e8;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .bullet-list { list-style: none; }
+        .bullet-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+            display: flex;
+            gap: 8px;
+        }
+        .bullet-list li:last-child { border-bottom: none; }
+        .bullet-icon { color: #667eea; font-weight: 700; }
+        .faq-item { margin-bottom: 12px; }
+        .faq-question { font-weight: 600; font-size: 14px; margin-bottom: 4px; color: #333; }
+        .faq-answer { font-size: 13px; color: #666; padding-left: 16px; }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .image-item {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #666;
+        }
+        .image-type { font-weight: 600; color: #333; margin-bottom: 4px; }
+        .action-bar {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #f0f0f0;
+        }
+        .action-bar .btn { flex: 1; }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: #f0f0f0;
+            padding: 4px;
+            border-radius: 10px;
+        }
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .tab.active { background: white; color: #667eea; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-state-icon { font-size: 64px; margin-bottom: 16px; }
+        .empty-state-text { font-size: 16px; }
+        .copy-btn {
+            background: none;
+            border: 1px solid #ddd;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            color: #666;
+            margin-left: 8px;
+        }
+        .copy-btn:hover { background: #f0f0f0; color: #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <div class="header">
+            <h1>🚀 Nuotao AI OS - 智能选品工作台</h1>
+            <p>输入1688产品信息，AI一键完成：多维度分析 → 英文Listing生成 → SEO优化 → 图片处理方案 → 选品决策建议 → 一键上架</p>
+            <div class="workflow-steps">
+                <div class="step active"><span class="step-number">1</span>产品录入</div>
+                <div class="step"><span class="step-number">2</span>AI分析</div>
+                <div class="step"><span class="step-number">3</span>内容生成</div>
+                <div class="step"><span class="step-number">4</span>图片处理</div>
+                <div class="step"><span class="step-number">5</span>决策建议</div>
+                <div class="step"><span class="step-number">6</span>一键上架</div>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            <!-- 左侧：输入表单 -->
+            <div class="card">
+                <div class="card-title">📝 产品信息录入</div>
+                
+                <div class="form-group">
+                    <label class="form-label">中文产品名称 <span class="required">*</span></label>
+                    <input type="text" class="form-input" id="name_zh" placeholder="例如：不锈钢保温水壶 1L双层真空 24小时保温">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">产品类别 <span class="required">*</span></label>
+                    <select class="form-select" id="category">
+                        <option value="">请选择类别</option>
+                        <option value="lighting">💡 照明类（露营灯、手电筒、太阳能灯）</option>
+                        <option value="furniture">🪑 家具类（折叠椅、露营桌、吊床）</option>
+                        <option value="drinkware">🥤 饮品类（保温水壶、咖啡杯、保温杯）</option>
+                        <option value="camping">⛺ 露营装备（帐篷、睡袋、露营配件）</option>
+                        <option value="cooking">🍳 烹饪用具（露营炉、炊具套装、餐具）</option>
+                        <option value="storage">🎒 收纳类（收纳包、防水袋、整理箱）</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">1688产品链接</label>
+                    <input type="text" class="form-input" id="source_url" placeholder="https://detail.1688.com/offer/xxx.html">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">供应商名称</label>
+                    <input type="text" class="form-input" id="supplier_name" placeholder="例如：永康杯业有限公司（实力商家）">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">采购价（人民币）</label>
+                        <input type="number" class="form-input" id="purchase_price_cny" placeholder="25.00" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">起订量（MOQ）</label>
+                        <input type="number" class="form-input" id="moq" placeholder="200">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">交货天数</label>
+                        <input type="number" class="form-input" id="lead_time_days" placeholder="12">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">目标市场</label>
+                        <select class="form-select" id="target_market">
+                            <option value="US">🇺🇸 美国</option>
+                            <option value="EU">🇪🇺 欧洲</option>
+                            <option value="UK">🇬🇧 英国</option>
+                            <option value="CA">🇨🇦 加拿大</option>
+                            <option value="AU">🇦🇺 澳大利亚</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">产品描述（中文）</label>
+                    <textarea class="form-textarea" id="description_zh" placeholder="简要描述产品特点、材质、功能等..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">规格参数（每行一个，格式：参数名:参数值）</label>
+                    <textarea class="form-textarea" id="specs" placeholder="容量:1L
+材质:304不锈钢
+保温时间:24小时
+重量:350g"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">标签（逗号分隔）</label>
+                    <input type="text" class="form-input" id="tags" placeholder="water bottle, insulated, stainless steel, outdoor">
+                </div>
+
+                <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalysis()">
+                    <span>✨ 一键智能选品分析</span>
+                </button>
+            </div>
+
+            <!-- 右侧：结果展示 -->
+            <div class="card">
+                <div class="card-title">📊 选品分析结果</div>
+
+                <!-- 空状态 -->
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-state-icon">🎯</div>
+                    <div class="empty-state-text">填写左侧产品信息，点击"一键智能选品分析"<br>AI将在30秒内完成全部分析</div>
+                </div>
+
+                <!-- 加载状态 -->
+                <div class="loading" id="loadingState">
+                    <div class="spinner"></div>
+                    <div class="loading-text" id="loadingText">AI正在分析产品信息...</div>
+                </div>
+
+                <!-- 结果区域 -->
+                <div class="result-section" id="resultSection">
+                    <!-- 选项卡 -->
+                    <div class="tabs">
+                        <div class="tab active" onclick="switchTab('overview')">📈 总览</div>
+                        <div class="tab" onclick="switchTab('content')">📝 Listing内容</div>
+                        <div class="tab" onclick="switchTab('seo')">🔍 SEO优化</div>
+                        <div class="tab" onclick="switchTab('images')">🖼️ 图片方案</div>
+                    </div>
+
+                    <!-- 总览选项卡 -->
+                    <div class="tab-content active" id="tab-overview">
+                        <!-- 评分卡片 -->
+                        <div class="score-grid">
+                            <div class="score-card overall">
+                                <div class="score-value" id="overallScore">--</div>
+                                <div class="score-label">综合评分</div>
+                            </div>
+                            <div class="score-card">
+                                <div class="score-value" id="profitScore">--</div>
+                                <div class="score-label">盈利能力</div>
+                            </div>
+                            <div class="score-card">
+                                <div class="score-value" id="demandScore">--</div>
+                                <div class="score-label">市场需求</div>
+                            </div>
+                            <div class="score-card">
+                                <div class="score-value" id="competitionScore">--</div>
+                                <div class="score-label">竞争度</div>
+                            </div>
+                            <div class="score-card">
+                                <div class="score-value" id="differentiationScore">--</div>
+                                <div class="score-label">差异化</div>
+                            </div>
+                            <div class="score-card">
+                                <div class="score-value" id="logisticsScore">--</div>
+                                <div class="score-label">物流可行性</div>
+                            </div>
+                        </div>
+
+                        <!-- 决策建议 -->
+                        <div class="recommendation" id="recommendationBox">
+                            <div class="recommendation-icon" id="recIcon">--</div>
+                            <div class="recommendation-text">
+                                <div class="recommendation-title" id="recTitle">--</div>
+                                <div class="recommendation-desc" id="recDesc">--</div>
+                            </div>
+                        </div>
+
+                        <!-- 关键信息 -->
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">建议售价</div>
+                                <div class="info-value" id="suggestedPrice">--</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">预计利润率</div>
+                                <div class="info-value" id="estimatedMargin">--</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">预计ROAS</div>
+                                <div class="info-value" id="estimatedRoas">--</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">置信度</div>
+                                <div class="info-value" id="confidence">--</div>
+                            </div>
+                        </div>
+
+                        <!-- 分析理由 -->
+                        <div class="content-block">
+                            <h4>✅ AI分析理由</h4>
+                            <ul class="bullet-list" id="reasonsList"></ul>
+                        </div>
+
+                        <!-- 风险提示 -->
+                        <div class="content-block">
+                            <h4>⚠️ 风险提示</h4>
+                            <ul class="bullet-list" id="risksList"></ul>
+                        </div>
+                    </div>
+
+                    <!-- Listing内容选项卡 -->
+                    <div class="tab-content" id="tab-content">
+                        <div class="content-block">
+                            <h4>📌 英文产品标题 
+                                <button class="copy-btn" onclick="copyText('titleEn')">复制</button>
+                            </h4>
+                            <div class="content-box" id="titleEn">--</div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>📄 产品描述 
+                                <button class="copy-btn" onclick="copyText('descriptionEn')">复制</button>
+                            </h4>
+                            <div class="content-box" id="descriptionEn">--</div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>🎯 核心卖点（Bullet Points）</h4>
+                            <ul class="bullet-list" id="bulletPoints"></ul>
+                        </div>
+                    </div>
+
+                    <!-- SEO选项卡 -->
+                    <div class="tab-content" id="tab-seo">
+                        <div class="content-block">
+                            <h4>🏷️ Meta标题 
+                                <button class="copy-btn" onclick="copyText('metaTitle')">复制</button>
+                            </h4>
+                            <div class="content-box" id="metaTitle">--</div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>📝 Meta描述 
+                                <button class="copy-btn" onclick="copyText('metaDescription')">复制</button>
+                            </h4>
+                            <div class="content-box" id="metaDescription">--</div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>🔑 SEO关键词（{seoKeywordsCount}个）</h4>
+                            <div class="tag-list" id="seoKeywords"></div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>🔍 搜索词建议</h4>
+                            <div class="tag-list" id="searchTerms"></div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>❓ FAQ问题（可用于产品详情页和SEO）</h4>
+                            <div id="faqQuestions"></div>
+                        </div>
+                    </div>
+
+                    <!-- 图片方案选项卡 -->
+                    <div class="tab-content" id="tab-images">
+                        <div class="content-block">
+                            <h4>🖼️ 图片处理方案（共{imageCount}张）</h4>
+                            <p style="font-size: 13px; color: #666; margin-bottom: 16px;">
+                                AI根据产品类别自动生成图片处理方案，包括主图、画廊图、场景图、详情图。
+                                实际图片生成需调用图片生成API。
+                            </p>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>1️⃣ 主图（白底专业电商图）</h4>
+                            <div class="content-box" id="mainImage">--</div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>2️⃣ 画廊图（多角度展示）</h4>
+                            <div class="image-grid" id="galleryImages"></div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>3️⃣ 场景图（Lifestyle Images）</h4>
+                            <div class="image-grid" id="lifestyleImages"></div>
+                        </div>
+
+                        <div class="content-block">
+                            <h4>4️⃣ 详情图（产品特点说明）</h4>
+                            <div class="image-grid" id="detailImages"></div>
+                        </div>
+                    </div>
+
+                    <!-- 操作栏 -->
+                    <div class="action-bar">
+                        <button class="btn btn-outline" onclick="resetForm()">🔄 重新分析</button>
+                        <button class="btn btn-success" onclick="publishProduct()" id="publishBtn" disabled>🚀 一键上架WooCommerce</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentResult = null;
+
+        // 切换选项卡
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('tab-' + tabName).classList.add('active');
+        }
+
+        // 复制文本
+        function copyText(elementId) {
+            const text = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('已复制到剪贴板！');
+            });
+        }
+
+        // 解析规格参数
+        function parseSpecs(text) {
+            const specs = {};
+            text.split('\n').forEach(line => {
+                const [key, ...valueParts] = line.split(':');
+                if (key && valueParts.length > 0) {
+                    specs[key.trim()] = valueParts.join(':').trim();
+                }
+            });
+            return specs;
+        }
+
+        // 开始分析
+        async function startAnalysis() {
+            const nameZh = document.getElementById('name_zh').value.trim();
+            const category = document.getElementById('category').value;
+            
+            if (!nameZh || !category) {
+                alert('请填写产品名称和选择产品类别！');
+                return;
+            }
+
+            // 显示加载状态
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('resultSection').classList.remove('active');
+            document.getElementById('loadingState').classList.add('active');
+            document.getElementById('analyzeBtn').disabled = true;
+
+            const loadingTexts = [
+                'AI正在分析产品信息...',
+                '正在进行多维度评估（盈利能力、市场需求、竞争度...）',
+                '正在生成英文Listing内容...',
+                '正在优化SEO关键词...',
+                '正在生成图片处理方案...',
+                '正在生成选品决策建议...',
+                '即将完成...'
+            ];
+            let textIndex = 0;
+            const textInterval = setInterval(() => {
+                document.getElementById('loadingText').textContent = loadingTexts[textIndex % loadingTexts.length];
+                textIndex++;
+            }, 3000);
+
+            // 构建请求数据
+            const requestData = {
+                name_zh: nameZh,
+                description_zh: document.getElementById('description_zh').value,
+                category: category,
+                source_url: document.getElementById('source_url').value,
+                supplier_name: document.getElementById('supplier_name').value,
+                purchase_price_cny: parseFloat(document.getElementById('purchase_price_cny').value) || 0,
+                moq: parseInt(document.getElementById('moq').value) || 0,
+                lead_time_days: parseInt(document.getElementById('lead_time_days').value) || 0,
+                specs: parseSpecs(document.getElementById('specs').value),
+                tags: document.getElementById('tags').value.split(',').map(t => t.trim()).filter(t => t),
+                target_market: document.getElementById('target_market').value
+            };
+
+            try {
+                // 调用API
+                const response = await fetch('/api/smart-sourcing/api/v1/smart-sourcing/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData)
+                });
+
+                const result = await response.json();
+                clearInterval(textInterval);
+
+                if (result.success) {
+                    currentResult = result;
+                    displayResult(result);
+                } else {
+                    throw new Error(result.detail || '分析失败');
+                }
+            } catch (error) {
+                clearInterval(textInterval);
+                alert('分析失败：' + error.message);
+                document.getElementById('emptyState').style.display = 'block';
+            } finally {
+                document.getElementById('loadingState').classList.remove('active');
+                document.getElementById('analyzeBtn').disabled = false;
+            }
+        }
+
+        // 显示结果
+        function displayResult(result) {
+            document.getElementById('resultSection').classList.add('active');
+
+            const a = result.analysis;
+            const c = result.content;
+            const img = result.images;
+
+            // 评分
+            document.getElementById('overallScore').textContent = a.overall_score.toFixed(1);
+            document.getElementById('profitScore').textContent = a.profit_score.toFixed(1);
+            document.getElementById('demandScore').textContent = a.demand_score.toFixed(1);
+            document.getElementById('competitionScore').textContent = a.competition_score.toFixed(1);
+            document.getElementById('differentiationScore').textContent = a.differentiation_score.toFixed(1);
+            document.getElementById('logisticsScore').textContent = a.logistics_score.toFixed(1);
+
+            // 决策建议
+            const recBox = document.getElementById('recommendationBox');
+            recBox.className = 'recommendation ' + a.recommendation;
+            
+            const recIcons = { approve: '✅', pending: '⏳', reject: '❌' };
+            const recTitles = { approve: '建议通过 - 可以进入小批量测试', pending: '待定 - 建议收集更多市场数据', reject: '建议拒绝 - 风险较高或竞争激烈' };
+            
+            document.getElementById('recIcon').textContent = recIcons[a.recommendation] || '📊';
+            document.getElementById('recTitle').textContent = recTitles[a.recommendation] || a.recommendation;
+            document.getElementById('recDesc').textContent = `综合评分 ${a.overall_score.toFixed(1)}/10，置信度 ${(a.confidence * 100).toFixed(0)}%`;
+
+            // 关键信息
+            document.getElementById('suggestedPrice').textContent = '$' + a.suggested_price_usd.toFixed(2);
+            document.getElementById('estimatedMargin').textContent = (a.estimated_margin * 100).toFixed(0) + '%';
+            document.getElementById('estimatedRoas').textContent = a.estimated_roas.toFixed(1);
+            document.getElementById('confidence').textContent = (a.confidence * 100).toFixed(0) + '%';
+
+            // 分析理由
+            const reasonsList = document.getElementById('reasonsList');
+            reasonsList.innerHTML = a.reasons.map(r => 
+                `<li><span class="bullet-icon">✓</span>${r}</li>`
+            ).join('');
+
+            // 风险提示
+            const risksList = document.getElementById('risksList');
+            risksList.innerHTML = a.risks.map(r => 
+                `<li><span class="bullet-icon">⚠</span>${r}</li>`
+            ).join('');
+
+            // Listing内容
+            document.getElementById('titleEn').textContent = c.title_en;
+            document.getElementById('descriptionEn').textContent = c.description_en;
+            
+            const bulletPoints = document.getElementById('bulletPoints');
+            bulletPoints.innerHTML = c.bullet_points.map(b => 
+                `<li><span class="bullet-icon">•</span>${b}</li>`
+            ).join('');
+
+            // SEO
+            document.getElementById('metaTitle').textContent = c.meta_title;
+            document.getElementById('metaDescription').textContent = c.meta_description;
+            
+            const seoKeywords = document.getElementById('seoKeywords');
+            seoKeywords.innerHTML = c.seo_keywords.map(k => `<span class="tag">${k}</span>`).join('');
+            
+            const searchTerms = document.getElementById('searchTerms');
+            searchTerms.innerHTML = c.search_terms.map(t => `<span class="tag">${t}</span>`).join('');
+            
+            const faqQuestions = document.getElementById('faqQuestions');
+            faqQuestions.innerHTML = c.faq_questions.map(f => 
+                `<div class="faq-item">
+                    <div class="faq-question">Q: ${f.question}</div>
+                    <div class="faq-answer">A: ${f.answer}</div>
+                </div>`
+            ).join('');
+
+            // 图片
+            document.getElementById('mainImage').textContent = img.main_image;
+            
+            const galleryImages = document.getElementById('galleryImages');
+            galleryImages.innerHTML = img.gallery_images.map(i => 
+                `<div class="image-item"><div class="image-type">画廊图</div>${i}</div>`
+            ).join('');
+            
+            const lifestyleImages = document.getElementById('lifestyleImages');
+            lifestyleImages.innerHTML = img.lifestyle_images.map(i => 
+                `<div class="image-item"><div class="image-type">场景图</div>${i}</div>`
+            ).join('');
+            
+            const detailImages = document.getElementById('detailImages');
+            detailImages.innerHTML = img.detail_images.map(i => 
+                `<div class="image-item"><div class="image-type">详情图</div>${i}</div>`
+            ).join('');
+
+            // 启用上架按钮（仅当建议为approve时）
+            document.getElementById('publishBtn').disabled = a.recommendation !== 'approve';
+        }
+
+        // 重置表单
+        function resetForm() {
+            document.getElementById('resultSection').classList.remove('active');
+            document.getElementById('emptyState').style.display = 'block';
+            currentResult = null;
+        }
+
+        // 一键上架
+        async function publishProduct() {
+            if (!currentResult) return;
+            
+            if (!confirm('确认将此产品一键上架到WooCommerce吗？')) return;
+            
+            alert('一键上架功能开发中...\n\n将自动完成：\n1. 创建WooCommerce产品（标题、描述、价格）\n2. 上传产品图片\n3. 设置分类和标签\n4. 配置SEO\n5. 设置库存');
+        }
+    </script>
+</body>
+</html>

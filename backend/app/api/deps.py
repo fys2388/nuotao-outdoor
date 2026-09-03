@@ -39,7 +39,7 @@ async def _safe_event(db: AsyncSession, **kwargs) -> None:
     """Record an identity audit event; audit must never block a decision."""
     try:
         await event_service.create_event(db, **kwargs)
-    except Exception:  # noqa: BLE001 - identity/auth outcomes do not depend on audit
+    except Exception:
         logger.warning("identity audit event could not be recorded", exc_info=True)
 
 

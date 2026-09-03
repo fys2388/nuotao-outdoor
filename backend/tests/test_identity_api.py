@@ -13,6 +13,10 @@ from typing import Annotated
 from uuid import UUID
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
 from app.api.deps import require_authenticated_actor, require_permission, require_workspace_context
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -20,9 +24,6 @@ from app.core.identity import Identity
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.services import approval_rbac, workspace_identity
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import select
 from tests.identity_helpers import (
     AUDIENCE,
     ISSUER,

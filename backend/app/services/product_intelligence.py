@@ -2028,7 +2028,7 @@ def _csv_decimal(raw: str | None) -> Decimal | None:
         return None
     try:
         value = Decimal(text)
-    except Exception as exc:  # noqa: BLE001 - row-level validation
+    except Exception as exc:
         raise ValueError(f"invalid number: {text!r}") from exc
     return value
 
@@ -2048,7 +2048,7 @@ def _csv_row_to_intake(row: dict[str, str]) -> ProductIntakeRequest:
 
         try:
             parsed = _json.loads(dims_raw)
-        except Exception as exc:  # noqa: BLE001 - row-level validation
+        except Exception as exc:
             raise ValueError(f"dimensions must be a JSON object: {exc}") from exc
         if not isinstance(parsed, dict):
             raise ValueError("dimensions must be a JSON object")
@@ -2117,7 +2117,7 @@ async def intake_products_csv(
                 data=data,
                 trace_id=trace_id,
             )
-        except Exception as exc:  # noqa: BLE001 - row-level isolation
+        except Exception as exc:
             failed += 1
             results.append(
                 CandidateCsvRowResult(

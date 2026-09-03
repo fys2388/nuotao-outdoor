@@ -60,7 +60,7 @@ class CustomerLearningError(Exception):
 
 
 def _decimal(value: Any) -> Decimal | None:
-    return ai_evaluation._decimal(value)  # noqa: SLF001
+    return ai_evaluation._decimal(value)
 
 
 async def _load_profile(
@@ -108,20 +108,20 @@ async def record_customer_evaluation(
 
     accuracy = ai_evaluation.compute_accuracy(data.prediction, data.actual_behavior)
     decision_match = accuracy.get("decision_match")
-    success_flag = ai_evaluation._determine_success(  # noqa: SLF001
+    success_flag = ai_evaluation._determine_success(
         data.prediction, data.actual_behavior, decision_match
     )
     prediction_result = (
         "success" if success_flag is True else "failure" if success_flag is False else "unknown"
     )
     error_type = (
-        ai_evaluation._error_type(  # noqa: SLF001
+        ai_evaluation._error_type(
             data.prediction, data.actual_behavior, decision_match
         )
         if success_flag is False
         else None
     )
-    confidence = ai_evaluation._prediction_confidence(data.prediction)  # noqa: SLF001
+    confidence = ai_evaluation._prediction_confidence(data.prediction)
 
     evaluation = CustomerAiEvaluation(
         workspace_id=workspace_id,
@@ -132,9 +132,9 @@ async def record_customer_evaluation(
         prediction_result=prediction_result,
         error_type=error_type,
         confidence=confidence,
-        confidence_bucket=ai_evaluation._confidence_bucket(confidence),  # noqa: SLF001
+        confidence_bucket=ai_evaluation._confidence_bucket(confidence),
         success_flag=success_flag,
-        metric_snapshot=ai_evaluation._metric_snapshot(  # noqa: SLF001
+        metric_snapshot=ai_evaluation._metric_snapshot(
             data.prediction, data.actual_behavior, decision_match
         ),
         human_rating=data.human_rating,

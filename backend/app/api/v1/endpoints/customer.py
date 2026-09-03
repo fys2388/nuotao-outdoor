@@ -221,7 +221,7 @@ async def get_interaction(
     workspace_id: WorkspaceId,
 ) -> InteractionOut:
     """Return one interaction by internal id."""
-    interaction = await customer._load_interaction(  # noqa: SLF001
+    interaction = await customer._load_interaction(
         db, workspace_id=workspace_id, interaction_id=interaction_id
     )
     if interaction is None:

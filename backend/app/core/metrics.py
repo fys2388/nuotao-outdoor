@@ -14,7 +14,6 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
-from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -24,8 +23,6 @@ from prometheus_client import (
     Gauge,
     Histogram,
     generate_latest,
-    multiprocess,
-    values,
 )
 
 # ============================================

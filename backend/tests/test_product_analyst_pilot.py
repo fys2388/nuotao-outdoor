@@ -18,6 +18,8 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
+
 from app.agents import product_analyst
 from app.core.config import get_settings
 from app.core.workspace import DEFAULT_WORKSPACE_ID
@@ -38,7 +40,6 @@ from app.services import (
     rule_engine,
 )
 from app.services.llm_gateway import LLMResponse
-from sqlalchemy import select
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")

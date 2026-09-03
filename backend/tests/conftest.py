@@ -1,11 +1,12 @@
 """Shared pytest fixtures for the backend test suite."""
 
 import pytest
-from app.core.database import Base, get_db
-from app.main import app
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
+
+from app.core.database import Base, get_db
+from app.main import app
 
 
 @pytest.fixture()

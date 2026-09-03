@@ -103,7 +103,7 @@ async def get_campaign(
     workspace_id: WorkspaceId,
 ) -> CampaignOut:
     """Return one campaign by internal id."""
-    campaign = await marketing._load_campaign(  # noqa: SLF001
+    campaign = await marketing._load_campaign(
         db, workspace_id=workspace_id, campaign_id=campaign_id
     )
     if campaign is None:
@@ -190,7 +190,7 @@ async def get_creative(
     workspace_id: WorkspaceId,
 ) -> CreativeOut:
     """Return one creative asset."""
-    creative = await marketing._load_creative(  # noqa: SLF001
+    creative = await marketing._load_creative(
         db, workspace_id=workspace_id, creative_id=creative_id
     )
     if creative is None:
@@ -283,7 +283,7 @@ async def get_feedback(
     workspace_id: WorkspaceId,
 ) -> FeedbackOut:
     """Return one feedback record."""
-    feedback = await marketing._load_feedback(  # noqa: SLF001
+    feedback = await marketing._load_feedback(
         db, workspace_id=workspace_id, feedback_id=feedback_id
     )
     if feedback is None:
@@ -387,7 +387,7 @@ async def get_experiment(
     workspace_id: WorkspaceId,
 ) -> ExperimentOut:
     """Return one experiment."""
-    experiment = await marketing._load_experiment(  # noqa: SLF001
+    experiment = await marketing._load_experiment(
         db, workspace_id=workspace_id, experiment_id=experiment_id
     )
     if experiment is None:
