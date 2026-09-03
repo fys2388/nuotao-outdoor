@@ -233,6 +233,41 @@ async def _process_order_event(
             details["order_confirmation_email_error"] = str(e)
             logger.exception("Order confirmation email failed: order_id=%s, error=%s", payload.get("id"), str(e))
 
+        # 自动生成1688采购单草稿（半自动代采）
+        try:
+            from app.services.purchase_order_service import (
+                create_purchase_order_from_wc_order,
+                load_purchase_orders,
+            )
+            # 检查是否已为该订单生成过采购单（避免重复）
+            existing_pos = load_purchase_orders()
+            order_id = payload.get("id")
+            already_generated = any(
+                po.get("wc_order_id") == order_id for po in existing_pos
+            )
+            if not already_generated:
+                purchase_order = create_purchase_order_from_wc_order(payload)
+                details["purchase_order"] = {
+                    "generated": True,
+                    "purchase_order_id": purchase_order.get("purchase_order_id"),
+                    "mapped_items": len(purchase_order.get("items", [])),
+                    "unmapped_items": len(purchase_order.get("unmapped_items", [])),
+                    "total_cost": purchase_order.get("total_cost"),
+                }
+                logger.info(
+                    "Purchase order auto-generated: order_id=%s, po_id=%s, mapped=%d, unmapped=%d",
+                    order_id,
+                    purchase_order.get("purchase_order_id"),
+                    len(purchase_order.get("items", [])),
+                    len(purchase_order.get("unmapped_items", [])),
+                )
+            else:
+                details["purchase_order"] = {"generated": False, "reason": "already_exists"}
+                logger.info("Purchase order already exists for order_id=%s, skipping", order_id)
+        except Exception as e:
+            details["purchase_order_error"] = str(e)
+            logger.exception("Purchase order auto-generation failed: order_id=%s, error=%s", payload.get("id"), str(e))
+
     # 订单状态变更时记录
     if event.event_type == "order.updated":
         details["previous_status"] = payload.get("status")

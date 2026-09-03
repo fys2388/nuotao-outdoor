@@ -30,7 +30,9 @@ from app.services.competitor_analysis_service import compare_pricing
 FIELD_MAPPING = {
     # 商品标题
     "subject": ["商品标题", "商品名称", "宝贝标题", "产品名称", "产品标题",
-                "货品标题", "offer标题", "name", "title", "subject", "product_name"],
+                "货品标题", "offer标题", "标题", "name", "title", "subject", "product_name"],
+    # 1688产品ID
+    "product_id": ["产品ID", "商品ID", "offer_id", "product_id", "item_id", "货品ID", "id"],
     # 价格
     "price": ["价格", "批发价", "单价", "售价", "价格区间", "最低价格", "最高价",
               "price", "unit_price", "wholesale_price", "报价", "金额"],
@@ -39,19 +41,21 @@ FIELD_MAPPING = {
                       "min_order", "min_order_quantity", "起批数量"],
     # 供应商
     "supplier": ["供应商", "公司名称", "店铺名称", "厂家", "供应商名称", "企业名称",
-                 "店铺", "company", "supplier", "company_name", "seller", "商家"],
+                 "店铺", "company", "supplier", "company_name", "seller", "商家", "工厂"],
     # 商品链接
     "detail_url": ["商品链接", "详情链接", "链接", "URL", "url", "detail_url",
-                   "商品URL", "详情页链接", "offer_url", "product_url"],
+                   "商品URL", "详情页链接", "offer_url", "product_url", "产品链接"],
     # 主图
     "image_url": ["主图", "图片", "商品图", "首图", "image", "image_url", "pic",
                   "主图URL", "图片链接", "product_image", "main_image"],
     # 销量
     "sales": ["销量", "成交", "30天销量", "已售", "销售数量", "月销", "sale_count",
-              "sales", "sold", "transaction_count", "成交量", "复购率"],
+              "sales", "sold", "transaction_count", "成交量", "累计销量"],
+    # 复购率
+    "repurchase_rate": ["复购率", "repurchase_rate", "回头率", "回购率"],
     # 发货地
     "location": ["发货地", "产地", "工厂地址", "发货地址", "location", "address",
-                 "ship_from", "origin", "地区", "省份", "城市"],
+                 "ship_from", "origin", "地区", "省份", "城市", "地址"],
     # SKU/规格
     "sku": ["SKU", "规格", "型号", "sku", "spec", "model", "产品规格", "货号"],
     # 库存
@@ -118,6 +122,7 @@ def normalize_fields(raw_item: dict[str, str]) -> dict[str, any]:
     """将原始字段映射为标准化字段"""
     normalized = {
         "subject": "",
+        "product_id": "",
         "price": None,
         "price_min": None,
         "price_max": None,
@@ -126,6 +131,7 @@ def normalize_fields(raw_item: dict[str, str]) -> dict[str, any]:
         "detail_url": "",
         "image_url": "",
         "sales": None,
+        "repurchase_rate": None,
         "location": "",
         "sku": "",
         "stock": None,
@@ -157,16 +163,16 @@ def normalize_fields(raw_item: dict[str, str]) -> dict[str, any]:
                             normalized[std_field] = str(raw_val).strip()
                         break
 
-    # 解析价格（支持区间价 "10.5-25.8" 或 "¥15.80"）
-    price_str = normalized.get("price", "")
-    if price_str:
+    # 解析价格（支持区间价 "10.5-25.8" 或 "¥15.80" 或 "-"）
+    price_str = str(normalized.get("price", "")).strip()
+    if price_str and price_str not in ("-", "—", "暂无", "无", "面议", ""):
         prices = re.findall(r'[\d.]+', price_str)
         if prices:
             price_values = [float(p) for p in prices if float(p) > 0]
             if price_values:
                 normalized["price_min"] = min(price_values)
                 normalized["price_max"] = max(price_values)
-                normalized["price"] = min(price_values)  # 取最低价作为参考
+                normalized["price"] = min(price_values)
 
     # 解析起订量
     moq_str = str(normalized.get("min_order_qty", ""))
@@ -175,18 +181,44 @@ def normalize_fields(raw_item: dict[str, str]) -> dict[str, any]:
         if nums:
             normalized["min_order_qty"] = int(nums[0])
 
-    # 解析销量
-    sales_str = str(normalized.get("sales", ""))
-    if sales_str:
+    # 解析销量（支持 "已售100+件"、"1.2万"、"12580"、"-" 等格式）
+    sales_str = str(normalized.get("sales", "")).strip()
+    if sales_str and sales_str not in ("-", "—", "暂无", "无", "0", ""):
+        # 处理 "已售100+件" 格式
+        if '已售' in sales_str or '件' in sales_str:
+            nums = re.findall(r'[\d.]+', sales_str)
+            if nums:
+                normalized["sales"] = int(float(nums[0]))
+            else:
+                normalized["sales"] = None
         # 处理 "1.2万" 格式
-        if '万' in sales_str:
+        elif '万' in sales_str:
             nums = re.findall(r'[\d.]+', sales_str)
             if nums:
                 normalized["sales"] = int(float(nums[0]) * 10000)
+            else:
+                normalized["sales"] = None
         else:
             nums = re.findall(r'\d+', sales_str)
             if nums:
                 normalized["sales"] = int(nums[0])
+            else:
+                normalized["sales"] = None
+    else:
+        normalized["sales"] = None
+
+    # 解析复购率
+    repurchase_str = str(normalized.get("repurchase_rate", ""))
+    if repurchase_str:
+        nums = re.findall(r'[\d.]+', repurchase_str)
+        if nums:
+            normalized["repurchase_rate"] = float(nums[0])
+
+    # 产品链接不完整时自动拼接产品ID（如 https://detail.1688.com/offer/ + product_id）
+    detail_url = normalized.get("detail_url", "")
+    product_id = normalized.get("product_id", "")
+    if detail_url and detail_url.endswith("/offer/") and product_id:
+        normalized["detail_url"] = detail_url + str(product_id)
 
     # 解析库存
     stock_str = str(normalized.get("stock", ""))
