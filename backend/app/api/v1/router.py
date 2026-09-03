@@ -29,6 +29,7 @@ from app.api.v1.endpoints import (
     fulfillment,
     health,
     i18n_tax,
+    inventory,
     identity,
     image_gen,
     influencer,
@@ -62,6 +63,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(health.router)
 api_router.include_router(i18n_tax.router)
+api_router.include_router(inventory.router)
 api_router.include_router(events.router)
 api_router.include_router(identity.router)
 api_router.include_router(rules.router)

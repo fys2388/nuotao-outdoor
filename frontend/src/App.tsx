@@ -25,6 +25,8 @@ const DashboardPage = lazy(() => import('./pages/Dashboard'))
 const AlertsPage = lazy(() => import('./pages/Alerts'))
 const InventoryPage = lazy(() => import('./pages/Inventory'))
 const ModulePage = lazy(() => import('./pages/ModulePage'))
+const MarketingCampaigns = lazy(() => import('./pages/MarketingCampaigns'))
+const LogisticsTracking = lazy(() => import('./pages/LogisticsTracking'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -58,6 +60,8 @@ type MenuKey =
   | 'influencer'
   | 'listing-localization'
   | 'customer-templates'
+  | 'marketing-campaigns'
+  | 'logistics-tracking'
   | 'settings'
 
 const menuItems = [

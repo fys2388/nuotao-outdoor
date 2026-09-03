@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { api } from '../api/client';
 
 interface Product {
   id: number;
@@ -44,11 +45,33 @@ export function Products() {
   const [formData, setFormData] = useState({ name: '', sku: '', price: 0, stock: 0, status: 'active' as const, category: '', description: '' });
 
   useEffect(() => {
-    setLoading(true);
-    setTimeout(() => {
-      setProducts(mockProducts);
-      setLoading(false);
-    }, 300);
+    const fetchProducts = async () => {
+      setLoading(true);
+      try {
+        const data: any = await api.getCoreProducts();
+        const items = Array.isArray(data) ? data : (data.items || data.data || []);
+        const mapped = items.map((p: any, idx: number) => ({
+          id: idx + 1,
+          name: p.name || '',
+          sku: p.sku || '',
+          price: p.attributes?.price ? parseFloat(p.attributes.price) : 0,
+          stock: p.attributes?.stock_quantity || 0,
+          status: p.status || 'draft',
+          category: p.category || '未分类',
+          description: p.description || '',
+          woocommerce_id: p.meta?.woocommerce_id || p.attributes?.wc_product_id,
+          created_at: p.created_at || '',
+          updated_at: p.updated_at || '',
+        }));
+        setProducts(mapped);
+      } catch (err) {
+        console.error('Failed to fetch products:', err);
+        setProducts(mockProducts);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProducts();
   }, []);
 
   const filteredProducts = products.filter((p) => {

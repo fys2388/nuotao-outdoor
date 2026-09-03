@@ -60,4 +60,20 @@ export const api = {
   // B2B
   getAgents: () => request('/p3/b2b/agents'),
   getB2BOrders: () => request('/p3/b2b/orders'),
+
+  // 产品管理（核心业务表）
+  getCoreProducts: (page = 1, pageSize = 50) =>
+    request(`/products?page=${page}&page_size=${pageSize}`),
+
+  // 订单管理（核心业务表）
+  getCoreOrders: (page = 1, pageSize = 50, status?: string) => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('page_size', String(pageSize))
+    if (status) params.set('status', status)
+    return request(`/orders?${params.toString()}`)
+  },
+
+  // 订单详情
+  getOrderDetail: (id: string) => request(`/orders/${id}`),
 }

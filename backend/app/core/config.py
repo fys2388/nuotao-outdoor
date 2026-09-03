@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     # Payment fee estimation used when the payment provider fee is unknown.
     payment_fee_rate: Decimal = Decimal("0.029")
     payment_fee_fixed: Decimal = Decimal("0.30")
+    # --- SMTP Email Configuration ---
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    from_email: str = "noreply@nuotaooutdoor.com"
+    from_name: str = "Nuotao Outdoor"
+
 
     # --- LLM Gateway (M2.2): multi-provider, vendor lock-in avoided ---------
     # Primary provider drives default routing; the fallback is used when the
