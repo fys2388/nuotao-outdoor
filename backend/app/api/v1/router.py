@@ -36,6 +36,7 @@ from app.api.v1.endpoints import (
     llm_gateway,
     logistics,
     m6_extras,
+    m5_m6,
     marketing,
     marketing_learning,
     notifications,
@@ -105,6 +106,7 @@ api_router.include_router(image_gen.router)
 api_router.include_router(activity_planner.router)
 api_router.include_router(influencer.router)
 api_router.include_router(m6_extras.router)
+api_router.include_router(m5_m6.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(llm_gateway.router)
 api_router.include_router(logistics.router)
