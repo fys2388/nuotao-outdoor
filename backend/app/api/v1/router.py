@@ -42,6 +42,7 @@ from app.api.v1.endpoints import (
     orders,
     p3,
     product_intelligence,
+    product_listing,
     products,
     prompts,
     purchase_automation,
@@ -78,6 +79,7 @@ api_router.include_router(cost_model.router)
 api_router.include_router(product_intelligence.product_router)
 api_router.include_router(product_intelligence.decision_router)
 api_router.include_router(product_intelligence.candidate_router)
+api_router.include_router(product_listing.router)
 api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
 api_router.include_router(seo.router)
