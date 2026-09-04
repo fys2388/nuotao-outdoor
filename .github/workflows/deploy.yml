@@ -108,7 +108,16 @@ jobs:
             FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
             echo "Backend API: $BACKEND_CODE"
             echo "Frontend: $FRONTEND_CODE"
-            [ "$BACKEND_CODE" = "200" ] || { echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"; exit 1; }
+            if [ "$BACKEND_CODE" != "200" ]; then
+              echo "=== backend diagnostics ==="
+              echo "-- is-active:"; systemctl is-active nuotao-backend || true
+              echo "-- status:"; systemctl status nuotao-backend --no-pager | head -15 || true
+              echo "-- journal:"; journalctl -u nuotao-backend -n 25 --no-pager || true
+              echo "-- listeners:"; ss -tlnp 2>/dev/null | grep -E ':8000|:5432' || echo "(none on 8000/5432)"
+              echo "-- postgres:"; systemctl status postgresql --no-pager | head -6 || true
+              echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"
+              exit 1
+            fi
             [ "$FRONTEND_CODE" = "200" ] || { echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"; exit 1; }
 
             echo "=== Deployment completed successfully ==="
