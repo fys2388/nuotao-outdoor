@@ -50,7 +50,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Start database backup scheduler (daily at configured time).
     from app.services.database_backup_service import get_backup_service
-    from app.core.config import settings
     backup_service = get_backup_service()
     app.state.backup_service = backup_service
     if settings.backup_scheduler_enabled:
