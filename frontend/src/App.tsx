@@ -19,11 +19,13 @@ import {
   PictureOutlined,
   CalendarOutlined,
   MessageOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 // 懒加载页面组件（减少初始 bundle 体积）
 const DashboardPage = lazy(() => import('./pages/Dashboard'))
 const AlertsPage = lazy(() => import('./pages/Alerts'))
 const InventoryPage = lazy(() => import('./pages/Inventory'))
+const NewtonSourcingPage = lazy(() => import('./pages/NewtonSourcing'))
 const ModulePage = lazy(() => import('./pages/ModulePage'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
@@ -58,6 +60,7 @@ type MenuKey =
   | 'influencer'
   | 'listing-localization'
   | 'customer-templates'
+  | 'newton-sourcing'
   | 'settings'
 
 const menuItems = [
@@ -69,6 +72,7 @@ const menuItems = [
     label: '供应链',
     children: [
       { key: 'sourcing', icon: <ShoppingOutlined />, label: '选品管理' },
+      { key: 'newton-sourcing', icon: <RobotOutlined />, label: '牛顿AI选品' },
       { key: 'cost', icon: <DollarOutlined />, label: '成本模型' },
       { key: 'selection', icon: <BarChartOutlined />, label: 'AI选品建议' },
       { key: 'purchase', icon: <ShoppingCartOutlined />, label: '采购自动化' },
@@ -116,6 +120,7 @@ const pageTitles: Record<MenuKey, string> = {
   dashboard: '经营看板',
   alerts: '预警中心',
   sourcing: '选品管理',
+  'newton-sourcing': '牛顿AI智能选品',
   cost: '成本模型',
   selection: 'AI选品建议',
   purchase: '采购自动化',
@@ -153,6 +158,8 @@ function App() {
           return <AlertsPage />
         case 'inventory':
           return <InventoryPage />
+        case 'newton-sourcing':
+          return <NewtonSourcingPage />
         default:
           const config = moduleConfigs[activeKey]
           if (config) {

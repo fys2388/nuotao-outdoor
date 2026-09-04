@@ -261,6 +261,31 @@ async def _process_order_event(
                     len(purchase_order.get("items", [])),
                     len(purchase_order.get("unmapped_items", [])),
                 )
+
+                # 自动触发批量询盘（牛顿Agent）
+                try:
+                    from app.services.auto_inquiry_service import trigger_auto_inquiry
+                    inquiry_result = trigger_auto_inquiry(
+                        purchase_order=purchase_order,
+                        strategy="standard",
+                        auto=True,
+                    )
+                    details["auto_inquiry"] = {
+                        "triggered": inquiry_result.get("success", False),
+                        "product_count": inquiry_result.get("product_count", 0),
+                        "task_id": inquiry_result.get("task_id"),
+                        "error": inquiry_result.get("error"),
+                    }
+                    logger.info(
+                        "Auto inquiry triggered: order_id=%s, po_id=%s, success=%s, products=%d",
+                        order_id,
+                        purchase_order.get("purchase_order_id"),
+                        inquiry_result.get("success"),
+                        inquiry_result.get("product_count", 0),
+                    )
+                except Exception as e:
+                    details["auto_inquiry_error"] = str(e)
+                    logger.warning("Auto inquiry failed: order_id=%s, error=%s", order_id, str(e))
             else:
                 details["purchase_order"] = {"generated": False, "reason": "already_exists"}
                 logger.info("Purchase order already exists for order_id=%s, skipping", order_id)

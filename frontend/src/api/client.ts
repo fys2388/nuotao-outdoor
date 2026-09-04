@@ -60,4 +60,19 @@ export const api = {
   // B2B
   getAgents: () => request('/p3/b2b/agents'),
   getB2BOrders: () => request('/p3/b2b/orders'),
+
+  // 牛顿AI Agent
+  getNewtonStatus: () => request('/newton/status'),
+  getNewtonModels: () => request('/newton/models'),
+  getNewtonPoints: () => request('/newton/points'),
+  createNewtonTask: (message: string, auto = true, model?: string) =>
+    request('/newton/tasks', { method: 'POST', body: JSON.stringify({ message, auto, model }) }),
+  getNewtonTask: (taskId: string) => request(`/newton/tasks/${taskId}`),
+  newtonSearch: (query: string, minPrice?: number, maxPrice?: number, minOrderQty?: number, category?: string) =>
+    request('/newton/search', { method: 'POST', body: JSON.stringify({ query, min_price: minPrice, max_price: maxPrice, min_order_qty: minOrderQty, category }) }),
+  newtonBatchInquiry: (productIds: string[], inquiryMessage: string) =>
+    request('/newton/inquiry', { method: 'POST', body: JSON.stringify({ product_ids: productIds, inquiry_message: inquiryMessage }) }),
+  getNewtonCostDaily: () => request('/newton/cost/daily'),
+  getNewtonCostAlerts: () => request('/newton/cost/alerts'),
+  getNewtonCostCredits: () => request('/newton/cost/credits'),
 }

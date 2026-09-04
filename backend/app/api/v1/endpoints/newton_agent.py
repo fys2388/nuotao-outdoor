@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.services.newton_agent_service import (
     batch_inquiry,
     create_agent_task,
@@ -29,10 +31,24 @@ from app.services.newton_cost_monitor import (
     get_weekly_usage,
     log_api_call,
 )
+from app.services.auto_inquiry_service import (
+    get_inquiry_history,
+    get_inquiry_stats,
+    trigger_auto_inquiry,
+)
+from app.services.newton_sourcing_storage import (
+    get_newton_candidate_stats,
+    import_products_to_candidates,
+    list_newton_candidates,
+    load_sourcing_result_by_id,
+    load_sourcing_results,
+    save_sourcing_result,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/newton", tags=["newton-agent"])
+DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 # ============================================
@@ -286,4 +302,150 @@ async def get_cost_monitor_report() -> StandardResponse:
         return StandardResponse(success=True, data=result)
     except Exception as e:
         logger.error("Generate monitor report failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 自动询盘端点
+# ============================================
+
+@router.get("/auto-inquiry/history", summary="查询自动询盘历史")
+async def get_auto_inquiry_history(
+    purchase_order_id: str = Query(None, description="采购单ID（可选）"),
+    limit: int = Query(20, ge=1, le=100, description="返回条数"),
+) -> StandardResponse:
+    """查询自动询盘历史记录，支持按采购单ID筛选"""
+    try:
+        result = get_inquiry_history(purchase_order_id=purchase_order_id, limit=limit)
+        return StandardResponse(success=True, data={"records": result, "total": len(result)})
+    except Exception as e:
+        logger.error("Get inquiry history failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/auto-inquiry/stats", summary="查询自动询盘统计")
+async def get_auto_inquiry_stats() -> StandardResponse:
+    """查询自动询盘统计信息（总数、成功率、按策略分布）"""
+    try:
+        result = get_inquiry_stats()
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get inquiry stats failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class TriggerInquiryRequest(BaseModel):
+    """手动触发询盘请求"""
+    purchase_order: dict[str, Any] = Field(..., description="采购单数据")
+    strategy: str = Field("standard", description="询盘策略：spot/custom/standard")
+    auto: bool = Field(True, description="是否自动执行（False=仅生成草稿）")
+
+
+@router.post("/auto-inquiry/trigger", summary="手动触发自动询盘")
+async def trigger_auto_inquiry_endpoint(request: TriggerInquiryRequest) -> StandardResponse:
+    """手动触发自动询盘（用于测试或补触发）"""
+    try:
+        result = trigger_auto_inquiry(
+            purchase_order=request.purchase_order,
+            strategy=request.strategy,
+            auto=request.auto,
+        )
+        if not result.get("success") and result.get("error"):
+            # 部分情况（如无商品映射）也算成功返回，但带错误信息
+            pass
+        log_api_call("auto_inquiry_trigger", success=result.get("success", False))
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Trigger auto inquiry failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 选品结果入库端点
+# ============================================
+
+@router.get("/sourcing/results", summary="查询历史选品结果列表")
+async def get_sourcing_results_list(
+    limit: int = Query(20, ge=1, le=100, description="返回条数"),
+) -> StandardResponse:
+    """查询牛顿AI历史选品结果列表（JSON文件存储）"""
+    try:
+        results = load_sourcing_results(limit=limit)
+        return StandardResponse(success=True, data={"results": results, "total": len(results)})
+    except Exception as e:
+        logger.error("Get sourcing results failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sourcing/results/{sourcing_id}", summary="查询选品结果详情")
+async def get_sourcing_result_detail(sourcing_id: str) -> StandardResponse:
+    """根据选品ID查询详细结果（含商品列表和AI总结）"""
+    try:
+        result = load_sourcing_result_by_id(sourcing_id)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"选品结果 {sourcing_id} 不存在")
+        return StandardResponse(success=True, data=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Get sourcing result detail failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ImportSourcingRequest(BaseModel):
+    """导入选品结果到候选库请求"""
+    products: list[dict[str, Any]] = Field(..., description="商品列表")
+    sourcing_id: str = Field("", description="选品批次ID")
+    source_query: str = Field("", description="来源查询词")
+
+
+@router.post("/sourcing/import", summary="导入选品结果到候选库")
+async def import_sourcing_to_candidates(
+    request: ImportSourcingRequest,
+    db: DbSession,
+) -> StandardResponse:
+    """将牛顿找品商品批量导入系统选品候选库"""
+    try:
+        result = await import_products_to_candidates(
+            session=db,
+            products=request.products,
+            sourcing_id=request.sourcing_id,
+            source_query=request.source_query,
+        )
+        log_api_call("sourcing_import", success=result.get("imported", 0) > 0)
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Import sourcing to candidates failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sourcing/candidates", summary="查询牛顿来源的选品候选")
+async def get_newton_sourcing_candidates(
+    db: DbSession,
+    status: str = Query("candidate", description="候选状态：candidate/approved/testing/winner/rejected"),
+    limit: int = Query(50, ge=1, le=200, description="每页条数"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+) -> StandardResponse:
+    """查询牛顿AI来源的选品候选列表"""
+    try:
+        result = await list_newton_candidates(
+            session=db,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get newton candidates failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sourcing/stats", summary="查询选品候选统计")
+async def get_sourcing_candidate_stats(db: DbSession) -> StandardResponse:
+    """查询牛顿选品候选统计（按状态分布）"""
+    try:
+        result = await get_newton_candidate_stats(session=db)
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get sourcing stats failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
