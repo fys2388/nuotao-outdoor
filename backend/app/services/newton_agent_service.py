@@ -275,6 +275,67 @@ def kill_task(task_id: str) -> dict[str, Any]:
         return {"success": False, "error": str(e), "task_id": task_id}
 
 
+def query_points() -> dict[str, Any]:
+    """
+    查询积分/额度详情
+
+    Returns:
+        积分信息（总积分、已用积分、剩余积分、每日额度等）
+    """
+    if not is_configured():
+        return {"success": True, "source": "mock", "total": 5000, "used": 0, "remaining": 5000}
+
+    try:
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.points.query", {})
+        result = data.get("result", data)
+        return {
+            "success": True,
+            "source": "newton_api",
+            "total": result.get("totalPoints", result.get("total", 5000)),
+            "used": result.get("usedPoints", result.get("used", 0)),
+            "remaining": result.get("remainingPoints", result.get("remaining", 5000)),
+            "daily_limit": result.get("dailyLimit", 5000),
+            "raw": result,
+        }
+    except Exception as e:
+        logger.error("Newton query points failed: %s", str(e))
+        return {"success": False, "error": str(e), "source": "newton_api"}
+
+
+def list_tasks(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    """
+    查询任务列表
+
+    Args:
+        page: 页码
+        page_size: 每页数量
+
+    Returns:
+        任务列表
+    """
+    if not is_configured():
+        return {"success": True, "source": "mock", "tasks": [], "total": 0}
+
+    try:
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.task.list", {
+            "page": page,
+            "pageSize": page_size,
+        })
+        result = data.get("result", data)
+        tasks = result.get("tasks", result.get("items", []))
+        return {
+            "success": True,
+            "source": "newton_api",
+            "tasks": tasks,
+            "total": result.get("total", len(tasks)),
+            "page": page,
+            "page_size": page_size,
+        }
+    except Exception as e:
+        logger.error("Newton list tasks failed: %s", str(e))
+        return {"success": False, "error": str(e), "tasks": [], "source": "newton_api"}
+
+
 # ============================================
 # 高层封装
 # ============================================
@@ -307,22 +368,41 @@ def await_result(
         # mock模式直接返回结果
         return fetch_task_result("mock_task")
 
-    # 轮询状态
+    # 轮询状态（牛顿API状态为大写：INIT/RUNNING/WAIT_SKILL/WAIT_USER/END/KILL）
     elapsed = 0
+    final_status = None
+    final_raw = None
     while elapsed < max_wait:
         status_resp = get_task_status(task_id)
         if not status_resp.get("success"):
             return status_resp
 
-        status = status_resp.get("status", "")
-        if status in ("end", "completed", "success", "failed", "error"):
+        status = status_resp.get("status", "").upper()
+        final_raw = status_resp.get("raw", {})
+
+        if status in ("END", "KILL", "FAILED", "ERROR", "COMPLETED", "SUCCESS"):
+            final_status = status
             break
 
         time.sleep(poll_interval)
         elapsed += poll_interval
 
-    # 获取结果
-    return fetch_task_result(task_id)
+    # 从get_task_status的raw中提取内容（牛顿API返回content字段）
+    content = final_raw.get("content", "") if final_raw else ""
+    chunks = final_raw.get("chunks", "") if final_raw else ""
+
+    return {
+        "success": final_status in ("END", "COMPLETED", "SUCCESS"),
+        "source": "newton_api",
+        "task_id": task_id,
+        "status": final_status or "TIMEOUT",
+        "summary": content,
+        "content": content,
+        "chunks": chunks,
+        "products": final_raw.get("products", final_raw.get("items", [])) if final_raw else [],
+        "raw": final_raw,
+        "elapsed_seconds": elapsed,
+    }
 
 
 def newton_agent_search(
