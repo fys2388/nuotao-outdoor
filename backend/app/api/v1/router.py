@@ -41,6 +41,7 @@ from app.api.v1.endpoints import (
     marketing,
     marketing_learning,
     notifications,
+    newton_agent,
     orders,
     p3,
     product_intelligence,
@@ -115,6 +116,7 @@ api_router.include_router(logistics.router)
 api_router.include_router(marketing.router)
 api_router.include_router(marketing_learning.router)
 api_router.include_router(notifications.router)
+api_router.include_router(newton_agent.router)
 api_router.include_router(supply_chain.router)
 api_router.include_router(supply_chain_learning.router)
 api_router.include_router(connectors.router)
