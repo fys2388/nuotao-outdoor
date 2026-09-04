@@ -21,6 +21,14 @@ from app.services.newton_agent_service import (
     newton_agent_search,
     query_points,
 )
+from app.services.newton_cost_monitor import (
+    check_alerts,
+    generate_monitor_report,
+    get_daily_usage,
+    get_remote_credits,
+    get_weekly_usage,
+    log_api_call,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +218,72 @@ async def create_batch_inquiry(request: BatchInquiryRequest) -> StandardResponse
         )
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "批量询盘失败"))
+        log_api_call("batch_inquiry", success=result.get("success", False))
         return StandardResponse(success=True, data=result)
     except Exception as e:
         logger.error("Batch inquiry failed: %s", str(e))
+        log_api_call("batch_inquiry", success=False, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# 成本监控端点
+# ============================================
+
+@router.get("/cost/daily", summary="获取每日用量统计")
+async def get_daily_cost_usage(
+    date: str = Query(None, description="日期（YYYY-MM-DD），默认为今天"),
+) -> StandardResponse:
+    """获取指定日期的API用量统计（调用次数、积分消耗、token使用）"""
+    try:
+        result = get_daily_usage(date)
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get daily usage failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cost/weekly", summary="获取7天用量趋势")
+async def get_weekly_cost_usage() -> StandardResponse:
+    """获取最近7天的API用量趋势和统计"""
+    try:
+        result = get_weekly_usage()
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get weekly usage failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cost/alerts", summary="检查额度告警")
+async def get_cost_alerts() -> StandardResponse:
+    """检查API额度使用告警（80%/90%阈值、失败率异常）"""
+    try:
+        result = check_alerts()
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Check alerts failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cost/credits", summary="查询远程积分详情")
+async def get_remote_cost_credits() -> StandardResponse:
+    """从牛顿API查询远程积分余额和历史消耗记录"""
+    try:
+        result = get_remote_credits()
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "查询积分失败"))
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Get remote credits failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cost/report", summary="生成完整监控报告")
+async def get_cost_monitor_report() -> StandardResponse:
+    """生成完整的成本监控报告（每日用量、7天趋势、告警、远程积分）"""
+    try:
+        result = generate_monitor_report()
+        return StandardResponse(success=True, data=result)
+    except Exception as e:
+        logger.error("Generate monitor report failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
