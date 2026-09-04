@@ -73,6 +73,35 @@ jobs:
             cp -r dist/* /var/www/nuotao/
             chown -R www-data:www-data /var/www/nuotao
 
+            echo "=== 6.5 Configuring nginx (console :8081) ==="
+            NGINX_CONF=/etc/nginx/sites-available/nuotao-console
+            if [ ! -f "$NGINX_CONF" ]; then
+              {
+                echo 'server {'
+                echo '    listen 8081;'
+                echo '    listen [::]:8081;'
+                echo '    server_name _;'
+                echo '    root /var/www/nuotao;'
+                echo '    index index.html;'
+                echo '    location / {'
+                echo '        try_files $uri $uri/ /index.html;'
+                echo '    }'
+                echo '    location /assets/ {'
+                echo '        expires 30d;'
+                echo '        add_header Cache-Control "public, immutable";'
+                echo '    }'
+                echo '    add_header X-Content-Type-Options nosniff;'
+                echo '    add_header X-Frame-Options SAMEORIGIN;'
+                echo '}'
+              } > "$NGINX_CONF"
+              echo "[nginx] created $NGINX_CONF"
+            else
+              echo "[nginx] $NGINX_CONF already exists, skipping"
+            fi
+            ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/nuotao-console
+            nginx -t && systemctl reload nginx
+            echo "[nginx] console :8081 ready"
+
             echo "=== 7. Health check ==="
             sleep 5
             BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs || true)
