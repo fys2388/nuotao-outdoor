@@ -11,8 +11,30 @@ env:
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
 jobs:
+  ci-gate:
+    name: Pre-deploy check (syntax + imports + smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install backend dependencies
+        run: pip install -e .
+      - name: Syntax check
+        run: python -m compileall -q app
+      - name: App internal import integrity
+        run: python scripts/check_app_imports.py
+      - name: FastAPI app smoke
+        run: python -c "import app.main as m; assert m.app is not None; assert m.settings is not None; print('SMOKE OK')"
+
   deploy:
     name: Deploy to Hetzner Server
+    needs: ci-gate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
