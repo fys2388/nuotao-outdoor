@@ -54,7 +54,7 @@ jobs:
               echo "ERROR: 数据库迁移失败，请登录服务器排查:"
               echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
               echo "  2) 确认数据库已启动: systemctl status postgresql"
-              echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\"
+              echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\""
               exit 1
             fi
 
