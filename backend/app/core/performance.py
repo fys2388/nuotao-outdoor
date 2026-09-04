@@ -19,8 +19,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.redis import get_redis
+
+settings = get_settings()
 
 
 # ============================================

@@ -82,24 +82,28 @@ async def _handle_generate_activity_plan(
     target_audience = arguments.get("target_audience")
     goals = arguments.get("goals")
     try:
-        from app.services.activity_planner_service import generate_plan
-        plan = await generate_plan(
+        from app.services.activity_planner_service import generate_activity_plan
+        extra: dict[str, Any] = {}
+        if target_audience:
+            extra["target_audience"] = target_audience
+        if goals:
+            extra["goals"] = goals
+        plan = await generate_activity_plan(
             context.session,
             workspace_id=context.workspace_id,
             name=name,
             activity_type=activity_type,
             budget_total=budget,
-            target_audience=target_audience,
-            goals=goals,
+            additional_context=extra if extra else None,
             trace_id=context.trace_id,
         )
         return {
-            "plan_id": str(plan.id),
-            "name": plan.name,
-            "activity_type": plan.activity_type,
-            "approval_status": plan.approval_status,
-            "version": plan.version,
-            "summary": plan.plan_json.get("summary", "") if plan.plan_json else "",
+            "plan_id": plan["id"],
+            "name": plan["name"],
+            "activity_type": plan["activity_type"],
+            "approval_status": plan["approval_status"],
+            "version": plan["version"],
+            "summary": (plan.get("plan") or {}).get("summary", ""),
         }
     except Exception as exc:
         logger.exception("activity plan generation failed")

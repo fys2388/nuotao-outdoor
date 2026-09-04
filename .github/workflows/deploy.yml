@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deployment info
         run: |
@@ -101,6 +101,9 @@ jobs:
             ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/nuotao-console
             nginx -t && systemctl reload nginx
             echo "[nginx] console :8081 ready"
+
+            echo "=== 6.6 nginx server_name conflict check ==="
+            grep -rn "admin.nuotaooutdoor.com" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || echo "(no admin.nuotaooutdoor.com references)"
 
             echo "=== 7. Health check ==="
             sleep 5
