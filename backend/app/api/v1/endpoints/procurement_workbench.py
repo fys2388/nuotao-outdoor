@@ -17,9 +17,11 @@ from app.services.purchase_order_service import (
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_CONFIRMED,
+    STATUS_INTERNATIONAL_SHIPPED,
     STATUS_ORDERED,
     STATUS_PENDING,
     STATUS_SHIPPED,
+    add_international_tracking,
     add_tracking,
     cancel_purchase_order,
     complete_purchase_order,
@@ -54,10 +56,18 @@ class MarkOrderedRequest(BaseModel):
 
 
 class AddTrackingRequest(BaseModel):
-    """添加物流单号请求"""
-    tracking_number: str = Field(..., description="物流单号")
-    carrier: str = Field("", description="快递公司")
-    tracking_url: str = Field("", description="物流查询链接")
+    """添加国内采购物流单号请求（1688供应商→货代/集运仓）"""
+    tracking_number: str = Field(..., description="国内物流单号")
+    carrier: str = Field("", description="国内快递公司（韵达/中通/圆通等）")
+    tracking_url: str = Field("", description="国内物流查询链接")
+    notes: str = Field("", description="备注")
+
+
+class AddInternationalTrackingRequest(BaseModel):
+    """添加国际发货物流单号请求（货代/集运仓→海外客户，自动回传WooCommerce）"""
+    tracking_number: str = Field(..., description="国际物流单号（4PX/燕文/云途等）")
+    carrier: str = Field("", description="国际快递公司")
+    tracking_url: str = Field("", description="国际物流查询链接")
     notes: str = Field("", description="备注")
 
 
@@ -164,9 +174,9 @@ async def mark_as_ordered(po_id: str, request: MarkOrderedRequest) -> StandardRe
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/orders/{po_id}/tracking", summary="添加物流单号")
+@router.put("/orders/{po_id}/tracking", summary="添加国内采购物流单号")
 async def add_tracking_info(po_id: str, request: AddTrackingRequest) -> StandardResponse:
-    """添加物流单号，自动回传WooCommerce订单，状态 ordered → shipped"""
+    """添加国内采购物流单号（1688供应商→货代/集运仓），不回传WooCommerce"""
     try:
         result = add_tracking(
             po_id,
@@ -176,12 +186,33 @@ async def add_tracking_info(po_id: str, request: AddTrackingRequest) -> Standard
             notes=request.notes,
         )
         if not result:
-            raise HTTPException(status_code=404, detail=f"采购单 {po_id} 不存在或状态不允许添加物流")
+            raise HTTPException(status_code=404, detail=f"采购单 {po_id} 不存在或状态不允许添加国内物流")
         return StandardResponse(success=True, data=result)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Add tracking failed: %s", str(e))
+        logger.error("Add domestic tracking failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/orders/{po_id}/international-tracking", summary="添加国际发货物流单号")
+async def add_international_tracking_info(po_id: str, request: AddInternationalTrackingRequest) -> StandardResponse:
+    """添加国际发货物流单号（货代/集运仓→海外客户），自动回传WooCommerce订单"""
+    try:
+        result = add_international_tracking(
+            po_id,
+            tracking_number=request.tracking_number,
+            carrier=request.carrier,
+            tracking_url=request.tracking_url,
+            notes=request.notes,
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail=f"采购单 {po_id} 不存在或状态不允许添加国际物流")
+        return StandardResponse(success=True, data=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Add international tracking failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

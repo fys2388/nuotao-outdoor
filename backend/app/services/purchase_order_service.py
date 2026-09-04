@@ -35,19 +35,22 @@ WC_AUTH = (
 STATUS_PENDING = "pending"
 STATUS_CONFIRMED = "confirmed"
 STATUS_ORDERED = "ordered"
-STATUS_SHIPPED = "shipped"
+STATUS_SHIPPED = "shipped"  # 国内已发货（1688供应商→货代/集运仓）
+STATUS_INTERNATIONAL_SHIPPED = "international_shipped"  # 国际已发货（货代→海外客户，已回传WC）
 STATUS_COMPLETED = "completed"
 STATUS_CANCELLED = "cancelled"
 
 VALID_STATUSES = [STATUS_PENDING, STATUS_CONFIRMED, STATUS_ORDERED,
-                  STATUS_SHIPPED, STATUS_COMPLETED, STATUS_CANCELLED]
+                  STATUS_SHIPPED, STATUS_INTERNATIONAL_SHIPPED,
+                  STATUS_COMPLETED, STATUS_CANCELLED]
 
-# 状态流转规则
+# 状态流转规则（一件代发模式）
 STATUS_TRANSITIONS = {
     STATUS_PENDING: [STATUS_CONFIRMED, STATUS_CANCELLED],
     STATUS_CONFIRMED: [STATUS_ORDERED, STATUS_CANCELLED],
     STATUS_ORDERED: [STATUS_SHIPPED, STATUS_CANCELLED],
-    STATUS_SHIPPED: [STATUS_COMPLETED],
+    STATUS_SHIPPED: [STATUS_INTERNATIONAL_SHIPPED, STATUS_COMPLETED],
+    STATUS_INTERNATIONAL_SHIPPED: [STATUS_COMPLETED],
     STATUS_COMPLETED: [],
     STATUS_CANCELLED: [],
 }
@@ -280,13 +283,14 @@ def mark_ordered(po_id: str, ali1688_order_id: str = "", ali1688_order_url: str 
 
 def add_tracking(po_id: str, tracking_number: str, carrier: str = "", tracking_url: str = "", notes: str = "") -> dict[str, Any] | None:
     """
-    添加物流跟踪号，并自动更新WooCommerce订单
+    添加国内采购物流跟踪号（1688供应商→货代/集运仓）
+    注意：这是国内物流单号，不回传WooCommerce订单
 
     Args:
         po_id: 采购单号
-        tracking_number: 物流单号
-        carrier: 承运商
-        tracking_url: 物流查询链接
+        tracking_number: 国内物流单号
+        carrier: 国内承运商（韵达、中通、圆通等）
+        tracking_url: 国内物流查询链接
         notes: 备注
 
     Returns:
@@ -296,7 +300,7 @@ def add_tracking(po_id: str, tracking_number: str, carrier: str = "", tracking_u
     for i, po in enumerate(orders):
         if po.get("purchase_order_id") == po_id:
             if po.get("status") not in (STATUS_ORDERED, STATUS_SHIPPED):
-                raise ValueError(f"采购单状态必须是ordered或shipped才能添加物流，当前: {po.get('status')}")
+                raise ValueError(f"采购单状态必须是ordered或shipped才能添加国内物流，当前: {po.get('status')}")
 
             po["status"] = STATUS_SHIPPED
             po["tracking_number"] = tracking_number
@@ -307,13 +311,60 @@ def add_tracking(po_id: str, tracking_number: str, carrier: str = "", tracking_u
                 po["notes"] = notes
             po["history"].append({
                 "timestamp": datetime.now().isoformat(),
-                "action": "tracking_added",
-                "description": f"物流单号: {tracking_number}, 承运商: {carrier or '未填写'}",
+                "action": "domestic_tracking_added",
+                "description": f"国内物流单号: {tracking_number}, 承运商: {carrier or '未填写'}（供应商→货代/集运仓）",
             })
             orders[i] = po
             save_purchase_orders(orders)
 
-            # 自动更新WooCommerce订单（添加物流备注）
+            # 注意：国内物流不回传WooCommerce订单
+            return po
+    return None
+
+
+def add_international_tracking(
+    po_id: str,
+    tracking_number: str,
+    carrier: str = "",
+    tracking_url: str = "",
+    notes: str = "",
+) -> dict[str, Any] | None:
+    """
+    添加国际发货物流跟踪号（货代/集运仓→海外客户）
+    国际专线单号会自动回传WooCommerce订单
+
+    Args:
+        po_id: 采购单号
+        tracking_number: 国际物流单号（4PX、燕文、云途等）
+        carrier: 国际承运商
+        tracking_url: 国际物流查询链接
+        notes: 备注
+
+    Returns:
+        更新后的采购单
+    """
+    orders = load_purchase_orders()
+    for i, po in enumerate(orders):
+        if po.get("purchase_order_id") == po_id:
+            if po.get("status") not in (STATUS_SHIPPED, STATUS_INTERNATIONAL_SHIPPED):
+                raise ValueError(f"采购单状态必须是shipped或international_shipped才能添加国际物流，当前: {po.get('status')}")
+
+            po["status"] = STATUS_INTERNATIONAL_SHIPPED
+            po["international_tracking_number"] = tracking_number
+            po["international_tracking_carrier"] = carrier
+            po["international_tracking_url"] = tracking_url
+            po["updated_at"] = datetime.now().isoformat()
+            if notes:
+                po["notes"] = notes
+            po["history"].append({
+                "timestamp": datetime.now().isoformat(),
+                "action": "international_tracking_added",
+                "description": f"国际物流单号: {tracking_number}, 承运商: {carrier or '未填写'}（货代→海外客户，已回传WooCommerce）",
+            })
+            orders[i] = po
+            save_purchase_orders(orders)
+
+            # 国际物流自动回传WooCommerce订单
             wc_order_id = po.get("wc_order_id")
             if wc_order_id:
                 _update_wc_order_with_tracking(wc_order_id, tracking_number, carrier, tracking_url)

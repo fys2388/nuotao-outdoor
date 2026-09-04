@@ -12,12 +12,13 @@ import {
 
 const { Title, Text, Paragraph } = Typography
 
-// 采购单状态配置
+// 采购单状态配置（一件代发模式）
 const STATUS_CONFIG: Record<string, { color: string; label: string; icon: any }> = {
   pending: { color: 'orange', label: '待确认', icon: <ShoppingCartOutlined /> },
   confirmed: { color: 'blue', label: '已确认', icon: <CheckCircleOutlined /> },
   ordered: { color: 'purple', label: '已下单', icon: <DollarOutlined /> },
-  shipped: { color: 'cyan', label: '已发货', icon: <TruckOutlined /> },
+  shipped: { color: 'cyan', label: '国内已发货', icon: <TruckOutlined /> },
+  international_shipped: { color: 'geekblue', label: '国际已发货', icon: <ExportOutlined /> },
   completed: { color: 'green', label: '已完成', icon: <CheckCircleOutlined /> },
   cancelled: { color: 'default', label: '已取消', icon: <StopOutlined /> },
 }
@@ -48,9 +49,12 @@ interface PurchaseOrder {
   }
   ali1688_order_id: string
   ali1688_order_url: string
-  tracking_number: string
+  tracking_number: string  // 国内采购物流号
   tracking_carrier: string
   tracking_url: string
+  international_tracking_number: string  // 国际发货物流号（回传WC）
+  international_tracking_carrier: string
+  international_tracking_url: string
   notes: string
 }
 
@@ -63,8 +67,10 @@ export default function ProcurementWorkbench() {
   const [currentOrder, setCurrentOrder] = useState<PurchaseOrder | null>(null)
   const [orderModal, setOrderModal] = useState(false)
   const [trackingModal, setTrackingModal] = useState(false)
+  const [internationalTrackingModal, setInternationalTrackingModal] = useState(false)
   const [form] = Form.useForm()
   const [trackingForm] = Form.useForm()
+  const [internationalTrackingForm] = Form.useForm()
 
   // 获取统计数据
   const fetchStats = async () => {
@@ -163,7 +169,7 @@ export default function ProcurementWorkbench() {
     }
   }
 
-  // 添加物流单号
+  // 添加国内采购物流单号（不回传WC）
   const handleAddTracking = async (values: any) => {
     if (!currentOrder) return
     try {
@@ -174,9 +180,34 @@ export default function ProcurementWorkbench() {
       })
       const data = await resp.json()
       if (data.success) {
-        message.success('物流单号已添加，已回传WooCommerce')
+        message.success('国内采购物流单号已添加')
         setTrackingModal(false)
         trackingForm.resetFields()
+        fetchStats()
+        fetchOrders(activeStatus)
+        setCurrentOrder(data.data)
+      } else {
+        message.error(data.error || '操作失败')
+      }
+    } catch (e) {
+      message.error('操作失败')
+    }
+  }
+
+  // 添加国际发货物流单号（回传WC）
+  const handleAddInternationalTracking = async (values: any) => {
+    if (!currentOrder) return
+    try {
+      const resp = await fetch(`/api/v1/procurement/orders/${currentOrder.purchase_order_id}/international-tracking`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        message.success('国际物流单号已添加，已回传WooCommerce')
+        setInternationalTrackingModal(false)
+        internationalTrackingForm.resetFields()
         fetchStats()
         fetchOrders(activeStatus)
         setCurrentOrder(data.data)
@@ -313,13 +344,24 @@ export default function ProcurementWorkbench() {
       ) : <Text type="secondary">-</Text>,
     },
     {
-      title: '物流单号',
+      title: '国内物流',
       dataIndex: 'tracking_number',
       key: 'tracking_number',
-      width: 150,
+      width: 140,
       render: (v: string, record: PurchaseOrder) => v ? (
         record.tracking_url ? (
           <a href={record.tracking_url} target="_blank" rel="noreferrer">{v}</a>
+        ) : v
+      ) : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '国际物流',
+      dataIndex: 'international_tracking_number',
+      key: 'international_tracking_number',
+      width: 140,
+      render: (v: string, record: PurchaseOrder) => v ? (
+        record.international_tracking_url ? (
+          <a href={record.international_tracking_url} target="_blank" rel="noreferrer">{v}</a>
         ) : v
       ) : <Text type="secondary">-</Text>,
     },
@@ -367,10 +409,18 @@ export default function ProcurementWorkbench() {
               setCurrentOrder(record)
               setTrackingModal(true)
             }}>
-              填物流
+              国内物流
             </Button>
           )}
           {record.status === 'shipped' && (
+            <Button size="small" type="primary" icon={<ExportOutlined />} onClick={() => {
+              setCurrentOrder(record)
+              setInternationalTrackingModal(true)
+            }}>
+              国际发货
+            </Button>
+          )}
+          {['international_shipped'].includes(record.status) && (
             <Button size="small" type="primary" onClick={() => handleComplete(record.purchase_order_id)}>
               完成
             </Button>
@@ -390,7 +440,8 @@ export default function ProcurementWorkbench() {
     { title: '待确认', value: stats?.by_status?.pending || 0, color: '#faad14', icon: <ShoppingCartOutlined />, status: 'pending' },
     { title: '已确认', value: stats?.by_status?.confirmed || 0, color: '#1890ff', icon: <CheckCircleOutlined />, status: 'confirmed' },
     { title: '已下单', value: stats?.by_status?.ordered || 0, color: '#722ed1', icon: <DollarOutlined />, status: 'ordered' },
-    { title: '已发货', value: stats?.by_status?.shipped || 0, color: '#13c2c2', icon: <TruckOutlined />, status: 'shipped' },
+    { title: '国内已发', value: stats?.by_status?.shipped || 0, color: '#13c2c2', icon: <TruckOutlined />, status: 'shipped' },
+    { title: '国际已发', value: stats?.by_status?.international_shipped || 0, color: '#2f54eb', icon: <ExportOutlined />, status: 'international_shipped' },
     { title: '已完成', value: stats?.by_status?.completed || 0, color: '#52c41a', icon: <CheckCircleOutlined />, status: 'completed' },
   ]
 
@@ -401,8 +452,8 @@ export default function ProcurementWorkbench() {
         <Space>
           <ShoppingCartOutlined style={{ fontSize: '28px', color: '#722ed1' }} />
           <div>
-            <Title level={3} style={{ margin: 0 }}>代采工作台</Title>
-            <Text type="secondary">半自动代采：确认 → 1688下单 → 物流回填 → 完成</Text>
+            <Title level={3} style={{ margin: 0 }}>代采工作台（一件代发）</Title>
+            <Text type="secondary">确认 → 1688下单 → 国内物流（供应商→货代）→ 国际发货（货代→客户，回传WC）→ 完成</Text>
           </div>
         </Space>
         <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>
@@ -524,13 +575,22 @@ export default function ProcurementWorkbench() {
                   ) : currentOrder.ali1688_order_id
                 ) : '-'}
               </Descriptions.Item>
-              <Descriptions.Item label="物流单号">
+              <Descriptions.Item label="国内物流">
                 {currentOrder.tracking_number ? (
                   currentOrder.tracking_url ? (
                     <a href={currentOrder.tracking_url} target="_blank" rel="noreferrer">
                       {currentOrder.tracking_number}
                     </a>
                   ) : currentOrder.tracking_number
+                ) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="国际物流" span={2}>
+                {currentOrder.international_tracking_number ? (
+                  currentOrder.international_tracking_url ? (
+                    <a href={currentOrder.international_tracking_url} target="_blank" rel="noreferrer">
+                      {currentOrder.international_tracking_number}
+                    </a>
+                  ) : currentOrder.international_tracking_number
                 ) : '-'}
               </Descriptions.Item>
             </Descriptions>
@@ -623,9 +683,9 @@ export default function ProcurementWorkbench() {
         </Form>
       </Modal>
 
-      {/* 添加物流单号弹窗 */}
+      {/* 添加国内采购物流单号弹窗 */}
       <Modal
-        title="添加物流单号"
+        title="添加国内采购物流单号"
         open={trackingModal}
         onCancel={() => setTrackingModal(false)}
         onOk={() => trackingForm.submit()}
@@ -633,16 +693,16 @@ export default function ProcurementWorkbench() {
       >
         <Alert
           type="info"
-          message="添加物流单号后会自动回传WooCommerce订单"
+          message="这是1688供应商→货代/集运仓的国内物流单号，不会回传WooCommerce订单"
           style={{ marginBottom: '16px' }}
         />
         <Form form={trackingForm} layout="vertical">
-          <Form.Item name="tracking_number" label="物流单号" rules={[{ required: true, message: '请输入物流单号' }]}>
-            <Input placeholder="请输入物流单号" />
+          <Form.Item name="tracking_number" label="国内物流单号" rules={[{ required: true, message: '请输入国内物流单号' }]}>
+            <Input placeholder="请输入国内物流单号（韵达/中通/圆通等）" />
           </Form.Item>
-          <Form.Item name="carrier" label="快递公司">
+          <Form.Item name="carrier" label="国内快递公司">
             <Select
-              placeholder="请选择快递公司"
+              placeholder="请选择国内快递公司"
               allowClear
               options={[
                 { value: '韵达快递', label: '韵达快递' },
@@ -656,7 +716,49 @@ export default function ProcurementWorkbench() {
               ]}
             />
           </Form.Item>
-          <Form.Item name="tracking_url" label="物流查询链接">
+          <Form.Item name="tracking_url" label="国内物流查询链接">
+            <Input placeholder="https://..." />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <Input.TextArea rows={2} placeholder="可选备注" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 添加国际发货物流单号弹窗 */}
+      <Modal
+        title="添加国际发货物流单号"
+        open={internationalTrackingModal}
+        onCancel={() => setInternationalTrackingModal(false)}
+        onOk={() => internationalTrackingForm.submit()}
+        okText="确认发货"
+      >
+        <Alert
+          type="warning"
+          message="这是货代/集运仓→海外客户的国际专线单号，添加后会自动回传WooCommerce订单"
+          style={{ marginBottom: '16px' }}
+        />
+        <Form form={internationalTrackingForm} layout="vertical">
+          <Form.Item name="tracking_number" label="国际物流单号" rules={[{ required: true, message: '请输入国际物流单号' }]}>
+            <Input placeholder="请输入国际专线单号（4PX/燕文/云途等）" />
+          </Form.Item>
+          <Form.Item name="carrier" label="国际快递公司">
+            <Select
+              placeholder="请选择国际快递公司"
+              allowClear
+              options={[
+                { value: '4PX递四方', label: '4PX递四方' },
+                { value: '燕文物流', label: '燕文物流' },
+                { value: '云途物流', label: '云途物流' },
+                { value: '中国邮政', label: '中国邮政' },
+                { value: 'DHL', label: 'DHL' },
+                { value: 'FedEx', label: 'FedEx' },
+                { value: 'UPS', label: 'UPS' },
+                { value: '其他', label: '其他' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="tracking_url" label="国际物流查询链接">
             <Input placeholder="https://..." />
           </Form.Item>
           <Form.Item name="notes" label="备注">
