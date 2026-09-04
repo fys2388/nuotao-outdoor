@@ -48,6 +48,7 @@ from app.api.v1.endpoints import (
     product_listing,
     products,
     prompts,
+    procurement_workbench,
     purchase_automation,
     rules,
     scraping,
@@ -72,6 +73,7 @@ api_router.include_router(identity.router)
 api_router.include_router(rules.router)
 api_router.include_router(products.router)
 api_router.include_router(purchase_automation.router)
+api_router.include_router(procurement_workbench.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(webhooks_generic.router)
 api_router.include_router(weekly_report.router)

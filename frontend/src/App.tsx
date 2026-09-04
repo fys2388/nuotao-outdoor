@@ -26,6 +26,7 @@ const DashboardPage = lazy(() => import('./pages/Dashboard'))
 const AlertsPage = lazy(() => import('./pages/Alerts'))
 const InventoryPage = lazy(() => import('./pages/Inventory'))
 const NewtonSourcingPage = lazy(() => import('./pages/NewtonSourcing'))
+const ProcurementWorkbenchPage = lazy(() => import('./pages/ProcurementWorkbench'))
 const ModulePage = lazy(() => import('./pages/ModulePage'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
@@ -61,6 +62,7 @@ type MenuKey =
   | 'listing-localization'
   | 'customer-templates'
   | 'newton-sourcing'
+  | 'procurement'
   | 'settings'
 
 const menuItems = [
@@ -76,6 +78,7 @@ const menuItems = [
       { key: 'cost', icon: <DollarOutlined />, label: '成本模型' },
       { key: 'selection', icon: <BarChartOutlined />, label: 'AI选品建议' },
       { key: 'purchase', icon: <ShoppingCartOutlined />, label: '采购自动化' },
+      { key: 'procurement', icon: <ShoppingCartOutlined />, label: '代采工作台' },
       { key: 'logistics', icon: <TruckOutlined />, label: '物流监控' },
     ],
   },
@@ -124,6 +127,7 @@ const pageTitles: Record<MenuKey, string> = {
   cost: '成本模型',
   selection: 'AI选品建议',
   purchase: '采购自动化',
+  procurement: '代采工作台',
   logistics: '物流监控',
   content: '内容生成系统',
   seo: 'SEO基建',
@@ -160,6 +164,8 @@ function App() {
           return <InventoryPage />
         case 'newton-sourcing':
           return <NewtonSourcingPage />
+        case 'procurement':
+          return <ProcurementWorkbenchPage />
         default:
           const config = moduleConfigs[activeKey]
           if (config) {
