@@ -16,11 +16,11 @@ API能力:
 """
 from __future__ import annotations
 
+import hmac
 import hashlib
 import logging
 import os
 import time
-from datetime import datetime
 from typing import Any
 
 import requests
@@ -41,26 +41,32 @@ POLL_INTERVAL = 3
 MAX_POLL_ATTEMPTS = 100
 
 
-def _sign(params: dict[str, Any], secret: str) -> str:
-    """1688 API 签名（MD5，与sourcing_1688_service一致）"""
-    sorted_params = sorted(params.items())
-    sign_str = secret + "".join(f"{k}{v}" for k, v in sorted_params) + secret
-    return hashlib.md5(sign_str.encode("utf-8")).hexdigest().upper()
+def _sign(url_path: str, params: dict[str, Any], secret: str) -> str:
+    """
+    1688 API 签名（HMAC-SHA1，官方标准算法）
 
+    官方签名规则（https://open.1688.com/doc/signature.htm）：
+    1. 构造urlPath：从param2开始到?为止，如 param2/1/namespace/api_name/appKey
+    2. 构造参数签名因子：key+value拼接，按key首字母排序，最后拼接
+    3. 合并：s = urlPath + 参数签名因子
+    4. 签名：uppercase(hex(hmac_sha1(s, secretKey)))
+    """
+    # 排除签名参数本身
+    sign_params = {k: v for k, v in params.items() if k != "_aop_signature"}
 
-def _build_common_params(method: str) -> dict[str, Any]:
-    """构建公共参数（牛顿API需额外传access_token）"""
-    params = {
-        "method": method,
-        "app_key": NEWTON_APP_KEY,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "format": "json",
-        "v": "2.0",
-        "sign_method": "md5",
-    }
-    if NEWTON_ACCESS_TOKEN:
-        params["access_token"] = NEWTON_ACCESS_TOKEN
-    return params
+    # 参数key+value拼接，按key排序
+    sorted_params = sorted(sign_params.items())
+    param_str = "".join(f"{k}{v}" for k, v in sorted_params)
+
+    # 合并urlPath和参数
+    sign_str = url_path + param_str
+
+    # HMAC-SHA1签名
+    return hmac.new(
+        secret.encode("utf-8"),
+        sign_str.encode("utf-8"),
+        hashlib.sha1,
+    ).hexdigest().upper()
 
 
 def is_configured() -> bool:
@@ -78,18 +84,47 @@ def _call_newton_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
     调用牛顿云API（底层网关调用）
 
     Args:
-        method: API方法名，如 com.alibaba.newton.agent.create
+        method: API方法名，如 com.alibaba.agent.newtoncloud.task.create
         biz_params: 业务参数
 
     Returns:
         API响应JSON
     """
-    params = _build_common_params(method)
-    params.update(biz_params)
-    params["_aop_signature"] = _sign(params, NEWTON_APP_SECRET)
+    # 拆分method为namespace和api_name
+    # 牛顿云API的namespace固定为 com.alibaba.agent
+    # method格式：com.alibaba.agent.newtoncloud.task.create
+    NEWTON_NAMESPACE = "com.alibaba.agent"
+    prefix = f"{NEWTON_NAMESPACE}."
+    if method.startswith(prefix):
+        namespace = NEWTON_NAMESPACE
+        api_name = method[len(prefix):]  # newtoncloud.task.create
+    else:
+        # 兼容其他格式：从最后一个点拆分
+        parts = method.rsplit(".", 1)
+        namespace = parts[0] if len(parts) == 2 else ""
+        api_name = parts[1] if len(parts) == 2 else method
 
-    url = f"{NEWTON_BASE_URL}/param2/1/{method}/{NEWTON_APP_KEY}"
-    resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
+    # 构造参数：业务参数 + access_token + _aop_timestamp
+    params: dict[str, Any] = {}
+    params.update(biz_params)
+    if NEWTON_ACCESS_TOKEN:
+        params["access_token"] = NEWTON_ACCESS_TOKEN
+    params["_aop_timestamp"] = str(int(time.time() * 1000))
+
+    # 构造urlPath：从param2开始到?为止
+    url_path = f"param2/1/{namespace}/{api_name}/{NEWTON_APP_KEY}"
+
+    # 计算签名
+    params["_aop_signature"] = _sign(url_path, params, NEWTON_APP_SECRET)
+
+    # 构造完整URL
+    url = f"{NEWTON_BASE_URL}/{url_path}"
+
+    # 禁用代理（本地环境可能配置了HTTP代理导致连接失败）
+    proxies = {"http": None, "https": None}
+
+    # GET请求，参数通过URL query传递（1688网关标准方式）
+    resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT, proxies=proxies)
     resp.raise_for_status()
     return resp.json()
 
@@ -129,7 +164,7 @@ def create_agent_task(
         if extra_params:
             biz_params.update(extra_params)
 
-        data = _call_newton_api("com.alibaba.newton.agent.create", biz_params)
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.task.create", biz_params)
         result = data.get("result", data)
         return {
             "success": True,
@@ -158,7 +193,7 @@ def get_task_status(task_id: str) -> dict[str, Any]:
         return _mock_get_status(task_id)
 
     try:
-        data = _call_newton_api("com.alibaba.newton.agent.get", {"taskId": task_id})
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.task.get", {"taskId": task_id})
         result = data.get("result", data)
         return {
             "success": True,
@@ -187,7 +222,7 @@ def fetch_task_result(task_id: str) -> dict[str, Any]:
         return _mock_fetch_result(task_id)
 
     try:
-        data = _call_newton_api("com.alibaba.newton.agent.fetch", {"taskId": task_id})
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.task.fetch", {"taskId": task_id})
         result = data.get("result", data)
         return {
             "success": True,
@@ -215,7 +250,7 @@ def list_models() -> dict[str, Any]:
         return _mock_list_models()
 
     try:
-        data = _call_newton_api("com.alibaba.newton.agent.listModels", {})
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.model.list", {})
         result = data.get("result", data)
         models = result.get("models", result.get("items", []))
         return {
@@ -234,7 +269,7 @@ def kill_task(task_id: str) -> dict[str, Any]:
     if not is_configured():
         return {"success": True, "source": "mock", "task_id": task_id, "status": "killed"}
     try:
-        data = _call_newton_api("com.alibaba.newton.agent.kill", {"taskId": task_id})
+        data = _call_newton_api("com.alibaba.agent.newtoncloud.task.kill", {"taskId": task_id})
         return {"success": True, "source": "newton_api", "task_id": task_id, "raw": data}
     except Exception as e:
         return {"success": False, "error": str(e), "task_id": task_id}
