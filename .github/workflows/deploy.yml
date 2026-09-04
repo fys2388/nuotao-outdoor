@@ -36,15 +36,27 @@ jobs:
             cd /opt/nuotao
 
             echo "=== 1. Pulling latest code ==="
-            git pull origin ${{ github.ref_name }}
+            git fetch --prune origin ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }}
 
             echo "=== 2. Installing backend dependencies ==="
             cd /opt/nuotao/backend
             source .venv/bin/activate
-            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet 2>/dev/null || true
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 依赖安装失败，请检查 pip 源与 requirements.txt"; exit 1; }
 
             echo "=== 3. Running database migrations ==="
-            alembic upgrade head
+            if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
+              echo "[db] 连接配置(密码已隐藏): $DBURL"
+            else
+              echo "[db] 警告: 未在 /opt/nuotao/backend/.env 找到 DATABASE_URL"
+            fi
+            if ! alembic upgrade head; then
+              echo "ERROR: 数据库迁移失败，请登录服务器排查:"
+              echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
+              echo "  2) 确认数据库已启动: systemctl status postgresql"
+              echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\"
+              exit 1
+            fi
 
             echo "=== 4. Restarting backend service ==="
             systemctl restart nuotao-backend
