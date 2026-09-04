@@ -105,6 +105,21 @@ jobs:
             echo "=== 6.6 nginx server_name conflict check ==="
             grep -rn "admin.nuotaooutdoor.com" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || echo "(no admin.nuotaooutdoor.com references)"
 
+            echo "=== 6.7 cleaning stale nginx site backups ==="
+            CLEANED=0
+            for f in /etc/nginx/sites-enabled/nuotao.bak.*; do
+              [ -e "$f" ] || continue
+              mv "$f" /etc/nginx/sites-available/
+              echo "[nginx] moved $f -> sites-available"
+              CLEANED=1
+            done
+            if [ "$CLEANED" = "1" ]; then
+              nginx -t && systemctl reload nginx
+              echo "[nginx] reloaded after cleanup"
+            else
+              echo "[nginx] no stale backups, nothing to do"
+            fi
+
             echo "=== 7. Health check ==="
             sleep 5
             BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs || true)
