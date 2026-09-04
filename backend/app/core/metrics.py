@@ -11,9 +11,12 @@ Provides:
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -240,6 +243,113 @@ backups_total = Counter(
 )
 
 # ============================================
+# Backup Metric Sync (Status File + Backup Directory)
+# ============================================
+# The actual backup may be performed by any of:
+#   1. Windows scheduled task (scripts/backup-database.ps1) -> writes status file
+#   2. Docker backup container (docker-compose.prod.yml) -> writes .sql.gz to /backups
+#   3. In-app DatabaseBackupService -> updates gauges directly
+# Previously only #3 updated nuotao_last_backup_timestamp, causing false
+# BackupFailed alerts. This bridge checks all sources and keeps metrics in sync.
+
+logger = logging.getLogger(__name__)
+
+# Source 1: status file written by backup-database.ps1 (Windows local)
+BACKUP_STATUS_FILE = Path(r"E:\AI\nuotao-ai-os\backups\last_backup_status.json")
+_backup_status_file_mtime: float | None = None
+
+# Source 2: backup directories to scan for latest .sql.gz (Docker / local)
+BACKUP_DIRECTORIES = [
+    Path("/backups"),                      # Production: backup container mount (read-only in api)
+    Path(r"E:\AI\nuotao-ai-os\backups\database"),  # Windows local: ps1 script output
+    Path("backups/database"),              # Relative fallback
+]
+_backup_dir_latest_mtime: float | None = None
+
+
+def _find_latest_backup_file() -> tuple[Path, float] | None:
+    """Scan candidate backup directories and return the newest .sql.gz file
+    along with its mtime, or None if no backup files exist."""
+    latest: tuple[Path, float] | None = None
+    for directory in BACKUP_DIRECTORIES:
+        try:
+            if not directory.exists() or not directory.is_dir():
+                continue
+            for f in directory.glob("*.sql.gz"):
+                try:
+                    mtime = f.stat().st_mtime
+                    if latest is None or mtime > latest[1]:
+                        latest = (f, mtime)
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    return latest
+
+
+def sync_backup_metrics_from_file() -> None:
+    """Read the backup status file written by backup-database.ps1 and
+    update Prometheus gauges if the file is newer than the last sync."""
+    global _backup_status_file_mtime
+    try:
+        if not BACKUP_STATUS_FILE.exists():
+            return
+        mtime = BACKUP_STATUS_FILE.stat().st_mtime
+        if _backup_status_file_mtime is not None and mtime <= _backup_status_file_mtime:
+            return  # No change since last sync
+        _backup_status_file_mtime = mtime
+
+        status = json.loads(BACKUP_STATUS_FILE.read_text(encoding="utf-8-sig"))
+        if not status.get("success") or not status.get("timestamp"):
+            return
+
+        ts = float(status["timestamp"])
+        last_backup_timestamp.set(ts)
+        if status.get("compressed_size_bytes"):
+            last_backup_size_bytes.set(int(status["compressed_size_bytes"]))
+        logger.info(
+            "Backup metrics synced from status file: timestamp=%s file=%s",
+            status.get("timestamp_iso", ts),
+            status.get("file_name", "unknown"),
+        )
+    except Exception as e:
+        logger.warning("Failed to sync backup metrics from status file: %s", e)
+
+
+def sync_backup_metrics_from_directory() -> None:
+    """Scan backup directories for the newest .sql.gz file and update
+    Prometheus gauges if it is newer than the last synced file.
+    This is the primary source in production (Docker backup container)."""
+    global _backup_dir_latest_mtime
+    try:
+        latest = _find_latest_backup_file()
+        if latest is None:
+            return
+        backup_file, mtime = latest
+        if _backup_dir_latest_mtime is not None and mtime <= _backup_dir_latest_mtime:
+            return  # No newer backup since last sync
+        _backup_dir_latest_mtime = mtime
+
+        size_bytes = backup_file.stat().st_size
+        last_backup_timestamp.set(mtime)
+        last_backup_size_bytes.set(size_bytes)
+        logger.info(
+            "Backup metrics synced from directory: file=%s mtime=%s size=%d bytes",
+            backup_file.name,
+            mtime,
+            size_bytes,
+        )
+    except Exception as e:
+        logger.warning("Failed to sync backup metrics from directory: %s", e)
+
+
+def sync_backup_metrics() -> None:
+    """Unified entry point: sync backup metrics from all available sources.
+    Called on app startup and on every /metrics scrape."""
+    sync_backup_metrics_from_file()
+    sync_backup_metrics_from_directory()
+
+# ============================================
 # System Info
 # ============================================
 
@@ -328,9 +438,15 @@ def setup_metrics(app: FastAPI) -> None:
         python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
     ).set(1)
 
+    # Sync backup metrics from status file / backup directory on startup
+    # (bridges external backup scripts and Docker backup container -> Prometheus)
+    sync_backup_metrics()
+
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> PlainTextResponse:
         """Prometheus metrics endpoint."""
+        # Re-sync on every scrape so backups taken while the app runs are reflected
+        sync_backup_metrics()
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

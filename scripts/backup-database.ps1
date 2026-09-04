@@ -156,6 +156,23 @@ try {
     $notifyMsg = "Database: $PG_DB`nTime: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`nFile: $(Split-Path $backupFileGz -Leaf)`nOriginal: $backupSizeMB MB`nCompressed: $compressedSizeMB MB`nBackups: $($currentBackups.Count)`nTotal: $totalSizeMB MB"
     Send-FeishuNotify -title "Database Backup Success" -message $notifyMsg -color "green"
 
+    # 7. Write backup status file for Prometheus metrics sync
+    #    Bridges the gap: this script does the actual pg_dump,
+    #    but only the in-app backup service used to update metrics.
+    $statusFile = "E:\AI\nuotao-ai-os\backups\last_backup_status.json"
+    $status = @{
+        timestamp = [int][double]::Parse((Get-Date -UFormat %s))
+        timestamp_iso = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+        file_name = (Split-Path $backupFileGz -Leaf)
+        file_path = $backupFileGz
+        original_size_bytes = $backupSize
+        compressed_size_bytes = $compressedSize
+        success = $true
+    } | ConvertTo-Json -Depth 5
+    # Use .NET WriteAllText to avoid UTF-8 BOM (Python json.loads compatibility)
+    [System.IO.File]::WriteAllText($statusFile, $status, [System.Text.UTF8Encoding]::new($false))
+    Write-Log "Backup status file written: $statusFile"
+
 } catch {
     Write-Log "Database backup failed: $_" "ERROR"
     Write-Log $_.ScriptStackTrace "ERROR"

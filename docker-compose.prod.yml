@@ -197,6 +197,10 @@ services:
   api:
     # Don't expose port directly in production - Nginx handles it
     ports: []
+    volumes:
+      # Read-only mount of backup container's output directory, so /metrics
+      # can detect latest backup file mtime and update nuotao_last_backup_timestamp.
+      - ./data/backups:/backups:ro
     environment:
       <<: *backend-env
       ENVIRONMENT: production

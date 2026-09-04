@@ -6,10 +6,12 @@
 import sys
 import os
 
-# 配置 WooCommerce 密钥
-os.environ["WOOCOMMERCE_URL"] = "https://nuotaooutdoor.com"
-os.environ["WOOCOMMERCE_CONSUMER_KEY"] = "***REMOVED_WOOCOMMERCE_KEY***"
-os.environ["WOOCOMMERCE_CONSUMER_SECRET"] = "***REMOVED_WOOCOMMERCE_SECRET***"
+# 配置 WooCommerce 密钥（必须从环境变量读取，禁止硬编码到源码）
+os.environ.setdefault("WOOCOMMERCE_URL", "https://nuotaooutdoor.com")
+if not os.environ.get("WOOCOMMERCE_CONSUMER_KEY") or not os.environ.get("WOOCOMMERCE_CONSUMER_SECRET"):
+    print("ERROR: WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET environment variables must be set.")
+    print("Set them before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
 
 sys.path.insert(0, '.')
 

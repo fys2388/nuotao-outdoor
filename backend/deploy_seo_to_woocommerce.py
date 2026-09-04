@@ -11,8 +11,13 @@ import requests
 sys.path.insert(0, '.')
 
 WC_URL = "https://nuotaooutdoor.com/wp-json/wc/v3"
-WC_AUTH = ("***REMOVED_WOOCOMMERCE_KEY***",
-            "***REMOVED_WOOCOMMERCE_SECRET***")
+WC_KEY = os.environ.get("WOOCOMMERCE_CONSUMER_KEY")
+WC_SECRET = os.environ.get("WOOCOMMERCE_CONSUMER_SECRET")
+if not WC_KEY or not WC_SECRET:
+    print("ERROR: WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET environment variables must be set.")
+    print("Set them before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
+WC_AUTH = (WC_KEY, WC_SECRET)
 
 # 读取营销内容
 with open("marketing_content_results.json", "r", encoding="utf-8") as f:

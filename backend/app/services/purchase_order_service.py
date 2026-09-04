@@ -23,10 +23,12 @@ MAPPING_FILE = os.path.join(DATA_DIR, "supplier_product_mapping.json")
 PURCHASE_ORDERS_FILE = os.path.join(DATA_DIR, "purchase_orders.json")
 
 # WooCommerce API配置
+# 密钥必须从环境变量 WOOCOMMERCE_CONSUMER_KEY / WOOCOMMERCE_CONSUMER_SECRET 读取。
+# 禁止硬编码密钥到源码——会被提交到 git 并泄露。
 WC_URL = "https://nuotaooutdoor.com/wp-json/wc/v3"
 WC_AUTH = (
-    os.getenv("WOOCOMMERCE_CONSUMER_KEY", "***REMOVED_WOOCOMMERCE_KEY***"),
-    os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "***REMOVED_WOOCOMMERCE_SECRET***"),
+    os.getenv("WOOCOMMERCE_CONSUMER_KEY"),
+    os.getenv("WOOCOMMERCE_CONSUMER_SECRET"),
 )
 
 # 采购单状态

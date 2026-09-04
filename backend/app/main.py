@@ -48,11 +48,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.m6_tool_registry import register_m6_tool_handlers
     register_m6_tool_handlers()
 
+    # Start database backup scheduler (daily at configured time).
+    from app.services.database_backup_service import get_backup_service
+    from app.core.config import settings
+    backup_service = get_backup_service()
+    app.state.backup_service = backup_service
+    if settings.backup_scheduler_enabled:
+        await backup_service.start_scheduler(
+            hour=settings.backup_scheduler_hour,
+            minute=settings.backup_scheduler_minute,
+        )
+
     # NOTE: Worker + Scheduler temporarily disabled in-process for API stability.
     # Run them separately via run_worker.py when Redis Stream support is available.
     try:
         yield
     finally:
+        if settings.backup_scheduler_enabled:
+            await backup_service.stop_scheduler()
         await app.state.redis.aclose()
 
 

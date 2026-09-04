@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     customer_learning,
     customer_service,
     dashboard,
+    database_backup,
     deployment,
     edm_automation,
     emails,
@@ -98,6 +99,7 @@ api_router.include_router(customer.router)
 api_router.include_router(customer_learning.router)
 api_router.include_router(customer_service.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(database_backup.router)
 api_router.include_router(deployment.router)
 api_router.include_router(emails.router)
 api_router.include_router(edm_automation.router)

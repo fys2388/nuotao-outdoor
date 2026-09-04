@@ -33,10 +33,13 @@ from app.services.purchase_order_service import (
 import requests
 
 WC_URL = "https://nuotaooutdoor.com/wp-json/wc/v3"
-WC_AUTH = (
-    os.getenv("WOOCOMMERCE_CONSUMER_KEY", "***REMOVED_WOOCOMMERCE_KEY***"),
-    os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "***REMOVED_WOOCOMMERCE_SECRET***"),
-)
+_WC_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY")
+_WC_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET")
+if not _WC_KEY or not _WC_SECRET:
+    print("ERROR: WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET environment variables must be set.")
+    print("Set them before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
+WC_AUTH = (_WC_KEY, _WC_SECRET)
 
 STATUS_LABELS = {
     STATUS_PENDING: "待确认",

@@ -219,6 +219,14 @@ class Settings(BaseSettings):
     volcengine_api_key: str = ""
     volcengine_ark_endpoint: str = ""
 
+    # --- Database Backup (auto daily backup, Neon PostgreSQL) ---------------
+    backup_dir: str = "backups/database"
+    backup_retention_days: int = 30
+    backup_max_files: int = 30
+    backup_scheduler_enabled: bool = True
+    backup_scheduler_hour: int = 2  # 0-23
+    backup_scheduler_minute: int = 0  # 0-59
+
     @property
     def is_production(self) -> bool:
         """Return True when running in a production environment."""

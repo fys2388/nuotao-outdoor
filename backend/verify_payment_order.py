@@ -19,8 +19,13 @@ from app.services.webhook_service import parse_webhook_event
 from app.services.fulfillment_service import add_tracking_to_order
 
 WC_URL = "https://nuotaooutdoor.com/wp-json/wc/v3"
-WC_AUTH = ("***REMOVED_WOOCOMMERCE_KEY***",
-            "***REMOVED_WOOCOMMERCE_SECRET***")
+WC_KEY = os.environ.get("WOOCOMMERCE_CONSUMER_KEY")
+WC_SECRET = os.environ.get("WOOCOMMERCE_CONSUMER_SECRET")
+if not WC_KEY or not WC_SECRET:
+    print("ERROR: WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET environment variables must be set.")
+    print("Set them before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
+WC_AUTH = (WC_KEY, WC_SECRET)
 
 print("=" * 60)
 print("P8: 真实支付订单验证")

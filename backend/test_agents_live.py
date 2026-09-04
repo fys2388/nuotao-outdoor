@@ -11,8 +11,12 @@ from datetime import datetime
 
 import requests
 
-# DeepSeek API 配置
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "***REMOVED_DEEPSEEK_KEY***")
+# DeepSeek API 配置（密钥必须从环境变量读取，禁止硬编码到源码）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+if not DEEPSEEK_API_KEY:
+    print("ERROR: DEEPSEEK_API_KEY environment variable must be set.")
+    print("Set it before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 MODEL = "deepseek-chat"
 

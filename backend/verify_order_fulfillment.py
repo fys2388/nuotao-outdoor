@@ -9,9 +9,15 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-os.environ["WOOCOMMERCE_URL"] = "https://nuotaooutdoor.com"
-os.environ["WOOCOMMERCE_CONSUMER_KEY"] = "***REMOVED_WOOCOMMERCE_KEY***"
-os.environ["WOOCOMMERCE_CONSUMER_SECRET"] = "***REMOVED_WOOCOMMERCE_SECRET***"
+os.environ.setdefault("WOOCOMMERCE_URL", "https://nuotaooutdoor.com")
+# WooCommerce API credentials MUST come from environment variables.
+# Never hardcode keys in source files — they will be committed to git and leaked.
+_WC_KEY = os.environ.get("WOOCOMMERCE_CONSUMER_KEY")
+_WC_SECRET = os.environ.get("WOOCOMMERCE_CONSUMER_SECRET")
+if not _WC_KEY or not _WC_SECRET:
+    print("ERROR: WOOCOMMERCE_CONSUMER_KEY and WOOCOMMERCE_CONSUMER_SECRET environment variables must be set.")
+    print("Set them before running this script (do NOT hardcode credentials in source files).")
+    sys.exit(1)
 
 sys.path.insert(0, '.')
 
@@ -28,8 +34,7 @@ from app.services.fulfillment_service import (
 )
 
 WC_URL = "https://nuotaooutdoor.com/wp-json/wc/v3"
-WC_AUTH = ("***REMOVED_WOOCOMMERCE_KEY***",
-            "***REMOVED_WOOCOMMERCE_SECRET***")
+WC_AUTH = (_WC_KEY, _WC_SECRET)
 
 print("=" * 60)
 print("P0: 订单→履约闭环端到端验证")
