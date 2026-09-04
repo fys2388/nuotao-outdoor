@@ -27,6 +27,7 @@ const AlertsPage = lazy(() => import('./pages/Alerts'))
 const InventoryPage = lazy(() => import('./pages/Inventory'))
 const NewtonSourcingPage = lazy(() => import('./pages/NewtonSourcing'))
 const ProcurementWorkbenchPage = lazy(() => import('./pages/ProcurementWorkbench'))
+const ProductAnalysisPage = lazy(() => import('./pages/ProductAnalysis'))
 const ModulePage = lazy(() => import('./pages/ModulePage'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
@@ -63,6 +64,7 @@ type MenuKey =
   | 'customer-templates'
   | 'newton-sourcing'
   | 'procurement'
+  | 'product-analysis'
   | 'settings'
 
 const menuItems = [
@@ -75,6 +77,7 @@ const menuItems = [
     children: [
       { key: 'sourcing', icon: <ShoppingOutlined />, label: '选品管理' },
       { key: 'newton-sourcing', icon: <RobotOutlined />, label: '牛顿AI选品' },
+      { key: 'product-analysis', icon: <RobotOutlined />, label: 'AI产品分析' },
       { key: 'cost', icon: <DollarOutlined />, label: '成本模型' },
       { key: 'selection', icon: <BarChartOutlined />, label: 'AI选品建议' },
       { key: 'purchase', icon: <ShoppingCartOutlined />, label: '采购自动化' },
@@ -124,6 +127,7 @@ const pageTitles: Record<MenuKey, string> = {
   alerts: '预警中心',
   sourcing: '选品管理',
   'newton-sourcing': '牛顿AI智能选品',
+  'product-analysis': 'AI产品分析与Prompt生成',
   cost: '成本模型',
   selection: 'AI选品建议',
   purchase: '采购自动化',
@@ -164,6 +168,8 @@ function App() {
           return <InventoryPage />
         case 'newton-sourcing':
           return <NewtonSourcingPage />
+        case 'product-analysis':
+          return <ProductAnalysisPage />
         case 'procurement':
           return <ProcurementWorkbenchPage />
         default:
