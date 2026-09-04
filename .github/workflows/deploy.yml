@@ -75,7 +75,11 @@ jobs:
 
             echo "=== 7. Health check ==="
             sleep 5
-            curl -s -o /dev/null -w "Backend API: %{http_code}\n" http://127.0.0.1:8000/docs
-            curl -s -o /dev/null -w "Frontend: %{http_code}\n" http://127.0.0.1/
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs)
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/)
+            echo "Backend API: $BACKEND_CODE"
+            echo "Frontend: $FRONTEND_CODE"
+            [ "$BACKEND_CODE" = "200" ] || { echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"; exit 1; }
+            [ "$FRONTEND_CODE" = "200" ] || { echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"; exit 1; }
 
             echo "=== Deployment completed successfully ==="
