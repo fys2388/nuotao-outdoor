@@ -22,19 +22,9 @@ jobs:
           port: 22
           script: |
             set -e
-            
             echo "=== 创建 ops-dashboard 目录 ==="
             mkdir -p /opt/nuotao/ops-dashboard
-            
-            echo "=== 上传 index.html ==="
-            # 这里通过 scp 上传，但是 ssh-action 不直接支持 scp
-            # 我们用 base64 编码的方式传输
-            echo "文件将通过后续步骤上传"
-            
-            echo "=== 检查 Nginx 配置 ==="
-            ls -la /etc/nginx/sites-enabled/ 2>/dev/null || ls -la /etc/nginx/conf.d/ 2>/dev/null || echo "Nginx 配置目录未找到"
-            
-            echo "=== 查找 admin.nuotaooutdoor.com 配置 ==="
+            echo "=== 查找 Nginx 配置文件 ==="
             grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>/dev/null || echo "未找到配置文件"
 
       - name: Upload index.html via scp
@@ -48,7 +38,7 @@ jobs:
           target: "/opt/nuotao/ops-dashboard/"
           strip_components: 1
 
-      - name: Configure Nginx for ops-dashboard
+      - name: Configure Nginx for ops-dashboard (FORCE REWRITE)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -58,48 +48,89 @@ jobs:
           script: |
             set -e
             
-            echo "=== 验证文件已上传 ==="
+            echo "=== 1. 验证文件已上传 ==="
             ls -la /opt/nuotao/ops-dashboard/
-            wc -l /opt/nuotao/ops-dashboard/index.html
+            wc -c /opt/nuotao/ops-dashboard/index.html
             
-            echo "=== 查找 Nginx 配置文件 ==="
+            echo "=== 2. 查找 Nginx 配置文件 ==="
             NGINX_CONF=$(grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>/dev/null | head -1)
-            
             if [ -z "$NGINX_CONF" ]; then
-                echo "未找到 admin.nuotaooutdoor.com 的 Nginx 配置，尝试查找其他配置"
                 NGINX_CONF=$(ls /etc/nginx/sites-enabled/* 2>/dev/null | head -1)
             fi
-            
             echo "使用配置文件: $NGINX_CONF"
             
-            if [ -n "$NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then
-                echo "=== 检查是否已配置 ops-dashboard ==="
-                if grep -q "ops-dashboard" "$NGINX_CONF"; then
-                    echo "ops-dashboard 已配置，跳过"
-                else
-                    echo "=== 添加 ops-dashboard 配置 ==="
-                    # 在 server 块内添加 location
-                    # 先备份
-                    cp "$NGINX_CONF" "${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
-                    
-                    # 在第一个 location 之前插入 ops-dashboard 的 location
-                    # 使用 sed 在 server_name 后面的第一个 { 之后插入
-                    sed -i '/server_name.*admin.nuotaooutdoor.com/a\\n    # Ops Dashboard 静态文件\n    location /ops-dashboard/ {\n        alias /opt/nuotao/ops-dashboard/;\n        index index.html;\n        try_files $uri $uri/ /ops-dashboard/index.html;\n    }' "$NGINX_CONF"
-                    
-                    echo "=== 测试 Nginx 配置 ==="
-                    nginx -t
-                    
-                    echo "=== 重载 Nginx ==="
-                    systemctl reload nginx
-                    
-                    echo "✅ Nginx 配置完成并已重载"
-                fi
+            echo "=== 3. 备份配置 ==="
+            cp "$NGINX_CONF" "${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+            
+            echo "=== 4. 用 Python 强制重写 ops-dashboard 配置 ==="
+            python3 << 'PYEOF'
+            import re
+            conf_path = "/etc/nginx/sites-available/nuotao"
+            with open(conf_path, 'r') as f:
+                content = f.read()
+            
+            # 删除所有旧的 ops-dashboard 相关块（注释 + location）
+            pattern = r'\n?\s*#.*[Oo]ps.*[Dd]ashboard.*?\n\s*location\s*\^?~?\s*/ops-dashboard/.*?\n\s*\}'
+            content = re.sub(pattern, '', content, flags=re.DOTALL)
+            
+            # 也删除单独的 location 块
+            pattern2 = r'\n\s*location\s*\^?~?\s*/ops-dashboard/.*?\n\s*\}'
+            content = re.sub(pattern2, '', content, flags=re.DOTALL)
+            
+            # 新配置（放在 server 块最开头，优先匹配）
+            new_config = '''
+    # ============================================
+    # Ops Dashboard 静态文件（优先匹配）
+    # ============================================
+    location ^~ /ops-dashboard/ {
+        alias /opt/nuotao/ops-dashboard/;
+        index index.html;
+        try_files $uri $uri/ /ops-dashboard/index.html;
+    }
+'''
+            
+            # 在第一个 server { 后插入
+            server_match = re.search(r'server\s*\{', content)
+            if server_match:
+                insert_pos = server_match.end()
+                newline_pos = content.find('\n', insert_pos)
+                if newline_pos != -1:
+                    insert_pos = newline_pos + 1
+                content = content[:insert_pos] + new_config + content[insert_pos:]
+                print("✅ 已在 server 块开头插入 ops-dashboard 配置")
+            else:
+                print("❌ 未找到 server {")
+            
+            with open(conf_path, 'w') as f:
+                f.write(content)
+            print("✅ 配置文件已写入")
+            PYEOF
+            
+            echo ""
+            echo "=== 5. 验证配置 ==="
+            grep -n -A 6 "ops-dashboard" "$NGINX_CONF" | head -20
+            
+            echo ""
+            echo "=== 6. 测试 Nginx ==="
+            nginx -t
+            
+            echo ""
+            echo "=== 7. 重载 Nginx ==="
+            systemctl reload nginx
+            
+            echo ""
+            echo "=== 8. 测试访问 ==="
+            sleep 3
+            curl -s -o /tmp/test_dash.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/
+            echo "前3行:"
+            head -3 /tmp/test_dash.html
+            if grep -q "运营监控中心" /tmp/test_dash.html; then
+                echo "✅✅✅ 成功! 返回 ops-dashboard 页面!"
             else
-                echo "❌ 未找到 Nginx 配置文件"
-                exit 1
+                echo "❌ 失败: 返回的不是 ops-dashboard 页面"
+                echo "完整内容:"
+                cat /tmp/test_dash.html
             fi
             
-            echo "=== 验证访问 ==="
-            curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost:80/ops-dashboard/ || echo "本地访问测试失败"
-            
+            echo ""
             echo "=== 部署完成 ==="
