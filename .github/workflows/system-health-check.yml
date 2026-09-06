@@ -1,0 +1,55 @@
+name: System Health Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check system status via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. 后端服务 ==="
+            systemctl is-active nuotao-backend || echo "not found"
+            echo ""
+            echo "=== 2. 调度器服务 ==="
+            systemctl is-active nuotao-agent-scheduler || echo "not found"
+            echo ""
+            echo "=== 3. 调度器今日日志 ==="
+            journalctl -u nuotao-agent-scheduler --since today --no-pager -n 30 | tail -20 || echo "no logs"
+            echo ""
+            echo "=== 4. 后端今日错误 ==="
+            journalctl -u nuotao-backend --since today --no-pager -n 100 | grep -iE "error|exception|traceback" | tail -15 || echo "no errors"
+            echo ""
+            echo "=== 5. 数据库建议统计 ==="
+            cd /opt/nuotao/backend && source .venv/bin/activate
+            python3 -c "
+import asyncio
+from app.core.database import async_session_factory
+from app.models.agent_suggestion import AgentSuggestion
+from sqlalchemy import select, func
+
+async def main():
+    async with async_session_factory() as s:
+        total = await s.scalar(select(func.count()).select_from(AgentSuggestion))
+        print(f'总建议数: {total}')
+        r = await s.execute(select(AgentSuggestion.status, func.count()).group_by(AgentSuggestion.status))
+        for st, c in r.all():
+            print(f'  {st}: {c}')
+        r2 = await s.execute(select(AgentSuggestion).order_by(AgentSuggestion.created_at.desc()).limit(5))
+        print('最近5条:')
+        for x in r2.scalars().all():
+            print(f'  [{x.created_at}] {x.status} | {x.title[:35]}')
+
+asyncio.run(main())
+" 2>&1 || echo "db query failed"
+            echo ""
+            echo "=== 6. 健康检查 ==="
+            curl -s -o /dev/null -w "HTTP: %{http_code}\n" http://localhost:8000/docs
+            echo "=== DONE ==="
