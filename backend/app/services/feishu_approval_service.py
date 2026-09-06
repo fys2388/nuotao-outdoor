@@ -29,6 +29,7 @@ FEISHU_WEBHOOK_URL = os.getenv(
 )
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")
 FEISHU_CALLBACK_BASE_URL = os.getenv("FEISHU_CALLBACK_BASE_URL", "")
 
 # 风险等级对应的卡片颜色
@@ -70,6 +71,48 @@ def _get_tenant_access_token() -> str | None:
     return None
 
 
+def _send_card_via_app_api(card: dict[str, Any], chat_id: str | None = None) -> dict[str, Any]:
+    """通过企业自建应用 API 发送交互式卡片（支持按钮回调）。
+
+    必须通过自建应用 API 发送，卡片按钮的回调才会走自建应用的事件订阅地址。
+    通过群机器人 Webhook 发送的卡片不支持卡片交互回调。
+    """
+    target_chat_id = chat_id or FEISHU_CHAT_ID
+    if not target_chat_id:
+        return {"success": False, "error": "FEISHU_CHAT_ID 未配置"}
+
+    token = _get_tenant_access_token()
+    if not token:
+        return {"success": False, "error": "获取 tenant_access_token 失败（检查 FEISHU_APP_ID/SECRET）"}
+
+    try:
+        # 飞书消息发送 API：content 字段需要是 JSON 字符串
+        content_str = json.dumps(card.get("card", {}), ensure_ascii=False)
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json={
+                "receive_id": target_chat_id,
+                "msg_type": "interactive",
+                "content": content_str,
+            },
+            timeout=15,
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            message_id = data.get("data", {}).get("message_id")
+            logger.info("自建应用 API 卡片发送成功: message_id=%s", message_id)
+            return {"success": True, "message_id": message_id}
+        logger.warning("自建应用 API 卡片发送失败: code=%s msg=%s", data.get("code"), data.get("msg"))
+        return {"success": False, "error": data.get("msg", str(data)), "code": data.get("code")}
+    except Exception as e:
+        logger.error("自建应用 API 卡片发送异常: %s", e)
+        return {"success": False, "error": str(e)}
+
+
 def send_approval_card(
     *,
     suggestion_id: int,
@@ -80,6 +123,7 @@ def send_approval_card(
     risk_level: str = "medium",
     execution_params: dict[str, Any] | None = None,
     webhook_url: str | None = None,
+    chat_id: str | None = None,
 ) -> dict[str, Any]:
     """发送带「批准」「拒绝」按钮的飞书交互式审批卡片。
 
@@ -191,16 +235,26 @@ def send_approval_card(
         ],
     })
 
+    # 优先通过自建应用 API 发送（支持卡片按钮回调）
+    # 只有通过自建应用 API 发送的卡片，按钮点击才会触发 card.action.trigger 回调
+    if FEISHU_APP_ID and FEISHU_APP_SECRET and FEISHU_CHAT_ID:
+        app_result = _send_card_via_app_api(card, chat_id=chat_id)
+        if app_result.get("success"):
+            return app_result
+        logger.warning("自建应用 API 发送失败，降级到 Webhook: %s", app_result.get("error"))
+
+    # 降级：通过群机器人 Webhook 发送（注意：Webhook 卡片不支持按钮回调）
+    url = webhook_url or FEISHU_WEBHOOK_URL
     try:
         resp = requests.post(url, json=card, timeout=10)
         result = resp.json()
         if result.get("code") == 0 or result.get("StatusCode") == 0:
-            logger.info("飞书审批卡片发送成功: suggestion_id=%s", suggestion_id)
-            return {"success": True, "message_id": result.get("data", {}).get("message_id")}
-        logger.warning("飞书审批卡片发送失败: %s", result)
+            logger.info("飞书审批卡片发送成功(Webhook): suggestion_id=%s", suggestion_id)
+            return {"success": True, "message_id": result.get("data", {}).get("message_id"), "channel": "webhook"}
+        logger.warning("飞书审批卡片发送失败(Webhook): %s", result)
         return {"success": False, "error": result.get("msg", str(result))}
     except Exception as e:
-        logger.error("飞书审批卡片发送异常: %s", e)
+        logger.error("飞书审批卡片发送异常(Webhook): %s", e)
         return {"success": False, "error": str(e)}
 
 
