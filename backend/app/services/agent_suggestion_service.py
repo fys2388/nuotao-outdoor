@@ -97,6 +97,8 @@ async def create_suggestion(
         logger.info("飞书卡片发送结果: suggestion_id=%s, result=%s", suggestion.id, result)
         message_id = result.get("message_id") if result else None
         logger.info("提取到的 message_id: suggestion_id=%s, message_id=%s", suggestion.id, message_id)
+        # 调试：把发送结果保存到 execution_result 字段
+        suggestion.execution_result = {"debug_send_result": result, "debug_message_id": message_id}
         if message_id:
             suggestion.feishu_message_id = message_id
             await session.flush()
