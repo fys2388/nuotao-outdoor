@@ -148,3 +148,21 @@ async def approval_test():
         execution_params={"test_param": "test_value", "foo": "bar"},
     )
     return result
+
+
+@router.get("/trigger-product-test")
+async def trigger_product_test(db: AsyncSession = Depends(get_db)):
+    """测试端点：手动触发产品分析师每日分析，生成真实建议并推送飞书卡片。"""
+    from app.tasks.daily_agents import run_product_analyst_daily
+
+    try:
+        result = await run_product_analyst_daily(db)
+        await db.commit()
+        return {
+            "success": True,
+            "message": "产品分析任务已执行，建议已生成并推送飞书卡片",
+            "result": result,
+        }
+    except Exception as e:
+        logger.exception("产品分析测试任务执行失败")
+        return {"success": False, "error": str(e)}
