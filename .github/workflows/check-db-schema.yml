@@ -1,0 +1,48 @@
+name: Check DB Schema
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check database schema
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/nuotao/backend && source .venv/bin/activate
+            python3 << 'PYEOF'
+import sys, os
+sys.path.insert(0, '.')
+os.chdir('.')
+from sqlalchemy import create_engine, inspect, text
+from app.core.config import get_settings
+settings = get_settings()
+sync_url = settings.database_url.replace("+asyncpg", "")
+engine = create_engine(sync_url)
+insp = inspect(engine)
+
+print("=== agent_suggestions 表结构 ===")
+cols = insp.get_columns('agent_suggestions')
+for col in cols:
+    print(f"  {col['name']}: {col['type']} (nullable={col['nullable']})")
+
+print(f"\n总列数: {len(cols)}")
+print(f"feishu_message_id 存在: {'feishu_message_id' in [c['name'] for c in cols]}")
+
+# 尝试手动添加列
+if 'feishu_message_id' not in [c['name'] for c in cols]:
+    print("\n=== 尝试手动添加 feishu_message_id 列 ===")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE agent_suggestions ADD COLUMN feishu_message_id VARCHAR(128)"))
+    print("列添加成功！")
+    
+    # 验证
+    insp2 = inspect(engine)
+    cols2 = insp2.get_columns('agent_suggestions')
+    print(f"添加后 feishu_message_id 存在: {'feishu_message_id' in [c['name'] for c in cols2]}")
+PYEOF
