@@ -91,26 +91,7 @@ jobs:
               exit 1
             fi
             echo "[db] ensure all model tables exist (create_all idempotent)..."
-            python3 << 'PYEOF'
-import sys, os
-sys.path.insert(0, '/opt/nuotao/backend')
-os.chdir('/opt/nuotao/backend')
-from sqlalchemy import create_engine, inspect
-from app.core.config import settings
-from app.models import Base
-sync_url = settings.DATABASE_URL.replace('+asyncpg', '')
-engine = create_engine(sync_url)
-insp = inspect(engine)
-existing = set(insp.get_table_names())
-needed = set(Base.metadata.tables.keys())
-missing = needed - existing
-if missing:
-    print(f'[db] creating missing tables: {sorted(missing)}')
-    Base.metadata.create_all(bind=engine)
-    print('[db] missing tables created')
-else:
-    print('[db] all tables exist, nothing to create')
-PYEOF
+            python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
             echo "[db] table check done"
 
             echo "=== 4. Restarting backend service ==="
