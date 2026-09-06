@@ -83,3 +83,35 @@ async def get_order(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
     return OrderDetailOut.model_validate(order)
+
+
+
+@router.post(
+    "/sync-woocommerce",
+    status_code=status.HTTP_200_OK,
+    summary="从 WooCommerce 同步订单 / Sync orders from WooCommerce",
+)
+async def sync_woocommerce_orders(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    days: int = Query(default=30, ge=1, le=365),
+    max_orders: int = Query(default=500, ge=1, le=5000),
+    status_filter: str = Query(default="any", max_length=24),
+) -> dict:
+    """从 WooCommerce 同步订单到本地数据库（upsert by workspace + external_order_id）。"""
+    from app.services.woocommerce_sync_service import sync_orders_to_db
+
+    try:
+        result = await sync_orders_to_db(
+            db,
+            workspace_id=workspace_id,
+            days=days,
+            max_orders=max_orders,
+            status_filter=status_filter,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"WooCommerce 订单同步失败: {str(e)}",
+        ) from e
