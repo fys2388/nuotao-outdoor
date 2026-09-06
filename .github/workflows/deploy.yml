@@ -82,6 +82,8 @@ jobs:
             else
               echo "[db] 警告: 未在 /opt/nuotao/backend/.env 找到 DATABASE_URL"
             fi
+            echo "[db] 自动检测模型变化并生成迁移..."
+            alembic revision --autogenerate -m "auto migration" 2>&1 | tail -3 || echo "[db] 无新迁移，继续"
             if ! alembic upgrade head; then
               echo "ERROR: 数据库迁移失败，请登录服务器排查:"
               echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
@@ -185,5 +187,39 @@ jobs:
               fi
               exit 1
             fi
+
+            echo "=== 7.5 Configuring AI Agent Scheduler ==="
+            SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
+            if [ ! -f "$SCHEDULER_SERVICE" ]; then
+              {
+                echo '[Unit]'
+                echo 'Description=Nuotao AI Agent Scheduler'
+                echo 'After=network.target postgresql.service'
+                echo ''
+                echo '[Service]'
+                echo 'Type=simple'
+                echo 'User=root'
+                echo 'WorkingDirectory=/opt/nuotao/backend'
+                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
+                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler'
+                echo 'Restart=always'
+                echo 'RestartSec=10'
+                echo 'StandardOutput=journal'
+                echo 'StandardError=journal'
+                echo ''
+                echo '[Install]'
+                echo 'WantedBy=multi-user.target'
+              } > "$SCHEDULER_SERVICE"
+              echo "[scheduler] created $SCHEDULER_SERVICE"
+            else
+              echo "[scheduler] service already exists, updating..."
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler|' "$SCHEDULER_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-agent-scheduler 2>/dev/null || true
+            systemctl restart nuotao-agent-scheduler
+            sleep 3
+            systemctl status nuotao-agent-scheduler --no-pager | head -8 || echo "[scheduler] status check failed"
+            echo "[scheduler] AI Agent Scheduler configured and started"
 
             echo "=== Deployment completed successfully ==="
