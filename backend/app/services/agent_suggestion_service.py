@@ -88,7 +88,7 @@ async def create_suggestion(
 
         def _push_feishu():
             try:
-                send_approval_card(
+                result = send_approval_card(
                     suggestion_id=suggestion.id,
                     title=title,
                     description=description,
@@ -97,6 +97,28 @@ async def create_suggestion(
                     risk_level=risk_level,
                     execution_params=execution_params,
                 )
+                # 保存飞书 message_id 到数据库（用于回调后更新原卡片）
+                message_id = result.get("message_id") if result else None
+                if message_id:
+                    import asyncio as _asyncio
+                    from app.core.database import async_session_factory
+                    async def _save_message_id():
+                        async with async_session_factory() as session:
+                            from app.models.agent_suggestion import AgentSuggestion
+                            from sqlalchemy import select
+                            stmt = select(AgentSuggestion).where(AgentSuggestion.id == suggestion.id)
+                            res = await session.execute(stmt)
+                            sug = res.scalar_one_or_none()
+                            if sug:
+                                sug.feishu_message_id = message_id
+                                await session.commit()
+                    try:
+                        loop = _asyncio.new_event_loop()
+                        _asyncio.set_event_loop(loop)
+                        loop.run_until_complete(_save_message_id())
+                        loop.close()
+                    except Exception as e:
+                        logger.warning("保存飞书message_id失败（非阻塞）: %s", e)
             except Exception as e:
                 logger.warning("飞书审批卡片推送失败（非阻塞）: %s", e)
 

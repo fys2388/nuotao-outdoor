@@ -312,6 +312,83 @@ def send_approval_result_notification(
         return {"success": False, "error": str(e)}
 
 
+def update_card(
+    *,
+    message_id: str,
+    title: str,
+    action: str,
+    operator: str = "飞书用户",
+) -> dict[str, Any]:
+    """通过飞书 API 更新原始卡片内容（批准/拒绝后把按钮替换为状态）。
+
+    Args:
+        message_id: 飞书卡片的 message_id
+        title: 建议标题
+        action: approve 或 reject
+        operator: 操作人
+
+    Returns:
+        更新结果
+    """
+    if not message_id:
+        return {"success": False, "error": "message_id 为空"}
+
+    token = _get_tenant_access_token()
+    if not token:
+        return {"success": False, "error": "无法获取 tenant_access_token"}
+
+    action_text = "✅ 已批准并进入执行队列" if action == "approve" else "❌ 已拒绝"
+    color = "green" if action == "approve" else "red"
+
+    # 构建更新后的卡片（按钮替换为状态文字）
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"审批结果 | {title[:30]}"},
+            "template": color,
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**操作**: {action_text}\n"
+                        f"**操作人**: {operator}\n"
+                        f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    ),
+                },
+            },
+            {
+                "tag": "note",
+                "elements": [
+                    {"tag": "plain_text", "content": "此卡片已处理，按钮已失效"}
+                ],
+            },
+        ],
+    }
+
+    try:
+        resp = requests.patch(
+            f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json={"content": json.dumps(card, ensure_ascii=False)},
+            timeout=15,
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            logger.info("飞书卡片更新成功: message_id=%s", message_id)
+            return {"success": True}
+        logger.warning("飞书卡片更新失败: %s", data)
+        return {"success": False, "error": data.get("msg", str(data))}
+    except Exception as e:
+        logger.error("飞书卡片更新异常: %s", e)
+        return {"success": False, "error": str(e)}
+
+
 def verify_feishu_request(headers: dict[str, str], body: dict[str, Any]) -> bool:
     """验证飞书回调请求的合法性（简化版，生产环境应验证签名）。"""
     # 飞书 URL 验证挑战

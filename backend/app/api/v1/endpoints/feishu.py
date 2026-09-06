@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import async_session_factory, get_db
 from app.services import agent_suggestion_service
 from app.services.execution_router import execute_suggestion
-from app.services.feishu_approval_service import send_approval_result_notification
+from app.services.feishu_approval_service import send_approval_result_notification, update_card
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,19 @@ async def feishu_card_callback(
                 action="approve",
                 operator=operator,
             )
+            # 更新原始卡片（把按钮替换为已批准状态）
+            message_id = getattr(existing, "feishu_message_id", None)
+            if message_id:
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(None, lambda: update_card(
+                        message_id=message_id,
+                        title=result.title if hasattr(result, "title") else f"建议 #{suggestion_id}",
+                        action="approve",
+                        operator=operator,
+                    ))
+                except Exception as e:
+                    logger.warning("更新飞书原始卡片失败（非阻塞）: %s", e)
             logger.info("建议 %s 已通过飞书审批，立即触发执行", suggestion_id)
             # 批准后立即异步执行（不阻塞回调响应）
             asyncio.create_task(_execute_suggestion_async(int(suggestion_id)))
@@ -142,6 +155,19 @@ async def feishu_card_callback(
                 action="reject",
                 operator=operator,
             )
+            # 更新原始卡片（把按钮替换为已拒绝状态）
+            message_id = getattr(existing, "feishu_message_id", None)
+            if message_id:
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(None, lambda: update_card(
+                        message_id=message_id,
+                        title=result.title if hasattr(result, "title") else f"建议 #{suggestion_id}",
+                        action="reject",
+                        operator=operator,
+                    ))
+                except Exception as e:
+                    logger.warning("更新飞书原始卡片失败（非阻塞）: %s", e)
             logger.info("建议 %s 已通过飞书拒绝", suggestion_id)
 
         return {
