@@ -96,14 +96,14 @@ jobs:
             # 新配置（放在 server 块最开头，优先匹配）
             new_config = "\n    # ============================================\n    # Ops Dashboard 静态文件（优先匹配）\n    # ============================================\n    location ^~ /ops-dashboard/ {\n        alias /opt/nuotao/ops-dashboard/;\n        index index.html;\n        try_files $uri $uri/ /ops-dashboard/index.html;\n    }\n"
             
-            # 在所有 location / { 之前插入 ops-dashboard 配置
+            # 在所有 server { 之后插入 ops-dashboard 配置
             # 确保无论哪个 server 块处理请求都能匹配到
-            count = content.count("location / {")
+            count = content.count("server {")
             if count > 0:
-                content = content.replace("location / {", new_config + "    location / {")
-                print(f"✅ 已在 {count} 个 location / 之前插入 ops-dashboard 配置")
+                content = content.replace("server {", "server {" + new_config)
+                print(f"✅ 已在 {count} 个 server 块中插入 ops-dashboard 配置")
             else:
-                print("❌ 未找到 location / {")
+                print("❌ 未找到 server {")
             
             with open(conf_path, 'w') as f:
                 f.write(content)
