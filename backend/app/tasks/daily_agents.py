@@ -17,12 +17,27 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from decimal import Decimal
+from uuid import UUID
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.customer import CustomerProfile
+from app.models.marketing import Campaign
 from app.services import agent_suggestion_service
+from app.services.report_truthfulness import (
+    CampaignMetric,
+    SegmentMetric,
+    validate_marketing_report,
+)
 
 logger = logging.getLogger(__name__)
+
+# 默认工作区（与 agent_suggestion_service 保持一致）
+DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
+# 营销活动默认 ROAS 目标（低于该值视为低绩效，生成优化建议）
+DEFAULT_TARGET_ROAS = Decimal("3.0")
 
 
 # --------------------------------------------------------------------------- #
@@ -122,13 +137,17 @@ async def run_product_analyst_daily(session: AsyncSession) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 async def run_marketing_manager_daily(session: AsyncSession) -> dict[str, Any]:
-    """营销经理每日分析。
+    """营销经理每日分析（防造假校验版）。
 
     分析内容：
     - 营销活动 ROAS 分析
     - 文案优化建议
     - SEO 关键词机会
     - 客户触达建议
+
+    防造假硬规则（见 app.services.report_truthfulness）：
+    - 生成建议前强制收入对账 + 样本量 + 状态校验；
+    - 校验失败时禁止生成带数字的建议，只披露缺口，不编造结论。
     """
     logger.info("=== 营销经理每日分析开始 ===")
     started_at = datetime.now(UTC)
@@ -138,7 +157,78 @@ async def run_marketing_manager_daily(session: AsyncSession) -> dict[str, Any]:
     # 获取营销数据（简化版）
     marketing_stats = await _get_marketing_stats(session)
 
-    # 生成营销优化建议
+    # ---- 防造假校验：构造规范化指标并强制对账 ----
+    campaigns = [
+        CampaignMetric(
+            name=str(c.get("name", "unknown")),
+            channel=c.get("channel"),
+            status=str(c.get("status", "active")),
+            spend=c.get("spend"),
+            revenue=c.get("revenue"),
+            source=c.get("source"),
+        )
+        for c in marketing_stats.get("campaigns", [])
+    ]
+    segments = [
+        SegmentMetric(
+            name=str(s.get("name", "unknown")),
+            customer_count=int(s.get("customer_count", 0)),
+            revenue=s.get("revenue"),
+            source=s.get("source"),
+        )
+        for s in marketing_stats.get("customer_segments", [])
+    ]
+
+    check = validate_marketing_report(campaigns=campaigns, segments=segments)
+
+    # 对账失败：必须披露缺口，禁止生成带数字结论的建议
+    if not check.passed:
+        logger.warning(
+            "营销经理报告防造假校验未通过: %s", check.violations
+        )
+        if check.reconciliation and check.reconciliation.issues:
+            suggestion = await agent_suggestion_service.create_suggestion(
+                session,
+                agent_id="marketing_manager",
+                suggestion_type="data_quality",
+                title="收入对账失败: 活动收入与客户分群收入存在缺口",
+                description=(
+                    f"{check.reconciliation.issues[0]}。"
+                    f"在缺口查明来源并修复前，禁止对外发布营销分析结论。"
+                ),
+                execution_params={
+                    "rules_version": check.rules_version,
+                    "campaign_total_revenue": str(check.reconciliation.campaign_total_revenue),
+                    "segment_total_revenue": str(check.reconciliation.segment_total_revenue),
+                    "gap": str(check.reconciliation.gap),
+                    "violations": check.violations,
+                },
+                execution_action="investigate_revenue_gap",
+                expected_impact="恢复收入口径可对账后，营销分析结论才可对外发布",
+                priority="high",
+                risk_level="low",
+            )
+            suggestions_created.append(suggestion.id)
+
+        await session.commit()
+        duration = (datetime.now(UTC) - started_at).total_seconds()
+        logger.info(
+            "=== 营销经理每日分析完成(校验失败): 耗时%.1fs, 创建披露建议%d条 ===",
+            duration, len(suggestions_created),
+        )
+        return {
+            "agent": "marketing_manager",
+            "duration_seconds": round(duration, 1),
+            "suggestions_created": len(suggestions_created),
+            "suggestion_ids": suggestions_created,
+            "truthfulness": {
+                "passed": False,
+                "rules_version": check.rules_version,
+                "violations": check.violations,
+            },
+        }
+
+    # ---- 校验通过：生成营销优化建议 ----
     if marketing_stats.get("underperforming_campaigns"):
         for campaign in marketing_stats["underperforming_campaigns"]:
             suggestion = await agent_suggestion_service.create_suggestion(
@@ -149,12 +239,14 @@ async def run_marketing_manager_daily(session: AsyncSession) -> dict[str, Any]:
                 description=(
                     f"营销活动 {campaign.get('name')} 当前 ROAS {campaign.get('roas', 0):.2f}，"
                     f"低于目标 {campaign.get('target_roas', 3.0)}。建议优化受众定向和广告素材。"
+                    f"数据来源: {campaign.get('source', '待标注')}"
                 ),
                 execution_params={
                     "campaign_id": campaign.get("id"),
                     "current_roas": campaign.get("roas"),
                     "target_roas": campaign.get("target_roas"),
                     "optimization_actions": ["adjust_audience", "refresh_creatives", "adjust_bid"],
+                    "data_source": campaign.get("source"),
                 },
                 execution_action="optimize_campaign",
                 expected_impact="提升 ROAS 至目标水平",
@@ -176,6 +268,11 @@ async def run_marketing_manager_daily(session: AsyncSession) -> dict[str, Any]:
         "duration_seconds": round(duration, 1),
         "suggestions_created": len(suggestions_created),
         "suggestion_ids": suggestions_created,
+        "truthfulness": {
+            "passed": True,
+            "rules_version": check.rules_version,
+            "violations": check.violations,
+        },
     }
 
 
@@ -258,12 +355,94 @@ async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
 
 
 async def _get_marketing_stats(session: AsyncSession) -> dict[str, Any]:
-    """获取营销统计数据（简化版）。"""
+    """获取营销统计数据（真实数据，来自 campaigns 与 customer_profiles 表）。
+
+    返回规范化结构，供防造假校验（report_truthfulness）消费：
+    - campaigns: [{name, channel, status, spend, revenue, source}]
+    - customer_segments: [{name, customer_count, revenue, source}]
+    - underperforming_campaigns: 低于 ROAS 目标的活动（校验通过后生成建议用）
+
+    数据来源标注（R1）：
+    - 活动指标来源固定为 campaigns 表（M3.1 营销智能）
+    - 客户分群来源固定为 customer_profiles 表（M3.3 客户智能）
+    来源缺失时校验服务会拒绝无来源数字。
+    """
+    workspace_id = DEFAULT_WORKSPACE_ID
+
+    # 1. 活动数据（campaigns 表）
+    campaign_rows = (
+        await session.execute(
+            select(Campaign).where(Campaign.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    campaigns = [
+        {
+            "name": c.name or c.campaign_id,
+            "channel": c.platform,
+            "status": c.status,
+            "spend": c.spend,
+            "revenue": c.revenue,
+            "source": "campaigns 表 (M3.1 营销智能)",
+            "id": str(c.id),
+            "roas": c.roas,
+            "target_roas": DEFAULT_TARGET_ROAS,
+        }
+        for c in campaign_rows
+    ]
+
+    # 2. 客户分群（customer_profiles 表，按订单数区分 repeat / new）
+    profile_rows = (
+        await session.execute(
+            select(CustomerProfile).where(
+                CustomerProfile.workspace_id == workspace_id
+            )
+        )
+    ).scalars().all()
+    repeat_count = sum(1 for c in profile_rows if (c.total_orders or 0) > 1)
+    new_count = sum(1 for c in profile_rows if (c.total_orders or 0) == 1)
+    repeat_revenue = sum(
+        (c.total_revenue or Decimal("0"))
+        for c in profile_rows
+        if (c.total_orders or 0) > 1
+    )
+    new_revenue = sum(
+        (c.total_revenue or Decimal("0"))
+        for c in profile_rows
+        if (c.total_orders or 0) == 1
+    )
+    customer_segments = [
+        {
+            "name": "repeat",
+            "customer_count": repeat_count,
+            "revenue": repeat_revenue,
+            "source": "customer_profiles 表 (M3.3 客户智能)",
+        },
+        {
+            "name": "new",
+            "customer_count": new_count,
+            "revenue": new_revenue,
+            "source": "customer_profiles 表 (M3.3 客户智能)",
+        },
+    ]
+
+    # 3. 低 ROAS 活动（低于目标阈值，供校验通过后生成优化建议）
+    underperforming = [
+        c for c in campaigns
+        if c["status"] != "planned"
+        and c["roas"] is not None
+        and c["roas"] < c["target_roas"]
+    ]
+
+    total_spend = sum((c["spend"] or Decimal("0")) for c in campaigns)
+    total_revenue = sum((c["revenue"] or Decimal("0")) for c in campaigns)
+
     return {
-        "active_campaigns": 0,
-        "underperforming_campaigns": [],
-        "total_spend": 0,
-        "total_revenue": 0,
+        "active_campaigns": len(campaigns),
+        "campaigns": campaigns,
+        "customer_segments": customer_segments,
+        "underperforming_campaigns": underperforming,
+        "total_spend": total_spend,
+        "total_revenue": total_revenue,
     }
 
 
