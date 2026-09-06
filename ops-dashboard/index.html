@@ -353,7 +353,7 @@
         async function loadMetrics() {
             const dash = await fetchJSON(API_BASE + '/dashboard/summary');
             const sugg = await fetchJSON(API_BASE + '/agent-suggestions?limit=200');
-            const prod = await fetchJSON(API_BASE + '/products?limit=1');
+            const prod = await fetchJSON(API_BASE + '/products?limit=100');
             const inv = await fetchJSON(API_BASE + '/inventory/status');
 
             if (dash.error) {
