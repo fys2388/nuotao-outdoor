@@ -82,8 +82,7 @@ jobs:
             else
               echo "[db] 警告: 未在 /opt/nuotao/backend/.env 找到 DATABASE_URL"
             fi
-            echo "[db] 自动检测模型变化并生成迁移..."
-            alembic revision --autogenerate -m "auto migration" 2>&1 | tail -3 || echo "[db] 无新迁移，继续"
+            echo "[db] 执行数据库迁移..."
             if ! alembic upgrade head; then
               echo "ERROR: 数据库迁移失败，请登录服务器排查:"
               echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
@@ -91,6 +90,28 @@ jobs:
               echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\""
               exit 1
             fi
+            echo "[db] ensure all model tables exist (create_all idempotent)..."
+            python3 << 'PYEOF'
+import sys, os
+sys.path.insert(0, '/opt/nuotao/backend')
+os.chdir('/opt/nuotao/backend')
+from sqlalchemy import create_engine, inspect
+from app.core.config import settings
+from app.models import Base
+sync_url = settings.DATABASE_URL.replace('+asyncpg', '')
+engine = create_engine(sync_url)
+insp = inspect(engine)
+existing = set(insp.get_table_names())
+needed = set(Base.metadata.tables.keys())
+missing = needed - existing
+if missing:
+    print(f'[db] creating missing tables: {sorted(missing)}')
+    Base.metadata.create_all(bind=engine)
+    print('[db] missing tables created')
+else:
+    print('[db] all tables exist, nothing to create')
+PYEOF
+            echo "[db] table check done"
 
             echo "=== 4. Restarting backend service ==="
             systemctl restart nuotao-backend
