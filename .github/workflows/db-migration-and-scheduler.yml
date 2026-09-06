@@ -1,0 +1,176 @@
+name: DB Migration & Scheduler Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_migration:
+        description: 'Run database migration (alembic upgrade head)'
+        type: boolean
+        default: true
+      setup_scheduler:
+        description: 'Setup unified agent scheduler (replace cron)'
+        type: boolean
+        default: true
+      verify_deployment:
+        description: 'Verify deployment and new APIs'
+        type: boolean
+        default: true
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  maintenance:
+    name: Server Maintenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run database migration
+        if: ${{ github.event.inputs.run_migration == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+
+            echo "=== 1. Generating Alembic migration ==="
+            alembic revision --autogenerate -m "add agent_suggestions and growth_memories tables" 2>&1 || echo "Migration file may already exist, continuing..."
+
+            echo "=== 2. Running alembic upgrade head ==="
+            alembic upgrade head 2>&1
+
+            echo "=== 3. Verifying new tables ==="
+            DB_URL=$(grep '^DATABASE_URL=' .env | cut -d'=' -f2-)
+            python3 -c "
+import os
+import asyncio
+from sqlalchemy import create_engine, text
+db_url = os.environ.get('DATABASE_URL', '').replace('+asyncpg', '')
+if not db_url:
+    with open('.env') as f:
+        for line in f:
+            if line.startswith('DATABASE_URL='):
+                db_url = line.split('=', 1)[1].strip().replace('+asyncpg', '')
+                break
+engine = create_engine(db_url)
+with engine.connect() as conn:
+    tables = conn.execute(text(\"SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('agent_suggestions','growth_memories')\")).fetchall()
+    print('New tables found:', [t[0] for t in tables])
+    for t in tables:
+        count = conn.execute(text(f'SELECT COUNT(*) FROM {t[0]}')).scalar()
+        print(f'  {t[0]}: {count} rows')
+"
+            echo "=== Database migration completed ==="
+
+      - name: Setup unified agent scheduler
+        if: ${{ github.event.inputs.setup_scheduler == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== 1. Stopping old cron-based agents ==="
+            # Comment out old agent cron jobs
+            crontab -l 2>/dev/null | grep -v "agent-daily-" | grep -v "agent_scheduler" > /tmp/crontab_new || true
+            # Add scheduler to crontab (start on reboot)
+            if ! crontab -l 2>/dev/null | grep -q "agent_scheduler"; then
+                (crontab -l 2>/dev/null; echo "@reboot cd /opt/nuotao/backend && source .venv/bin/activate && nohup python -m app.services.agent_scheduler > /opt/nuotao/logs/scheduler.log 2>&1 &") | crontab -
+                echo "Added scheduler to crontab (@reboot)"
+            else
+                echo "Scheduler already in crontab"
+            fi
+
+            echo "=== 2. Creating log directory ==="
+            mkdir -p /opt/nuotao/logs
+
+            echo "=== 3. Stopping any existing scheduler ==="
+            pkill -f "agent_scheduler" 2>/dev/null && echo "Stopped existing scheduler" || echo "No existing scheduler running"
+            sleep 2
+
+            echo "=== 4. Starting unified scheduler ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            nohup python -m app.services.agent_scheduler > /opt/nuotao/logs/scheduler.log 2>&1 &
+            SCHEDULER_PID=$!
+            echo "Scheduler started with PID: $SCHEDULER_PID"
+
+            echo "=== 5. Waiting for scheduler to initialize ==="
+            sleep 5
+
+            echo "=== 6. Verifying scheduler is running ==="
+            if ps aux | grep -v grep | grep "agent_scheduler" > /dev/null; then
+                echo "✅ Scheduler is running"
+                ps aux | grep -v grep | grep "agent_scheduler"
+            else
+                echo "❌ Scheduler is NOT running"
+                echo "--- Scheduler log ---"
+                cat /opt/nuotao/logs/scheduler.log | tail -30
+                exit 1
+            fi
+
+            echo "=== 7. Scheduler log preview ==="
+            cat /opt/nuotao/logs/scheduler.log | head -20
+
+            echo "=== Scheduler setup completed ==="
+
+      - name: Verify deployment
+        if: ${{ github.event.inputs.verify_deployment == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== 1. Backend health check ==="
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs || true)
+            echo "Backend /docs: HTTP $BACKEND_CODE"
+
+            echo "=== 2. New API endpoints verification ==="
+            # Test pending stats endpoint
+            PENDING_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/agent-suggestions/pending/stats || true)
+            echo "GET /agent-suggestions/pending/stats: HTTP $PENDING_CODE"
+
+            # Test list endpoint
+            LIST_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/agent-suggestions/ || true)
+            echo "GET /agent-suggestions/: HTTP $LIST_CODE"
+
+            echo "=== 3. Frontend health check ==="
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
+            echo "Frontend: HTTP $FRONTEND_CODE"
+
+            echo "=== 4. Scheduler status ==="
+            if ps aux | grep -v grep | grep "agent_scheduler" > /dev/null; then
+                echo "✅ Agent scheduler: running"
+            else
+                echo "⚠️ Agent scheduler: not running"
+            fi
+
+            echo "=== 5. System services ==="
+            systemctl is-active nuotao-backend 2>/dev/null && echo "✅ nuotao-backend: active" || echo "❌ nuotao-backend: inactive"
+            systemctl is-active postgresql 2>/dev/null && echo "✅ postgresql: active" || echo "❌ postgresql: inactive"
+            systemctl is-active nginx 2>/dev/null && echo "✅ nginx: active" || echo "❌ nginx: inactive"
+
+            echo "=== 6. Crontab ==="
+            crontab -l 2>/dev/null || echo "(empty)"
+
+            echo ""
+            echo "=== Verification completed ==="
+            if [ "$BACKEND_CODE" = "200" ] && [ "$PENDING_CODE" = "200" ]; then
+                echo "✅ All checks passed!"
+            else
+                echo "⚠️ Some checks failed, please review above"
+            fi
