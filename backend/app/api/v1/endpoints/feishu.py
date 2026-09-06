@@ -97,7 +97,20 @@ async def feishu_card_callback(
 
     # 批准或拒绝
     try:
+        # 幂等性检查：先获取建议当前状态，避免重复处理
+        existing = await agent_suggestion_service.get_suggestion(db, int(suggestion_id))
+        if not existing:
+            return {"code": 1, "msg": "suggestion not found"}
+
         if action == "approve":
+            # 如果已经批准过，直接返回，不重复处理
+            if existing.status in ("approved", "executing", "executed", "execution_failed"):
+                logger.info("建议 %s 已处于 %s 状态，跳过重复批准", suggestion_id, existing.status)
+                return {
+                    "code": 0,
+                    "msg": "already_approved",
+                    "data": {"suggestion_id": suggestion_id, "status": existing.status},
+                }
             result = await agent_suggestion_service.approve_suggestion(
                 db, int(suggestion_id), approved_by=operator
             )
@@ -112,6 +125,14 @@ async def feishu_card_callback(
             # 批准后立即异步执行（不阻塞回调响应）
             asyncio.create_task(_execute_suggestion_async(int(suggestion_id)))
         else:  # reject
+            # 如果已经拒绝过，直接返回
+            if existing.status == "rejected":
+                logger.info("建议 %s 已拒绝，跳过重复处理", suggestion_id)
+                return {
+                    "code": 0,
+                    "msg": "already_rejected",
+                    "data": {"suggestion_id": suggestion_id, "status": existing.status},
+                }
             result = await agent_suggestion_service.reject_suggestion(
                 db, int(suggestion_id), rejected_by=operator, reason="飞书卡片拒绝"
             )
