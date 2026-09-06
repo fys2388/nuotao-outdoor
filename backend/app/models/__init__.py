@@ -19,6 +19,7 @@ from app.models.agent_runtime_hardening import (
     AgentRetryPolicy,
     AgentTaskAttempt,
 )
+from app.models.agent_suggestion import AgentSuggestion
 from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.customer import (
     CustomerInteraction,
@@ -33,6 +34,7 @@ from app.models.customer_learning import (
     CustomerPatternRun,
 )
 from app.models.event import EventLog
+from app.models.growth_memory import GrowthMemory
 from app.models.identity import WorkspaceIdentityLink
 from app.models.image_gen import ImageGenerationTask
 from app.models.influencer import Influencer, InfluencerCollaboration

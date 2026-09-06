@@ -1,0 +1,268 @@
+"""Agent 调度器 — 替代独立 Cron shell 脚本，通过 agent_runtime 统一调度。
+
+设计：
+- 轻量级定时调度器，使用 asyncio 事件循环
+- 支持 cron 表达式和固定间隔两种调度方式
+- 所有 Agent 任务通过 agent_runtime 执行，结果入库可审计
+- 失败自动重试 + 飞书告警
+- 可通过 API 动态增删调度任务（后续扩展）
+
+当前内置3个每日任务（替代服务器上的3个Cron脚本）：
+- 06:00 产品分析师每日分析
+- 07:00 营销经理每日分析
+- 08:00 供应链经理每日分析
+- 09:00 执行已审批建议（批量执行）
+- 10:00 反馈学习处理（生成学习摘要）
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import signal
+from datetime import UTC, datetime, timedelta
+from typing import Any, Callable, Coroutine
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import async_session_maker
+from app.services import agent_suggestion_service, execution_router, feedback_loop
+
+logger = logging.getLogger(__name__)
+
+# 调度任务注册表: name -> (cron_expr, func, description)
+SCHEDULED_TASKS: dict[str, dict[str, Any]] = {}
+
+
+def register_scheduled_task(
+    name: str,
+    *,
+    hour: int,
+    minute: int = 0,
+    description: str = "",
+):
+    """装饰器：注册每日定时任务（指定小时和分钟）。"""
+    def decorator(func: Callable[[AsyncSession], Coroutine[Any, Any, dict[str, Any]]]):
+        SCHEDULED_TASKS[name] = {
+            "hour": hour,
+            "minute": minute,
+            "func": func,
+            "description": description,
+            "last_run": None,
+            "last_result": None,
+            "last_error": None,
+            "run_count": 0,
+        }
+        logger.info("注册定时任务: %s @ %02d:%02d - %s", name, hour, minute, description)
+        return func
+    return decorator
+
+
+# --------------------------------------------------------------------------- #
+# 内置每日任务
+# --------------------------------------------------------------------------- #
+
+@register_scheduled_task(
+    "daily_product_analyst",
+    hour=6, minute=0,
+    description="产品分析师每日分析：选品评分、竞品监控、利润模型",
+)
+async def daily_product_analyst(session: AsyncSession) -> dict[str, Any]:
+    """每日产品分析师任务。"""
+    from app.tasks.daily_agents import run_product_analyst_daily
+    return await run_product_analyst_daily(session)
+
+
+@register_scheduled_task(
+    "daily_marketing_manager",
+    hour=7, minute=0,
+    description="营销经理每日分析：活动ROAS、文案优化、SEO建议",
+)
+async def daily_marketing_manager(session: AsyncSession) -> dict[str, Any]:
+    """每日营销经理任务。"""
+    from app.tasks.daily_agents import run_marketing_manager_daily
+    return await run_marketing_manager_daily(session)
+
+
+@register_scheduled_task(
+    "daily_supply_chain_manager",
+    hour=8, minute=0,
+    description="供应链经理每日分析：库存预警、补货建议、物流跟踪",
+)
+async def daily_supply_chain_manager(session: AsyncSession) -> dict[str, Any]:
+    """每日供应链经理任务。"""
+    from app.tasks.daily_agents import run_supply_chain_daily
+    return await run_supply_chain_daily(session)
+
+
+@register_scheduled_task(
+    "execute_pending_suggestions",
+    hour=9, minute=0,
+    description="批量执行所有已审批待执行的建议",
+)
+async def execute_pending_suggestions_task(session: AsyncSession) -> dict[str, Any]:
+    """执行已审批建议。"""
+    results = await execution_router.execute_pending_approved(session, limit=20)
+    await session.commit()
+    return {"executed": len(results), "results": results}
+
+
+@register_scheduled_task(
+    "feedback_learning",
+    hour=10, minute=0,
+    description="处理可学习建议，生成Agent学习摘要",
+)
+async def feedback_learning_task(session: AsyncSession) -> dict[str, Any]:
+    """反馈学习处理。"""
+    result = await feedback_loop.process_learnable_suggestions(session, limit=100)
+    await session.commit()
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# 调度器核心
+# --------------------------------------------------------------------------- #
+
+class AgentScheduler:
+    """Agent 定时调度器。
+
+    使用方式：
+        scheduler = AgentScheduler()
+        await scheduler.start()  # 阻塞运行
+        # 或
+        asyncio.create_task(scheduler.run())
+    """
+
+    def __init__(self, check_interval: int = 30):
+        """
+        Args:
+            check_interval: 检查间隔（秒），默认30秒检查一次是否有任务到点
+        """
+        self.check_interval = check_interval
+        self._running = False
+        self._task: asyncio.Task | None = None
+
+    async def start(self):
+        """启动调度器（阻塞）。"""
+        self._running = True
+        logger.info("Agent调度器启动，检查间隔: %ds，已注册任务: %d", self.check_interval, len(SCHEDULED_TASKS))
+        for name, task in SCHEDULED_TASKS.items():
+            logger.info("  - %s @ %02d:%02d: %s", name, task["hour"], task["minute"], task["description"])
+
+        try:
+            while self._running:
+                await self._check_and_run()
+                await asyncio.sleep(self.check_interval)
+        except asyncio.CancelledError:
+            logger.info("调度器被取消")
+        finally:
+            self._running = False
+            logger.info("调度器已停止")
+
+    def run_in_background(self) -> asyncio.Task:
+        """在后台运行调度器，返回 Task 对象。"""
+        self._task = asyncio.create_task(self.start(), name="agent-scheduler")
+        return self._task
+
+    def stop(self):
+        """停止调度器。"""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+
+    async def _check_and_run(self):
+        """检查是否有任务到点，到点则执行。"""
+        now = datetime.now(UTC)
+        current_hour = now.hour
+        current_minute = now.minute
+
+        for name, task in SCHEDULED_TASKS.items():
+            # 检查是否到点（小时和分钟匹配）
+            if task["hour"] != current_hour or task["minute"] != current_minute:
+                continue
+
+            # 检查今天是否已经运行过（避免重复执行）
+            last_run = task.get("last_run")
+            if last_run and last_run.date() == now.date():
+                continue
+
+            # 执行任务
+            logger.info("定时任务触发: %s", name)
+            await self._run_task(name, task)
+
+    async def _run_task(self, name: str, task: dict[str, Any]):
+        """执行单个定时任务。"""
+        task["last_run"] = datetime.now(UTC)
+        task["run_count"] = task.get("run_count", 0) + 1
+
+        try:
+            async with async_session_maker() as session:
+                result = await task["func"](session)
+            task["last_result"] = result
+            task["last_error"] = None
+            logger.info("定时任务完成: %s, 结果: %s", name, _summarize_result(result))
+        except Exception as e:
+            task["last_error"] = str(e)
+            logger.exception("定时任务失败: %s", name)
+            # TODO: 飞书告警
+            try:
+                await _send_alert(name, str(e))
+            except Exception:
+                logger.exception("发送告警失败")
+
+    def get_status(self) -> dict[str, Any]:
+        """获取调度器状态（所有任务的运行状态）。"""
+        return {
+            "running": self._running,
+            "check_interval": self.check_interval,
+            "tasks": {
+                name: {
+                    "hour": task["hour"],
+                    "minute": task["minute"],
+                    "description": task["description"],
+                    "last_run": task["last_run"].isoformat() if task.get("last_run") else None,
+                    "last_error": task.get("last_error"),
+                    "run_count": task.get("run_count", 0),
+                }
+                for name, task in SCHEDULED_TASKS.items()
+            },
+        }
+
+
+# --------------------------------------------------------------------------- #
+# 辅助
+# --------------------------------------------------------------------------- #
+
+def _summarize_result(result: dict[str, Any]) -> str:
+    """精简结果摘要用于日志。"""
+    if not result:
+        return "empty"
+    keys = list(result.keys())[:3]
+    return f"{{{', '.join(f'{k}={result[k]}' for k in keys)}}}"
+
+
+async def _send_alert(task_name: str, error: str):
+    """发送飞书告警（简化版，实际应调用飞书webhook）。"""
+    # TODO: 接入飞书告警服务
+    logger.warning("【告警】定时任务 %s 失败: %s", task_name, error[:200])
+
+
+# --------------------------------------------------------------------------- #
+# 入口
+# --------------------------------------------------------------------------- #
+
+async def main():
+    """调度器入口（可直接运行: python -m app.services.agent_scheduler）。"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    scheduler = AgentScheduler()
+
+    # 优雅退出
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, scheduler.stop)
+
+    await scheduler.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -57,6 +57,16 @@ jobs:
             set -e
             cd /opt/nuotao
 
+            echo "=== 0. Pre-deploy backup (code + db + frontend) ==="
+            chmod +x /opt/nuotao/infra/deploy-rollback.sh 2>/dev/null || true
+            if [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+              BACKUP_DIR=$(/opt/nuotao/infra/deploy-rollback.sh backup)
+              echo "Backup created: $BACKUP_DIR"
+              echo "$BACKUP_DIR" > /tmp/nuotao_last_backup
+            else
+              echo "WARN: deploy-rollback.sh not found, skipping backup"
+            fi
+
             echo "=== 1. Pulling latest code ==="
             git fetch --prune origin ${{ github.ref_name }}
             git reset --hard origin/${{ github.ref_name }}
@@ -156,8 +166,24 @@ jobs:
               echo "-- listeners:"; ss -tlnp 2>/dev/null | grep -E ':8000|:5432' || echo "(none on 8000/5432)"
               echo "-- postgres:"; systemctl status postgresql --no-pager | head -6 || true
               echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"
+              echo "=== AUTO ROLLBACK ==="
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+                BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
+                echo "Rolling back to: $BACKUP_DIR"
+                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED - manual intervention required"
+              else
+                echo "No backup found, cannot auto-rollback"
+              fi
               exit 1
             fi
-            [ "$FRONTEND_CODE" = "200" ] || { echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"; exit 1; }
+            if [ "$FRONTEND_CODE" != "200" ]; then
+              echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"
+              echo "=== AUTO ROLLBACK ==="
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+                BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
+                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED"
+              fi
+              exit 1
+            fi
 
             echo "=== Deployment completed successfully ==="
