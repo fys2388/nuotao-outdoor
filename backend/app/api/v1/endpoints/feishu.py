@@ -152,17 +152,41 @@ async def approval_test():
 
 @router.get("/trigger-product-test")
 async def trigger_product_test(db: AsyncSession = Depends(get_db)):
-    """测试端点：手动触发产品分析师每日分析，生成真实建议并推送飞书卡片。"""
-    from app.tasks.daily_agents import run_product_analyst_daily
+    """测试端点：手动创建一条真实测试建议，验证完整流程（创建→飞书推送→审批→执行）。"""
+    from app.services import agent_suggestion_service
 
     try:
-        result = await run_product_analyst_daily(db)
+        # 直接创建一条真实的选品建议（不依赖产品数据）
+        suggestion = await agent_suggestion_service.create_suggestion(
+            db,
+            agent_id="product_analyst",
+            suggestion_type="product_optimization",
+            title="【测试】户外露营灯选品建议：高流明可充电款",
+            description=(
+                "基于户外品类趋势分析，建议新增高流明可充电露营灯SKU。"
+                "目标售价 $29.99，预计毛利率 45%，月销预期 500+ 件。"
+                "建议立即启动1688选品和样品采购流程。"
+            ),
+            execution_params={
+                "category": "camping_lights",
+                "target_price": 29.99,
+                "expected_margin": 0.45,
+                "expected_monthly_sales": 500,
+                "action": "start_sourcing",
+            },
+            execution_action="start_product_sourcing",
+            expected_impact="新增SKU，月营收预期 +$15000",
+            priority="high",
+            risk_level="low",
+        )
         await db.commit()
         return {
             "success": True,
-            "message": "产品分析任务已执行，建议已生成并推送飞书卡片",
-            "result": result,
+            "message": "测试建议已创建，飞书审批卡片已推送",
+            "suggestion_id": suggestion.id,
+            "title": suggestion.title,
+            "status": suggestion.status,
         }
     except Exception as e:
-        logger.exception("产品分析测试任务执行失败")
+        logger.exception("测试建议创建失败")
         return {"success": False, "error": str(e)}
