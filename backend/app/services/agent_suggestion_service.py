@@ -101,8 +101,12 @@ async def create_suggestion(
         suggestion.execution_result = {"debug_send_result": result, "debug_message_id": message_id}
         if message_id:
             suggestion.feishu_message_id = message_id
+            logger.info("赋值后 suggestion.feishu_message_id: %s", suggestion.feishu_message_id)
+            logger.info("suggestion 对象属性: %s", [attr for attr in dir(suggestion) if 'feishu' in attr.lower()])
             await session.flush()
-            logger.info("飞书 message_id 已保存到对象: suggestion_id=%s, feishu_message_id=%s", suggestion.id, suggestion.feishu_message_id)
+            logger.info("flush后 suggestion.feishu_message_id: %s", suggestion.feishu_message_id)
+            # 调试：把赋值后的值也保存到 execution_result
+            suggestion.execution_result["debug_after_assign"] = suggestion.feishu_message_id
         else:
             logger.warning("飞书卡片未返回 message_id（可能是Webhook发送，不支持卡片更新）")
     except Exception as e:
