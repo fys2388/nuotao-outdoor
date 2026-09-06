@@ -137,4 +137,44 @@ jobs:
             fi
             
             echo ""
+            echo "=== 9. 查找前端构建目录并复制 ops-dashboard 文件 ==="
+            # 查找包含 index.html 和 assets 目录的前端构建目录
+            FRONTEND_DIR=""
+            for dir in /opt/nuotao/frontend/dist /opt/nuotao/frontend/build /opt/nuotao/admin/dist /opt/nuotao/admin/build /opt/nuotao/web/dist /opt/nuotao/web/build; do
+                if [ -d "$dir" ] && [ -f "$dir/index.html" ]; then
+                    FRONTEND_DIR="$dir"
+                    echo "找到前端构建目录: $FRONTEND_DIR"
+                    break
+                fi
+            done
+            
+            # 如果没找到，用 find 命令查找
+            if [ -z "$FRONTEND_DIR" ]; then
+                echo "用 find 命令查找前端构建目录..."
+                FRONTEND_DIR=$(find /opt/nuotao -name "index.html" -path "*/dist/*" -o -name "index.html" -path "*/build/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+                echo "find 找到的目录: $FRONTEND_DIR"
+            fi
+            
+            if [ -n "$FRONTEND_DIR" ] && [ -d "$FRONTEND_DIR" ]; then
+                echo "前端构建目录: $FRONTEND_DIR"
+                # 创建 ops-dashboard 子目录
+                mkdir -p "$FRONTEND_DIR/ops-dashboard"
+                # 复制 ops-dashboard 文件
+                cp /opt/nuotao/ops-dashboard/index.html "$FRONTEND_DIR/ops-dashboard/index.html"
+                echo "✅ 已复制 ops-dashboard 文件到 $FRONTEND_DIR/ops-dashboard/"
+                
+                # 测试访问
+                sleep 2
+                curl -s -o /tmp/test_dash2.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/
+                if grep -q "运营监控中心" /tmp/test_dash2.html; then
+                    echo "✅✅✅ 成功! 通过前端构建目录访问 ops-dashboard 页面!"
+                else
+                    echo "❌ 通过前端构建目录访问失败"
+                    head -3 /tmp/test_dash2.html
+                fi
+            else
+                echo "❌ 未找到前端构建目录"
+            fi
+            
+            echo ""
             echo "=== 部署完成 ==="
