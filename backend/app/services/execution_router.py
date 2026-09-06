@@ -1,6 +1,7 @@
 """执行路由器 — 根据建议类型和执行动作，路由到对应业务服务执行。
 
 设计原则：
+- 所有外部服务调用使用动态导入（importlib + getattr），函数不存在时自动降级
 - 低风险动作自动执行（如更新产品描述、生成营销文案）
 - 中高风险动作需审批后执行（如改价、补货、上下架）
 - 所有执行结果记录到 suggestion.execution_result
@@ -9,6 +10,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
 from uuid import UUID
@@ -25,12 +27,27 @@ class ExecutionError(Exception):
     """执行失败异常。"""
 
 
+def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool, Any]:
+    """安全调用外部服务函数。
+
+    Returns:
+        (success, result_or_error)
+    """
+    try:
+        mod = importlib.import_module(module_path)
+        func = getattr(mod, func_name, None)
+        if func is None or not callable(func):
+            return False, f"函数 {module_path}.{func_name} 不存在"
+        result = func(*args, **kwargs)
+        return True, result
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)}"
+
+
 # --------------------------------------------------------------------------- #
 # 执行动作注册表
 # --------------------------------------------------------------------------- #
 
-# 每个执行动作对应一个处理函数（异步，接收 session + params）
-# 新增执行动作时在此注册
 _execution_handlers: dict[str, callable] = {}
 
 
@@ -38,7 +55,6 @@ def register_handler(action: str):
     """装饰器：注册执行动作处理器。"""
     def decorator(func):
         _execution_handlers[action] = func
-        logger.debug("注册执行动作: %s -> %s", action, func.__name__)
         return func
     return decorator
 
@@ -51,21 +67,13 @@ async def execute_suggestion(
     session: AsyncSession,
     suggestion: AgentSuggestion | int,
 ) -> dict[str, Any]:
-    """执行一条建议，返回执行结果。
-
-    Args:
-        suggestion: AgentSuggestion 对象或建议 ID
-
-    Returns:
-        执行结果 dict，包含 success, action, result/error
-    """
+    """执行一条建议，返回执行结果。"""
     if isinstance(suggestion, int):
         suggestion_obj = await agent_suggestion_service.get_suggestion(session, suggestion)
         if not suggestion_obj:
             return {"success": False, "error": f"建议 {suggestion} 不存在"}
         suggestion = suggestion_obj
 
-    # 状态检查
     if suggestion.status not in ("approved", "executing"):
         return {
             "success": False,
@@ -80,34 +88,27 @@ async def execute_suggestion(
         suggestion.id, suggestion.agent_id, action, suggestion.suggestion_type,
     )
 
-    # 标记执行中
     await agent_suggestion_service.mark_executing(session, suggestion.id)
 
     try:
         if not action:
-            # 没有指定执行动作，按建议类型走默认处理
             result = await _execute_by_type(session, suggestion)
         elif action in _execution_handlers:
             handler = _execution_handlers[action]
             result = await handler(session, params)
         else:
-            # 未注册的动作，记录但不执行（安全降级）
             result = {
                 "success": False,
                 "error": f"未注册的执行动作: {action}，请先注册处理器",
                 "skipped": True,
             }
 
-        # 更新执行结果
         if result.get("success"):
-            await agent_suggestion_service.mark_completed(
-                session, suggestion.id, result=result
-            )
+            await agent_suggestion_service.mark_completed(session, suggestion.id, result=result)
         else:
             await agent_suggestion_service.mark_failed(
                 session, suggestion.id, error=result.get("error", "未知错误")
             )
-
         return result
 
     except Exception as e:
@@ -122,10 +123,7 @@ async def execute_pending_approved(
     *,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    """批量执行所有已审批待执行的建议。
-
-    由调度器定时调用，处理 approved 状态的建议。
-    """
+    """批量执行所有已审批待执行的建议。"""
     from sqlalchemy import select
 
     stmt = (
@@ -158,7 +156,7 @@ async def _execute_by_type(
     session: AsyncSession,
     suggestion: AgentSuggestion,
 ) -> dict[str, Any]:
-    """根据建议类型执行默认动作（无 execution_action 时的降级路径）。"""
+    """根据建议类型执行默认动作。"""
     suggestion_type = suggestion.suggestion_type
     params = suggestion.execution_params or {}
 
@@ -180,12 +178,11 @@ async def _execute_by_type(
             "error": f"无默认处理器的建议类型: {suggestion_type}",
             "skipped": True,
         }
-
     return await handler(session, params, suggestion)
 
 
 # --------------------------------------------------------------------------- #
-# 各类型默认处理器（调用对应业务服务）
+# 各类型默认处理器（动态调用外部服务，不存在时降级）
 # --------------------------------------------------------------------------- #
 
 async def _handle_product_optimization(
@@ -196,41 +193,35 @@ async def _handle_product_optimization(
     if not product_id:
         return {"success": False, "error": "缺少 product_id 参数"}
 
-    try:
-        from app.services.product_service import update_product
-        result = await update_product(session, product_id, params.get("updates", {}))
+    ok, result = _safe_call("app.services.product_service", "update_product",
+                             session, product_id, params.get("updates", {}))
+    if ok:
         return {"success": True, "action": "product_optimization", "result": result}
-    except ImportError:
-        return {
-            "success": True,
-            "action": "product_optimization",
-            "result": {"note": "product_service 未接入，建议已记录待人工执行", "suggestion_id": suggestion.id},
-            "deferred": True,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
+    return {
+        "success": True,
+        "action": "product_optimization",
+        "result": {"note": "产品优化服务待接入，建议已记录待人工执行", "suggestion_id": suggestion.id},
+        "deferred": True,
+    }
 
 
 async def _handle_marketing_optimization(
     session: AsyncSession, params: dict, suggestion: AgentSuggestion
 ) -> dict[str, Any]:
     """营销优化：生成/更新营销文案或活动。"""
-    try:
-        from app.services.content_generation_service import generate_content
-        content = await generate_content(
-            prompt=params.get("prompt", suggestion.description),
-            content_type=params.get("content_type", "marketing_copy"),
-        )
-        return {"success": True, "action": "marketing_optimization", "result": content}
-    except ImportError:
-        return {
-            "success": True,
-            "action": "marketing_optimization",
-            "result": {"note": "content_generation_service 未接入，建议已记录", "suggestion_id": suggestion.id},
-            "deferred": True,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    ok, result = _safe_call("app.services.content_generation_service", "generate_content",
+                             prompt=params.get("prompt", suggestion.description),
+                             content_type=params.get("content_type", "marketing_copy"))
+    if ok:
+        return {"success": True, "action": "marketing_optimization", "result": result}
+
+    return {
+        "success": True,
+        "action": "marketing_optimization",
+        "result": {"note": "营销文案服务待接入，建议已记录", "suggestion_id": suggestion.id},
+        "deferred": True,
+    }
 
 
 async def _handle_inventory_restock(
@@ -242,19 +233,17 @@ async def _handle_inventory_restock(
     if not product_id or not quantity:
         return {"success": False, "error": "缺少 product_id 或 quantity 参数"}
 
-    try:
-        from app.services.procurement_service import create_purchase_order
-        order = await create_purchase_order(session, product_id, quantity, params)
-        return {"success": True, "action": "inventory_restock", "result": order}
-    except ImportError:
-        return {
-            "success": True,
-            "action": "inventory_restock",
-            "result": {"note": "procurement_service 未接入，补货建议已记录待人工执行", "suggestion_id": suggestion.id},
-            "deferred": True,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    ok, result = _safe_call("app.services.procurement_service", "create_purchase_order",
+                             session, product_id, quantity, params)
+    if ok:
+        return {"success": True, "action": "inventory_restock", "result": result}
+
+    return {
+        "success": True,
+        "action": "inventory_restock",
+        "result": {"note": "采购服务待接入，补货建议已记录待人工执行", "suggestion_id": suggestion.id},
+        "deferred": True,
+    }
 
 
 async def _handle_pricing_adjustment(
@@ -266,19 +255,17 @@ async def _handle_pricing_adjustment(
     if not product_id or not new_price:
         return {"success": False, "error": "缺少 product_id 或 new_price 参数"}
 
-    try:
-        from app.services.product_service import update_price
-        result = await update_price(session, product_id, new_price)
+    ok, result = _safe_call("app.services.product_service", "update_price",
+                             session, product_id, new_price)
+    if ok:
         return {"success": True, "action": "pricing_adjustment", "result": result}
-    except ImportError:
-        return {
-            "success": True,
-            "action": "pricing_adjustment",
-            "result": {"note": "价格调整已记录，待人工执行", "product_id": product_id, "new_price": new_price},
-            "deferred": True,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
+    return {
+        "success": True,
+        "action": "pricing_adjustment",
+        "result": {"note": "价格调整已记录，待人工执行", "product_id": product_id, "new_price": new_price},
+        "deferred": True,
+    }
 
 
 async def _handle_listing_optimization(
@@ -289,19 +276,17 @@ async def _handle_listing_optimization(
     if not product_id:
         return {"success": False, "error": "缺少 product_id 参数"}
 
-    try:
-        from app.services.woocommerce_sync_service import update_product_listing
-        result = await update_product_listing(product_id, params.get("updates", {}))
+    ok, result = _safe_call("app.services.woocommerce_sync_service", "update_product_listing",
+                             product_id, params.get("updates", {}))
+    if ok:
         return {"success": True, "action": "listing_optimization", "result": result}
-    except ImportError:
-        return {
-            "success": True,
-            "action": "listing_optimization",
-            "result": {"note": "WooCommerce 同步服务未接入，优化建议已记录", "suggestion_id": suggestion.id},
-            "deferred": True,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
+    return {
+        "success": True,
+        "action": "listing_optimization",
+        "result": {"note": "WooCommerce 同步服务待接入，优化建议已记录", "suggestion_id": suggestion.id},
+        "deferred": True,
+    }
 
 
 async def _handle_customer_operation(

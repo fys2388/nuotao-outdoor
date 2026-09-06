@@ -25,7 +25,7 @@ from typing import Any, Callable, Coroutine
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import async_session_maker
+from app.core.database import async_session_factory
 from app.services import agent_suggestion_service, execution_router, feedback_loop
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,7 @@ class AgentScheduler:
         task["run_count"] = task.get("run_count", 0) + 1
 
         try:
-            async with async_session_maker() as session:
+            async with async_session_factory() as session:
                 result = await task["func"](session)
             task["last_result"] = result
             task["last_error"] = None
