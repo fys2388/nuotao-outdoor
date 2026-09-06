@@ -1,0 +1,53 @@
+name: Debug Ops Dashboard
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check server files and nginx config
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. 检查 ops-dashboard 目录 ==="
+            ls -la /opt/nuotao/ops-dashboard/ 2>&1 || echo "目录不存在"
+            
+            echo ""
+            echo "=== 2. 检查 index.html 文件大小 ==="
+            wc -c /opt/nuotao/ops-dashboard/index.html 2>&1 || echo "文件不存在"
+            
+            echo ""
+            echo "=== 3. 检查 index.html 前10行 ==="
+            head -10 /opt/nuotao/ops-dashboard/index.html 2>&1 || echo "无法读取"
+            
+            echo ""
+            echo "=== 4. 查找 Nginx 配置文件 ==="
+            grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>&1 || echo "未找到"
+            
+            echo ""
+            echo "=== 5. 显示 Nginx 配置内容 ==="
+            NGINX_CONF=$(grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>/dev/null | head -1)
+            if [ -n "$NGINX_CONF" ]; then
+                echo "配置文件: $NGINX_CONF"
+                cat "$NGINX_CONF"
+            else
+                echo "未找到 admin.nuotaooutdoor.com 配置"
+                echo "=== 所有 sites-enabled ==="
+                ls -la /etc/nginx/sites-enabled/ 2>&1
+                echo "=== 所有 conf.d ==="
+                ls -la /etc/nginx/conf.d/ 2>&1
+            fi
+            
+            echo ""
+            echo "=== 6. 测试本地访问 ==="
+            curl -s -o /dev/null -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/ 2>&1 || echo "访问失败"
+            
+            echo ""
+            echo "=== 7. 检查 Nginx 错误日志 ==="
+            tail -20 /var/log/nginx/error.log 2>&1 || echo "无法读取错误日志"
