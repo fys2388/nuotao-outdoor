@@ -94,11 +94,13 @@ async def create_suggestion(
             execution_params=execution_params,
         )
         # 保存飞书 message_id 到数据库
+        logger.info("飞书卡片发送结果: suggestion_id=%s, result=%s", suggestion.id, result)
         message_id = result.get("message_id") if result else None
+        logger.info("提取到的 message_id: suggestion_id=%s, message_id=%s", suggestion.id, message_id)
         if message_id:
             suggestion.feishu_message_id = message_id
             await session.flush()
-            logger.info("飞书 message_id 已保存: suggestion_id=%s, message_id=%s", suggestion.id, message_id)
+            logger.info("飞书 message_id 已保存到对象: suggestion_id=%s, feishu_message_id=%s", suggestion.id, suggestion.feishu_message_id)
         else:
             logger.warning("飞书卡片未返回 message_id（可能是Webhook发送，不支持卡片更新）")
     except Exception as e:
