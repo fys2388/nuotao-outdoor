@@ -1,0 +1,102 @@
+name: Fix Ops Dashboard Nginx
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix nginx config for ops-dashboard
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            
+            NGINX_CONF="/etc/nginx/sites-available/nuotao"
+            
+            echo "=== 1. 备份当前配置 ==="
+            cp "$NGINX_CONF" "${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+            
+            echo "=== 2. 查看当前 ops-dashboard 配置 ==="
+            grep -A 5 "ops-dashboard" "$NGINX_CONF"
+            
+            echo ""
+            echo "=== 3. 修复 ops-dashboard location ==="
+            # 使用 Python 来精确替换配置
+            python3 << 'PYEOF'
+            import re
+            
+            conf_path = "/etc/nginx/sites-available/nuotao"
+            with open(conf_path, 'r') as f:
+                content = f.read()
+            
+            # 替换旧的 ops-dashboard location 为新的（使用 ^~ 优先匹配，去掉 try_files 的 fallback）
+            old_block = """    # Ops Dashboard 静态文件
+    location /ops-dashboard/ {
+        alias /opt/nuotao/ops-dashboard/;
+        try_files $uri $uri/ /ops-dashboard/index.html;
+    }"""
+            
+            new_block = """    # Ops Dashboard 静态文件（优先匹配，不回退到前端）
+    location ^~ /ops-dashboard/ {
+        alias /opt/nuotao/ops-dashboard/;
+        index index.html;
+        try_files $uri $uri/ =404;
+    }"""
+            
+            if old_block in content:
+                content = content.replace(old_block, new_block)
+                print("✅ 已替换 ops-dashboard location 配置")
+            else:
+                print("⚠️ 未找到精确匹配的旧配置，尝试正则替换")
+                # 使用正则替换
+                pattern = r'    # Ops Dashboard 静态文件\n    location /ops-dashboard/ \{[^}]+\}'
+                replacement = """    # Ops Dashboard 静态文件（优先匹配，不回退到前端）
+    location ^~ /ops-dashboard/ {
+        alias /opt/nuotao/ops-dashboard/;
+        index index.html;
+        try_files $uri $uri/ =404;
+    }"""
+                content = re.sub(pattern, replacement, content)
+                print("✅ 已通过正则替换 ops-dashboard location 配置")
+            
+            with open(conf_path, 'w') as f:
+                f.write(content)
+            
+            print("✅ 配置文件已写入")
+            PYEOF
+            
+            echo ""
+            echo "=== 4. 验证新配置 ==="
+            grep -A 6 "ops-dashboard" "$NGINX_CONF"
+            
+            echo ""
+            echo "=== 5. 测试 Nginx 配置 ==="
+            nginx -t
+            
+            echo ""
+            echo "=== 6. 重载 Nginx ==="
+            systemctl reload nginx
+            
+            echo ""
+            echo "=== 7. 等待 2 秒后测试访问 ==="
+            sleep 2
+            curl -s -o /tmp/ops_dash_test.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/
+            
+            echo ""
+            echo "=== 8. 验证返回内容 ==="
+            head -5 /tmp/ops_dash_test.html
+            echo "..."
+            if grep -q "运营监控中心" /tmp/ops_dash_test.html; then
+                echo "✅ 返回的是 ops-dashboard 页面！"
+            else
+                echo "❌ 返回的不是 ops-dashboard 页面"
+            fi
+            
+            echo ""
+            echo "=== 修复完成 ==="
