@@ -12,7 +12,8 @@ os.chdir(os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from sqlalchemy import create_engine, inspect
 from app.core.config import get_settings
-from app.models import Base
+from app.core.database import Base
+import app.models  # noqa: F401 - 导入所有模型，注册到 Base.metadata
 
 
 def main():
