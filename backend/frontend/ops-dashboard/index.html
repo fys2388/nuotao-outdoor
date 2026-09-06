@@ -326,7 +326,7 @@
             const checks = await Promise.all([
                 fetchJSON(API_BASE + '/dashboard/summary'),
                 fetchJSON(API_BASE + '/agent-suggestions?limit=1'),
-                fetchJSON(API_BASE + '/products?limit=1'),
+                fetchJSON(API_BASE + '/products?limit=100'),
                 fetchJSON(API_BASE + '/orders?limit=1'),
             ]);
 
@@ -498,7 +498,7 @@
             const checks = await Promise.all([
                 fetchJSON(API_BASE + '/dashboard/summary'),
                 fetchJSON(API_BASE + '/agent-suggestions?limit=1'),
-                fetchJSON(API_BASE + '/products?limit=1'),
+                fetchJSON(API_BASE + '/products?limit=100'),
                 fetchJSON(API_BASE + '/orders?limit=1'),
                 fetchJSON(API_BASE + '/inventory/status'),
                 fetchJSON(API_BASE + '/sourcing/status'),
