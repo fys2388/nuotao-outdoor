@@ -78,16 +78,7 @@ jobs:
             content = re.sub(pattern2, '', content, flags=re.DOTALL)
             
             # 新配置（放在 server 块最开头，优先匹配）
-            new_config = '''
-    # ============================================
-    # Ops Dashboard 静态文件（优先匹配）
-    # ============================================
-    location ^~ /ops-dashboard/ {
-        alias /opt/nuotao/ops-dashboard/;
-        index index.html;
-        try_files $uri $uri/ /ops-dashboard/index.html;
-    }
-'''
+            new_config = "\n    # ============================================\n    # Ops Dashboard 静态文件（优先匹配）\n    # ============================================\n    location ^~ /ops-dashboard/ {\n        alias /opt/nuotao/ops-dashboard/;\n        index index.html;\n        try_files $uri $uri/ /ops-dashboard/index.html;\n    }\n"
             
             # 在第一个 server { 后插入
             server_match = re.search(r'server\s*\{', content)
