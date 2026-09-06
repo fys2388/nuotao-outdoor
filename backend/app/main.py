@@ -118,7 +118,7 @@ app.mount(
 
 # Ops Dashboard 运营监控中心（直接返回 HTML 内容，不依赖静态文件目录）
 _ops_dashboard_html = None
-_ops_dashboard_file = Path(__file__).resolve().parents[2] / "frontend" / "ops-dashboard" / "index.html"
+_ops_dashboard_file = Path(__file__).resolve().parent.parent / "frontend" / "ops-dashboard" / "index.html"
 
 @app.get("/api/v1/ops-dashboard/", include_in_schema=False)
 async def ops_dashboard() -> Response:
