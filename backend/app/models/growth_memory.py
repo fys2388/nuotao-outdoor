@@ -14,11 +14,9 @@
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func, Index
-from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import AI_JSON, BIGINT_PK, Base, TimestampMixin, WorkspaceMixin
 
@@ -70,8 +68,9 @@ class GrowthMemory(Base, TimestampMixin, WorkspaceMixin):
     )
 
     # --- 元数据 ---
+    # 标签存 JSON（PG 上为 JSONB，SQLite 测试为 JSON），GIN 索引在 PG 上仍生效
     tags: Mapped[list[str]] = mapped_column(
-        ARRAY(String(64)), nullable=False, default=list, comment="标签（用于检索过滤）"
+        AI_JSON, nullable=False, default=list, comment="标签（用于检索过滤）"
     )
     source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="agent_suggestion", comment="记忆来源"

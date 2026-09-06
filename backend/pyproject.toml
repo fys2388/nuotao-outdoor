@@ -48,6 +48,11 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+# 忽略 aiosqlite/SQLAlchemy 在测试结束时连接未关闭的环境警告
+# （coroutine 'Connection._cancel' was never awaited），避免退出码被污染
+filterwarnings = [
+    "ignore:coroutine 'Connection\\._cancel' was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 line-length = 100
