@@ -59,6 +59,22 @@ jobs:
             fi
             echo "使用配置文件: $NGINX_CONF"
             
+            echo "=== 调试: 输出 Nginx 配置文件结构 ==="
+            echo "--- 所有 server 行 ---"
+            grep -n "server" "$NGINX_CONF" | head -20
+            echo "--- 所有 location 行 ---"
+            grep -n "location" "$NGINX_CONF" | head -30
+            echo "--- 所有 listen 行 ---"
+            grep -n "listen" "$NGINX_CONF" | head -10
+            echo "--- 所有 root 行 ---"
+            grep -n "root" "$NGINX_CONF" | head -10
+            echo "--- 所有 proxy_pass 行 ---"
+            grep -n "proxy_pass" "$NGINX_CONF" | head -10
+            echo "--- 所有 try_files 行 ---"
+            grep -n "try_files" "$NGINX_CONF" | head -10
+            echo "--- 文件总行数 ---"
+            wc -l "$NGINX_CONF"
+            
             echo "=== 3. 备份配置 ==="
             cp "$NGINX_CONF" "${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
             
