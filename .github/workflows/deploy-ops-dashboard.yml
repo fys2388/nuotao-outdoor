@@ -80,17 +80,22 @@ jobs:
             # 新配置（放在 server 块最开头，优先匹配）
             new_config = "\n    # ============================================\n    # Ops Dashboard 静态文件（优先匹配）\n    # ============================================\n    location ^~ /ops-dashboard/ {\n        alias /opt/nuotao/ops-dashboard/;\n        index index.html;\n        try_files $uri $uri/ /ops-dashboard/index.html;\n    }\n"
             
-            # 在第一个 server { 后插入
-            server_match = re.search(r'server\s*\{', content)
-            if server_match:
-                insert_pos = server_match.end()
-                newline_pos = content.find('\n', insert_pos)
-                if newline_pos != -1:
-                    insert_pos = newline_pos + 1
-                content = content[:insert_pos] + new_config + content[insert_pos:]
-                print("✅ 已在 server 块开头插入 ops-dashboard 配置")
+            # 在包含 server_name admin.nuotaooutdoor.com 的 server 块中插入
+            server_name_pos = content.find('server_name admin.nuotaooutdoor.com')
+            if server_name_pos != -1:
+                # 向上找到这个 server 块的开头
+                server_start = content.rfind('server {', 0, server_name_pos)
+                if server_start == -1:
+                    server_start = content.rfind('server{', 0, server_name_pos)
+                if server_start != -1:
+                    # 在 server { 后面的第一个换行后插入
+                    insert_pos = content.find('\n', server_start) + 1
+                    content = content[:insert_pos] + new_config + content[insert_pos:]
+                    print("✅ 已在 admin.nuotaooutdoor.com server 块插入配置")
+                else:
+                    print("❌ 未找到 server 块开头")
             else:
-                print("❌ 未找到 server {")
+                print("❌ 未找到 server_name admin.nuotaooutdoor.com")
             
             with open(conf_path, 'w') as f:
                 f.write(content)
