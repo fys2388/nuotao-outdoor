@@ -376,8 +376,8 @@
             const total = Array.isArray(suggList) ? suggList.length : 0;
             const successRate = total > 0 ? ((completed / total) * 100).toFixed(0) : '--';
 
-            // 产品总数（从响应头或列表推断）
-            const productCount = prod.total || (Array.isArray(prod.items) ? prod.items.length : '--');
+            // 产品总数（支持数组或对象格式）
+            const productCount = Array.isArray(prod) ? prod.length : (prod.total || (Array.isArray(prod.items) ? prod.items.length : 0));
 
             const woW = trends.revenue_week_over_week || {};
             const woWDir = woW.direction === 'up' ? 'up' : 'down';

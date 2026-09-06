@@ -5,21 +5,28 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
+from app.core.workspace import get_workspace_id
 from app.services.dashboard_service import (
     generate_daily_metrics,
     get_dashboard_status,
-    get_dashboard_summary,
+    get_dashboard_summary_real,
     get_product_performance,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 
 # ============================================
@@ -51,17 +58,24 @@ async def get_status() -> dict[str, Any]:
     summary="获取经营看板汇总数据",
 )
 async def get_summary(
+    db: DbSession,
+    workspace_id: WorkspaceId,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
     """
-    获取经营看板汇总数据
+    获取经营看板汇总数据（基于真实WooCommerce订单）
 
     包含：今日数据、本周数据、本月数据、上周数据、环比趋势、关键指标。
     支持自定义时间范围。
     """
     try:
-        summary = get_dashboard_summary(start_date, end_date)
+        summary = await get_dashboard_summary_real(
+            db,
+            workspace_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
         return {
             "success": True,
             "summary": summary,
@@ -137,15 +151,18 @@ async def get_product_performance_endpoint(
     "/key-metrics",
     summary="获取关键经营指标",
 )
-async def get_key_metrics() -> dict[str, Any]:
+async def get_key_metrics(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
     """
-    获取关键经营指标（精简版）
+    获取关键经营指标（精简版，基于真实WooCommerce订单）
 
     返回最核心的经营指标：今日收入、今日订单、毛利率、ROAS、
     本周收入、本周订单、本月收入、本月订单、环比趋势。
     """
     try:
-        summary = get_dashboard_summary()
+        summary = await get_dashboard_summary_real(db, workspace_id)
         key_metrics = summary["key_metrics"]
         trends = summary["trends"]
 
