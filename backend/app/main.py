@@ -116,13 +116,20 @@ app.mount(
     name="runtime-console",
 )
 
-# Ops Dashboard 运营监控中心（静态页面）
-_ops_dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "ops-dashboard"
-app.mount(
-    "/api/v1/ops-dashboard",
-    StaticFiles(directory=str(_ops_dashboard_dir), html=True, check_dir=False),
-    name="ops-dashboard",
-)
+# Ops Dashboard 运营监控中心（直接返回 HTML 内容，不依赖静态文件目录）
+_ops_dashboard_html = None
+_ops_dashboard_file = Path(__file__).resolve().parents[2] / "frontend" / "ops-dashboard" / "index.html"
+
+@app.get("/api/v1/ops-dashboard/", include_in_schema=False)
+async def ops_dashboard() -> Response:
+    """返回运营监控中心 HTML 页面。"""
+    global _ops_dashboard_html
+    if _ops_dashboard_html is None:
+        try:
+            _ops_dashboard_html = _ops_dashboard_file.read_text(encoding="utf-8")
+        except Exception:
+            _ops_dashboard_html = "<html><body><h1>Ops Dashboard not found</h1></body></html>"
+    return Response(content=_ops_dashboard_html, media_type="text/html; charset=utf-8")
 
 
 @app.exception_handler(ActorResolutionError)
