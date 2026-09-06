@@ -22,7 +22,6 @@ import {
   SyncOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
-import axios from 'axios'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -97,16 +96,17 @@ export default function AgentSuggestionsPage() {
   const fetchSuggestions = async (status?: string) => {
     setLoading(true)
     try {
-      const params: Record<string, any> = { limit: 50 }
+      const params = new URLSearchParams({ limit: '50' })
       if (status && status !== 'all') {
-        params.status = status
+        params.set('status', status)
       }
-      const response = await axios.get(API_BASE, { params })
-      setSuggestions(response.data || [])
+      const response = await fetch(`${API_BASE}?${params.toString()}`)
+      const data = await response.json()
+      setSuggestions(data || [])
 
       // 统计
-      const allResponse = await axios.get(API_BASE, { params: { limit: 200 } })
-      const all = allResponse.data || []
+      const allResponse = await fetch(`${API_BASE}?limit=200`)
+      const all = await allResponse.json()
       setStats({
         pending: all.filter((s: AgentSuggestion) => s.status === 'pending_approval').length,
         approved: all.filter((s: AgentSuggestion) => s.status === 'approved').length,
@@ -127,7 +127,7 @@ export default function AgentSuggestionsPage() {
 
   const handleApprove = async (id: string) => {
     try {
-      await axios.post(`${API_BASE}/${id}/approve`)
+      await fetch(`${API_BASE}/${id}/approve`, { method: 'POST' })
       message.success('建议已批准')
       fetchSuggestions(statusFilter)
     } catch (error) {
@@ -138,7 +138,7 @@ export default function AgentSuggestionsPage() {
 
   const handleReject = async (id: string) => {
     try {
-      await axios.post(`${API_BASE}/${id}/reject`)
+      await fetch(`${API_BASE}/${id}/reject`, { method: 'POST' })
       message.success('建议已拒绝')
       fetchSuggestions(statusFilter)
     } catch (error) {
@@ -149,9 +149,10 @@ export default function AgentSuggestionsPage() {
 
   const handleExecute = async (id: string) => {
     try {
-      const response = await axios.post(`${API_BASE}/${id}/execute`)
+      const response = await fetch(`${API_BASE}/${id}/execute`, { method: 'POST' })
+      const data = await response.json()
       message.success('执行请求已发送')
-      console.log('执行结果:', response.data)
+      console.log('执行结果:', data)
       fetchSuggestions(statusFilter)
     } catch (error) {
       message.error('执行失败')
