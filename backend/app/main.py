@@ -116,6 +116,14 @@ app.mount(
     name="runtime-console",
 )
 
+# Ops Dashboard 运营监控中心（静态页面）
+_ops_dashboard_dir = Path(__file__).resolve().parents[2] / "frontend" / "ops-dashboard"
+app.mount(
+    "/ops-dashboard",
+    StaticFiles(directory=str(_ops_dashboard_dir), html=True, check_dir=False),
+    name="ops-dashboard",
+)
+
 
 @app.exception_handler(ActorResolutionError)
 async def _actor_resolution_error_handler(request: Request, exc: ActorResolutionError) -> Response:
