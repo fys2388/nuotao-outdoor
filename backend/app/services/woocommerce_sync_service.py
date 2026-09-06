@@ -592,3 +592,211 @@ async def sync_products_to_db(
         "errors": errors,
         "total_processed": imported + updated + failed,
     }
+
+
+
+# --------------------------------------------------------------------------- #
+# 订单同步到数据库
+# --------------------------------------------------------------------------- #
+
+async def sync_orders_to_db(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    days: int = 30,
+    max_orders: int = 500,
+    status_filter: str = "any",
+) -> dict[str, Any]:
+    """从 WooCommerce 同步订单到本地数据库（upsert by workspace + external_order_id）。
+
+    Args:
+        session: 数据库会话
+        workspace_id: 工作区 ID
+        days: 同步最近多少天的订单
+        max_orders: 最大同步订单数
+        status_filter: 订单状态过滤（any/pending/processing/on-hold/completed/cancelled/refunded/failed）
+
+    Returns:
+        同步结果统计
+    """
+    from app.models.order import Order, OrderItem
+    from sqlalchemy import select
+    from decimal import Decimal
+
+    now = datetime.utcnow()
+    date_after = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    imported = 0
+    updated = 0
+    failed = 0
+    errors: list[str] = []
+    page = 1
+    total_fetched = 0
+
+    while total_fetched < max_orders:
+        logger.info("同步 WooCommerce 订单: 第 %d 页", page)
+        result = fetch_woocommerce_orders(
+            per_page=100,
+            page=page,
+            status=status_filter,
+            date_after=date_after,
+        )
+
+        if not result.get("success"):
+            error_msg = result.get("error", "未知错误")
+            logger.error("获取 WooCommerce 订单失败: %s", error_msg)
+            errors.append(f"第 {page} 页: {error_msg}")
+            break
+
+        orders = result.get("orders", [])
+        if not orders:
+            logger.info("第 %d 页无订单，同步完成", page)
+            break
+
+        for wc_order in orders:
+            try:
+                external_order_id = str(wc_order.get("id", ""))
+                if not external_order_id:
+                    failed += 1
+                    errors.append("订单缺少 ID")
+                    continue
+
+                # 按 workspace + external_order_id 查找现有订单
+                existing = (
+                    await session.execute(
+                        select(Order).where(
+                            Order.workspace_id == workspace_id,
+                            Order.external_order_id == external_order_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                # 提取订单数据
+                wc_status = wc_order.get("status", "received")
+                status_map = {
+                    "pending": "pending",
+                    "processing": "processing",
+                    "on-hold": "on_hold",
+                    "completed": "completed",
+                    "cancelled": "cancelled",
+                    "refunded": "refunded",
+                    "failed": "failed",
+                }
+                status = status_map.get(wc_status, wc_status)
+
+                billing = wc_order.get("billing", {})
+                shipping = wc_order.get("shipping", {})
+                country = shipping.get("country") or billing.get("country")
+
+                # 金额字段
+                def to_decimal(value, default=0):
+                    try:
+                        return Decimal(str(value)) if value is not None else Decimal(str(default))
+                    except (ValueError, TypeError):
+                        return Decimal(str(default))
+
+                subtotal = to_decimal(wc_order.get("subtotal"))
+                shipping_total = to_decimal(wc_order.get("shipping_total"))
+                discount_total = to_decimal(wc_order.get("discount_total"))
+                tax_total = to_decimal(wc_order.get("total_tax"))
+                total = to_decimal(wc_order.get("total"))
+
+                # 客户引用 ID（非 PII，使用哈希）
+                customer_email = billing.get("email", "")
+                customer_reference_id = None
+                if customer_email:
+                    import hashlib
+                    customer_reference_id = hashlib.sha256(customer_email.encode()).hexdigest()[:32]
+
+                # 元数据
+                meta = {
+                    "woocommerce_id": wc_order.get("id"),
+                    "order_number": wc_order.get("number"),
+                    "payment_method_title": wc_order.get("payment_method_title"),
+                    "customer_id": wc_order.get("customer_id"),
+                    "date_created": wc_order.get("date_created"),
+                    "date_modified": wc_order.get("date_modified"),
+                }
+                meta = {k: v for k, v in meta.items() if v is not None}
+
+                if existing is None:
+                    # 新建订单
+                    order = Order(
+                        workspace_id=workspace_id,
+                        external_order_id=external_order_id,
+                        status=status,
+                        payment_status="paid" if status == "completed" else status,
+                        fulfillment_status="fulfilled" if status == "completed" else "pending",
+                        currency=wc_order.get("currency", "USD"),
+                        country=country,
+                        payment_method=wc_order.get("payment_method"),
+                        source="woocommerce",
+                        customer_reference_id=customer_reference_id,
+                        subtotal=subtotal,
+                        shipping_total=shipping_total,
+                        discount_total=discount_total,
+                        tax_total=tax_total,
+                        total=total,
+                        profit_snapshot=meta,
+                    )
+                    session.add(order)
+                    await session.flush()
+
+                    # 创建订单项
+                    for item in wc_order.get("line_items", []):
+                        order_item = OrderItem(
+                            order_id=order.id,
+                            product_id=None,  # 后续关联产品
+                            sku=item.get("sku", ""),
+                            name=item.get("name", ""),
+                            quantity=int(item.get("quantity", 0)),
+                            unit_price=to_decimal(item.get("price")),
+                            total=to_decimal(item.get("total")),
+                            meta={"product_id": item.get("product_id"), "variation_id": item.get("variation_id")},
+                        )
+                        session.add(order_item)
+
+                    imported += 1
+                else:
+                    # 更新订单
+                    existing.status = status
+                    existing.payment_status = "paid" if status == "completed" else status
+                    existing.fulfillment_status = "fulfilled" if status == "completed" else "pending"
+                    existing.country = country
+                    existing.subtotal = subtotal
+                    existing.shipping_total = shipping_total
+                    existing.discount_total = discount_total
+                    existing.tax_total = tax_total
+                    existing.total = total
+                    existing.profit_snapshot = meta
+                    updated += 1
+
+            except Exception as e:
+                failed += 1
+                error_msg = f"订单 ID {wc_order.get('id')}: {str(e)}"
+                logger.error("同步订单失败: %s", error_msg)
+                errors.append(error_msg)
+
+        # 每批提交一次
+        await session.commit()
+
+        total_fetched += len(orders)
+        pagination = result.get("pagination", {})
+        total_pages = pagination.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+    logger.info(
+        "WooCommerce 订单同步完成: 新增 %d, 更新 %d, 失败 %d",
+        imported, updated, failed,
+    )
+
+    return {
+        "success": failed == 0,
+        "imported": imported,
+        "updated": updated,
+        "failed": failed,
+        "errors": errors[:10],  # 只返回前10个错误
+        "total_processed": imported + updated + failed,
+    }
