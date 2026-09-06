@@ -24,10 +24,6 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# 飞书消息推送时间限制（避免打扰用户休息）
-PUSH_START_HOUR = int(os.getenv("FEISHU_PUSH_START_HOUR", "6"))   # 早上6点开始推送
-PUSH_END_HOUR = int(os.getenv("FEISHU_PUSH_END_HOUR", "23"))       # 晚上11点停止推送
-
 FEISHU_WEBHOOK_URL = os.getenv(
     "FEISHU_WEBHOOK_URL",
     "https://open.feishu.cn/open-apis/bot/v2/hook/1035e5f2-8984-44d1-83f4-9fb60f274371",
@@ -36,6 +32,10 @@ FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
 FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")
 FEISHU_CALLBACK_BASE_URL = os.getenv("FEISHU_CALLBACK_BASE_URL", "")
+
+# 飞书消息推送时间限制（避免打扰用户休息）
+PUSH_START_HOUR = int(os.getenv("FEISHU_PUSH_START_HOUR", "6"))   # 早上6点开始推送
+PUSH_END_HOUR = int(os.getenv("FEISHU_PUSH_END_HOUR", "23"))       # 晚上11点停止推送
 
 # 风险等级对应的卡片颜色
 RISK_COLORS = {
@@ -77,51 +77,46 @@ def _get_tenant_access_token() -> str | None:
         data = resp.json()
         if data.get("code") == 0:
             return data.get("tenant_access_token")
-        logger.warning("获取飞书 token 失败: %s", data.get("msg"))
+        logger.warning("获取 tenant_access_token 失败: %s", data)
+        return None
     except Exception as e:
-        logger.warning("获取飞书 token 异常: %s", e)
-    return None
+        logger.error("获取 tenant_access_token 异常: %s", e)
+        return None
 
 
 def _send_card_via_app_api(card: dict[str, Any], chat_id: str | None = None) -> dict[str, Any]:
-    """通过企业自建应用 API 发送交互式卡片（支持按钮回调）。
-
-    必须通过自建应用 API 发送，卡片按钮的回调才会走自建应用的事件订阅地址。
-    通过群机器人 Webhook 发送的卡片不支持卡片交互回调。
-    """
-    target_chat_id = chat_id or FEISHU_CHAT_ID
-    if not target_chat_id:
-        return {"success": False, "error": "FEISHU_CHAT_ID 未配置"}
-
+    """通过飞书自建应用 API 发送交互式卡片（支持按钮回调）。"""
     token = _get_tenant_access_token()
     if not token:
-        return {"success": False, "error": "获取 tenant_access_token 失败（检查 FEISHU_APP_ID/SECRET）"}
+        return {"success": False, "error": "无法获取 tenant_access_token"}
+
+    target_chat = chat_id or FEISHU_CHAT_ID
+    if not target_chat:
+        return {"success": False, "error": "FEISHU_CHAT_ID 未配置"}
 
     try:
-        # 飞书消息发送 API：content 字段需要是 JSON 字符串
-        content_str = json.dumps(card.get("card", {}), ensure_ascii=False)
         resp = requests.post(
-            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
             json={
-                "receive_id": target_chat_id,
+                "receive_id": target_chat,
                 "msg_type": "interactive",
-                "content": content_str,
+                "content": json.dumps(card, ensure_ascii=False),
             },
             timeout=15,
         )
         data = resp.json()
         if data.get("code") == 0:
-            message_id = data.get("data", {}).get("message_id")
-            logger.info("自建应用 API 卡片发送成功: message_id=%s", message_id)
-            return {"success": True, "message_id": message_id}
-        logger.warning("自建应用 API 卡片发送失败: code=%s msg=%s", data.get("code"), data.get("msg"))
-        return {"success": False, "error": data.get("msg", str(data)), "code": data.get("code")}
+            message_id = data.get("data", {}).get("message_id", "")
+            logger.info("自建应用 API 发送卡片成功: message_id=%s", message_id)
+            return {"success": True, "message_id": message_id, "channel": "app_api"}
+        logger.warning("自建应用 API 发送卡片失败: %s", data)
+        return {"success": False, "error": data.get("msg", str(data))}
     except Exception as e:
-        logger.error("自建应用 API 卡片发送异常: %s", e)
+        logger.error("自建应用 API 发送卡片异常: %s", e)
         return {"success": False, "error": str(e)}
 
 
@@ -147,7 +142,8 @@ def send_approval_card(
         suggestion_type: 建议类型
         risk_level: 风险等级（low/medium/high）
         execution_params: 执行参数（展示在卡片中）
-        webhook_url: 飞书 webhook URL（可选）
+        webhook_url: 飞书 webhook URL（可选，降级用）
+        chat_id: 飞书群 chat_id（可选，自建应用发送用）
 
     Returns:
         发送结果
@@ -170,108 +166,82 @@ def send_approval_card(
         lines = []
         for k, v in list(execution_params.items())[:5]:
             val_str = str(v)[:50]
-            lines.append(f"• **{k}**: {val_str}")
-        if len(execution_params) > 5:
-            lines.append(f"• ... 共 {len(execution_params)} 项参数")
-        params_summary = "\n".join(lines)
+            lines.append(f"**{k}**: {val_str}")
+        params_summary = "\n" + "\n".join(lines)
 
     card = {
-        "msg_type": "interactive",
-        "card": {
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": f"🤖 AI 建议审批 | {type_name}",
-                },
-                "template": color,
-            },
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**标题**: {title}\n**来源 Agent**: {agent_name}\n**风险等级**: {risk_level.upper()}\n**建议 ID**: {suggestion_id}",
-                    },
-                },
-                {"tag": "hr"},
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**建议内容**:\n{description[:500]}",
-                    },
-                },
-            ],
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"🤖 AI 建议审批 | {type_name}"},
+            "template": color,
         },
-    }
-
-    # 添加执行参数
-    if params_summary:
-        card["card"]["elements"].extend([
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**标题**: {title[:60]}\n"
+                        f"**来源 Agent**: {agent_name}\n"
+                        f"**风险等级**: {risk_level.upper()}\n"
+                        f"**建议 ID**: {suggestion_id}"
+                    ),
+                },
+            },
             {"tag": "hr"},
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": f"**执行参数**:\n{params_summary}",
+                    "content": f"**建议内容**:\n{description[:300]}{params_summary}",
                 },
             },
-        ])
-
-    # 添加按钮（高风险需要额外确认）
-    actions = [
-        {
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": "✅ 批准并执行"},
-            "type": "primary",
-            "value": {"action": "approve", "suggestion_id": suggestion_id},
-        },
-        {
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": "❌ 拒绝"},
-            "type": "danger",
-            "value": {"action": "reject", "suggestion_id": suggestion_id},
-        },
-    ]
-    if risk_level == "high":
-        actions.insert(1, {
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": "📋 查看详情"},
-            "type": "default",
-            "value": {"action": "view", "suggestion_id": suggestion_id},
-        })
-
-    card["card"]["elements"].append({"tag": "action", "actions": actions})
-
-    # 底部提示
-    callback_hint = FEISHU_CALLBACK_BASE_URL or "（回调地址未配置）"
-    card["card"]["elements"].append({
-        "tag": "note",
-        "elements": [
+            {"tag": "hr"},
             {
-                "tag": "plain_text",
-                "content": f"点击按钮后自动回调处理 | 回调: {callback_hint}",
-            }
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "✅ 批准并执行"},
+                        "type": "primary",
+                        "value": {"action": "approve", "suggestion_id": suggestion_id},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "❌ 拒绝"},
+                        "type": "danger",
+                        "value": {"action": "reject", "suggestion_id": suggestion_id},
+                    },
+                ],
+            },
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": f"点击按钮后自动回调处理 | 回调: {FEISHU_CALLBACK_BASE_URL or '未配置'}",
+                    }
+                ],
+            },
         ],
-    })
+    }
 
-    # 优先通过自建应用 API 发送（支持卡片按钮回调）
-    # 只有通过自建应用 API 发送的卡片，按钮点击才会触发 card.action.trigger 回调
+    # 优先通过自建应用 API 发送（支持按钮回调），失败则降级到 Webhook
     if FEISHU_APP_ID and FEISHU_APP_SECRET and FEISHU_CHAT_ID:
         app_result = _send_card_via_app_api(card, chat_id=chat_id)
         if app_result.get("success"):
             return app_result
         logger.warning("自建应用 API 发送失败，降级到 Webhook: %s", app_result.get("error"))
 
-    # 降级：通过群机器人 Webhook 发送（注意：Webhook 卡片不支持按钮回调）
-    url = webhook_url or FEISHU_WEBHOOK_URL
+    # 降级：通过 Webhook 发送（注意：Webhook 发送的卡片不支持按钮回调）
     try:
-        resp = requests.post(url, json=card, timeout=10)
-        result = resp.json()
-        if result.get("code") == 0 or result.get("StatusCode") == 0:
-            logger.info("飞书审批卡片发送成功(Webhook): suggestion_id=%s", suggestion_id)
-            return {"success": True, "message_id": result.get("data", {}).get("message_id"), "channel": "webhook"}
-        logger.warning("飞书审批卡片发送失败(Webhook): %s", result)
+        payload = {"msg_type": "interactive", "card": card}
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("code") == 0 or data.get("StatusCode") == 0:
+                logger.info("Webhook 发送审批卡片成功（注意：Webhook卡片不支持按钮回调）: suggestion_id=%s", suggestion_id)
+                return {"success": True, "message_id": None, "channel": "webhook"}
         return {"success": False, "error": result.get("msg", str(result))}
     except Exception as e:
         logger.error("飞书审批卡片发送异常(Webhook): %s", e)
@@ -285,8 +255,12 @@ def send_approval_result_notification(
     action: str,
     operator: str = "飞书用户",
     webhook_url: str | None = None,
+    chat_id: str | None = None,
 ) -> dict[str, Any]:
-    """发送审批结果通知（批准/拒绝后更新原卡片或发送新消息）。"""
+    """发送审批结果通知（批准/拒绝后发送新消息通知）。
+
+    优先通过自建应用 API 发送（统一用 Nuotao AI OS），失败则降级到 Webhook。
+    """
     # 推送时间限制（非推送时段不发送结果通知）
     if not _is_within_push_hours():
         logger.info(
@@ -295,32 +269,44 @@ def send_approval_result_notification(
         )
         return {"success": False, "skipped": True, "reason": "outside_push_hours"}
 
-    url = webhook_url or FEISHU_WEBHOOK_URL
     action_text = "✅ 已批准并进入执行队列" if action == "approve" else "❌ 已拒绝"
     color = "green" if action == "approve" else "red"
 
-    payload = {
-        "msg_type": "interactive",
-        "card": {
-            "header": {
-                "title": {"tag": "plain_text", "content": f"审批结果 | {title[:30]}"},
-                "template": color,
-            },
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**建议 ID**: {suggestion_id}\n**操作**: {action_text}\n**操作人**: {operator}\n**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-                    },
-                }
-            ],
+    card = {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"审批结果 | {title[:30]}"},
+            "template": color,
         },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**建议 ID**: {suggestion_id}\n"
+                        f"**操作**: {action_text}\n"
+                        f"**操作人**: {operator}\n"
+                        f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    ),
+                },
+            }
+        ],
     }
 
+    # 优先通过自建应用 API 发送（统一用 Nuotao AI OS）
+    if FEISHU_APP_ID and FEISHU_APP_SECRET and FEISHU_CHAT_ID:
+        app_result = _send_card_via_app_api(card, chat_id=chat_id)
+        if app_result.get("success"):
+            return app_result
+        logger.warning("自建应用 API 发送结果通知失败，降级到 Webhook: %s", app_result.get("error"))
+
+    # 降级：通过 Webhook 发送
+    url = webhook_url or FEISHU_WEBHOOK_URL
     try:
+        payload = {"msg_type": "interactive", "card": card}
         resp = requests.post(url, json=payload, timeout=10)
-        return {"success": resp.status_code == 200}
+        return {"success": resp.status_code == 200, "channel": "webhook"}
     except Exception as e:
         logger.error("发送审批结果通知失败: %s", e)
         return {"success": False, "error": str(e)}
