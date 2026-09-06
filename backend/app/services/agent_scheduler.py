@@ -1,4 +1,4 @@
-"""Agent 调度器 — 替代独立 Cron shell 脚本，通过 agent_runtime 统一调度。
+﻿"""Agent 调度器 — 替代独立 Cron shell 脚本，通过 agent_runtime 统一调度。
 
 设计：
 - 轻量级定时调度器，使用 asyncio 事件循环
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Coroutine
