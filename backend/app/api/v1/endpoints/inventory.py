@@ -6,7 +6,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+from app.core.workspace import get_workspace_id
+from typing import Annotated
+from uuid import UUID
 from pydantic import BaseModel
 
 from app.services.inventory_service import (
@@ -25,6 +30,9 @@ from app.services.inventory_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
@@ -237,3 +245,34 @@ async def get_inventory_sync_history(limit: int = 20) -> dict[str, Any]:
     except Exception as e:
         logger.error("Get sync history failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.post(
+    "/alerts/check",
+    summary="检查库存预警并自动生成补货建议",
+)
+async def check_inventory_alerts_endpoint(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    warehouse_id: str = Query(default="default", description="仓库 ID"),
+    threshold: int = Query(default=10, ge=0, description="低库存阈值"),
+    auto_create: bool = Query(default=True, description="是否自动创建补货建议"),
+) -> dict[str, Any]:
+    """检查库存预警，当库存低于阈值时自动生成补货建议到 AI 建议队列。"""
+    from app.services.inventory_service import check_inventory_alerts
+
+    try:
+        result = await check_inventory_alerts(
+            db,
+            workspace_id=workspace_id,
+            warehouse_id=warehouse_id,
+            low_stock_threshold=threshold,
+            auto_create_suggestion=auto_create,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"库存预警检查失败: {str(e)}",
+        ) from e

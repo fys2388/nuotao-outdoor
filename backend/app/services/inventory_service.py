@@ -727,3 +727,131 @@ def sync_inventory_from_1688(warehouse_id: str = "default") -> dict[str, Any]:
             "error": str(e),
             "data": {"sync_id": sync_id},
         }
+
+
+
+# --------------------------------------------------------------------------- #
+# 库存预警：低于阈值自动生成补货建议
+# --------------------------------------------------------------------------- #
+
+async def check_inventory_alerts(
+    session,
+    *,
+    workspace_id,
+    warehouse_id: str = "default",
+    low_stock_threshold: int = 10,
+    auto_create_suggestion: bool = True,
+) -> dict:
+    """检查库存预警，当库存低于阈值时自动生成补货建议。
+
+    Args:
+        session: 数据库会话
+        workspace_id: 工作区 ID
+        warehouse_id: 仓库 ID
+        low_stock_threshold: 低库存阈值
+        auto_create_suggestion: 是否自动创建补货建议
+
+    Returns:
+        预警结果统计
+    """
+    from app.models.product import Product
+    from app.models.agent_suggestion import AgentSuggestion
+    from sqlalchemy import select
+    from uuid import uuid4
+    import json
+
+    warehouse = _load_warehouse(warehouse_id)
+    if not warehouse:
+        return {
+            "success": False,
+            "error": f"仓库 {warehouse_id} 不存在",
+            "alerts": [],
+            "suggestions_created": 0,
+        }
+
+    alerts = []
+    suggestions_created = 0
+
+    for sku, item in warehouse["inventory"].items():
+        available = item.get("available", 0)
+        if available <= low_stock_threshold:
+            # 查找对应的产品
+            product = (
+                await session.execute(
+                    select(Product).where(
+                        Product.workspace_id == workspace_id,
+                        Product.sku == sku,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            product_name = product.name if product else sku
+            product_id = str(product.id) if product else None
+
+            alert = {
+                "sku": sku,
+                "product_name": product_name,
+                "product_id": product_id,
+                "available": available,
+                "quantity": item.get("quantity", 0),
+                "reserved": item.get("reserved", 0),
+                "urgency": "critical" if available == 0 else "warning" if available <= 5 else "advisory",
+            }
+            alerts.append(alert)
+
+            # 自动创建补货建议
+            if auto_create_suggestion and product_id:
+                # 检查是否已存在相同的待审批建议
+                existing = (
+                    await session.execute(
+                        select(AgentSuggestion).where(
+                            AgentSuggestion.workspace_id == workspace_id,
+                            AgentSuggestion.suggestion_type == "inventory_restock",
+                            AgentSuggestion.status == "pending_approval",
+                            AgentSuggestion.execution_params["product_id"].astext == product_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not existing:
+                    suggestion = AgentSuggestion(
+                        id=uuid4(),
+                        workspace_id=workspace_id,
+                        agent_id="inventory-manager",
+                        suggestion_type="inventory_restock",
+                        title=f"库存预警：{product_name} 库存不足",
+                        description=f"产品 {product_name} (SKU: {sku}) 当前可用库存为 {available}，低于阈值 {low_stock_threshold}。建议立即补货。",
+                        priority="high" if available <= 5 else "medium",
+                        status="pending_approval",
+                        risk_level="medium",
+                        execution_action="create_purchase_order",
+                        execution_params={
+                            "product_id": product_id,
+                            "sku": sku,
+                            "product_name": product_name,
+                            "current_stock": available,
+                            "recommended_quantity": max(100, low_stock_threshold * 10),
+                            "warehouse_id": warehouse_id,
+                        },
+                        expected_impact=f"避免 {product_name} 缺货，预计补货 {max(100, low_stock_threshold * 10)} 件",
+                    )
+                    session.add(suggestion)
+                    suggestions_created += 1
+
+    await session.commit()
+
+    # 按紧急程度排序
+    urgency_order = {"critical": 0, "warning": 1, "advisory": 2}
+    alerts.sort(key=lambda x: urgency_order.get(x["urgency"], 3))
+
+    return {
+        "success": True,
+        "warehouse_id": warehouse_id,
+        "threshold": low_stock_threshold,
+        "total_alerts": len(alerts),
+        "critical_count": sum(1 for a in alerts if a["urgency"] == "critical"),
+        "warning_count": sum(1 for a in alerts if a["urgency"] == "warning"),
+        "advisory_count": sum(1 for a in alerts if a["urgency"] == "advisory"),
+        "suggestions_created": suggestions_created,
+        "alerts": alerts[:20],  # 只返回前20个预警
+    }
