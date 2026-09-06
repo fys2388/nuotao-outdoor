@@ -2,6 +2,11 @@ name: Check System Status
 
 on:
   workflow_dispatch:
+    inputs:
+      reason:
+        description: '触发原因'
+        required: false
+        default: 'manual check'
 
 env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
