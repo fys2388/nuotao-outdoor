@@ -227,12 +227,20 @@ async def trigger_product_test(db: AsyncSession = Depends(get_db)):
             risk_level="low",
         )
         await db.commit()
+        # 调试：重新查询建议，看看 feishu_message_id 是否有值
+        from sqlalchemy import select
+        from app.models.agent_suggestion import AgentSuggestion
+        result = await db.execute(select(AgentSuggestion).where(AgentSuggestion.id == suggestion.id))
+        fresh_suggestion = result.scalar_one_or_none()
         return {
             "success": True,
             "message": "测试建议已创建，飞书审批卡片已推送",
             "suggestion_id": suggestion.id,
             "title": suggestion.title,
             "status": suggestion.status,
+            "debug_feishu_message_id": suggestion.feishu_message_id,
+            "debug_fresh_feishu_message_id": fresh_suggestion.feishu_message_id if fresh_suggestion else None,
+            "debug_execution_result": suggestion.execution_result,
         }
     except Exception as e:
         logger.exception("测试建议创建失败")
