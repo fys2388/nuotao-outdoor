@@ -23,6 +23,7 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
+          envs: FEISHU_APP_ID,FEISHU_APP_SECRET,FEISHU_CHAT_ID
           script: |
             set -e
             cd /opt/nuotao/backend
