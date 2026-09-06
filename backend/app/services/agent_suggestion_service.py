@@ -1,4 +1,4 @@
-"""Agent 建议服务 — 建议生命周期管理（创建/查询/审批/拒绝/执行/反馈）。
+﻿"""Agent 建议服务 — 建议生命周期管理（创建/查询/审批/拒绝/执行/反馈）。
 
 与 approval_service.py 的区别：
 - approval_service 是通用审批引擎（任意实体的审批流）
@@ -223,6 +223,7 @@ async def approve_suggestion(
     suggestion.approved_at = datetime.now(UTC)
     suggestion.approval_comment = comment
     await session.flush()
+    await session.commit()
 
     logger.info("建议 %s 已审批通过 by %s", suggestion_id, approved_by)
 
@@ -253,6 +254,7 @@ async def reject_suggestion(
     suggestion.approved_at = datetime.now(UTC)
     suggestion.approval_comment = comment or "已拒绝"
     await session.flush()
+    await session.commit()
 
     logger.info("建议 %s 已拒绝 by %s", suggestion_id, rejected_by)
     return suggestion
