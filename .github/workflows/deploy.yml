@@ -70,6 +70,8 @@ jobs:
             echo "=== 1. Pulling latest code ==="
             git fetch --prune origin ${{ github.ref_name }}
             git reset --hard origin/${{ github.ref_name }}
+            git clean -fd backend/alembic/versions/ 2>/dev/null || true
+            echo "[git] cleaned untracked migration files"
 
             echo "=== 2. Installing backend dependencies ==="
             cd /opt/nuotao/backend
