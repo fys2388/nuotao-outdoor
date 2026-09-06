@@ -9,19 +9,32 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import async_session_factory, get_db
 from app.services import agent_suggestion_service
+from app.services.execution_router import execute_suggestion
 from app.services.feishu_approval_service import send_approval_result_notification
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/feishu", tags=["飞书集成"])
+
+
+async def _execute_suggestion_async(suggestion_id: int) -> None:
+    """异步执行单条建议（批准后立即执行，不阻塞回调响应）。"""
+    try:
+        async with async_session_factory() as session:
+            result = await execute_suggestion(session, suggestion_id)
+            await session.commit()
+            logger.info("建议 %s 即时执行完成: %s", suggestion_id, result)
+    except Exception as e:
+        logger.exception("建议 %s 即时执行失败: %s", suggestion_id, e)
 
 
 @router.post("/card-callback")
@@ -95,7 +108,9 @@ async def feishu_card_callback(
                 action="approve",
                 operator=operator,
             )
-            logger.info("建议 %s 已通过飞书审批，进入执行队列", suggestion_id)
+            logger.info("建议 %s 已通过飞书审批，立即触发执行", suggestion_id)
+            # 批准后立即异步执行（不阻塞回调响应）
+            asyncio.create_task(_execute_suggestion_async(int(suggestion_id)))
         else:  # reject
             result = await agent_suggestion_service.reject_suggestion(
                 db, int(suggestion_id), rejected_by=operator, reason="飞书卡片拒绝"

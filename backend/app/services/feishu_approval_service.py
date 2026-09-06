@@ -17,11 +17,16 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# 飞书消息推送时间限制（避免打扰用户休息）
+PUSH_START_HOUR = int(os.getenv("FEISHU_PUSH_START_HOUR", "6"))   # 早上6点开始推送
+PUSH_END_HOUR = int(os.getenv("FEISHU_PUSH_END_HOUR", "23"))       # 晚上11点停止推送
 
 FEISHU_WEBHOOK_URL = os.getenv(
     "FEISHU_WEBHOOK_URL",
@@ -50,6 +55,13 @@ SUGGESTION_TYPE_NAMES = {
     "supply_chain": "供应链优化",
     "business_insight": "商业洞察",
 }
+
+
+def _is_within_push_hours() -> bool:
+    """检查当前时间是否在允许推送的时间段内（默认 6:00-23:00）。"""
+    now = datetime.now()
+    current_hour = now.hour
+    return PUSH_START_HOUR <= current_hour < PUSH_END_HOUR
 
 
 def _get_tenant_access_token() -> str | None:
@@ -140,6 +152,14 @@ def send_approval_card(
     Returns:
         发送结果
     """
+    # 推送时间限制（非推送时段不发送，避免打扰用户休息）
+    if not _is_within_push_hours():
+        logger.info(
+            "当前时间不在推送时段（%d:00-%d:00），跳过发送审批卡片: suggestion_id=%s",
+            PUSH_START_HOUR, PUSH_END_HOUR, suggestion_id,
+        )
+        return {"success": False, "skipped": True, "reason": "outside_push_hours"}
+
     url = webhook_url or FEISHU_WEBHOOK_URL
     type_name = SUGGESTION_TYPE_NAMES.get(suggestion_type, suggestion_type)
     color = RISK_COLORS.get(risk_level, "blue")
@@ -267,6 +287,14 @@ def send_approval_result_notification(
     webhook_url: str | None = None,
 ) -> dict[str, Any]:
     """发送审批结果通知（批准/拒绝后更新原卡片或发送新消息）。"""
+    # 推送时间限制（非推送时段不发送结果通知）
+    if not _is_within_push_hours():
+        logger.info(
+            "当前时间不在推送时段（%d:00-%d:00），跳过发送审批结果通知: suggestion_id=%s",
+            PUSH_START_HOUR, PUSH_END_HOUR, suggestion_id,
+        )
+        return {"success": False, "skipped": True, "reason": "outside_push_hours"}
+
     url = webhook_url or FEISHU_WEBHOOK_URL
     action_text = "✅ 已批准并进入执行队列" if action == "approve" else "❌ 已拒绝"
     color = "green" if action == "approve" else "red"
