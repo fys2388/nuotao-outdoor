@@ -30,6 +30,7 @@ from app.api.v1.endpoints import (
     emails,
     events,
     fulfillment,
+    feishu,
     health,
     i18n_tax,
     identity,
@@ -144,4 +145,5 @@ api_router.include_router(agent_operations.router)
 api_router.include_router(agent_platform.router)
 api_router.include_router(agent_analysis.router)
 api_router.include_router(agent_suggestions.router)
+api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)

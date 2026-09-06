@@ -80,6 +80,30 @@ async def create_suggestion(
         "Agent建议已创建: id=%s agent=%s type=%s risk=%s",
         suggestion.id, agent_id, suggestion_type, risk_level,
     )
+
+    # 异步推送飞书审批卡片（非阻塞，失败不影响建议创建）
+    try:
+        import asyncio
+        from app.services.feishu_approval_service import send_approval_card
+
+        def _push_feishu():
+            try:
+                send_approval_card(
+                    suggestion_id=suggestion.id,
+                    title=title,
+                    description=description,
+                    agent_name=agent_id,
+                    suggestion_type=suggestion_type,
+                    risk_level=risk_level,
+                    execution_params=execution_params,
+                )
+            except Exception as e:
+                logger.warning("飞书审批卡片推送失败（非阻塞）: %s", e)
+
+        asyncio.get_event_loop().run_in_executor(None, _push_feishu)
+    except Exception as e:
+        logger.warning("飞书推送初始化失败（非阻塞）: %s", e)
+
     return suggestion
 
 

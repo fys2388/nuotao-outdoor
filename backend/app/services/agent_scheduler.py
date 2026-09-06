@@ -30,6 +30,26 @@ from app.services import agent_suggestion_service, execution_router, feedback_lo
 
 logger = logging.getLogger(__name__)
 
+
+def _get_schedule_time(env_var: str, default_hour: int, default_minute: int = 0) -> tuple[int, int]:
+    """从环境变量读取调度时间，格式 HH:MM，失败则使用默认值。"""
+    val = os.getenv(env_var, "")
+    if val and ":" in val:
+        try:
+            h, m = val.split(":")
+            return int(h), int(m)
+        except (ValueError, TypeError):
+            pass
+    return default_hour, default_minute
+
+
+# 调度任务时间配置（可通过环境变量覆盖）
+SCHEDULE_PRODUCT_HOUR, SCHEDULE_PRODUCT_MINUTE = _get_schedule_time("SCHEDULE_PRODUCT_HOUR", 6, 0)
+SCHEDULE_MARKETING_HOUR, SCHEDULE_MARKETING_MINUTE = _get_schedule_time("SCHEDULE_MARKETING_HOUR", 7, 0)
+SCHEDULE_SUPPLY_CHAIN_HOUR, SCHEDULE_SUPPLY_CHAIN_MINUTE = _get_schedule_time("SCHEDULE_SUPPLY_CHAIN_HOUR", 8, 0)
+SCHEDULE_EXECUTION_HOUR, SCHEDULE_EXECUTION_MINUTE = _get_schedule_time("SCHEDULE_EXECUTION_HOUR", 9, 0)
+SCHEDULE_FEEDBACK_HOUR, SCHEDULE_FEEDBACK_MINUTE = _get_schedule_time("SCHEDULE_FEEDBACK_HOUR", 10, 0)
+
 # 调度任务注册表: name -> (cron_expr, func, description)
 SCHEDULED_TASKS: dict[str, dict[str, Any]] = {}
 
@@ -64,7 +84,7 @@ def register_scheduled_task(
 
 @register_scheduled_task(
     "daily_product_analyst",
-    hour=6, minute=0,
+    hour=SCHEDULE_PRODUCT_HOUR, minute=SCHEDULE_PRODUCT_MINUTE,
     description="产品分析师每日分析：选品评分、竞品监控、利润模型",
 )
 async def daily_product_analyst(session: AsyncSession) -> dict[str, Any]:
@@ -75,7 +95,7 @@ async def daily_product_analyst(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "daily_marketing_manager",
-    hour=7, minute=0,
+    hour=SCHEDULE_MARKETING_HOUR, minute=SCHEDULE_MARKETING_MINUTE,
     description="营销经理每日分析：活动ROAS、文案优化、SEO建议",
 )
 async def daily_marketing_manager(session: AsyncSession) -> dict[str, Any]:
@@ -86,7 +106,7 @@ async def daily_marketing_manager(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "daily_supply_chain_manager",
-    hour=8, minute=0,
+    hour=SCHEDULE_SUPPLY_CHAIN_HOUR, minute=SCHEDULE_SUPPLY_CHAIN_MINUTE,
     description="供应链经理每日分析：库存预警、补货建议、物流跟踪",
 )
 async def daily_supply_chain_manager(session: AsyncSession) -> dict[str, Any]:
@@ -97,7 +117,7 @@ async def daily_supply_chain_manager(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "execute_pending_suggestions",
-    hour=9, minute=0,
+    hour=SCHEDULE_EXECUTION_HOUR, minute=SCHEDULE_EXECUTION_MINUTE,
     description="批量执行所有已审批待执行的建议",
 )
 async def execute_pending_suggestions_task(session: AsyncSession) -> dict[str, Any]:
@@ -109,7 +129,7 @@ async def execute_pending_suggestions_task(session: AsyncSession) -> dict[str, A
 
 @register_scheduled_task(
     "feedback_learning",
-    hour=10, minute=0,
+    hour=SCHEDULE_FEEDBACK_HOUR, minute=SCHEDULE_FEEDBACK_MINUTE,
     description="处理可学习建议，生成Agent学习摘要",
 )
 async def feedback_learning_task(session: AsyncSession) -> dict[str, Any]:
