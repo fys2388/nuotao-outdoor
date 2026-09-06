@@ -68,6 +68,7 @@ const CostModelPage = lazy(() => import('./pages/CostModel'))
 const ListingLocalizationPage = lazy(() => import('./pages/ListingLocalization'))
 const CustomerTemplatesPage = lazy(() => import('./pages/CustomerTemplates'))
 const B2BAgentsPage = lazy(() => import('./pages/B2BAgents'))
+const AgentSuggestionsPage = lazy(() => import('./pages/AgentSuggestions'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -120,10 +121,12 @@ type MenuKey =
   | 'warehouse'
   | 'crm'
   | 'finance-report'
+  | 'agent-suggestions'
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: '经营看板' },
   { key: 'alerts', icon: <AlertOutlined />, label: '预警中心', badge: 3 },
+  { key: 'agent-suggestions', icon: <RobotOutlined />, label: 'AI建议审批', badge: 5 },
   {
     key: 'group-supply',
     icon: <ShoppingCartOutlined />,
@@ -246,6 +249,8 @@ function App() {
           return <DashboardPage />
         case 'alerts':
           return <AlertsPage />
+        case 'agent-suggestions':
+          return <AgentSuggestionsPage />
         case 'inventory':
           return <InventoryPage />
         case 'newton-sourcing':
