@@ -1,0 +1,105 @@
+name: Deploy Ops Dashboard
+
+on:
+  push:
+    paths:
+      - 'ops-dashboard/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy ops-dashboard to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            
+            echo "=== 创建 ops-dashboard 目录 ==="
+            mkdir -p /opt/nuotao/ops-dashboard
+            
+            echo "=== 上传 index.html ==="
+            # 这里通过 scp 上传，但是 ssh-action 不直接支持 scp
+            # 我们用 base64 编码的方式传输
+            echo "文件将通过后续步骤上传"
+            
+            echo "=== 检查 Nginx 配置 ==="
+            ls -la /etc/nginx/sites-enabled/ 2>/dev/null || ls -la /etc/nginx/conf.d/ 2>/dev/null || echo "Nginx 配置目录未找到"
+            
+            echo "=== 查找 admin.nuotaooutdoor.com 配置 ==="
+            grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>/dev/null || echo "未找到配置文件"
+
+      - name: Upload index.html via scp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: "ops-dashboard/index.html"
+          target: "/opt/nuotao/ops-dashboard/"
+          strip_components: 1
+
+      - name: Configure Nginx for ops-dashboard
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            
+            echo "=== 验证文件已上传 ==="
+            ls -la /opt/nuotao/ops-dashboard/
+            wc -l /opt/nuotao/ops-dashboard/index.html
+            
+            echo "=== 查找 Nginx 配置文件 ==="
+            NGINX_CONF=$(grep -rl "admin.nuotaooutdoor.com" /etc/nginx/ 2>/dev/null | head -1)
+            
+            if [ -z "$NGINX_CONF" ]; then
+                echo "未找到 admin.nuotaooutdoor.com 的 Nginx 配置，尝试查找其他配置"
+                NGINX_CONF=$(ls /etc/nginx/sites-enabled/* 2>/dev/null | head -1)
+            fi
+            
+            echo "使用配置文件: $NGINX_CONF"
+            
+            if [ -n "$NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then
+                echo "=== 检查是否已配置 ops-dashboard ==="
+                if grep -q "ops-dashboard" "$NGINX_CONF"; then
+                    echo "ops-dashboard 已配置，跳过"
+                else
+                    echo "=== 添加 ops-dashboard 配置 ==="
+                    # 在 server 块内添加 location
+                    # 先备份
+                    cp "$NGINX_CONF" "${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+                    
+                    # 在第一个 location 之前插入 ops-dashboard 的 location
+                    # 使用 sed 在 server_name 后面的第一个 { 之后插入
+                    sed -i '/server_name.*admin.nuotaooutdoor.com/a\\n    # Ops Dashboard 静态文件\n    location /ops-dashboard/ {\n        alias /opt/nuotao/ops-dashboard/;\n        index index.html;\n        try_files $uri $uri/ /ops-dashboard/index.html;\n    }' "$NGINX_CONF"
+                    
+                    echo "=== 测试 Nginx 配置 ==="
+                    nginx -t
+                    
+                    echo "=== 重载 Nginx ==="
+                    systemctl reload nginx
+                    
+                    echo "✅ Nginx 配置完成并已重载"
+                fi
+            else
+                echo "❌ 未找到 Nginx 配置文件"
+                exit 1
+            fi
+            
+            echo "=== 验证访问 ==="
+            curl -s -o /dev/null -w "HTTP 状态码: %{http_code}\n" http://localhost:80/ops-dashboard/ || echo "本地访问测试失败"
+            
+            echo "=== 部署完成 ==="
