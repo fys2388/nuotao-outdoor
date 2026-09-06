@@ -148,16 +148,8 @@ async def list_suggestions(
         stmt = stmt.where(AgentSuggestion.risk_level == risk_level)
         count_stmt = count_stmt.where(AgentSuggestion.risk_level == risk_level)
 
-    # 排序：待审批优先，然后按优先级和创建时间
-    status_order = func.array_position(
-        func.array(["pending_approval", "approved", "executing", "completed", "failed", "rejected", "skipped"]),
-        AgentSuggestion.status,
-    )
-    priority_order = func.array_position(
-        func.array(["high", "medium", "low"]),
-        AgentSuggestion.priority,
-    )
-    stmt = stmt.order_by(status_order, priority_order, AgentSuggestion.created_at.desc())
+    # 简单排序：按创建时间倒序（最新的在前）
+    stmt = stmt.order_by(AgentSuggestion.created_at.desc())
     stmt = stmt.limit(limit).offset(offset)
 
     total_result = await session.execute(count_stmt)
