@@ -1,0 +1,45 @@
+name: Check Feishu Env Config
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  check-env:
+    name: Check Feishu environment variables and backend status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check .env and backend status
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. .env 文件中的飞书配置 ==="
+            grep -E "^FEISHU_" /opt/nuotao/backend/.env 2>/dev/null | sed 's/APP_SECRET=.*/APP_SECRET=***MASKED***/' || echo ".env 文件不存在或没有飞书配置"
+
+            echo ""
+            echo "=== 2. 后端服务状态 ==="
+            systemctl status nuotao-backend 2>/dev/null | head -10 || echo "nuotao-backend 服务不存在"
+
+            echo ""
+            echo "=== 3. 后端进程环境变量（检查FEISHU）==="
+            pgrep -f "uvicorn|app.main" | head -1 | xargs -I{} cat /proc/{}/environ 2>/dev/null | tr '\0' '\n' | grep -E "^FEISHU_" | sed 's/APP_SECRET=.*/APP_SECRET=***MASKED***/' || echo "无法读取进程环境变量"
+
+            echo ""
+            echo "=== 4. 后端健康检查 ==="
+            curl -s -o /dev/null -w "HTTP状态码: %{http_code}\n" http://localhost:8000/docs || echo "健康检查失败"
+
+            echo ""
+            echo "=== 5. 后端最近日志（飞书相关）==="
+            journalctl -u nuotao-backend --no-pager -n 50 2>/dev/null | grep -i "feishu\|飞书\|secret\|chat_id" | tail -20 || echo "没有相关日志"
+
+            echo ""
+            echo "=== 6. 检查所有nuotao相关服务 ==="
+            systemctl list-units --type=service | grep -i nuotao || echo "没有nuotao服务"
