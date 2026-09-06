@@ -157,19 +157,21 @@ jobs:
             
             if [ -n "$FRONTEND_DIR" ] && [ -d "$FRONTEND_DIR" ]; then
                 echo "前端构建目录: $FRONTEND_DIR"
-                # 创建 ops-dashboard 子目录
-                mkdir -p "$FRONTEND_DIR/ops-dashboard"
-                # 复制 ops-dashboard 文件
-                cp /opt/nuotao/ops-dashboard/index.html "$FRONTEND_DIR/ops-dashboard/index.html"
-                echo "✅ 已复制 ops-dashboard 文件到 $FRONTEND_DIR/ops-dashboard/"
+                # 直接复制为 ops-dashboard.html（.html 文件不会被 SPA 路由拦截）
+                cp /opt/nuotao/ops-dashboard/index.html "$FRONTEND_DIR/ops-dashboard.html"
+                echo "✅ 已复制 ops-dashboard 文件到 $FRONTEND_DIR/ops-dashboard.html"
                 
-                # 测试访问
+                # 同时也创建子目录方式
+                mkdir -p "$FRONTEND_DIR/ops-dashboard"
+                cp /opt/nuotao/ops-dashboard/index.html "$FRONTEND_DIR/ops-dashboard/index.html"
+                
+                # 测试访问 .html 方式
                 sleep 2
-                curl -s -o /tmp/test_dash2.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/
+                curl -s -o /tmp/test_dash2.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard.html
                 if grep -q "运营监控中心" /tmp/test_dash2.html; then
-                    echo "✅✅✅ 成功! 通过前端构建目录访问 ops-dashboard 页面!"
+                    echo "✅✅✅ 成功! 通过 ops-dashboard.html 访问页面!"
                 else
-                    echo "❌ 通过前端构建目录访问失败"
+                    echo "❌ 通过 ops-dashboard.html 访问失败"
                     head -3 /tmp/test_dash2.html
                 fi
             else
