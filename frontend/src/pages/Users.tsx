@@ -151,15 +151,44 @@ const UsersPage = () => {
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
   const [searchText, setSearchText] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  // 真实API数据状态
+  const [usersData, setUsersData] = useState<any>(null);
   const [form] = Form.useForm();
 
-  // 加载用户
+  // 加载用户（调用真实API，失败则使用mock数据降级）
   const loadUsers = async () => {
-    setLoading(true);
-    setTimeout(() => {
+    try {
+      setLoading(true);
+      // 调用用户管理API（已有的auth端点）
+      const usersResp = await fetch('/api/v1/auth/users');
+      if (usersResp.ok) {
+        const usersData = await usersResp.json();
+        setUsersData(usersData);
+        // 如果API返回了用户列表，使用真实数据
+        if (usersData?.items && usersData.items.length > 0) {
+          setUsers(usersData.items.map((u: any) => ({
+            id: u.id,
+            username: u.username,
+            name: u.full_name || u.username,
+            email: u.email,
+            role: u.role,
+            status: u.is_active ? 'active' : 'inactive',
+            last_login: u.last_login_at || '-',
+            created_at: u.created_at || '-',
+          })));
+        }
+        console.log('Users data:', usersData);
+      } else {
+        setUsers(mockUsers);
+      }
+      message.success('用户数据加载完成');
+    } catch (e: any) {
+      console.error('Load users error:', e);
       setUsers(mockUsers);
+      message.warning(`API调用失败，使用模拟数据：${e.message || '未知错误'}`);
+    } finally {
       setLoading(false);
-    }, 500);
+    }
   };
 
   useEffect(() => {

@@ -395,6 +395,335 @@ def get_inventory_system_status() -> dict[str, Any]:
             "replenishment_suggestion",
             "low_stock_alert",
             "inventory_history",
+            "woocommerce_sync",
+            "1688_sync",
         ],
         "note": "Multi-warehouse inventory management system is ready. Supports domestic and overseas warehouses, inventory tracking, safety stock, and replenishment suggestions.",
     }
+
+
+# ============================================
+# 库存同步功能
+# ============================================
+
+SYNC_HISTORY_FILE = os.path.join(DATA_DIR, "sync_history.json")
+
+
+def _load_sync_history() -> list[dict[str, Any]]:
+    """加载同步历史记录"""
+    if not os.path.exists(SYNC_HISTORY_FILE):
+        return []
+    try:
+        with open(SYNC_HISTORY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error("Failed to load sync history: %s", str(e))
+        return []
+
+
+def _save_sync_history(history: list[dict[str, Any]]) -> None:
+    """保存同步历史记录"""
+    _ensure_data_dir()
+    try:
+        with open(SYNC_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history[-100:], f, indent=2, ensure_ascii=False, default=str)  # 只保留最近100条
+    except Exception as e:
+        logger.error("Failed to save sync history: %s", str(e))
+
+
+def record_sync_history(
+    sync_type: str,
+    source: str,
+    status: str,
+    items_synced: int = 0,
+    items_failed: int = 0,
+    details: str = "",
+) -> dict[str, Any]:
+    """
+    记录同步历史
+
+    Args:
+        sync_type: 同步类型（woocommerce/1688/manual）
+        source: 同步来源
+        status: 同步状态（success/failed/partial）
+        items_synced: 同步成功的商品数
+        items_failed: 同步失败的商品数
+        details: 详细信息
+
+    Returns:
+        同步记录
+    """
+    record = {
+        "id": str(uuid4()),
+        "sync_type": sync_type,
+        "source": source,
+        "status": status,
+        "items_synced": items_synced,
+        "items_failed": items_failed,
+        "details": details,
+        "started_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+
+    history = _load_sync_history()
+    history.append(record)
+    _save_sync_history(history)
+
+    return record
+
+
+def get_sync_history(limit: int = 20) -> dict[str, Any]:
+    """
+    获取同步历史记录
+
+    Args:
+        limit: 返回条数
+
+    Returns:
+        同步历史记录列表
+    """
+    history = _load_sync_history()
+    return {
+        "success": True,
+        "data": {
+            "history": history[-limit:][::-1],  # 最新的在前
+            "total": len(history),
+        },
+    }
+
+
+def sync_inventory_from_woocommerce(warehouse_id: str = "default") -> dict[str, Any]:
+    """
+    从WooCommerce同步库存
+
+    流程：
+    1. 从WooCommerce获取所有商品的库存数据
+    2. 更新本地仓库库存
+    3. 记录同步历史
+
+    Args:
+        warehouse_id: 仓库ID（默认default）
+
+    Returns:
+        同步结果
+    """
+    sync_id = str(uuid4())
+    start_time = datetime.utcnow()
+    logger.info("WooCommerce inventory sync %s started", sync_id)
+
+    try:
+        # 从WooCommerce获取商品库存
+        from app.services.woocommerce_sync_service import fetch_woocommerce_products
+
+        all_products = []
+        page = 1
+        while True:
+            result = fetch_woocommerce_products(per_page=100, page=page)
+            if not result.get("success"):
+                break
+            products = result.get("products", [])
+            if not products:
+                break
+            all_products.extend(products)
+            if len(products) < 100:
+                break
+            page += 1
+
+        logger.info("WooCommerce inventory sync %s: fetched %d products", sync_id, len(all_products))
+
+        # 更新本地仓库库存
+        items_synced = 0
+        items_failed = 0
+        synced_skus = []
+
+        for product in all_products:
+            try:
+                sku = product.get("sku", "")
+                if not sku:
+                    sku = f"WC-{product.get('id')}"
+
+                stock_quantity = product.get("stock_quantity", 0) or 0
+                stock_status = product.get("stock_status", "instock")
+
+                # 更新库存
+                update_inventory(
+                    warehouse_id=warehouse_id,
+                    sku=sku,
+                    quantity=int(stock_quantity),
+                    reason=f"WooCommerce sync - {product.get('name', '')}",
+                    reference_id=f"wc-{product.get('id')}",
+                )
+
+                items_synced += 1
+                synced_skus.append(sku)
+            except Exception as e:
+                items_failed += 1
+                logger.error("WooCommerce inventory sync %s: failed to sync product %s: %s",
+                            sync_id, product.get('id'), str(e))
+
+        # 记录同步历史
+        status = "success" if items_failed == 0 else "partial"
+        record_sync_history(
+            sync_type="woocommerce",
+            source=f"WooCommerce ({len(all_products)} products)",
+            status=status,
+            items_synced=items_synced,
+            items_failed=items_failed,
+            details=f"Synced {items_synced} SKUs from WooCommerce, {items_failed} failed",
+        )
+
+        elapsed = (datetime.utcnow() - start_time).total_seconds()
+        logger.info("WooCommerce inventory sync %s completed: synced=%d, failed=%d, elapsed=%.2fs",
+                    sync_id, items_synced, items_failed, elapsed)
+
+        return {
+            "success": True,
+            "data": {
+                "sync_id": sync_id,
+                "status": status,
+                "total_products": len(all_products),
+                "items_synced": items_synced,
+                "items_failed": items_failed,
+                "synced_skus": synced_skus[:50],  # 只返回前50个
+                "elapsed_seconds": round(elapsed, 2),
+            },
+        }
+
+    except Exception as e:
+        logger.error("WooCommerce inventory sync %s failed: %s", sync_id, str(e))
+        record_sync_history(
+            sync_type="woocommerce",
+            source="WooCommerce",
+            status="failed",
+            items_synced=0,
+            items_failed=0,
+            details=str(e),
+        )
+        return {
+            "success": False,
+            "error": str(e),
+            "data": {"sync_id": sync_id},
+        }
+
+
+def sync_inventory_from_1688(warehouse_id: str = "default") -> dict[str, Any]:
+    """
+    从1688同步供应商库存
+
+    流程：
+    1. 获取已映射的1688商品列表
+    2. 调用1688 API获取商品库存
+    3. 更新本地仓库库存
+    4. 记录同步历史
+
+    Args:
+        warehouse_id: 仓库ID（默认default）
+
+    Returns:
+        同步结果
+    """
+    sync_id = str(uuid4())
+    start_time = datetime.utcnow()
+    logger.info("1688 inventory sync %s started", sync_id)
+
+    try:
+        # 获取已映射的1688商品（从产品映射表）
+        # 注意：这里简化处理，实际应该从数据库获取已映射的商品
+        mapped_products = []
+
+        # 尝试从产品映射服务获取
+        try:
+            from app.services.product_mapping_service import get_all_mappings
+            mappings = get_all_mappings()
+            if mappings.get("success"):
+                mapped_products = mappings.get("data", {}).get("mappings", [])
+        except ImportError:
+            logger.warning("Product mapping service not available, using empty list")
+        except Exception as e:
+            logger.warning("Failed to get product mappings: %s", str(e))
+
+        logger.info("1688 inventory sync %s: found %d mapped products", sync_id, len(mapped_products))
+
+        items_synced = 0
+        items_failed = 0
+        synced_skus = []
+
+        # 同步每个已映射商品的库存
+        for mapping in mapped_products:
+            try:
+                ali1688_product_id = mapping.get("ali1688_product_id", "")
+                woo_sku = mapping.get("woo_sku", "")
+                if not ali1688_product_id or not woo_sku:
+                    continue
+
+                # 调用1688 API获取商品详情（包含库存信息）
+                from app.services.sourcing_1688_service import get_product_detail
+                product_detail = get_product_detail(ali1688_product_id)
+
+                if product_detail.get("success"):
+                    product = product_detail.get("product", {})
+                    # 从商品详情中提取库存信息
+                    # 注意：1688 API的库存字段可能不同，这里做兼容处理
+                    stock_quantity = product.get("stock", 0) or product.get("available_stock", 0) or 0
+
+                    # 更新本地仓库库存
+                    update_inventory(
+                        warehouse_id=warehouse_id,
+                        sku=woo_sku,
+                        quantity=int(stock_quantity),
+                        reason=f"1688 sync - {product.get('subject', '')}",
+                        reference_id=f"1688-{ali1688_product_id}",
+                    )
+
+                    items_synced += 1
+                    synced_skus.append(woo_sku)
+                else:
+                    items_failed += 1
+            except Exception as e:
+                items_failed += 1
+                logger.error("1688 inventory sync %s: failed to sync product %s: %s",
+                            sync_id, mapping.get('ali1688_product_id'), str(e))
+
+        # 记录同步历史
+        status = "success" if items_failed == 0 else "partial"
+        record_sync_history(
+            sync_type="1688",
+            source=f"1688 ({len(mapped_products)} mapped products)",
+            status=status,
+            items_synced=items_synced,
+            items_failed=items_failed,
+            details=f"Synced {items_synced} SKUs from 1688, {items_failed} failed",
+        )
+
+        elapsed = (datetime.utcnow() - start_time).total_seconds()
+        logger.info("1688 inventory sync %s completed: synced=%d, failed=%d, elapsed=%.2fs",
+                    sync_id, items_synced, items_failed, elapsed)
+
+        return {
+            "success": True,
+            "data": {
+                "sync_id": sync_id,
+                "status": status,
+                "total_mapped_products": len(mapped_products),
+                "items_synced": items_synced,
+                "items_failed": items_failed,
+                "synced_skus": synced_skus[:50],
+                "elapsed_seconds": round(elapsed, 2),
+            },
+        }
+
+    except Exception as e:
+        logger.error("1688 inventory sync %s failed: %s", sync_id, str(e))
+        record_sync_history(
+            sync_type="1688",
+            source="1688",
+            status="failed",
+            items_synced=0,
+            items_failed=0,
+            details=str(e),
+        )
+        return {
+            "success": False,
+            "error": str(e),
+            "data": {"sync_id": sync_id},
+        }

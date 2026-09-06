@@ -1,0 +1,66 @@
+# 集成测试环境 Docker Compose
+# 用于运行需要 PostgreSQL 和 Redis 的集成测试
+
+version: '3.8'
+
+services:
+  # PostgreSQL 测试数据库
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: nuotao-test-postgres
+    environment:
+      POSTGRES_USER: nuotao_test
+      POSTGRES_PASSWORD: nuotao_test_password
+      POSTGRES_DB: nuotao_test
+    ports:
+      - "5433:5432"  # 使用5433端口避免与生产环境冲突
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nuotao_test -d nuotao_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis 测试缓存
+  redis-test:
+    image: redis:7-alpine
+    container_name: nuotao-test-redis
+    ports:
+      - "6380:6379"  # 使用6380端口避免与生产环境冲突
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # pgvector 扩展（可选，用于AI向量存储）
+  pgvector-test:
+    image: pgvector/pgvector:pg16
+    container_name: nuotao-test-pgvector
+    environment:
+      POSTGRES_USER: nuotao_vector_test
+      POSTGRES_PASSWORD: nuotao_vector_test_password
+      POSTGRES_DB: nuotao_vector_test
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgvector_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nuotao_vector_test -d nuotao_vector_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_test_data:
+  redis_test_data:
+  pgvector_test_data:
+
+# 使用方法：
+# 1. 启动测试环境: docker-compose -f docker-compose.test.yml up -d
+# 2. 运行测试: DATABASE_URL=postgresql://nuotao_test:nuotao_test_password@localhost:5433/nuotao_test REDIS_URL=redis://localhost:6380 pytest tests/integration/
+# 3. 停止测试环境: docker-compose -f docker-compose.test.yml down
+# 4. 清理数据: docker-compose -f docker-compose.test.yml down -v

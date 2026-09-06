@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, Spin, Alert, Row, Col, Card, Statistic } from 'antd'
-import { DatabaseOutlined, PlusOutlined, ShopOutlined } from '@ant-design/icons'
+import { Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, Spin, Alert, Row, Col, Card, Statistic, Timeline, Badge, message } from 'antd'
+import { DatabaseOutlined, PlusOutlined, ShopOutlined, SyncOutlined, CloudUploadOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
 
 interface Warehouse {
@@ -27,6 +27,10 @@ export default function InventoryPage() {
   const [createModal, setCreateModal] = useState(false)
   const [form] = Form.useForm()
   const [error, setError] = useState<string | null>(null)
+  // 库存同步状态
+  const [syncLoading, setSyncLoading] = useState<string | null>(null)
+  const [syncHistory, setSyncHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const fetchWarehouses = async () => {
     try {
@@ -42,7 +46,76 @@ export default function InventoryPage() {
 
   useEffect(() => {
     fetchWarehouses()
+    fetchSyncHistory()
   }, [])
+
+  // 获取同步历史记录
+  const fetchSyncHistory = async () => {
+    try {
+      setHistoryLoading(true)
+      const resp = await fetch('/api/v1/inventory/sync/history?limit=10')
+      const data = await resp.json()
+      if (data.success && data.data?.history) {
+        setSyncHistory(data.data.history)
+      }
+    } catch (e: any) {
+      console.error('Fetch sync history error:', e)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  // 从WooCommerce同步库存
+  const handleSyncWooCommerce = async () => {
+    try {
+      setSyncLoading('woocommerce')
+      const resp = await fetch('/api/v1/inventory/sync/woocommerce', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ warehouse_id: 'default' }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        const result = data.data
+        message.success(`WooCommerce库存同步完成：成功${result.items_synced}个，失败${result.items_failed}个，耗时${result.elapsed_seconds}秒`)
+        fetchSyncHistory()
+        fetchWarehouses()
+      } else {
+        message.error(`WooCommerce库存同步失败：${data.error || '未知错误'}`)
+      }
+    } catch (e: any) {
+      console.error('Sync WooCommerce error:', e)
+      message.error(`WooCommerce库存同步失败：${e.message || '网络错误'}`)
+    } finally {
+      setSyncLoading(null)
+    }
+  }
+
+  // 从1688同步库存
+  const handleSync1688 = async () => {
+    try {
+      setSyncLoading('1688')
+      const resp = await fetch('/api/v1/inventory/sync/1688', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ warehouse_id: 'default' }),
+      })
+      const data = await resp.json()
+      if (data.success) {
+        const result = data.data
+        message.success(`1688库存同步完成：成功${result.items_synced}个，失败${result.items_failed}个，耗时${result.elapsed_seconds}秒`)
+        fetchSyncHistory()
+        fetchWarehouses()
+      } else {
+        message.error(`1688库存同步失败：${data.error || '未知错误'}`)
+      }
+    } catch (e: any) {
+      console.error('Sync 1688 error:', e)
+      message.error(`1688库存同步失败：${e.message || '网络错误'}`)
+    } finally {
+      setSyncLoading(null)
+    }
+  }
 
   const handleCreate = async (values: any) => {
     try {
@@ -93,9 +166,31 @@ export default function InventoryPage() {
       </Row>
 
       <div style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModal(true)}>
-          新建仓库
-        </Button>
+        <Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModal(true)}>
+            新建仓库
+          </Button>
+          <Button
+            icon={<CloudUploadOutlined />}
+            loading={syncLoading === 'woocommerce'}
+            onClick={handleSyncWooCommerce}
+          >
+            同步WooCommerce库存
+          </Button>
+          <Button
+            icon={<SyncOutlined />}
+            loading={syncLoading === '1688'}
+            onClick={handleSync1688}
+          >
+            同步1688供应商库存
+          </Button>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => { fetchWarehouses(); fetchSyncHistory(); }}
+          >
+            刷新
+          </Button>
+        </Space>
       </div>
 
       <Table
@@ -105,6 +200,47 @@ export default function InventoryPage() {
         pagination={{ pageSize: 10 }}
         size="middle"
       />
+
+      {/* 库存同步历史记录 */}
+      <Card
+        title={<Space><HistoryOutlined /> 库存同步历史记录</Space>}
+        size="small"
+        style={{ marginTop: 16 }}
+        extra={<Button size="small" icon={<ReloadOutlined />} onClick={fetchSyncHistory} loading={historyLoading}>刷新</Button>}
+      >
+        {syncHistory.length === 0 ? (
+          <Alert message="暂无同步历史记录" type="info" showIcon />
+        ) : (
+          <Timeline
+            items={syncHistory.map((record, index) => ({
+              color: record.status === 'success' ? 'green' : record.status === 'failed' ? 'red' : 'orange',
+              children: (
+                <div>
+                  <Space>
+                    <Tag color={record.sync_type === 'woocommerce' ? 'blue' : 'orange'}>
+                      {record.sync_type === 'woocommerce' ? 'WooCommerce' : '1688'}
+                    </Tag>
+                    <Badge
+                      status={record.status === 'success' ? 'success' : record.status === 'failed' ? 'error' : 'warning'}
+                      text={record.status === 'success' ? '成功' : record.status === 'failed' ? '失败' : '部分成功'}
+                    />
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {new Date(record.completed_at).toLocaleString('zh-CN')}
+                    </Text>
+                  </Space>
+                  <div style={{ marginTop: 4, fontSize: 13 }}>
+                    <Text>同步成功 <Text strong style={{ color: '#52c41a' }}>{record.items_synced}</Text> 个</Text>
+                    {record.items_failed > 0 && (
+                      <Text style={{ marginLeft: 12 }}>失败 <Text strong style={{ color: '#f5222d' }}>{record.items_failed}</Text> 个</Text>
+                    )}
+                    <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>{record.details}</Text>
+                  </div>
+                </div>
+              ),
+            }))}
+          />
+        )}
+      </Card>
 
       <Modal
         title="新建仓库"

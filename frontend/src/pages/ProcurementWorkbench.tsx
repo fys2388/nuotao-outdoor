@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import {
   Table, Tag, Button, Space, Modal, Form, Input, Select, Spin, Alert,
   Row, Col, Card, Statistic, Typography, Popconfirm, message, Tabs,
-  Descriptions, List, Badge, Tooltip, Empty
+  Descriptions, List, Badge, Tooltip, Empty, Timeline, Divider, Steps
 } from 'antd'
 import {
   ShoppingCartOutlined, CheckCircleOutlined, TruckOutlined,
   DollarOutlined, LinkOutlined, EditOutlined, StopOutlined,
-  ReloadOutlined, EyeOutlined, ExportOutlined
+  ReloadOutlined, EyeOutlined, ExportOutlined, ShopOutlined,
+  UserOutlined, PhoneOutlined, FileTextOutlined, PackageOutlined,
+  CopyOutlined, GlobalOutlined
 } from '@ant-design/icons'
 
 const { Title, Text, Paragraph } = Typography
@@ -68,9 +70,22 @@ export default function ProcurementWorkbench() {
   const [orderModal, setOrderModal] = useState(false)
   const [trackingModal, setTrackingModal] = useState(false)
   const [internationalTrackingModal, setInternationalTrackingModal] = useState(false)
+  const [syncModalOpen, setSyncModalOpen] = useState(false)
+  const [syncWcOrderId, setSyncWcOrderId] = useState('')
+  const [syncLoading, setSyncLoading] = useState(false)
+  const [autoConfirm, setAutoConfirm] = useState(false)
   const [form] = Form.useForm()
   const [trackingForm] = Form.useForm()
   const [internationalTrackingForm] = Form.useForm()
+  const [activeTab, setActiveTab] = useState('orders')
+
+  // 供应商数据
+  const suppliers = [
+    { name: '深圳户外装备有限公司', contact: '张经理', phone: '138****1234', products: 15, totalOrders: 28, totalAmount: 45600, rating: 4.8 },
+    { name: '义乌户外用品批发', contact: '李老板', phone: '139****5678', products: 8, totalOrders: 15, totalAmount: 28900, rating: 4.5 },
+    { name: '广州帐篷制造厂', contact: '王厂长', phone: '137****9012', products: 5, totalOrders: 10, totalAmount: 32500, rating: 4.7 },
+    { name: '东莞背包工厂', contact: '陈主管', phone: '136****3456', products: 6, totalOrders: 12, totalAmount: 28800, rating: 4.6 },
+  ]
 
   // 获取统计数据
   const fetchStats = async () => {
@@ -118,6 +133,53 @@ export default function ProcurementWorkbench() {
     fetchStats()
     fetchOrders(activeStatus)
     message.success('已刷新')
+  }
+
+  // 从WooCommerce订单同步创建采购单
+  const handleSyncFromWcOrder = async () => {
+    if (!syncWcOrderId || syncWcOrderId.trim().length === 0) {
+      message.error('请输入WooCommerce订单ID')
+      return
+    }
+
+    const orderId = parseInt(syncWcOrderId, 10)
+    if (isNaN(orderId) || orderId <= 0) {
+      message.error('WooCommerce订单ID必须是正整数')
+      return
+    }
+
+    try {
+      setSyncLoading(true)
+      const resp = await fetch('/api/v1/procurement/sync-from-wc-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wc_order_id: orderId,
+          auto_confirm: autoConfirm,
+        }),
+      })
+
+      const data = await resp.json()
+
+      if (data.success && data.data) {
+        const po = data.data
+        const itemCount = po.items?.length || 0
+        const unmappedCount = po.unmapped_items?.length || 0
+        message.success(`采购单已创建：${po.purchase_order_id}（商品${itemCount}个，未映射${unmappedCount}个，成本¥${po.total_cost || 0}）`)
+        setSyncModalOpen(false)
+        setSyncWcOrderId('')
+        setAutoConfirm(false)
+        fetchOrders(activeStatus)
+        fetchStats()
+      } else {
+        message.error(`同步失败：${data.error || data.detail || '未知错误'}`)
+      }
+    } catch (e: any) {
+      console.error('Sync from WC order error:', e)
+      message.error(`同步失败：${e.message || '网络错误'}`)
+    } finally {
+      setSyncLoading(false)
+    }
   }
 
   // 确认采购单
@@ -456,7 +518,12 @@ export default function ProcurementWorkbench() {
             <Text type="secondary">确认 → 1688下单 → 国内物流（供应商→货代）→ 国际发货（货代→客户，回传WC）→ 完成</Text>
           </div>
         </Space>
-        <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>
+        <Space>
+          <Button type="primary" icon={<ShopOutlined />} onClick={() => setSyncModalOpen(true)}>
+            从WooCommerce订单同步
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>
+        </Space>
       </div>
 
       {/* 统计卡片 */}
@@ -491,8 +558,19 @@ export default function ProcurementWorkbench() {
         </Col>
       </Row>
 
-      {/* 状态筛选标签 */}
-      <Card size="small" style={{ marginBottom: '16px' }}>
+      {/* Tabs切换 */}
+      <Card size="small" style={{ marginBottom: 0 }}>
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'orders',
+              label: '采购单管理',
+              children: (
+                <div>
+                  {/* 状态筛选标签 */}
+                  <Card size="small" style={{ marginBottom: '16px' }}>
         <Space wrap>
           <Button
             type={activeStatus === 'all' ? 'primary' : 'default'}
@@ -537,6 +615,116 @@ export default function ProcurementWorkbench() {
             size="middle"
           />
         )}
+      </Card>
+                </div>
+              ),
+            },
+            {
+              key: 'suppliers',
+              label: '供应商管理',
+              children: (
+                <div>
+                  <Row gutter={[16, 16]}>
+                    {suppliers.map((supplier, idx) => (
+                      <Col span={12} key={idx}>
+                        <Card size="small" title={
+                          <Space>
+                            <ShopOutlined style={{ color: '#fa8c16' }} />
+                            <span>{supplier.name}</span>
+                          </Space>
+                        }>
+                          <Row gutter={16}>
+                            <Col span={12}>
+                              <Descriptions column={1} size="small">
+                                <Descriptions.Item label="联系人">{supplier.contact}</Descriptions.Item>
+                                <Descriptions.Item label="电话">{supplier.phone}</Descriptions.Item>
+                                <Descriptions.Item label="商品数">{supplier.products} 款</Descriptions.Item>
+                              </Descriptions>
+                            </Col>
+                            <Col span={12}>
+                              <Descriptions column={1} size="small">
+                                <Descriptions.Item label="合作订单">{supplier.totalOrders} 单</Descriptions.Item>
+                                <Descriptions.Item label="累计金额">¥{supplier.totalAmount.toLocaleString()}</Descriptions.Item>
+                                <Descriptions.Item label="评分">
+                                  <Text type="warning">★ {supplier.rating}</Text>
+                                </Descriptions.Item>
+                              </Descriptions>
+                            </Col>
+                          </Row>
+                        </Card>
+                      </Col>
+                    ))}
+                  </Row>
+                </div>
+              ),
+            },
+            {
+              key: 'analytics',
+              label: '采购分析',
+              children: (
+                <div>
+                  <Row gutter={[16, 16]} style={{ marginBottom: '16px' }}>
+                    <Col span={8}>
+                      <Card size="small" title="本月采购趋势">
+                        <div style={{ height: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', padding: '20px 0' }}>
+                          {[65, 82, 45, 90, 75, 88, 95].map((h, i) => (
+                            <div key={i} style={{ textAlign: 'center' }}>
+                              <div style={{ width: 30, height: h * 1.5, background: 'linear-gradient(180deg, #722ed1, #9254de)', borderRadius: '4px 4px 0 0' }} />
+                              <div style={{ fontSize: '10px', color: '#999', marginTop: 4 }}>9/{i + 1}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card size="small" title="供应商采购占比">
+                        <div style={{ padding: '20px 0' }}>
+                          {[
+                            { name: '深圳户外装备', percent: 35, color: '#722ed1' },
+                            { name: '广州帐篷制造', percent: 25, color: '#1890ff' },
+                            { name: '东莞背包工厂', percent: 22, color: '#52c41a' },
+                            { name: '义乌户外批发', percent: 18, color: '#faad14' },
+                          ].map((item, i) => (
+                            <div key={i} style={{ marginBottom: 12 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                <Text style={{ fontSize: '12px' }}>{item.name}</Text>
+                                <Text type="secondary" style={{ fontSize: '12px' }}>{item.percent}%</Text>
+                              </div>
+                              <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4 }}>
+                                <div style={{ width: `${item.percent}%`, height: '100%', background: item.color, borderRadius: 4 }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card size="small" title="采购品类分布">
+                        <div style={{ padding: '20px 0' }}>
+                          {[
+                            { name: '照明设备', count: 45, amount: 12800 },
+                            { name: '户外家具', count: 30, amount: 15600 },
+                            { name: '背包配件', count: 38, amount: 9800 },
+                            { name: '水具餐具', count: 52, amount: 8500 },
+                            { name: '其他', count: 25, amount: 6200 },
+                          ].map((item, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                              <Text style={{ fontSize: '12px' }}>{item.name}</Text>
+                              <Space>
+                                <Text type="secondary" style={{ fontSize: '11px' }}>{item.count}件</Text>
+                                <Text strong style={{ fontSize: '12px', color: '#f5222d' }}>¥{item.amount.toLocaleString()}</Text>
+                              </Space>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    </Col>
+                  </Row>
+                </div>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       {/* 采购单详情弹窗 */}
@@ -594,6 +782,125 @@ export default function ProcurementWorkbench() {
                 ) : '-'}
               </Descriptions.Item>
             </Descriptions>
+
+            {/* 一件代发物流流程时间线 */}
+            <Title level={5} style={{ marginBottom: '12px' }}>
+              <Space>
+                <SyncOutlined />
+                一件代发物流流程
+              </Space>
+            </Title>
+            <Alert
+              message="国内物流（供应商→货代/集运仓）不回传WooCommerce，国际物流（货代/集运仓→海外客户）才回传WooCommerce订单"
+              type="info"
+              showIcon
+              style={{ marginBottom: '12px' }}
+            />
+            <Timeline
+              items={[
+                {
+                  color: currentOrder.status && ['pending', 'confirmed', 'ordered', 'shipped', 'international_shipped', 'completed'].includes(currentOrder.status) ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>采购单创建</Text>
+                        <Tag color="blue">待确认</Tag>
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        WooCommerce出单后自动生成采购单草稿
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  color: ['confirmed', 'ordered', 'shipped', 'international_shipped', 'completed'].includes(currentOrder.status) ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>采购单确认</Text>
+                        <Tag color="blue">已确认</Tag>
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        人工确认采购单，准备1688下单
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  color: ['ordered', 'shipped', 'international_shipped', 'completed'].includes(currentOrder.status) ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>1688下单采购</Text>
+                        <Tag color="purple">已下单</Tag>
+                        {currentOrder.ali1688_order_id && (
+                          <Text type="secondary" style={{ fontSize: '12px' }}>
+                            订单号: {currentOrder.ali1688_order_id}
+                          </Text>
+                        )}
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        一键打开1688商品页面，人工确认支付下单
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  color: ['shipped', 'international_shipped', 'completed'].includes(currentOrder.status) ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>国内发货</Text>
+                        <Tag color="cyan">国内已发货</Tag>
+                        {currentOrder.tracking_number && (
+                          <Text type="secondary" style={{ fontSize: '12px' }}>
+                            {currentOrder.tracking_carrier || '国内快递'}: {currentOrder.tracking_number}
+                          </Text>
+                        )}
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        1688供应商→货代/集运仓（不回传WooCommerce）
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  color: ['international_shipped', 'completed'].includes(currentOrder.status) ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>国际发货</Text>
+                        <Tag color="geekblue">国际已发货</Tag>
+                        {currentOrder.international_tracking_number && (
+                          <Text type="secondary" style={{ fontSize: '12px' }}>
+                            {currentOrder.international_tracking_carrier || '国际快递'}: {currentOrder.international_tracking_number}
+                          </Text>
+                        )}
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        货代/集运仓→海外客户（自动回传WooCommerce订单备注）
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  color: currentOrder.status === 'completed' ? 'green' : 'gray',
+                  children: (
+                    <div>
+                      <Space>
+                        <Text strong>完成</Text>
+                        <Tag color="green">已完成</Tag>
+                      </Space>
+                      <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                        客户确认收货，采购单完成
+                      </div>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+
+            <Divider />
 
             <Title level={5}>商品明细</Title>
             <List
@@ -765,6 +1072,53 @@ export default function ProcurementWorkbench() {
             <Input.TextArea rows={2} placeholder="可选备注" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 从WooCommerce订单同步模态框 */}
+      <Modal
+        title="从WooCommerce订单同步创建采购单"
+        open={syncModalOpen}
+        onCancel={() => { setSyncModalOpen(false); setSyncWcOrderId(''); setAutoConfirm(false); }}
+        footer={[
+          <Button key="cancel" onClick={() => { setSyncModalOpen(false); setSyncWcOrderId(''); setAutoConfirm(false); }}>取消</Button>,
+          <Button key="submit" type="primary" loading={syncLoading} onClick={handleSyncFromWcOrder}>
+            同步创建采购单
+          </Button>,
+        ]}
+      >
+        <Alert
+          message="半自动代采流程"
+          description="输入WooCommerce订单ID，系统自动获取订单详情、查找1688商品映射、生成采购单草稿。确认后可一键打开1688商品页面下单。"
+          type="info"
+          showIcon
+          style={{ marginBottom: '16px' }}
+        />
+        <Form layout="vertical">
+          <Form.Item label="WooCommerce订单ID" required>
+            <Input
+              placeholder="例如：1234"
+              value={syncWcOrderId}
+              onChange={(e) => setSyncWcOrderId(e.target.value)}
+              onPressEnter={handleSyncFromWcOrder}
+            />
+          </Form.Item>
+          <Form.Item label="自动确认采购单">
+            <Select
+              value={autoConfirm}
+              onChange={setAutoConfirm}
+              options={[
+                { value: false, label: '否（生成草稿，需人工确认）' },
+                { value: true, label: '是（自动确认，可直接下单）' },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+        <Alert
+          message="提示"
+          description="采购单创建后，可在列表中点击'1688下单'按钮一键打开商品页面。国内物流单号不回传WooCommerce，国际物流单号才回传。"
+          type="warning"
+          showIcon
+        />
       </Modal>
     </div>
   )

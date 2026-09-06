@@ -1,4 +1,4 @@
-"""Product intelligence API endpoints (M2.1).
+﻿"""Product intelligence API endpoints (M2.1).
 
 Routes under ``/products`` extend the existing product domain; routes under
 ``/product-decisions`` manage the human approval workflow. No AI agent is
@@ -43,6 +43,7 @@ from app.schemas.product_intelligence import (
 )
 from app.services import (
     approval_service,
+    product_copy_service,
     product_intelligence as pi,
     task_queue,
 )
@@ -673,3 +674,188 @@ async def list_woocommerce_drafts(
     """Return the generated draft payloads of a product (newest first)."""
     rows = await pi.list_woocommerce_drafts(db, workspace_id=workspace_id, product_id=product_id)
     return [WooCommerceDraftOut.model_validate(row) for row in rows]
+
+
+@product_router.post(
+    "/{product_id}/generate-copy",
+    summary="Generate English product copy (title, description, SEO) using AI",
+)
+async def generate_product_copy(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Generate English product copy from raw product info using LLM.
+
+    Returns title, description, bullet_points, seo_keywords, short_description.
+    """
+    product = (
+        await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+
+    result = await product_copy_service.generate_product_copy(
+        name=product.name,
+        category=product.category,
+        description=product.description,
+        source_url=product.source_url,
+        weight_kg=float(product.weight_kg) if product.weight_kg else None,
+        target_market=product.target_market or "US",
+        trace_id=get_trace_id(),
+    )
+    return result
+
+
+@product_router.get(
+    "/procurement-suggestions",
+    summary="Generate procurement suggestions based on product metrics",
+)
+async def get_procurement_suggestions(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    min_margin: float = 0.3,
+    low_stock_threshold: int = 20,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Generate procurement suggestions based on profit margin, stock level, selection score."""
+    from app.services.procurement_service import generate_procurement_suggestions
+    result = await generate_procurement_suggestions(
+        db,
+        workspace_id=workspace_id,
+        min_margin=min_margin,
+        low_stock_threshold=low_stock_threshold,
+        limit=limit,
+    )
+    return result
+
+
+@product_router.post(
+    "/sync-inventory",
+    summary="Trigger inventory sync from WooCommerce and 1688",
+)
+async def sync_inventory(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Manually trigger inventory sync and low stock alert."""
+    from app.tasks.inventory_sync import sync_inventory_from_woocommerce, sync_inventory_from_1688
+    
+    woocommerce_result = await sync_inventory_from_woocommerce()
+    alibaba_result = await sync_inventory_from_1688()
+    
+    return {
+        "success": True,
+        "woocommerce": woocommerce_result,
+        "alibaba_1688": alibaba_result,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@product_router.get(
+    "/low-stock",
+    summary="Get low stock products list",
+)
+async def get_low_stock_products(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    threshold: int = 20,
+) -> dict[str, Any]:
+    """Get products with low stock level."""
+    result = await db.execute(
+        select(Product).where(Product.workspace_id == workspace_id)
+    )
+    products = result.scalars().all()
+    
+    low_stock = []
+    for p in products:
+        stock = p.meta.get("stock", 0) if isinstance(p.meta, dict) else 0
+        if stock <= threshold:
+            low_stock.append({
+                "id": str(p.id),
+                "sku": p.sku,
+                "name": p.name,
+                "stock": stock,
+                "source_url": p.source_url,
+                "status": p.status,
+            })
+    
+    return {
+        "threshold": threshold,
+        "total_low_stock": len(low_stock),
+        "products": low_stock,
+    }
+
+
+@product_router.post(
+    "/batch-update",
+    summary="Batch update product fields (price, stock, status)",
+)
+async def batch_update_products(
+    body: dict[str, Any],
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Batch update products by IDs."""
+    product_ids = body.get("product_ids", [])
+    updates = body.get("updates", {})
+    
+    updated_count = 0
+    for pid in product_ids:
+        result = await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == pid,
+            )
+        )
+        product = result.scalar_one_or_none()
+        if product:
+            if "price" in updates:
+                product.meta = {**(product.meta or {}), "price": updates["price"]}
+            if "stock" in updates:
+                product.meta = {**(product.meta or {}), "stock": updates["stock"]}
+            if "status" in updates:
+                product.status = updates["status"]
+            updated_count += 1
+    
+    await db.commit()
+    return {"success": True, "updated_count": updated_count, "total": len(product_ids)}
+
+
+@product_router.post("/sync-inventory", summary="Trigger inventory sync")
+async def sync_inventory(db: DbSession, workspace_id: WorkspaceId) -> dict:
+    from app.tasks.inventory_sync import sync_inventory_from_woocommerce, sync_inventory_from_1688
+    wc = await sync_inventory_from_woocommerce()
+    ali = await sync_inventory_from_1688()
+    return {"success": True, "woocommerce": wc, "alibaba_1688": ali}
+
+@product_router.get("/low-stock", summary="Get low stock products")
+async def get_low_stock(db: DbSession, workspace_id: WorkspaceId, threshold: int = 20) -> dict:
+    result = await db.execute(select(Product).where(Product.workspace_id == workspace_id))
+    products = result.scalars().all()
+    low = []
+    for p in products:
+        stock = p.meta.get("stock", 0) if isinstance(p.meta, dict) else 0
+        if stock <= threshold:
+            low.append({"id": str(p.id), "sku": p.sku, "name": p.name, "stock": stock, "source_url": p.source_url})
+    return {"threshold": threshold, "total_low_stock": len(low), "products": low}
+
+@product_router.post("/batch-update", summary="Batch update products")
+async def batch_update(body: dict, db: DbSession, workspace_id: WorkspaceId) -> dict:
+    ids = body.get("product_ids", [])
+    updates = body.get("updates", {})
+    count = 0
+    for pid in ids:
+        result = await db.execute(select(Product).where(Product.workspace_id == workspace_id, Product.id == pid))
+        p = result.scalar_one_or_none()
+        if p:
+            if "stock" in updates: p.meta = {**(p.meta or {}), "stock": updates["stock"]}
+            if "status" in updates: p.status = updates["status"]
+            count += 1
+    await db.commit()
+    return {"success": True, "updated_count": count}

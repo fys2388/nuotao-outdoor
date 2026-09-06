@@ -1,0 +1,58 @@
+# Prometheus 配置文件
+# 用于监控 Nuotao AI OS 系统
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'nuotao-monitor'
+
+# 告警规则文件
+rule_files:
+  - "alerts.yml"
+
+# Alertmanager 配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - localhost:9093
+
+# 抓取配置
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 后端 API 服务监控
+  - job_name: 'nuotao-backend'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:8000']
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # 节点监控（服务器资源）
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 15s
+
+  # PostgreSQL 监控
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['localhost:9187']
+    scrape_interval: 15s
+
+  # Redis 监控
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['localhost:9121']
+    scrape_interval: 15s
+
+  # Nginx 监控
+  - job_name: 'nginx-exporter'
+    static_configs:
+      - targets: ['localhost:9113']
+    scrape_interval: 15s

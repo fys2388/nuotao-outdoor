@@ -106,6 +106,54 @@ def fetch_woocommerce_orders(
         }
 
 
+def fetch_woocommerce_order_by_id(order_id: int) -> dict[str, Any]:
+    """
+    根据订单ID从WooCommerce获取单个订单详情
+
+    Args:
+        order_id: WooCommerce订单ID
+
+    Returns:
+        订单详情数据
+    """
+    url = f"{WC_URL}/wp-json/wc/v3/orders/{order_id}"
+
+    try:
+        response = requests.get(
+            url,
+            auth=_get_wc_auth(),
+            headers=_get_wc_headers(),
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        order = response.json()
+        return {
+            "success": True,
+            "order": order,
+        }
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return {
+                "success": False,
+                "error": f"WooCommerce订单 {order_id} 不存在",
+                "order": None,
+            }
+        logger.error("Failed to fetch WooCommerce order %s: %s", order_id, str(e))
+        return {
+            "success": False,
+            "error": str(e),
+            "order": None,
+        }
+    except requests.exceptions.RequestException as e:
+        logger.error("Failed to fetch WooCommerce order %s: %s", order_id, str(e))
+        return {
+            "success": False,
+            "error": str(e),
+            "order": None,
+        }
+
+
 def fetch_woocommerce_products(
     per_page: int = 100,
     page: int = 1,

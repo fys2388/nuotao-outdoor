@@ -15,9 +15,12 @@ from app.services.inventory_service import (
     fulfill_inventory,
     get_inventory_status,
     get_inventory_system_status,
+    get_sync_history,
     list_warehouses,
     release_inventory,
     reserve_inventory,
+    sync_inventory_from_1688,
+    sync_inventory_from_woocommerce,
     update_inventory,
 )
 
@@ -156,3 +159,81 @@ async def replenishment_endpoint(warehouse_id: str, request: ReplenishmentReques
         return {"success": True, "result": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ============================================
+# 库存同步 API 端点
+# ============================================
+
+
+class SyncRequest(BaseModel):
+    """库存同步请求"""
+    warehouse_id: str = "default"
+
+
+@router.post("/sync/woocommerce", summary="从WooCommerce同步库存")
+async def sync_woocommerce_inventory(request: SyncRequest) -> dict[str, Any]:
+    """
+    从WooCommerce同步所有商品的库存数据到本地仓库
+
+    流程：
+    1. 从WooCommerce获取所有商品的库存数据
+    2. 更新本地仓库库存
+    3. 记录同步历史
+
+    Args:
+        warehouse_id: 仓库ID（默认default）
+
+    Returns:
+        同步结果，包含同步成功/失败的商品数
+    """
+    try:
+        result = sync_inventory_from_woocommerce(warehouse_id=request.warehouse_id)
+        return result
+    except Exception as e:
+        logger.error("Sync WooCommerce inventory failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sync/1688", summary="从1688同步供应商库存")
+async def sync_1688_inventory(request: SyncRequest) -> dict[str, Any]:
+    """
+    从1688同步已映射商品的供应商库存数据到本地仓库
+
+    流程：
+    1. 获取已映射的1688商品列表
+    2. 调用1688 API获取商品库存
+    3. 更新本地仓库库存
+    4. 记录同步历史
+
+    Args:
+        warehouse_id: 仓库ID（默认default）
+
+    Returns:
+        同步结果，包含同步成功/失败的商品数
+    """
+    try:
+        result = sync_inventory_from_1688(warehouse_id=request.warehouse_id)
+        return result
+    except Exception as e:
+        logger.error("Sync 1688 inventory failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sync/history", summary="获取库存同步历史记录")
+async def get_inventory_sync_history(limit: int = 20) -> dict[str, Any]:
+    """
+    获取库存同步历史记录
+
+    Args:
+        limit: 返回条数（默认20）
+
+    Returns:
+        同步历史记录列表
+    """
+    try:
+        result = get_sync_history(limit=limit)
+        return result
+    except Exception as e:
+        logger.error("Get sync history failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
