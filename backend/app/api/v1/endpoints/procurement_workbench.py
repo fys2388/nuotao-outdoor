@@ -26,11 +26,13 @@ from app.services.purchase_order_service import (
     cancel_purchase_order,
     complete_purchase_order,
     confirm_purchase_order,
+    create_purchase_order_from_wc_order,
     get_purchase_order,
     get_purchase_order_stats,
     list_purchase_orders,
     mark_ordered,
 )
+from app.services.woocommerce_sync_service import fetch_woocommerce_order_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +88,68 @@ class CompleteRequest(BaseModel):
     notes: str = Field("", description="备注")
 
 
+class SyncFromWcOrderRequest(BaseModel):
+    """从WooCommerce订单同步创建采购单请求"""
+    wc_order_id: int = Field(..., description="WooCommerce订单ID", ge=1)
+    auto_confirm: bool = Field(False, description="是否自动确认采购单（默认False，需要人工确认）")
+
+
 # ============================================
 # API 端点
 # ============================================
+
+@router.post("/sync-from-wc-order", summary="从WooCommerce订单同步创建采购单")
+async def sync_from_wc_order(request: SyncFromWcOrderRequest) -> StandardResponse:
+    """
+    从WooCommerce订单ID同步创建采购单草稿
+
+    流程：
+    1. 根据WooCommerce订单ID获取订单详情
+    2. 查找商品的1688映射
+    3. 生成采购单草稿（状态：pending）
+    4. 可选：自动确认采购单
+
+    Args:
+        wc_order_id: WooCommerce订单ID
+        auto_confirm: 是否自动确认采购单
+
+    Returns:
+        采购单信息
+    """
+    try:
+        # Step 1: 获取WooCommerce订单详情
+        wc_result = fetch_woocommerce_order_by_id(request.wc_order_id)
+        if not wc_result.get("success"):
+            raise HTTPException(status_code=404, detail=wc_result.get("error", "获取WooCommerce订单失败"))
+
+        wc_order = wc_result.get("order")
+        if not wc_order:
+            raise HTTPException(status_code=404, detail="WooCommerce订单数据为空")
+
+        # Step 2: 生成采购单草稿
+        purchase_order = create_purchase_order_from_wc_order(wc_order)
+
+        # Step 3: 可选 - 自动确认采购单
+        if request.auto_confirm:
+            po_id = purchase_order.get("purchase_order_id", "")
+            if po_id:
+                confirm_purchase_order(po_id, notes="自动确认（从WooCommerce订单同步）")
+                purchase_order["status"] = STATUS_CONFIRMED
+
+        logger.info("Synced purchase order from WC order %s: PO=%s, items=%d, unmapped=%d, cost=%.2f",
+                    request.wc_order_id,
+                    purchase_order.get("purchase_order_id"),
+                    len(purchase_order.get("items", [])),
+                    len(purchase_order.get("unmapped_items", [])),
+                    purchase_order.get("total_cost", 0))
+
+        return StandardResponse(success=True, data=purchase_order)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Sync from WC order failed: %s", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/stats", summary="获取代采工作台统计")
 async def get_procurement_stats() -> StandardResponse:

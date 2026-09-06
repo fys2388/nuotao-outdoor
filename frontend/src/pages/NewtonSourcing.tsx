@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
   Input, Button, Space, Card, Row, Col, Tag, Spin, Alert, Statistic,
-  Typography, List, Badge, Tooltip, Empty, message, Divider, Rate
+  Typography, List, Badge, Tooltip, Empty, message, Divider, Rate, Checkbox
 } from 'antd'
 import {
   SearchOutlined, RobotOutlined, ThunderboltOutlined,
-  DollarOutlined, ShopOutlined, StarOutlined, CheckCircleOutlined
+  DollarOutlined, ShopOutlined, StarOutlined, CheckCircleOutlined,
+  RocketOutlined
 } from '@ant-design/icons'
 import { api } from '../api/client'
 
@@ -57,6 +58,61 @@ export default function NewtonSourcingPage() {
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<any>(null)
   const [credits, setCredits] = useState<any>(null)
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set())
+
+  // 切换选中状态
+  const toggleSelect = (index: number) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return next
+    })
+  }
+
+  // 全选/取消全选
+  const toggleSelectAll = () => {
+    if (selectedItems.size === result?.products?.length) {
+      setSelectedItems(new Set())
+    } else {
+      setSelectedItems(new Set(result?.products?.map((_, i) => i) || []))
+    }
+  }
+
+  // 批量导入到工作流
+  const handleBatchImport = () => {
+    if (selectedItems.size === 0) {
+      message.warning('请先选择要导入的商品')
+      return
+    }
+
+    const selectedProducts = result?.products?.filter((_, i) => selectedItems.has(i)) || []
+    const batchData = {
+      products: selectedProducts.map((item: any) => ({
+        name: item.subject || item.title || item.name || '',
+        category: item.category || '',
+        price: item.price ? `¥${item.price}` : '',
+        description: item.description || item.reason || '',
+        core_selling_points: item.selling_points || item.highlights || [],
+        target_audience: item.target_audience || '',
+        usage_scenarios: item.scenarios || [],
+        product_features: item.features || [],
+        source_url: item.detail_url || item.url || '',
+        score: item.score,
+      })),
+      source: 'newton_sourcing_batch',
+      timestamp: new Date().toISOString(),
+    }
+
+    localStorage.setItem('product_pipeline_batch', JSON.stringify(batchData))
+    message.success(`已选择${selectedItems.size}个商品，正在跳转到产品工作流...`)
+    setTimeout(() => {
+      window.location.hash = '#/product-pipeline'
+    }, 500)
+  }
 
   const fetchStatus = async () => {
     try {
@@ -286,7 +342,24 @@ export default function NewtonSourcingPage() {
               </Space>
             }
             extra={
-              <Text type="secondary">任务ID: {result.task_id?.substring(0, 8)}...</Text>
+              <Space>
+                <Text type="secondary">任务ID: {result.task_id?.substring(0, 8)}...</Text>
+                <Checkbox
+                  checked={selectedItems.size === result.products?.length && result.products?.length > 0}
+                  onChange={toggleSelectAll}
+                >
+                  全选
+                </Checkbox>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<RocketOutlined />}
+                  onClick={handleBatchImport}
+                  disabled={selectedItems.size === 0}
+                >
+                  批量导入工作流（{selectedItems.size}）
+                </Button>
+              </Space>
             }
           >
             {result.products && result.products.length > 0 ? (
@@ -298,6 +371,15 @@ export default function NewtonSourcingPage() {
                   return (
                     <List.Item key={item.product_id || index}>
                       <Row gutter={[16, 16]} align="top">
+                        {/* 复选框 */}
+                        <Col flex="40px">
+                          <div style={{ paddingTop: '12px' }}>
+                            <Checkbox
+                              checked={selectedItems.has(index)}
+                              onChange={() => toggleSelect(index)}
+                            />
+                          </div>
+                        </Col>
                         {/* 排名 */}
                         <Col flex="60px">
                           <div style={{
@@ -375,6 +457,33 @@ export default function NewtonSourcingPage() {
                                 onClick={() => message.success('已加入选品候选库')}
                               >
                                 加入候选
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                icon={<RocketOutlined />}
+                                onClick={() => {
+                                  const productData = {
+                                    name: item.title || item.name || '',
+                                    category: item.category || '',
+                                    price: item.price || '',
+                                    description: item.description || item.reason || '',
+                                    core_selling_points: item.selling_points || item.highlights || [],
+                                    target_audience: item.target_audience || '',
+                                    usage_scenarios: item.scenarios || [],
+                                    product_features: item.features || [],
+                                    source_url: item.detail_url || item.url || '',
+                                    source: 'newton_sourcing',
+                                    timestamp: new Date().toISOString(),
+                                  }
+                                  localStorage.setItem('product_pipeline_input', JSON.stringify(productData))
+                                  message.success('商品信息已发送到产品工作流，正在跳转...')
+                                  setTimeout(() => {
+                                    window.location.hash = '#/product-pipeline'
+                                  }, 500)
+                                }}
+                              >
+                                导入到工作流
                               </Button>
                             </Space>
                           </Space>

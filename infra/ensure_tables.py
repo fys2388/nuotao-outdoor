@@ -22,16 +22,6 @@ def ensure_missing_columns(engine):
     insp = inspect(engine)
     added_columns = []
 
-    # 硬编码检查：确保 agent_suggestions 表有 feishu_message_id 列
-    if insp.has_table("agent_suggestions"):
-        existing_cols = {col["name"] for col in insp.get_columns("agent_suggestions")}
-        if "feishu_message_id" not in existing_cols:
-            print("[db] 硬编码添加 feishu_message_id 列到 agent_suggestions 表")
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE agent_suggestions ADD COLUMN feishu_message_id VARCHAR(128)"))
-            added_columns.append("agent_suggestions.feishu_message_id")
-            print("[db] feishu_message_id 列添加成功")
-
     for table_name, table in Base.metadata.tables.items():
         if not insp.has_table(table_name):
             continue  # 表不存在，由 create_all 处理

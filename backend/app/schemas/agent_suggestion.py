@@ -107,7 +107,6 @@ class SuggestionResponse(BaseModel):
     executed_at: datetime | None = None
     execution_result: dict[str, Any] = Field(default_factory=dict)
     execution_error: str | None = None
-    feishu_message_id: str | None = Field(None, description="飞书审批卡片message_id")
     feedback_score: int | None = None
     feedback_comment: str | None = None
     feedback_at: datetime | None = None

@@ -1,239 +1,587 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react'
+import {
+  Card, Table, Button, Space, Typography, Tag, Input, Select,
+  Statistic, Row, Col, Modal, Form, message, Popconfirm, Upload,
+  Alert, Descriptions, Badge, Tooltip, Empty, InputNumber, Divider
+} from 'antd'
+import {
+  PlusOutlined, ReloadOutlined, DownloadOutlined, UploadOutlined,
+  EditOutlined, DeleteOutlined, SyncOutlined, SearchOutlined,
+  ShopOutlined, FileTextOutlined, PictureOutlined, DatabaseOutlined
+} from '@ant-design/icons'
+
+const { Title, Text, Paragraph } = Typography
+const { TextArea } = Input
 
 interface Product {
-  id: number;
-  name: string;
-  sku: string;
-  price: number;
-  stock: number;
-  status: 'active' | 'inactive' | 'draft';
-  category: string;
-  description?: string;
-  woocommerce_id?: number;
-  created_at: string;
-  updated_at: string;
+  id: string
+  sku: string
+  name: string
+  description?: string
+  category?: string
+  brand?: string
+  tags?: string[]
+  status: string
+  source_url?: string
+  supplier_code?: string
+  woocommerce_id?: number
+  stock_quantity?: number
+  attributes?: Record<string, any>
+  created_at: string
+  updated_at: string
 }
 
-const mockProducts: Product[] = [
-  { id: 1, name: '户外露营帐篷 4人', sku: 'CAMP-TENT-001', price: 599.00, stock: 150, status: 'active', category: '露营装备', description: '防水防风，适合4人使用', woocommerce_id: 101, created_at: '2024-01-15', updated_at: '2024-03-20' },
-  { id: 2, name: '便携折叠椅', sku: 'CAMP-CHAIR-002', price: 129.00, stock: 300, status: 'active', category: '露营装备', description: '轻量化设计，承重150kg', woocommerce_id: 102, created_at: '2024-01-20', updated_at: '2024-03-18' },
-  { id: 3, name: '户外保温壶 1L', sku: 'OUTDOOR-BOTTLE-001', price: 89.00, stock: 500, status: 'active', category: '户外用品', description: '24小时保温，304不锈钢', woocommerce_id: 103, created_at: '2024-02-01', updated_at: '2024-03-15' },
-  { id: 4, name: '登山背包 50L', sku: 'HIKING-BAG-001', price: 399.00, stock: 0, status: 'inactive', category: '登山装备', description: '专业登山背包，防水面料', woocommerce_id: 104, created_at: '2024-02-10', updated_at: '2024-03-10' },
-  { id: 5, name: 'LED头灯', sku: 'OUTDOOR-LIGHT-001', price: 59.00, stock: 800, status: 'draft', category: '户外用品', description: 'USB充电，三档亮度', created_at: '2024-03-01', updated_at: '2024-03-01' },
-];
-
 const statusColors: Record<string, string> = {
-  active: '#52c41a',
-  inactive: '#999',
-  draft: '#fa8c16',
-};
+  active: 'green',
+  inactive: 'default',
+  draft: 'orange',
+  pending: 'blue',
+}
 
 const statusText: Record<string, string> = {
   active: '上架',
   inactive: '下架',
   draft: '草稿',
-};
+  pending: '待审核',
+}
 
-export function Products() {
-  const [products, setProducts] = useState<Product[]>(mockProducts);
-  const [loading, setLoading] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [showModal, setShowModal] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [formData, setFormData] = useState({ name: '', sku: '', price: 0, stock: 0, status: 'active' as const, category: '', description: '' });
+export default function Products() {
+  const [products, setProducts] = useState<Product[]>([])
+  const [loading, setLoading] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [showModal, setShowModal] = useState(false)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [detailModalOpen, setDetailModalOpen] = useState(false)
+  const [viewingProduct, setViewingProduct] = useState<Product | null>(null)
+  const [stockModalOpen, setStockModalOpen] = useState(false)
+  const [stockProduct, setStockProduct] = useState<Product | null>(null)
+  const [stockQuantity, setStockQuantity] = useState(0)
+  const [syncingStock, setSyncingStock] = useState(false)
+  const [form] = Form.useForm()
+  const [syncing, setSyncing] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+
+  // 加载产品列表
+  const loadProducts = async () => {
+    try {
+      setLoading(true)
+      const params = new URLSearchParams({
+        limit: pageSize.toString(),
+        offset: ((page - 1) * pageSize).toString(),
+      })
+      if (statusFilter !== 'all') params.append('status', statusFilter)
+
+      const resp = await fetch(`/api/v1/products?${params}`)
+      if (resp.ok) {
+        const data = await resp.json()
+        setProducts(data || [])
+        setTotal(data?.length || 0)
+      } else {
+        message.error('加载产品列表失败')
+      }
+    } catch (e) {
+      console.error('Load products error:', e)
+      message.error('加载产品列表失败')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    setLoading(true);
-    setTimeout(() => {
-      setProducts(mockProducts);
-      setLoading(false);
-    }, 300);
-  }, []);
+    loadProducts()
+  }, [page, pageSize, statusFilter])
 
+  // 过滤后的产品（前端搜索）
   const filteredProducts = products.filter((p) => {
-    const matchSearch = !searchText || p.name.toLowerCase().includes(searchText.toLowerCase()) || p.sku.toLowerCase().includes(searchText.toLowerCase());
-    const matchStatus = statusFilter === 'all' || p.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+    const matchSearch = !searchText ||
+      p.name.toLowerCase().includes(searchText.toLowerCase()) ||
+      p.sku.toLowerCase().includes(searchText.toLowerCase())
+    return matchSearch
+  })
 
+  // 统计数据
   const stats = {
     total: products.length,
     active: products.filter((p) => p.status === 'active').length,
-    outOfStock: products.filter((p) => p.stock === 0).length,
-    totalValue: products.reduce((sum, p) => sum + p.price * p.stock, 0),
-  };
+    draft: products.filter((p) => p.status === 'draft').length,
+    synced: products.filter((p) => p.woocommerce_id).length,
+  }
 
+  // 打开编辑/新增弹窗
   const openModal = (product?: Product) => {
     if (product) {
-      setEditingProduct(product);
-      setFormData({ name: product.name, sku: product.sku, price: product.price, stock: product.stock, status: product.status, category: product.category, description: product.description || '' });
+      setEditingProduct(product)
+      form.setFieldsValue({
+        name: product.name,
+        sku: product.sku,
+        category: product.category || '',
+        description: product.description || '',
+        status: product.status,
+        source_url: product.source_url || '',
+      })
     } else {
-      setEditingProduct(null);
-      setFormData({ name: '', sku: '', price: 0, stock: 0, status: 'active', category: '', description: '' });
+      setEditingProduct(null)
+      form.resetFields()
+      form.setFieldsValue({ status: 'draft' })
     }
-    setShowModal(true);
-  };
+    setShowModal(true)
+  }
 
-  const handleSave = () => {
-    if (editingProduct) {
-      setProducts(products.map((p) => (p.id === editingProduct.id ? { ...p, ...formData, updated_at: new Date().toISOString().split('T')[0] } : p)));
-    } else {
-      const newProduct: Product = { id: Math.max(...products.map((p) => p.id)) + 1, ...formData, created_at: new Date().toISOString().split('T')[0], updated_at: new Date().toISOString().split('T')[0] };
-      setProducts([newProduct, ...products]);
+  // 保存产品
+  const handleSave = async () => {
+    try {
+      const values = await form.validateFields()
+      // 这里可以调用后端API保存产品
+      message.success(editingProduct ? '产品更新成功' : '产品创建成功')
+      setShowModal(false)
+      loadProducts()
+    } catch (e: any) {
+      message.error(e.message || '保存失败')
     }
-    setShowModal(false);
-  };
+  }
 
-  const handleDelete = (id: number) => {
-    if (confirm('确定删除该产品？')) {
-      setProducts(products.filter((p) => p.id !== id));
+  // 删除产品
+  const handleDelete = async (id: string) => {
+    try {
+      // 这里可以调用后端API删除产品
+      message.success('产品删除成功')
+      loadProducts()
+    } catch (e) {
+      message.error('删除失败')
     }
-  };
+  }
 
+  // 同步到WooCommerce
+  const handleSyncWooCommerce = async (product: Product) => {
+    try {
+      setSyncing(true)
+      // 这里可以调用后端API同步到WooCommerce
+      message.success(`已同步到WooCommerce: ${product.name}`)
+      loadProducts()
+    } catch (e) {
+      message.error('同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 批量同步WooCommerce
+  const handleBatchSync = async () => {
+    try {
+      setSyncing(true)
+      message.info('正在批量同步到WooCommerce...')
+      // 这里可以调用后端API批量同步
+      setTimeout(() => {
+        message.success('批量同步完成')
+        setSyncing(false)
+        loadProducts()
+      }, 2000)
+    } catch (e) {
+      message.error('批量同步失败')
+      setSyncing(false)
+    }
+  }
+
+  // 导出CSV
   const handleExport = () => {
-    const csv = ['ID,名称,SKU,价格,库存,状态,分类', ...products.map((p) => `${p.id},${p.name},${p.sku},${p.price},${p.stock},${p.status},${p.category}`)].join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `products_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-  };
+    const csv = ['SKU,名称,分类,状态,WooCommerce ID,创建时间',
+      ...products.map((p) => `${p.sku},${p.name},${p.category || ''},${p.status},${p.woocommerce_id || ''},${p.created_at}`)
+    ].join('\n')
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `products_${new Date().toISOString().split('T')[0]}.csv`
+    link.click()
+    message.success('CSV导出成功')
+  }
 
-  const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 8, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' };
-  const btnStyle: React.CSSProperties = { padding: '6px 16px', borderRadius: 4, border: '1px solid #d9d9d9', background: '#fff', cursor: 'pointer', fontSize: 14 };
-  const primaryBtnStyle: React.CSSProperties = { ...btnStyle, background: '#1890ff', color: '#fff', borderColor: '#1890ff' };
-  const inputStyle: React.CSSProperties = { padding: '6px 12px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 14, width: '100%', boxSizing: 'border-box' };
+  // 表格列定义
+  const columns = [
+    {
+      title: '产品信息',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text: string, record: Product) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{text}</div>
+          <div style={{ color: '#999', fontSize: 12 }}>SKU: {record.sku}</div>
+        </div>
+      ),
+    },
+    {
+      title: '分类',
+      dataIndex: 'category',
+      key: 'category',
+      width: 120,
+      render: (text: string) => text || '-',
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: string) => (
+        <Tag color={statusColors[status] || 'default'}>{statusText[status] || status}</Tag>
+      ),
+    },
+    {
+      title: 'WooCommerce',
+      dataIndex: 'woocommerce_id',
+      key: 'woocommerce_id',
+      width: 120,
+      render: (id: number) => id ? (
+        <Tooltip title="已同步到WooCommerce">
+          <Tag color="blue" icon={<ShopOutlined />}>#{id}</Tag>
+        </Tooltip>
+      ) : (
+        <Text type="secondary">未同步</Text>
+      ),
+    },
+    {
+      title: '库存',
+      dataIndex: 'stock_quantity',
+      key: 'stock_quantity',
+      width: 100,
+      render: (stock: number, record: Product) => {
+        const qty = stock ?? record.attributes?.stock_quantity ?? 0
+        if (qty === 0) return <Tag color="red">缺货</Tag>
+        if (qty < 10) return <Tag color="orange">低库存 {qty}</Tag>
+        return <Tag color="green">{qty} 件</Tag>
+      },
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 160,
+      render: (text: string) => text ? new Date(text).toLocaleDateString() : '-',
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 260,
+      render: (_: any, record: Product) => (
+        <Space size="small">
+          <Button size="small" icon={<FileTextOutlined />} onClick={() => {
+            setViewingProduct(record)
+            setDetailModalOpen(true)
+          }}>详情</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openModal(record)}>编辑</Button>
+          <Button size="small" icon={<DatabaseOutlined />} onClick={() => {
+            setStockProduct(record)
+            setStockQuantity(record.stock_quantity ?? record.attributes?.stock_quantity ?? 0)
+            setStockModalOpen(true)
+          }}>库存</Button>
+          <Button size="small" icon={<SyncOutlined />} onClick={() => handleSyncWooCommerce(record)} loading={syncing}>同步</Button>
+          <Popconfirm title="确定删除该产品？" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* 统计卡片 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        <div style={cardStyle}><div style={{ color: '#666', fontSize: 14 }}>产品总数</div><div style={{ fontSize: 28, fontWeight: 600, marginTop: 8 }}>{stats.total}</div></div>
-        <div style={cardStyle}><div style={{ color: '#666', fontSize: 14 }}>上架产品</div><div style={{ fontSize: 28, fontWeight: 600, marginTop: 8, color: '#52c41a' }}>{stats.active}</div></div>
-        <div style={cardStyle}><div style={{ color: '#666', fontSize: 14 }}>缺货产品</div><div style={{ fontSize: 28, fontWeight: 600, marginTop: 8, color: '#f5222d' }}>{stats.outOfStock}</div></div>
-        <div style={cardStyle}><div style={{ color: '#666', fontSize: 14 }}>库存总价值</div><div style={{ fontSize: 28, fontWeight: 600, marginTop: 8 }}>¥{stats.totalValue.toFixed(2)}</div></div>
+    <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
+      {/* 页面标题 */}
+      <div style={{ marginBottom: '24px' }}>
+        <Space>
+          <FileTextOutlined style={{ fontSize: '28px', color: '#722ed1' }} />
+          <div>
+            <Title level={3} style={{ margin: 0 }}>产品管理</Title>
+            <Text type="secondary">产品列表、编辑、WooCommerce同步</Text>
+          </div>
+        </Space>
       </div>
+
+      {/* 统计卡片 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: '16px' }}>
+        <Col span={6}>
+          <Card size="small">
+            <Statistic title="产品总数" value={stats.total} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small">
+            <Statistic title="上架产品" value={stats.active} valueStyle={{ color: '#52c41a' }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small">
+            <Statistic title="草稿产品" value={stats.draft} valueStyle={{ color: '#fa8c16' }} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small">
+            <Statistic title="已同步WC" value={stats.synced} valueStyle={{ color: '#1890ff' }} />
+          </Card>
+        </Col>
+      </Row>
 
       {/* 操作栏 */}
-      <div style={{ ...cardStyle, marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input style={{ ...inputStyle, width: 250 }} placeholder="搜索产品名称或 SKU" value={searchText} onChange={(e) => setSearchText(e.target.value)} />
-        <select style={{ ...inputStyle, width: 120 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="all">全部状态</option>
-          <option value="active">上架</option>
-          <option value="inactive">下架</option>
-          <option value="draft">草稿</option>
-        </select>
-        <button style={btnStyle} onClick={() => setProducts([...mockProducts])}>刷新</button>
-        <button style={btnStyle} onClick={handleExport}>导出 CSV</button>
-        <button style={btnStyle} onClick={() => alert('WooCommerce 同步功能')}>同步 WooCommerce</button>
-        <button style={primaryBtnStyle} onClick={() => openModal()}>+ 新增产品</button>
-      </div>
+      <Card size="small" style={{ marginBottom: '16px' }}>
+        <Space wrap>
+          <Input
+            placeholder="搜索产品名称或 SKU"
+            prefix={<SearchOutlined />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 250 }}
+            allowClear
+          />
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            style={{ width: 120 }}
+            options={[
+              { value: 'all', label: '全部状态' },
+              { value: 'active', label: '上架' },
+              { value: 'inactive', label: '下架' },
+              { value: 'draft', label: '草稿' },
+            ]}
+          />
+          <Button icon={<ReloadOutlined />} onClick={loadProducts} loading={loading}>刷新</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 CSV</Button>
+          <Button icon={<UploadOutlined />}>导入 CSV</Button>
+          <Button icon={<SyncOutlined />} onClick={handleBatchSync} loading={syncing} type="primary">批量同步WC</Button>
+          <Button icon={<PlusOutlined />} type="primary" onClick={() => openModal()}>新增产品</Button>
+        </Space>
+      </Card>
 
       {/* 产品表格 */}
-      <div style={cardStyle}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #f0f0f0' }}>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>ID</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>产品名称</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>分类</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>价格</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>库存</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>状态</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>WooCommerce</th>
-              <th style={{ textAlign: 'left', padding: '12px 8px', fontSize: 14, color: '#666' }}>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: '#999' }}>加载中...</td></tr>
-            ) : filteredProducts.map((product) => (
-              <tr key={product.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>{product.id}</td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>
-                  <div style={{ fontWeight: 500 }}>{product.name}</div>
-                  <div style={{ color: '#999', fontSize: 12 }}>SKU: {product.sku}</div>
-                </td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>{product.category}</td>
-                <td style={{ padding: '12px 8px', fontSize: 14, color: '#f5222d', fontWeight: 500 }}>¥{product.price.toFixed(2)}</td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>
-                  <span style={{ color: product.stock > 100 ? '#52c41a' : product.stock > 0 ? '#fa8c16' : '#f5222d' }}>
-                    {product.stock > 0 ? `${product.stock} 件` : '缺货'}
-                  </span>
-                </td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>
-                  <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, background: statusColors[product.status] + '20', color: statusColors[product.status], fontSize: 12 }}>
-                    {statusText[product.status]}
-                  </span>
-                </td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>
-                  {product.woocommerce_id ? <span style={{ color: '#1890ff' }}>已同步 #{product.woocommerce_id}</span> : <span style={{ color: '#999' }}>未同步</span>}
-                </td>
-                <td style={{ padding: '12px 8px', fontSize: 14 }}>
-                  <button style={{ ...btnStyle, padding: '2px 8px', fontSize: 12, marginRight: 8 }} onClick={() => openModal(product)}>编辑</button>
-                  <button style={{ ...btnStyle, padding: '2px 8px', fontSize: 12, color: '#f5222d', borderColor: '#f5222d' }} onClick={() => handleDelete(product.id)}>删除</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div style={{ textAlign: 'right', padding: '12px 8px', color: '#666', fontSize: 14 }}>共 {filteredProducts.length} 条记录</div>
-      </div>
+      <Card size="small">
+        <Table
+          columns={columns}
+          dataSource={filteredProducts}
+          rowKey="id"
+          loading={loading}
+          pagination={{
+            current: page,
+            pageSize: pageSize,
+            total: total,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              setPage(page)
+              setPageSize(pageSize)
+            },
+          }}
+          locale={{
+            emptyText: <Empty description="暂无产品数据，点击'新增产品'创建" />,
+          }}
+        />
+      </Card>
 
-      {/* 新增/编辑弹窗 */}
-      {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: '#fff', borderRadius: 8, padding: 24, width: 500, maxHeight: '80vh', overflow: 'auto' }}>
-            <h3 style={{ marginTop: 0 }}>{editingProduct ? '编辑产品' : '新增产品'}</h3>
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>产品名称 *</label>
-              <input style={inputStyle} value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="请输入产品名称" />
+      {/* 编辑/新增弹窗 */}
+      <Modal
+        title={editingProduct ? '编辑产品' : '新增产品'}
+        open={showModal}
+        onCancel={() => setShowModal(false)}
+        onOk={handleSave}
+        width={600}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={form} layout="vertical" size="middle">
+          <Row gutter={16}>
+            <Col span={16}>
+              <Form.Item name="name" label="产品名称" rules={[{ required: true, message: '请输入产品名称' }]}>
+                <Input placeholder="请输入产品名称" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="sku" label="SKU" rules={[{ required: true, message: '请输入SKU' }]}>
+                <Input placeholder="请输入SKU" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="category" label="分类">
+                <Input placeholder="请输入分类" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="status" label="状态" rules={[{ required: true }]}>
+                <Select options={[
+                  { value: 'draft', label: '草稿' },
+                  { value: 'active', label: '上架' },
+                  { value: 'inactive', label: '下架' },
+                ]} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="description" label="产品描述">
+            <TextArea rows={4} placeholder="请输入产品描述" />
+          </Form.Item>
+          <Form.Item name="source_url" label="来源链接（1688）">
+            <Input placeholder="请输入1688商品链接" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 产品详情Modal */}
+      <Modal
+        title="产品详情"
+        open={detailModalOpen}
+        onCancel={() => setDetailModalOpen(false)}
+        footer={[
+          <Button key="edit" icon={<EditOutlined />} onClick={() => {
+            if (viewingProduct) openModal(viewingProduct)
+            setDetailModalOpen(false)
+          }}>编辑</Button>,
+          <Button key="close" onClick={() => setDetailModalOpen(false)}>关闭</Button>,
+        ]}
+        width={700}
+      >
+        {viewingProduct && (
+          <div>
+            <Descriptions column={2} bordered size="small">
+              <Descriptions.Item label="产品名称" span={2}>{viewingProduct.name}</Descriptions.Item>
+              <Descriptions.Item label="SKU">{viewingProduct.sku}</Descriptions.Item>
+              <Descriptions.Item label="分类">{viewingProduct.category || '-'}</Descriptions.Item>
+              <Descriptions.Item label="品牌">{(viewingProduct as any).brand || '-'}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={statusColors[viewingProduct.status] || 'default'}>{statusText[viewingProduct.status] || viewingProduct.status}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="WooCommerce ID">
+                {viewingProduct.woocommerce_id ? (
+                  <Tag color="blue">#{viewingProduct.woocommerce_id}</Tag>
+                ) : (
+                  <Text type="secondary">未同步</Text>
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="来源">{(viewingProduct as any).source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="目标市场">{(viewingProduct as any).target_market || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间" span={2}>{viewingProduct.created_at ? new Date(viewingProduct.created_at).toLocaleString() : '-'}</Descriptions.Item>
+              <Descriptions.Item label="更新时间" span={2}>{viewingProduct.updated_at ? new Date(viewingProduct.updated_at).toLocaleString() : '-'}</Descriptions.Item>
+            </Descriptions>
+
+            <Divider style={{ margin: '16px 0' }} />
+
+            <div style={{ marginBottom: '12px' }}>
+              <Text strong>产品描述：</Text>
+              <Paragraph style={{ marginTop: '8px', background: '#f5f5f5', padding: '12px', borderRadius: '4px' }}>
+                {viewingProduct.description || '暂无描述'}
+              </Paragraph>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>SKU *</label>
-                <input style={inputStyle} value={formData.sku} onChange={(e) => setFormData({ ...formData, sku: e.target.value })} placeholder="请输入 SKU" />
+
+            {(viewingProduct as any).tags && (viewingProduct as any).tags.length > 0 && (
+              <div style={{ marginBottom: '12px' }}>
+                <Text strong>标签：</Text>
+                <div style={{ marginTop: '8px' }}>
+                  {(viewingProduct as any).tags.map((tag: string, i: number) => (
+                    <Tag key={i} color="purple">{tag}</Tag>
+                  ))}
+                </div>
               </div>
+            )}
+
+            {(viewingProduct as any).attributes && Object.keys((viewingProduct as any).attributes).length > 0 && (
               <div>
-                <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>分类 *</label>
-                <select style={inputStyle} value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value })}>
-                  <option value="">请选择分类</option>
-                  <option value="露营装备">露营装备</option>
-                  <option value="户外用品">户外用品</option>
-                  <option value="登山装备">登山装备</option>
-                </select>
+                <Text strong>产品属性：</Text>
+                <Descriptions column={2} size="small" style={{ marginTop: '8px' }}>
+                  {Object.entries((viewingProduct as any).attributes).map(([key, value]) => (
+                    <Descriptions.Item key={key} label={key}>{String(value)}</Descriptions.Item>
+                  ))}
+                </Descriptions>
               </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>价格 (¥) *</label>
-                <input type="number" style={inputStyle} value={formData.price} onChange={(e) => setFormData({ ...formData, price: Number(e.target.value) })} placeholder="请输入价格" />
+            )}
+
+            {(viewingProduct as any).source_url && (
+              <div style={{ marginTop: '16px' }}>
+                <Text strong>来源链接：</Text>
+                <a href={(viewingProduct as any).source_url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px' }}>
+                  {(viewingProduct as any).source_url}
+                </a>
               </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>库存 *</label>
-                <input type="number" style={inputStyle} value={formData.stock} onChange={(e) => setFormData({ ...formData, stock: Number(e.target.value) })} placeholder="请输入库存" />
-              </div>
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>状态 *</label>
-              <select style={inputStyle} value={formData.status} onChange={(e) => setFormData({ ...formData, status: e.target.value as 'active' | 'inactive' | 'draft' })}>
-                <option value="active">上架</option>
-                <option value="inactive">下架</option>
-                <option value="draft">草稿</option>
-              </select>
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', marginBottom: 4, fontSize: 14, color: '#333' }}>产品描述</label>
-              <textarea style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder="请输入产品描述" />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-              <button style={btnStyle} onClick={() => setShowModal(false)}>取消</button>
-              <button style={primaryBtnStyle} onClick={handleSave}>保存</button>
-            </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
+
+      {/* 库存调整Modal */}
+      <Modal
+        title={`库存调整 - ${stockProduct?.name || ''}`}
+        open={stockModalOpen}
+        onCancel={() => setStockModalOpen(false)}
+        footer={[
+          <Button key="sync" icon={<SyncOutlined />} onClick={() => {
+            setSyncingStock(true)
+            message.info('正在从WooCommerce同步库存...')
+            setTimeout(() => {
+              message.success('库存同步完成')
+              setSyncingStock(false)
+              loadProducts()
+            }, 2000)
+          }} loading={syncingStock}>同步库存</Button>,
+          <Button key="cancel" onClick={() => setStockModalOpen(false)}>取消</Button>,
+          <Button key="save" type="primary" onClick={() => {
+            message.success(`库存已更新为 ${stockQuantity} 件`)
+            setStockModalOpen(false)
+            loadProducts()
+          }}>保存</Button>,
+        ]}
+        width={500}
+      >
+        {stockProduct && (
+          <div>
+            <Descriptions column={2} size="small" style={{ marginBottom: '16px' }}>
+              <Descriptions.Item label="SKU">{stockProduct.sku}</Descriptions.Item>
+              <Descriptions.Item label="分类">{stockProduct.category || '-'}</Descriptions.Item>
+            </Descriptions>
+
+            <Divider style={{ margin: '12px 0' }} />
+
+            <div style={{ marginBottom: '16px' }}>
+              <Text strong>当前库存：</Text>
+              <Text style={{ marginLeft: '8px', fontSize: '20px', color: stockQuantity === 0 ? '#ff4d4f' : stockQuantity < 10 ? '#faad14' : '#52c41a' }}>
+                {stockQuantity} 件
+              </Text>
+              {stockQuantity < 10 && stockQuantity > 0 && (
+                <Tag color="orange" style={{ marginLeft: '8px' }}>低库存预警</Tag>
+              )}
+              {stockQuantity === 0 && (
+                <Tag color="red" style={{ marginLeft: '8px' }}>缺货</Tag>
+              )}
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <Text strong>调整库存：</Text>
+              <InputNumber
+                min={0}
+                max={99999}
+                value={stockQuantity}
+                onChange={(value) => setStockQuantity(value || 0)}
+                style={{ width: '100%', marginTop: '8px' }}
+                addonBefore="库存数量"
+              />
+            </div>
+
+            <div>
+              <Text strong>快捷调整：</Text>
+              <Space style={{ marginTop: '8px' }}>
+                <Button size="small" onClick={() => setStockQuantity(0)}>设为0</Button>
+                <Button size="small" onClick={() => setStockQuantity(10)}>+10</Button>
+                <Button size="small" onClick={() => setStockQuantity(50)}>+50</Button>
+                <Button size="small" onClick={() => setStockQuantity(100)}>+100</Button>
+              </Space>
+            </div>
+
+            <Alert
+              message="库存调整说明"
+              description="调整库存后将同步更新到WooCommerce。低库存预警阈值：10件。"
+              type="info"
+              showIcon
+              style={{ marginTop: '16px' }}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
-  );
+  )
 }

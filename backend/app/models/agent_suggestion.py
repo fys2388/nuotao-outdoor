@@ -96,11 +96,6 @@ class AgentSuggestion(Base, TimestampMixin, WorkspaceMixin):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approval_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="审批意见")
 
-    # --- 飞书集成 ---
-    feishu_message_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, comment="飞书审批卡片message_id，用于回调后更新原卡片"
-    )
-
     # --- 执行结果 ---
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     execution_result: Mapped[dict[str, Any]] = mapped_column(

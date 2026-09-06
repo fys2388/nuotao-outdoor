@@ -47,25 +47,45 @@ export default defineConfig({
 
     rollupOptions: {
       output: {
-        // 手动代码分割（按依赖库拆分）
-        manualChunks: {
+        // 手动代码分割（按依赖库拆分，函数形式更灵活）
+        manualChunks(id) {
           // React 核心库
-          'react-vendor': ['react', 'react-dom'],
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/') || id.includes('node_modules/scheduler/')) {
+            return 'react-vendor'
+          }
           // Ant Design UI 库
-          'antd-vendor': ['antd', '@ant-design/icons'],
+          if (id.includes('node_modules/antd/') || id.includes('node_modules/@ant-design/')) {
+            return 'antd-vendor'
+          }
+          // Ant Design Icons 单独拆分（图标库较大）
+          if (id.includes('node_modules/@ant-design/icons/')) {
+            return 'icons-vendor'
+          }
+          // 路由库
+          if (id.includes('node_modules/react-router/') || id.includes('node_modules/@remix-run/')) {
+            return 'router-vendor'
+          }
+          // 工具库
+          if (id.includes('node_modules/lodash/') || id.includes('node_modules/axios/') || id.includes('node_modules/dayjs/')) {
+            return 'utils-vendor'
+          }
+          // 图表库
+          if (id.includes('node_modules/echarts/') || id.includes('node_modules/zrender/')) {
+            return 'charts-vendor'
+          }
         },
 
-        // chunk 文件命名（含内容哈希，便于缓存）
-        chunkFileNames: 'assets/js/[name]-[hash].js',
-        entryFileNames: 'assets/js/[name]-[hash].js',
+        // chunk 文件命名（不含哈希，避免Cloudflare缓存404问题）
+        chunkFileNames: 'assets/js/[name].js',
+        entryFileNames: 'assets/js/[name].js',
         assetFileNames: (assetInfo) => {
           const ext = assetInfo.name?.split('.').pop() || ''
-          if (ext === 'css') return 'assets/css/[name]-[hash].[ext]'
+          if (ext === 'css') return 'assets/css/[name].[ext]'
           if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext))
-            return 'assets/images/[name]-[hash].[ext]'
+            return 'assets/images/[name].[ext]'
           if (['woff', 'woff2', 'ttf', 'eot'].includes(ext))
-            return 'assets/fonts/[name]-[hash].[ext]'
-          return 'assets/[name]-[hash].[ext]'
+            return 'assets/fonts/[name].[ext]'
+          return 'assets/[name].[ext]'
         },
       },
     },

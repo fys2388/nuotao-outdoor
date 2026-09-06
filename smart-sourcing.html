@@ -427,14 +427,6 @@
                             📸 自动提取1688图片
                         </button>
                     </div>
-                    <div style="margin-top: 8px;">
-                        <label class="form-label" style="font-size: 12px; color: #888;">或手动粘贴图片URL（每行一个，支持从1688页面右键复制图片地址）</label>
-                        <textarea class="form-textarea" id="manualImageUrls" placeholder="https://cbu01.alicdn.com/img/ibank/xxx.jpg
-https://cbu01.alicdn.com/img/ibank/yyy.jpg" style="min-height: 60px; font-size: 12px;"></textarea>
-                        <button class="btn btn-extract" style="margin-top: 8px; background: #3498db;" onclick="loadManualImages()">
-                            📋 加载手动输入的图片
-                        </button>
-                    </div>
                     <!-- 图片预览区域 -->
                     <div class="image-preview-grid" id="imagePreviewGrid" style="display: none;"></div>
                     <!-- 图片处理按钮 -->
@@ -954,35 +946,14 @@ https://cbu01.alicdn.com/img/ibank/yyy.jpg" style="min-height: 60px; font-size: 
                     displayImagePreview();
                     alert(`✅ 成功提取 ${result.count} 张图片！\n已自动全选，可取消不需要的图片。`);
                 } else {
-                    alert('⚠️ 自动提取未能获取到图片（1688有反爬虫机制）。\n\n请使用下方"手动粘贴图片URL"功能：\n1. 在浏览器中打开1688产品页面\n2. 右键点击产品图片 → "复制图片地址"\n3. 粘贴到下方文本框（每行一个）');
+                    alert('未能提取到图片，请检查1688链接是否正确。');
                 }
             } catch (error) {
-                alert('提取图片失败：' + error.message + '\n\n请尝试使用手动粘贴图片URL功能。');
+                alert('提取图片失败：' + error.message);
             } finally {
                 btn.disabled = false;
                 btn.textContent = '📸 自动提取1688图片';
             }
-        }
-
-        // 加载手动输入的图片URL
-        function loadManualImages() {
-            const manualText = document.getElementById('manualImageUrls').value.trim();
-            if (!manualText) {
-                alert('请先粘贴图片URL！');
-                return;
-            }
-
-            const urls = manualText.split('\n').map(u => u.trim()).filter(u => u && u.startsWith('http'));
-
-            if (urls.length === 0) {
-                alert('未找到有效的图片URL，请确保每行一个以http开头的链接。');
-                return;
-            }
-
-            extractedImageUrls = urls;
-            selectedImageIndices = new Set(urls.map((_, i) => i)); // 默认全选
-            displayImagePreview();
-            alert(`✅ 成功加载 ${urls.length} 张图片！\n已自动全选，可取消不需要的图片。`);
         }
 
         // 显示图片预览

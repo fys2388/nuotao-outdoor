@@ -18,8 +18,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 # 1688 开放平台配置（从环境变量读取，未配置时降级）
-ALI1688_APP_KEY = os.getenv("ALI1688_APP_KEY", "")
-ALI1688_APP_SECRET = os.getenv("ALI1688_APP_SECRET", "")
+# 同时支持 ALI1688_ 和 ALIBABA_ 两种前缀
+ALI1688_APP_KEY = os.getenv("ALI1688_APP_KEY", "") or os.getenv("ALIBABA_APP_KEY", "")
+ALI1688_APP_SECRET = os.getenv("ALI1688_APP_SECRET", "") or os.getenv("ALIBABA_APP_SECRET", "")
+ALI1688_ACCESS_TOKEN = os.getenv("ALI1688_ACCESS_TOKEN", "") or os.getenv("ALIBABA_ACCESS_TOKEN", "")
 ALI1688_BASE_URL = "https://gw.open.1688.com/openapi"
 
 # 请求超时
@@ -35,7 +37,7 @@ def _sign(params: dict[str, Any], secret: str) -> str:
 
 def _build_common_params(method: str) -> dict[str, Any]:
     """构建公共参数"""
-    return {
+    params = {
         "method": method,
         "app_key": ALI1688_APP_KEY,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -43,6 +45,9 @@ def _build_common_params(method: str) -> dict[str, Any]:
         "v": "2.0",
         "sign_method": "md5",
     }
+    if ALI1688_ACCESS_TOKEN:
+        params["access_token"] = ALI1688_ACCESS_TOKEN
+    return params
 
 
 def is_configured() -> bool:
@@ -80,7 +85,7 @@ def search_products(
             "pageSize": page_size,
             "sortType": sort,
         })
-        params["_aop_signature"] = _sign(params, ALI1688_APP_SECRET)
+        params["sign"] = _sign(params, ALI1688_APP_SECRET)
 
         url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
         resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
@@ -119,7 +124,7 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
         method = "alibaba.product.get"
         params = _build_common_params(method)
         params["productId"] = product_id
-        params["_aop_signature"] = _sign(params, ALI1688_APP_SECRET)
+        params["sign"] = _sign(params, ALI1688_APP_SECRET)
 
         url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
         resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
@@ -154,7 +159,7 @@ def get_supplier_info(member_id: str) -> dict[str, Any]:
         method = "alibaba.member.get"
         params = _build_common_params(method)
         params["memberId"] = member_id
-        params["_aop_signature"] = _sign(params, ALI1688_APP_SECRET)
+        params["sign"] = _sign(params, ALI1688_APP_SECRET)
 
         url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
         resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
