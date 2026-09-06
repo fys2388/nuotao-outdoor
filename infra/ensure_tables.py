@@ -11,12 +11,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 os.chdir(os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from sqlalchemy import create_engine, inspect
-from app.core.config import settings
+from app.core.config import get_settings
 from app.models import Base
 
 
 def main():
-    sync_url = settings.DATABASE_URL.replace("+asyncpg", "")
+    settings = get_settings()
+    sync_url = settings.database_url.replace("+asyncpg", "")
     engine = create_engine(sync_url)
     insp = inspect(engine)
     existing = set(insp.get_table_names())
