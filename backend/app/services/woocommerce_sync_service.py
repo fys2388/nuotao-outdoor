@@ -9,6 +9,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 
 import requests
@@ -372,4 +373,222 @@ def get_sync_status() -> dict[str, Any]:
             "dashboard_integration",
         ],
         "note": "WooCommerce data sync service is ready. Syncs real order data from WooCommerce to dashboard, weekly report, and alert system.",
+    }
+
+
+
+# --------------------------------------------------------------------------- #
+# 产品同步到数据库
+# --------------------------------------------------------------------------- #
+
+def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]:
+    """将 WooCommerce 产品转换为系统内部格式。
+
+    Args:
+        wc_product: WooCommerce 产品数据
+
+    Returns:
+        系统内部格式的产品数据
+    """
+    # 提取类别
+    categories = wc_product.get("categories", [])
+    category = categories[0].get("name", "") if categories else None
+
+    # 提取标签
+    tags = [tag.get("name", "") for tag in wc_product.get("tags", []) if tag.get("name")]
+
+    # 提取属性
+    attributes = {}
+    for attr in wc_product.get("attributes", []):
+        attr_name = attr.get("name", "")
+        attr_options = attr.get("options", [])
+        if attr_name:
+            attributes[attr_name] = attr_options if len(attr_options) > 1 else attr_options[0] if attr_options else ""
+
+    # 提取尺寸
+    dimensions = wc_product.get("dimensions", {})
+    dim_dict = {}
+    if dimensions.get("length"):
+        dim_dict["length"] = dimensions["length"]
+    if dimensions.get("width"):
+        dim_dict["width"] = dimensions["width"]
+    if dimensions.get("height"):
+        dim_dict["height"] = dimensions["height"]
+
+    # 提取重量（WooCommerce 默认单位可能是 kg 或 g，这里假设是 kg）
+    weight = wc_product.get("weight")
+    weight_kg = None
+    if weight:
+        try:
+            weight_kg = float(weight)
+        except (ValueError, TypeError):
+            weight_kg = None
+
+    # 状态映射
+    wc_status = wc_product.get("status", "draft")
+    status_map = {
+        "publish": "active",
+        "draft": "draft",
+        "pending": "draft",
+        "private": "draft",
+    }
+    status = status_map.get(wc_status, "draft")
+
+    # 元数据（价格、库存等）
+    meta = {
+        "woocommerce_id": wc_product.get("id"),
+        "woocommerce_slug": wc_product.get("slug"),
+        "price": wc_product.get("price"),
+        "regular_price": wc_product.get("regular_price"),
+        "sale_price": wc_product.get("sale_price"),
+        "stock_quantity": wc_product.get("stock_quantity"),
+        "in_stock": wc_product.get("in_stock"),
+        "total_sales": wc_product.get("total_sales"),
+        "average_rating": wc_product.get("average_rating"),
+        "rating_count": wc_product.get("rating_count"),
+        "product_type": wc_product.get("type"),
+    }
+
+    # 清理空值
+    meta = {k: v for k, v in meta.items() if v is not None}
+
+    return {
+        "sku": wc_product.get("sku", f"wc-{wc_product.get('id', '')}"),
+        "name": wc_product.get("name", ""),
+        "description": (wc_product.get("description") or "")[:2000],
+        "category": category,
+        "brand": None,  # WooCommerce 默认没有品牌字段，可从 meta_data 提取
+        "status": status,
+        "source": "woocommerce",
+        "source_url": wc_product.get("permalink"),
+        "tags": tags,
+        "attributes": attributes,
+        "meta": meta,
+        "weight_kg": weight_kg,
+        "dimensions": dim_dict if dim_dict else None,
+        "target_market": "US",
+    }
+
+
+async def sync_products_to_db(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    per_page: int = 100,
+    max_pages: int | None = None,
+) -> dict[str, Any]:
+    """从 WooCommerce 同步产品到本地数据库（upsert by workspace + sku）。
+
+    Args:
+        session: 数据库会话
+        workspace_id: 工作区 ID
+        per_page: 每页获取数量
+        max_pages: 最大同步页数（None 表示全部同步）
+
+    Returns:
+        同步结果统计
+    """
+    from app.models.product import Product
+    from sqlalchemy import select
+
+    imported = 0
+    updated = 0
+    failed = 0
+    errors: list[str] = []
+    page = 1
+
+    while True:
+        if max_pages and page > max_pages:
+            break
+
+        logger.info("同步 WooCommerce 产品: 第 %d 页", page)
+        result = fetch_woocommerce_products(per_page=per_page, page=page)
+
+        if not result.get("success"):
+            error_msg = result.get("error", "未知错误")
+            logger.error("获取 WooCommerce 产品失败: %s", error_msg)
+            errors.append(f"第 {page} 页: {error_msg}")
+            break
+
+        products = result.get("products", [])
+        if not products:
+            logger.info("第 %d 页无产品，同步完成", page)
+            break
+
+        for wc_product in products:
+            try:
+                data = convert_wc_product_to_internal(wc_product)
+
+                # 按 workspace + sku 查找现有产品
+                existing = (
+                    await session.execute(
+                        select(Product).where(
+                            Product.workspace_id == workspace_id,
+                            Product.sku == data["sku"],
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if existing is None:
+                    # 新建产品
+                    product = Product(
+                        workspace_id=workspace_id,
+                        sku=data["sku"],
+                        name=data["name"],
+                        description=data["description"],
+                        category=data["category"],
+                        brand=data["brand"],
+                        status=data["status"],
+                        source=data["source"],
+                        source_url=data["source_url"],
+                        tags=data["tags"],
+                        attributes=data["attributes"],
+                        meta=data["meta"],
+                        weight_kg=data["weight_kg"],
+                        dimensions=data["dimensions"],
+                        target_market=data["target_market"],
+                    )
+                    session.add(product)
+                    imported += 1
+                else:
+                    # 更新产品
+                    existing.name = data["name"]
+                    existing.description = data["description"]
+                    existing.category = data["category"]
+                    existing.status = data["status"]
+                    existing.source_url = data["source_url"]
+                    existing.tags = data["tags"]
+                    existing.attributes = data["attributes"]
+                    existing.meta = data["meta"]
+                    existing.weight_kg = data["weight_kg"]
+                    existing.dimensions = data["dimensions"]
+                    updated += 1
+
+            except Exception as e:
+                failed += 1
+                error_msg = f"产品 ID {wc_product.get('id')}: {str(e)}"
+                logger.error("同步产品失败: %s", error_msg)
+                errors.append(error_msg)
+
+        # 每批提交一次
+        await session.commit()
+
+        pagination = result.get("pagination", {})
+        total_pages = pagination.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+    logger.info(
+        "WooCommerce 产品同步完成: 新增 %d, 更新 %d, 失败 %d",
+        imported, updated, failed,
+    )
+
+    return {
+        "success": failed == 0,
+        "imported": imported,
+        "updated": updated,
+        "failed": failed,
+        "errors": errors,
+        "total_processed": imported + updated + failed,
     }

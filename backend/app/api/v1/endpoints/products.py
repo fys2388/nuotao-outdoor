@@ -82,3 +82,33 @@ async def list_products(
         offset=offset,
     )
     return [ProductOut.model_validate(row) for row in rows]
+
+
+
+@router.post(
+    "/sync-woocommerce",
+    status_code=status.HTTP_200_OK,
+    summary="从 WooCommerce 同步产品 / Sync products from WooCommerce",
+)
+async def sync_woocommerce_products(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    per_page: int = Query(default=100, ge=1, le=100),
+    max_pages: int | None = Query(default=None, ge=1),
+) -> dict:
+    """从 WooCommerce 同步产品到本地数据库（upsert by workspace + sku）。"""
+    from app.services.woocommerce_sync_service import sync_products_to_db
+
+    try:
+        result = await sync_products_to_db(
+            db,
+            workspace_id=workspace_id,
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"WooCommerce 产品同步失败: {str(e)}",
+        ) from e
