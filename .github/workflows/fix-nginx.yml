@@ -1,0 +1,37 @@
+name: Fix Nginx Config
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix nginx config
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            # 备份
+            cp /etc/nginx/sites-available/nuotao /etc/nginx/sites-available/nuotao.bak
+            
+            # 用 sed 替换 location /ops-dashboard/ 为 location ^~ /ops-dashboard/
+            sed -i 's|location /ops-dashboard/ {|location ^~ /ops-dashboard/ {|g' /etc/nginx/sites-available/nuotao
+            
+            # 用 sed 替换 try_files 行，去掉 fallback
+            sed -i 's|try_files $uri $uri/ /ops-dashboard/index.html;|try_files $uri $uri/ =404;|g' /etc/nginx/sites-available/nuotao
+            
+            # 显示修改后的配置
+            grep -A 5 "ops-dashboard" /etc/nginx/sites-available/nuotao
+            
+            # 测试并重载
+            nginx -t && systemctl reload nginx
+            
+            # 测试访问
+            sleep 2
+            curl -s -o /tmp/test.html -w "HTTP: %{http_code}, Size: %{size_download}\n" http://localhost:80/ops-dashboard/
+            head -3 /tmp/test.html
+            grep -c "运营监控中心" /tmp/test.html && echo "SUCCESS: ops-dashboard page returned" || echo "FAIL: wrong page returned"
