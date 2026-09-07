@@ -30,12 +30,10 @@ jobs:
             echo "已移除旧变量"
 
             echo "=== 3. 写入新的 FEISHU_* 变量 ==="
-            cat >> $ENV_FILE << ENVEOF
-FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}
-FEISHU_APP_SECRET=${{ secrets.FEISHU_APP_SECRET }}
-FEISHU_CHAT_ID=${{ secrets.FEISHU_CHAT_ID }}
-FEISHU_CALLBACK_BASE_URL=${{ secrets.FEISHU_CALLBACK_BASE_URL }}
-ENVEOF
+            printf 'FEISHU_APP_ID=%s\n' '${{ secrets.FEISHU_APP_ID }}' >> $ENV_FILE
+            printf 'FEISHU_APP_SECRET=%s\n' '${{ secrets.FEISHU_APP_SECRET }}' >> $ENV_FILE
+            printf 'FEISHU_CHAT_ID=%s\n' '${{ secrets.FEISHU_CHAT_ID }}' >> $ENV_FILE
+            printf 'FEISHU_CALLBACK_BASE_URL=%s\n' '${{ secrets.FEISHU_CALLBACK_BASE_URL }}' >> $ENV_FILE
             echo "已写入新变量"
 
             echo "=== 4. 验证 .env 中的 FEISHU_* 变量（密钥脱敏） ==="
