@@ -1,0 +1,20 @@
+[Unit]
+Description=Nuotao AI Agent Scheduler (选品/营销/供应链/执行/反馈)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nuotao/backend
+Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/nuotao/.env
+ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nuotao-agent-scheduler
+
+[Install]
+WantedBy=multi-user.target

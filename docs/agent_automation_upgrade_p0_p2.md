@@ -22,6 +22,7 @@
 - Agent 运行结果写入 `ai_agent_runs` 表（已有模型），可通过 API 查询
 
 **验收**:
+- [x] 调度器部署件已补齐（2026-09-07 总负责人下令，见 `docs/agent_scheduler_deployment.md`）：infra/systemd 版本化模板 + deploy.yml §7.5 模板优先 + db-migration-and-scheduler.yml 移除 crontab 双启动 + 兼容入口 `backend/app/scheduler.py`
 - [ ] 3个 Agent 通过运行时调度执行，结果入库
 - [ ] API 可查询 Agent 运行历史（输入/输出/成本/状态）
 - [ ] Agent 失败自动告警到飞书

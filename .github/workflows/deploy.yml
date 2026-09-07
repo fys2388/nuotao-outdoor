@@ -242,7 +242,14 @@ jobs:
 
             echo "=== 7.5 Configuring AI Agent Scheduler ==="
             SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
-            if [ ! -f "$SCHEDULER_SERVICE" ]; then
+            SCHEDULER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-scheduler.service
+            if [ -f "$SCHEDULER_TEMPLATE" ]; then
+              # 模板优先：以仓库版本化模板为准（docs/agent_scheduler_deployment.md）
+              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
+              chmod 644 "$SCHEDULER_SERVICE"
+              echo "[scheduler] installed versioned template -> $SCHEDULER_SERVICE"
+            elif [ ! -f "$SCHEDULER_SERVICE" ]; then
+              # 兜底：模板缺失且服务不存在时内联生成
               {
                 echo '[Unit]'
                 echo 'Description=Nuotao AI Agent Scheduler'
@@ -262,9 +269,9 @@ jobs:
                 echo '[Install]'
                 echo 'WantedBy=multi-user.target'
               } > "$SCHEDULER_SERVICE"
-              echo "[scheduler] created $SCHEDULER_SERVICE"
+              echo "[scheduler] template missing, generated inline fallback"
             else
-              echo "[scheduler] service already exists, updating..."
+              echo "[scheduler] template missing, keeping existing $SCHEDULER_SERVICE"
               sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler|' "$SCHEDULER_SERVICE"
             fi
             systemctl daemon-reload

@@ -51,24 +51,24 @@ jobs:
             echo "=== 3. Verifying new tables ==="
             DB_URL=$(grep '^DATABASE_URL=' .env | cut -d'=' -f2-)
             python3 -c "
-import os
-import asyncio
-from sqlalchemy import create_engine, text
-db_url = os.environ.get('DATABASE_URL', '').replace('+asyncpg', '')
-if not db_url:
-    with open('.env') as f:
-        for line in f:
-            if line.startswith('DATABASE_URL='):
-                db_url = line.split('=', 1)[1].strip().replace('+asyncpg', '')
-                break
-engine = create_engine(db_url)
-with engine.connect() as conn:
-    tables = conn.execute(text(\"SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('agent_suggestions','growth_memories')\")).fetchall()
-    print('New tables found:', [t[0] for t in tables])
-    for t in tables:
-        count = conn.execute(text(f'SELECT COUNT(*) FROM {t[0]}')).scalar()
-        print(f'  {t[0]}: {count} rows')
-"
+            import os
+            import asyncio
+            from sqlalchemy import create_engine, text
+            db_url = os.environ.get('DATABASE_URL', '').replace('+asyncpg', '')
+            if not db_url:
+                with open('.env') as f:
+                    for line in f:
+                        if line.startswith('DATABASE_URL='):
+                            db_url = line.split('=', 1)[1].strip().replace('+asyncpg', '')
+                            break
+            engine = create_engine(db_url)
+            with engine.connect() as conn:
+                tables = conn.execute(text(\"SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('agent_suggestions','growth_memories')\")).fetchall()
+                print('New tables found:', [t[0] for t in tables])
+                for t in tables:
+                    count = conn.execute(text(f'SELECT COUNT(*) FROM {t[0]}')).scalar()
+                    print(f'  {t[0]}: {count} rows')
+            "
             echo "=== Database migration completed ==="
 
       - name: Setup unified agent scheduler
@@ -81,47 +81,44 @@ with engine.connect() as conn:
           port: 22
           script: |
             set -e
-            echo "=== 1. Stopping old cron-based agents ==="
-            # Comment out old agent cron jobs
-            crontab -l 2>/dev/null | grep -v "agent-daily-" | grep -v "agent_scheduler" > /tmp/crontab_new || true
-            # Add scheduler to crontab (start on reboot)
-            if ! crontab -l 2>/dev/null | grep -q "agent_scheduler"; then
-                (crontab -l 2>/dev/null; echo "@reboot cd /opt/nuotao/backend && source .venv/bin/activate && nohup python -m app.services.agent_scheduler > /opt/nuotao/logs/scheduler.log 2>&1 &") | crontab -
-                echo "Added scheduler to crontab (@reboot)"
+            echo "=== 1. Removing legacy cron-based scheduler (avoid double-run) ==="
+            # 移除旧 crontab @reboot 条目：调度器统一由 systemd 管理（deploy.yml §7.5 + infra/systemd 模板）
+            crontab -l 2>/dev/null | grep -v "agent-daily-" | grep -v "agent_scheduler" | crontab - || true
+            echo "[crontab] legacy scheduler entries removed"
+
+            echo "=== 2. Installing versioned systemd template ==="
+            SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
+            SCHEDULER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-scheduler.service
+            if [ -f "$SCHEDULER_TEMPLATE" ]; then
+              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
+              chmod 644 "$SCHEDULER_SERVICE"
+              echo "[scheduler] installed versioned template"
+            elif [ ! -f "$SCHEDULER_SERVICE" ]; then
+              echo "❌ 模板与既有服务均不存在，无法安装调度器"
+              exit 1
             else
-                echo "Scheduler already in crontab"
+              echo "[scheduler] template missing, keeping existing service"
             fi
 
-            echo "=== 2. Creating log directory ==="
-            mkdir -p /opt/nuotao/logs
+            echo "=== 3. Restarting scheduler via systemd ==="
+            systemctl daemon-reload
+            systemctl enable nuotao-agent-scheduler 2>/dev/null || true
+            systemctl restart nuotao-agent-scheduler
+            sleep 3
 
-            echo "=== 3. Stopping any existing scheduler ==="
-            pkill -f "agent_scheduler" 2>/dev/null && echo "Stopped existing scheduler" || echo "No existing scheduler running"
-            sleep 2
-
-            echo "=== 4. Starting unified scheduler ==="
-            cd /opt/nuotao/backend
-            source .venv/bin/activate
-            nohup python -m app.services.agent_scheduler > /opt/nuotao/logs/scheduler.log 2>&1 &
-            SCHEDULER_PID=$!
-            echo "Scheduler started with PID: $SCHEDULER_PID"
-
-            echo "=== 5. Waiting for scheduler to initialize ==="
-            sleep 5
-
-            echo "=== 6. Verifying scheduler is running ==="
-            if ps aux | grep -v grep | grep "agent_scheduler" > /dev/null; then
-                echo "✅ Scheduler is running"
-                ps aux | grep -v grep | grep "agent_scheduler"
+            echo "=== 4. Verifying scheduler is running ==="
+            if systemctl is-active --quiet nuotao-agent-scheduler; then
+              echo "✅ Scheduler is running (systemd)"
+              systemctl status nuotao-agent-scheduler --no-pager | head -6
             else
-                echo "❌ Scheduler is NOT running"
-                echo "--- Scheduler log ---"
-                cat /opt/nuotao/logs/scheduler.log | tail -30
-                exit 1
+              echo "❌ Scheduler is NOT running"
+              journalctl -u nuotao-agent-scheduler -n 30 --no-pager || true
+              exit 1
             fi
 
-            echo "=== 7. Scheduler log preview ==="
-            cat /opt/nuotao/logs/scheduler.log | head -20
+            echo "=== 5. Single-process check (no cron double-run) ==="
+            PROC_COUNT=$(pgrep -fc "app.services.agent_scheduler" || true)
+            echo "agent_scheduler processes: $PROC_COUNT (期望 1)"
 
             echo "=== Scheduler setup completed ==="
 
