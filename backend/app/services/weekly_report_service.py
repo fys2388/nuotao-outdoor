@@ -13,6 +13,15 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
+
+def _change_pct(metric: dict[str, Any] | None) -> float:
+    """环比变化率；无上一期数据（previous/change_percent 为 None）时返回 0，
+    使真实数据源（首周无环比）不触发异常/趋势误判，也不做除法崩溃。"""
+    if not metric:
+        return 0.0
+    value = metric.get("change_percent")
+    return float(value) if value is not None else 0.0
+
 # 周报数据存储路径
 DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -177,14 +186,14 @@ def _analyze_anomalies(data: dict[str, Any]) -> dict[str, Any]:
             "metric": "refund_rate",
             "current_value": refund_rate.get("current"),
             "threshold": 3.0,
-            "description": f"退款率 {refund_rate.get('current')}% 超过警戒线 3.0%，环比增长 {refund_rate.get('change_percent')}%",
+            "description": f"退款率 {refund_rate.get('current')}% 超过警戒线 3.0%，环比增长 {_change_pct(refund_rate)}%",
             "possible_causes": ["产品质量问题", "物流延迟导致退货", "产品描述与实际不符", "竞争对手降价导致比较退货"],
             "recommended_action": "立即审查本周退款订单原因，联系退款客户了解具体问题，检查产品质量和物流时效。",
         })
 
     # 检查 ROAS 下降
     roas = key_metrics.get("roas", {})
-    if roas.get("change_percent", 0) < -2:
+    if _change_pct(roas) < -2:
         anomalies.append({
             "type": "roas_decline",
             "severity": "warning",
@@ -192,14 +201,14 @@ def _analyze_anomalies(data: dict[str, Any]) -> dict[str, Any]:
             "current_value": roas.get("current"),
             "previous_value": roas.get("previous"),
             "change_percent": roas.get("change_percent"),
-            "description": f"广告 ROAS 从 {roas.get('previous')} 下降到 {roas.get('current')}，降幅 {abs(roas.get('change_percent'))}%",
+            "description": f"广告 ROAS 从 {roas.get('previous', 'n/a')} 下降到 {roas.get('current')}，降幅 {abs(_change_pct(roas))}%",
             "possible_causes": ["广告创意疲劳", "关键词竞争加剧", "落地页转化率下降", "季节性需求变化"],
             "recommended_action": "审查各广告渠道表现，暂停低效广告组，A/B 测试新创意，优化落地页。",
         })
 
     # 检查毛利率下降
     gross_margin = key_metrics.get("gross_margin", {})
-    if gross_margin.get("change_percent", 0) < -1:
+    if _change_pct(gross_margin) < -1:
         anomalies.append({
             "type": "margin_decline",
             "severity": "critical",
@@ -214,7 +223,7 @@ def _analyze_anomalies(data: dict[str, Any]) -> dict[str, Any]:
 
     # 检查客单价下降
     aov = key_metrics.get("avg_order_value", {})
-    if aov.get("change_percent", 0) < -3:
+    if _change_pct(aov) < -3:
         anomalies.append({
             "type": "aov_decline",
             "severity": "info",
@@ -245,7 +254,7 @@ def _analyze_trends(data: dict[str, Any]) -> dict[str, Any]:
     stable_trends = []
 
     for metric_name, metric_data in key_metrics.items():
-        change = metric_data.get("change_percent", 0)
+        change = _change_pct(metric_data)
         if change > 2:
             positive_trends.append({"metric": metric_name, "change_percent": change, "direction": "up"})
         elif change < -2:
@@ -277,11 +286,11 @@ def _generate_ai_insights(
 
     # 收入增长洞察
     revenue = key_metrics.get("total_revenue", {})
-    if revenue.get("change_percent", 0) > 5:
+    if _change_pct(revenue) > 5:
         insights.append({
             "category": "growth",
             "title": "收入增长强劲",
-            "insight": f"本周收入 ${revenue.get('current'):,.2f}，环比增长 {revenue.get('change_percent')}%，主要由订单量增长驱动。Google Ads 和 Email Marketing 渠道表现优异，ROAS 均达到 12.0。",
+            "insight": f"本周收入 ${revenue.get('current'):,.2f}，环比增长 {_change_pct(revenue)}%，主要由订单量增长驱动。Google Ads 和 Email Marketing 渠道表现优异，ROAS 均达到 12.0。",
             "confidence": "high",
             "impact": "positive",
         })
@@ -390,8 +399,8 @@ def _generate_executive_summary(
     margin = key_metrics.get("gross_margin", {})
 
     summary = (
-        f"本周经营表现整体良好，收入 ${revenue.get('current', 0):,.2f}，环比增长 {revenue.get('change_percent', 0)}%；"
-        f"订单量 {orders.get('current', 0)} 单，环比增长 {orders.get('change_percent', 0)}%；"
+        f"本周经营表现整体良好，收入 ${revenue.get('current', 0):,.2f}，环比增长 {_change_pct(revenue)}%；"
+        f"订单量 {orders.get('current', 0)} 单，环比增长 {_change_pct(orders)}%；"
         f"毛利率保持在 {margin.get('current', 0)}%。"
     )
 
@@ -423,7 +432,7 @@ def _identify_risks(
         })
 
     key_metrics = data.get("key_metrics", {})
-    if key_metrics.get("roas", {}).get("change_percent", 0) < 0:
+    if _change_pct(key_metrics.get("roas", {})) < 0:
         risks.append({
             "type": "marketing",
             "level": "medium",
@@ -448,7 +457,7 @@ def _generate_outlook(
     """生成下周展望"""
     key_metrics = data.get("key_metrics", {})
     current_revenue = key_metrics.get("total_revenue", {}).get("current", 0)
-    growth_rate = key_metrics.get("total_revenue", {}).get("change_percent", 0) / 100
+    growth_rate = _change_pct(key_metrics.get("total_revenue", {})) / 100
 
     # 保守预测
     conservative_forecast = current_revenue * (1 + growth_rate * 0.5)

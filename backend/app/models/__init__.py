@@ -70,6 +70,7 @@ from app.models.product_intelligence import (
 )
 from app.models.prompt import Prompt
 from app.models.rule import Rule, RuleExecutionLog
+from app.models.settlement import Settlement
 from app.models.supplier import Supplier
 from app.models.supply_chain import (
     InventorySnapshot,
@@ -154,6 +155,7 @@ __all__ = [
     "RefundCase",
     "Rule",
     "RuleExecutionLog",
+    "Settlement",
     "ShipmentRecord",
     "SourcingCandidate",
     "Supplier",

@@ -29,6 +29,7 @@ import {
   ApiOutlined,
   ThunderboltOutlined,
   SafetyCertificateOutlined,
+  AccountBookOutlined,
 } from '@ant-design/icons'
 // 懒加载页面组件（减少初始 bundle 体积）
 const DashboardPage = lazy(() => import('./pages/Dashboard'))
@@ -73,6 +74,7 @@ const B2BAgentsPage = lazy(() => import('./pages/B2BAgents'))
 const AgentSuggestionsPage = lazy(() => import('./pages/AgentSuggestions'))
 const AgentMonitorPage = lazy(() => import('./pages/AgentMonitor'))
 const MemoryReviewPage = lazy(() => import('./pages/MemoryReview'))
+const SettlementsPage = lazy(() => import('./pages/Settlements'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -128,6 +130,7 @@ type MenuKey =
   | 'agent-suggestions'
   | 'agent-monitor'
   | 'memory-review'
+  | 'settlements'
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: '经营看板' },
@@ -135,6 +138,7 @@ const menuItems = [
   { key: 'agent-suggestions', icon: <RobotOutlined />, label: 'AI建议审批', dynamicBadge: 'pending' },
   { key: 'agent-monitor', icon: <ThunderboltOutlined />, label: 'Agent监控' },
   { key: 'memory-review', icon: <SafetyCertificateOutlined />, label: '记忆审核' },
+  { key: 'settlements', icon: <AccountBookOutlined />, label: '回款台账' },
   {
     key: 'group-supply',
     icon: <ShoppingCartOutlined />,
@@ -242,6 +246,7 @@ const pageTitles: Record<MenuKey, string> = {
   'finance-report': '财务报表系统',
   'agent-monitor': 'Agent 运行监控',
   'memory-review': '成长记忆审核',
+  'settlements': '回款台账',
 }
 
 function App() {
@@ -297,6 +302,8 @@ function App() {
           return <AgentMonitorPage />
         case 'memory-review':
           return <MemoryReviewPage />
+        case 'settlements':
+          return <SettlementsPage />
         case 'inventory':
           return <InventoryPage />
         case 'newton-sourcing':

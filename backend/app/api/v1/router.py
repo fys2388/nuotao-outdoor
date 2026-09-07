@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     calibration,
     connectors,
     growth_memory,
+    settlements,
     content_generation,
     cost_model,
     customer,
@@ -147,5 +148,6 @@ api_router.include_router(agent_platform.router)
 api_router.include_router(agent_analysis.router)
 api_router.include_router(agent_suggestions.router)
 api_router.include_router(growth_memory.router)
+api_router.include_router(settlements.router)
 api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
