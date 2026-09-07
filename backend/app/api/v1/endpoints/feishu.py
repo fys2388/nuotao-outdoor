@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -19,11 +20,76 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import async_session_factory, get_db
 from app.services import agent_suggestion_service
 from app.services.execution_router import execute_suggestion
-from app.services.feishu_approval_service import send_approval_result_notification
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/feishu", tags=["飞书集成"])
+
+
+def _build_updated_card(
+    *,
+    title: str,
+    suggestion_id: int,
+    agent_name: str,
+    risk_level: str,
+    description: str,
+    action: str,
+    operator: str,
+) -> dict:
+    """构建审批后的更新卡片（移除按钮，显示审批结果）。"""
+    if action == "approve":
+        status_text = "✅ 已批准"
+        status_color = "green"
+        action_label = "已批准并进入执行队列"
+    else:
+        status_text = "❌ 已拒绝"
+        status_color = "red"
+        action_label = "已拒绝"
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": f"{status_text} | {title[:40]}"},
+            "template": status_color,
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**标题**: {title}\n"
+                        f"**建议 ID**: {suggestion_id}\n"
+                        f"**来源 Agent**: {agent_name}\n"
+                        f"**风险等级**: {risk_level.upper()}"
+                    ),
+                },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": f"**建议内容**: {description[:200]}"},
+            },
+            {"tag": "hr"},
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**操作**: {action_label}\n"
+                        f"**操作人**: {operator}\n"
+                        f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    ),
+                },
+            },
+            {
+                "tag": "note",
+                "elements": [
+                    {"tag": "plain_text", "content": "此建议已处理，按钮已禁用"}
+                ],
+            },
+        ],
+    }
 
 
 async def _execute_suggestion_async(suggestion_id: int) -> None:
@@ -102,56 +168,65 @@ async def feishu_card_callback(
         if not existing:
             return {"code": 1, "msg": "suggestion not found"}
 
+        title = existing.title or f"建议 #{suggestion_id}"
+        agent_name = existing.agent_id or "unknown"
+        risk_level = existing.risk_level or "medium"
+        description = existing.description or ""
+
         if action == "approve":
-            # 如果已经批准过，直接返回，不重复处理
+            # 如果已经批准过，直接返回更新后的卡片，不重复处理
             if existing.status in ("approved", "executing", "executed", "execution_failed"):
                 logger.info("建议 %s 已处于 %s 状态，跳过重复批准", suggestion_id, existing.status)
+                updated_card = _build_updated_card(
+                    title=title, suggestion_id=int(suggestion_id),
+                    agent_name=agent_name, risk_level=risk_level,
+                    description=description, action="approve", operator=operator,
+                )
                 return {
-                    "code": 0,
-                    "msg": "already_approved",
-                    "data": {"suggestion_id": suggestion_id, "status": existing.status},
+                    "toast": {"type": "info", "content": "该建议已批准，无需重复操作"},
+                    "card": updated_card,
                 }
             result = await agent_suggestion_service.approve_suggestion(
                 db, int(suggestion_id), approved_by=operator
-            )
-            # 推送审批结果通知
-            send_approval_result_notification(
-                suggestion_id=int(suggestion_id),
-                title=result.title if hasattr(result, "title") else f"建议 #{suggestion_id}",
-                action="approve",
-                operator=operator,
             )
             logger.info("建议 %s 已通过飞书审批，立即触发执行", suggestion_id)
             # 批准后立即异步执行（不阻塞回调响应）
             asyncio.create_task(_execute_suggestion_async(int(suggestion_id)))
         else:  # reject
-            # 如果已经拒绝过，直接返回
+            # 如果已经拒绝过，直接返回更新后的卡片
             if existing.status == "rejected":
                 logger.info("建议 %s 已拒绝，跳过重复处理", suggestion_id)
+                updated_card = _build_updated_card(
+                    title=title, suggestion_id=int(suggestion_id),
+                    agent_name=agent_name, risk_level=risk_level,
+                    description=description, action="reject", operator=operator,
+                )
                 return {
-                    "code": 0,
-                    "msg": "already_rejected",
-                    "data": {"suggestion_id": suggestion_id, "status": existing.status},
+                    "toast": {"type": "info", "content": "该建议已拒绝，无需重复操作"},
+                    "card": updated_card,
                 }
             result = await agent_suggestion_service.reject_suggestion(
                 db, int(suggestion_id), rejected_by=operator, reason="飞书卡片拒绝"
             )
-            send_approval_result_notification(
-                suggestion_id=int(suggestion_id),
-                title=result.title if hasattr(result, "title") else f"建议 #{suggestion_id}",
-                action="reject",
-                operator=operator,
-            )
             logger.info("建议 %s 已通过飞书拒绝", suggestion_id)
 
+        # 构建更新后的卡片并返回（卡片内原地更新，不发新消息）
+        updated_card = _build_updated_card(
+            title=title, suggestion_id=int(suggestion_id),
+            agent_name=agent_name, risk_level=risk_level,
+            description=description, action=action, operator=operator,
+        )
+        toast_type = "success" if action == "approve" else "warning"
+        toast_content = "已批准并进入执行队列" if action == "approve" else "已拒绝"
         return {
-            "code": 0,
-            "msg": "ok",
-            "data": {"suggestion_id": suggestion_id, "action": action},
+            "toast": {"type": toast_type, "content": toast_content},
+            "card": updated_card,
         }
     except Exception as e:
         logger.exception("飞书回调处理失败: suggestion_id=%s", suggestion_id)
-        return {"code": 1, "msg": str(e)}
+        return {
+            "toast": {"type": "error", "content": f"操作失败: {str(e)[:50]}"},
+        }
 
 
 @router.get("/approval-test")
