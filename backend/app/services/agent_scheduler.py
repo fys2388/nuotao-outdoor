@@ -285,9 +285,9 @@ class AgentScheduler:
                     name, delay, target_name, rule["condition"]
                 )
                 # 延迟触发协作任务（不阻塞当前流程）
-                asyncio.create_task(_trigger_collaboration_task(target_name, delay))
+                asyncio.create_task(self._trigger_collaboration_task(target_name, delay))
 
-    async def _trigger_collaboration_task(target_name: str, delay_seconds: int):
+    async def _trigger_collaboration_task(self, target_name: str, delay_seconds: int):
         """延迟触发协作任务。"""
         try:
             await asyncio.sleep(delay_seconds)
