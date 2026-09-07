@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { Layout, Menu, theme, Typography, Tag, Space, Badge, Spin } from 'antd'
 import {
   DashboardOutlined,
@@ -27,6 +27,8 @@ import {
   CustomerServiceOutlined,
   FundOutlined,
   ApiOutlined,
+  ThunderboltOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons'
 // 懒加载页面组件（减少初始 bundle 体积）
 const DashboardPage = lazy(() => import('./pages/Dashboard'))
@@ -69,6 +71,8 @@ const ListingLocalizationPage = lazy(() => import('./pages/ListingLocalization')
 const CustomerTemplatesPage = lazy(() => import('./pages/CustomerTemplates'))
 const B2BAgentsPage = lazy(() => import('./pages/B2BAgents'))
 const AgentSuggestionsPage = lazy(() => import('./pages/AgentSuggestions'))
+const AgentMonitorPage = lazy(() => import('./pages/AgentMonitor'))
+const MemoryReviewPage = lazy(() => import('./pages/MemoryReview'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -122,11 +126,15 @@ type MenuKey =
   | 'crm'
   | 'finance-report'
   | 'agent-suggestions'
+  | 'agent-monitor'
+  | 'memory-review'
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: '经营看板' },
-  { key: 'alerts', icon: <AlertOutlined />, label: '预警中心', badge: 3 },
-  { key: 'agent-suggestions', icon: <RobotOutlined />, label: 'AI建议审批', badge: 5 },
+  { key: 'alerts', icon: <AlertOutlined />, label: '预警中心', dynamicBadge: 'alerts' },
+  { key: 'agent-suggestions', icon: <RobotOutlined />, label: 'AI建议审批', dynamicBadge: 'pending' },
+  { key: 'agent-monitor', icon: <ThunderboltOutlined />, label: 'Agent监控' },
+  { key: 'memory-review', icon: <SafetyCertificateOutlined />, label: '记忆审核' },
   {
     key: 'group-supply',
     icon: <ShoppingCartOutlined />,
@@ -232,14 +240,48 @@ const pageTitles: Record<MenuKey, string> = {
   warehouse: '物流仓配管理',
   crm: '客户CRM系统',
   'finance-report': '财务报表系统',
+  'agent-monitor': 'Agent 运行监控',
+  'memory-review': '成长记忆审核',
 }
 
 function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [activeKey, setActiveKey] = useState<MenuKey>('dashboard')
+  const [pendingCount, setPendingCount] = useState(0)
+  const [alertsCount, setAlertsCount] = useState(0)
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken()
+
+  // 动态获取待审批建议数量（导航角标）
+  useEffect(() => {
+    const fetchPending = async () => {
+      try {
+        const res = await fetch('/api/v1/agent-suggestions?status=pending_approval&limit=1')
+        if (res.ok) {
+          const data = await res.json()
+          const total = data.total ?? data.items?.length ?? 0
+          setPendingCount(total)
+        }
+      } catch {
+        // 静默失败，角标显示 0
+      }
+      try {
+        const res2 = await fetch('/api/v1/alerts?status=open&limit=1')
+        if (res2.ok) {
+          const data2 = await res2.json()
+          const total2 = data2.total ?? data2.items?.length ?? 0
+          setAlertsCount(total2)
+        }
+      } catch {
+        // 静默失败
+      }
+    }
+    fetchPending()
+    // 每 60 秒刷新一次
+    const timer = setInterval(fetchPending, 60000)
+    return () => clearInterval(timer)
+  }, [])
 
   const renderContent = () => {
     const content = (() => {
@@ -251,6 +293,10 @@ function App() {
           return <AlertsPage />
         case 'agent-suggestions':
           return <AgentSuggestionsPage />
+        case 'agent-monitor':
+          return <AgentMonitorPage />
+        case 'memory-review':
+          return <MemoryReviewPage />
         case 'inventory':
           return <InventoryPage />
         case 'newton-sourcing':
@@ -351,15 +397,18 @@ function App() {
           defaultOpenKeys={['group-supply', 'group-marketing', 'group-analytics', 'group-p3']}
           selectedKeys={[activeKey]}
           onClick={({ key }) => setActiveKey(key as MenuKey)}
-          items={menuItems.map(item => ({
-            ...item,
-            label: item.badge ? (
-              <Space>
-                {item.label}
-                <Badge count={item.badge} size="small" />
-              </Space>
-            ) : item.label,
-          }))}
+          items={menuItems.map(item => {
+            const badgeCount = item.dynamicBadge === 'pending' ? pendingCount : (item.dynamicBadge === 'alerts' ? alertsCount : item.badge)
+            return {
+              ...item,
+              label: badgeCount ? (
+                <Space>
+                  {item.label}
+                  <Badge count={badgeCount} size="small" />
+                </Space>
+              ) : item.label,
+            }
+          })}
         />
       </Sider>
       <Layout>

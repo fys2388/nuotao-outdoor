@@ -1,0 +1,649 @@
+{
+  "agent_id": "product_manager",
+  "description": "产品经理 Agent 评测集：选品成本核算与成本置信度判定（确定性用例，基于 profit_engine）",
+  "cases": [
+    {
+      "id": "pm-001",
+      "category": "profit_margin",
+      "title": "高运费场景毛利为负",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "60.00",
+        "product_cost": "15.00",
+        "shipping_cost": "28.00",
+        "payment_fee": "1.80",
+        "refund": "20.00"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin",
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "key_exists",
+            "key": "contribution_margin"
+          },
+          {
+            "type": "value_lt",
+            "key": "contribution_margin",
+            "value": 0
+          },
+          {
+            "type": "key_exists",
+            "key": "contribution_margin_rate"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "运费占比 46.7% + 高退款，应判负毛利，不得推荐上架"
+    },
+    {
+      "id": "pm-002",
+      "category": "profit_margin",
+      "title": "轻小件高毛利场景",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "45.00",
+        "product_cost": "8.00",
+        "shipping_cost": "10.00",
+        "payment_fee": "1.35"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "contribution_margin_rate",
+            "min": 0.4,
+            "max": 1.0
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "轻小件运费占比低，毛利应健康"
+    },
+    {
+      "id": "pm-003",
+      "category": "profit_margin",
+      "title": "零收入输入必须返回 0 利润率",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "0",
+        "product_cost": "10.00",
+        "shipping_cost": "5.00"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "contribution_margin_rate",
+            "value": 0
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "revenue=0 时 rate 必须为 0，禁止除零"
+    },
+    {
+      "id": "pm-004",
+      "category": "profit_margin",
+      "title": "退款损耗吞噬利润",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "80.00",
+        "product_cost": "20.00",
+        "shipping_cost": "15.00",
+        "payment_fee": "2.40",
+        "refund": "25.00"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin"
+        ],
+        "rules": [
+          {
+            "type": "value_lt",
+            "key": "contribution_margin",
+            "value": 20
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "退款占比 31%，利润大幅侵蚀"
+    },
+    {
+      "id": "pm-005",
+      "category": "profit_margin",
+      "title": "广告成本计入总成本",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "100.00",
+        "product_cost": "30.00",
+        "shipping_cost": "20.00",
+        "advertising_cost": "25.00",
+        "payment_fee": "3.00"
+      },
+      "expected": {
+        "output_keys": [
+          "total_cost"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "total_cost",
+            "value": 78
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "total_cost = 30+20+25+3 = 78"
+    },
+    {
+      "id": "pm-006",
+      "category": "profit_margin",
+      "title": "目标净利率 15% 达标场景",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "120.00",
+        "product_cost": "36.00",
+        "shipping_cost": "24.00",
+        "payment_fee": "3.60",
+        "advertising_cost": "18.00"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "contribution_margin_rate",
+            "min": 0.3,
+            "max": 0.4
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "margin=38.4，rate=0.32，符合运营目标区间"
+    },
+    {
+      "id": "pm-007",
+      "category": "profit_margin",
+      "title": "大件重货运费占比过高",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "150.00",
+        "product_cost": "60.00",
+        "shipping_cost": "55.00",
+        "payment_fee": "4.50"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "value_lt",
+            "key": "contribution_margin_rate",
+            "value": 0.25
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "运费占比 36.7%，毛利仅 20%，首期应回避大件"
+    },
+    {
+      "id": "pm-008",
+      "category": "profit_margin",
+      "title": "订单与广告成本持平",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "50.00",
+        "product_cost": "15.00",
+        "shipping_cost": "12.00",
+        "advertising_cost": "23.00",
+        "payment_fee": "1.50"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin"
+        ],
+        "rules": [
+          {
+            "type": "value_lt",
+            "key": "contribution_margin",
+            "value": 0
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "margin=-1.5，广告成本过高导致亏损"
+    },
+    {
+      "id": "pm-009",
+      "category": "profit_margin",
+      "title": "小数精度校验",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "39.99",
+        "product_cost": "12.34",
+        "shipping_cost": "9.87",
+        "payment_fee": "1.20"
+      },
+      "expected": {
+        "output_keys": [
+          "total_cost"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "total_cost",
+            "min": 23.4,
+            "max": 23.5
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "total_cost = 12.34+9.87+1.20 = 23.41"
+    },
+    {
+      "id": "pm-010",
+      "category": "profit_margin",
+      "title": "零成本全未知场景禁用高置信结论",
+      "eval_mode": "deterministic",
+      "input": {
+        "revenue": "70.00",
+        "product_cost": "0",
+        "shipping_cost": "0",
+        "payment_fee": "0"
+      },
+      "expected": {
+        "output_keys": [
+          "contribution_margin_rate"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "contribution_margin_rate",
+            "value": 1
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "无成本数据时 margin=revenue，rate=1 是计算事实，但报告必须标注 UNKNOWN 置信度（见 cost_confidence 用例）"
+    },
+    {
+      "id": "pm-011",
+      "category": "cost_confidence",
+      "title": "全部成本已知→HIGH 置信度",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 5,
+        "total": 5
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status",
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "KNOWN"
+          },
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "HIGH"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "matched==total 必须 HIGH"
+    },
+    {
+      "id": "pm-012",
+      "category": "cost_confidence",
+      "title": "部分成本已知→MEDIUM 且必须标注估算",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 3,
+        "total": 5
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status",
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "ESTIMATED"
+          },
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "MEDIUM"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "部分未知禁止 HIGH"
+    },
+    {
+      "id": "pm-013",
+      "category": "cost_confidence",
+      "title": "全部成本未知→LOW 置信度",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 0,
+        "total": 4
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status",
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "UNKNOWN"
+          },
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "LOW"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "matched=0 必须 LOW，禁止给出盈利结论"
+    },
+    {
+      "id": "pm-014",
+      "category": "cost_confidence",
+      "title": "total=0 边界不产生 HIGH",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 0,
+        "total": 0
+      },
+      "expected": {
+        "output_keys": [
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "LOW"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "空集不触发 KNOWN 分支"
+    },
+    {
+      "id": "pm-015",
+      "category": "cost_confidence",
+      "title": "单件全已知→HIGH",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 1,
+        "total": 1
+      },
+      "expected": {
+        "output_keys": [
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "HIGH"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "单 SKU 全已知"
+    },
+    {
+      "id": "pm-016",
+      "category": "cost_confidence",
+      "title": "4/5 已知→MEDIUM 不得 HIGH",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 4,
+        "total": 5
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "ESTIMATED"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "差 1 项也按估算处理"
+    },
+    {
+      "id": "pm-017",
+      "category": "cost_confidence",
+      "title": "matched>total 输入防御",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 6,
+        "total": 5
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "ESTIMATED"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "脏数据不崩溃，落入估算分支"
+    },
+    {
+      "id": "pm-018",
+      "category": "cost_confidence",
+      "title": "2/8 已知→MEDIUM 且 reasons 非空",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 2,
+        "total": 8
+      },
+      "expected": {
+        "output_keys": [
+          "reasons"
+        ],
+        "rules": [
+          {
+            "type": "truthy",
+            "key": "reasons"
+          },
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "ESTIMATED"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "reasons 必须解释部分估算"
+    },
+    {
+      "id": "pm-019",
+      "category": "cost_confidence",
+      "title": "大件商品成本全未知→禁止上架建议",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 0,
+        "total": 6
+      },
+      "expected": {
+        "output_keys": [
+          "profit_confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "profit_confidence",
+            "value": "LOW"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "UNKNOWN 成本不得驱动上架决策"
+    },
+    {
+      "id": "pm-020",
+      "category": "cost_confidence",
+      "title": "尾程成本缺失但采购成本已知",
+      "eval_mode": "deterministic",
+      "input": {
+        "matched": 1,
+        "total": 3
+      },
+      "expected": {
+        "output_keys": [
+          "cost_status"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "cost_status",
+            "value": "ESTIMATED"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "运费未知场景"
+    },
+    {
+      "id": "pm-021",
+      "category": "llm_selection",
+      "title": "1688 选品分析-运费占比过高应判低分",
+      "eval_mode": "llm",
+      "input": {
+        "product_name": "铝合金折叠桌",
+        "supplier_price": "85",
+        "weight_kg": "8.5",
+        "est_shipping_us": "60",
+        "target_price_us": "139"
+      },
+      "expected": {
+        "output_keys": [
+          "score",
+          "verdict"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "score",
+            "min": 0,
+            "max": 100
+          },
+          {
+            "type": "value_in",
+            "key": "verdict",
+            "values": [
+              "reject",
+              "low_priority"
+            ]
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "需真实 Agent 推理，--with-llm 时执行"
+    },
+    {
+      "id": "pm-022",
+      "category": "llm_selection",
+      "title": "轻小高价值头灯应判高分",
+      "eval_mode": "llm",
+      "input": {
+        "product_name": "USB 充电头灯",
+        "supplier_price": "12",
+        "weight_kg": "0.12",
+        "est_shipping_us": "4",
+        "target_price_us": "29.9"
+      },
+      "expected": {
+        "output_keys": [
+          "score",
+          "verdict"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "score",
+            "min": 60,
+            "max": 100
+          },
+          {
+            "type": "value_in",
+            "key": "verdict",
+            "values": [
+              "approve",
+              "high_priority"
+            ]
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "轻小件首选品类"
+    },
+    {
+      "id": "pm-023",
+      "category": "llm_selection",
+      "title": "无成本数据的选品必须标注置信度不足",
+      "eval_mode": "llm",
+      "input": {
+        "product_name": "户外折叠椅",
+        "supplier_price": null,
+        "weight_kg": null,
+        "est_shipping_us": null,
+        "target_price_us": null
+      },
+      "expected": {
+        "output_keys": [
+          "confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_in",
+            "key": "confidence",
+            "values": [
+              "low",
+              "LOW",
+              "insufficient"
+            ]
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "禁止在数据缺失时给出高置信结论"
+    }
+  ]
+}

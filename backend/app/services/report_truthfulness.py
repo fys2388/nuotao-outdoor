@@ -180,12 +180,14 @@ def check_sample_size(
 # R5: 未投放活动状态校验
 # --------------------------------------------------------------------------- #
 
-def check_campaign_status(campaigns: list[CampaignMetric]) -> list[str]:
+def check_campaign_status(
+    campaigns: list[CampaignMetric],
+    actions: list[dict[str, Any]] | None = None,
+) -> list[str]:
     """检查活动状态与指标一致性。
-
     planned / 未启动活动：
     - ROAS 必须为 N/A（不得写 0.00）；
-    - 不得给出"暂停 / 删除"等执行指令；
+    - 不得给出暂停 / 删除等执行指令；
     - 花费 / 收入应为 0 或 None，不得有非零数据。
     """
     violations: list[str] = []
@@ -198,7 +200,76 @@ def check_campaign_status(campaigns: list[CampaignMetric]) -> list[str]:
                     f"活动 '{campaign.name}' 状态为 {campaign.status}（未投放），"
                     f"但存在非零花费/收入数据，数据不一致"
                 )
+            # R5 补全：未投放活动不得附加暂停/删除指令或 ROAS 数字结论
+            for action in actions or []:
+                text_block = " ".join(
+                    str(action.get(k) or "") for k in ("text", "expected_impact")
+                )
+                if re.search(r"(暂停|停投|删除|paus|delete|stop)", text_block, re.IGNORECASE):
+                    violations.append(
+                        f"活动 '{campaign.name}' 状态为 {campaign.status}（未投放），"
+                        f"不得附加暂停/删除指令"
+                    )
+                if re.search(r"roas|回报|回本", text_block, re.IGNORECASE) and re.search(r"\d", text_block):
+                    violations.append(
+                        f"活动 '{campaign.name}' 状态为 {campaign.status}（未投放），"
+                        f"不得写入 ROAS 数字结论（应为 N/A）"
+                    )
     return violations
+
+
+
+
+# --------------------------------------------------------------------------- #
+# R1: 数字必须带来源（动作层）
+# --------------------------------------------------------------------------- #
+
+def check_action_sources(actions: list[dict[str, Any]] | None) -> list[str]:
+    """检查行动建议中的数字结论是否携带来源（source / basis）。
+
+    规则：
+    - 动作文本含数字（金额、ROAS、倍数、百分比）且属结论/评估类
+      （conclusion / forecast / evaluation）时，必须携带 source 或 basis，
+      否则判违规；
+    - 纯描述性/建议性动作（note / instruction 不带数字）不检查。
+    """
+    violations: list[str] = []
+    for idx, action in enumerate(actions or []):
+        text_block = str(action.get("text") or action.get("expected_impact") or "")
+        action_type = str(action.get("action") or "note").lower()
+        has_number = re.search(r"\d", text_block) is not None
+        is_conclusive = action_type in ("conclusion", "forecast", "evaluation", "insight")
+        if not (has_number and is_conclusive):
+            continue
+        has_source = bool(action.get("source") or action.get("basis") or action.get("formula"))
+        if not has_source:
+            violations.append(
+                f"建议[{idx}] 结论 '{text_block[:60]}' 含数字但无来源（source/basis/formula），"
+                f"禁止无来源数字结论"
+            )
+    return violations
+
+
+# --------------------------------------------------------------------------- #
+# R1: 数字必须带来源（报告输出层）
+# --------------------------------------------------------------------------- #
+
+def check_report_sources(output: dict[str, Any] | None) -> list[str]:
+    """检查报告输出 data_sources 标注。
+
+    规则：output 含数字类字段但 data_sources 为空/缺失时判违规。
+    """
+    if not isinstance(output, dict) or not output:
+        return []
+    has_number = any(
+        isinstance(v, (int, float, Decimal)) for v in output.values()
+    ) or any(
+        isinstance(v, str) and re.search(r"\d", v) for v in output.values()
+    )
+    sources = output.get("data_sources")
+    if has_number and (not sources or len(sources) == 0):
+        return ["报告输出含数字但未标注数据来源（data_sources 为空）"]
+    return []
 
 
 # --------------------------------------------------------------------------- #
@@ -306,11 +377,17 @@ def validate_marketing_report(
     # R4 小样本
     violations.extend(check_sample_size(segments))
 
-    # R5 活动状态
-    violations.extend(check_campaign_status(campaigns))
+    # R5 活动状态（含未投放活动指令检查）
+    violations.extend(check_campaign_status(campaigns, actions))
+
+    # R1 数字来源（动作层）
+    violations.extend(check_action_sources(actions))
 
     # R3 预测模型
     violations.extend(check_predictions(actions or []))
+
+    # R1 数字来源（输出层）
+    violations.extend(check_report_sources(output))
 
     # R6 完整性（仅当显式传入报告正文时校验）
     if output is not None:

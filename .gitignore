@@ -28,6 +28,9 @@ Thumbs.db
 # Data / logs
 *.log
 data/
+# 业务数据资产例外：Agent 评测集与知识库 seed 必须入库（backend/app/data）
+!backend/app/data/
+!backend/app/data/**
 
 # ============================================================
 # 服务器一次性运维脚本（含硬编码密钥，禁止入库）

@@ -20,6 +20,7 @@ from app.models.agent_runtime_hardening import (
     AgentTaskAttempt,
 )
 from app.models.agent_suggestion import AgentSuggestion
+from app.models.strategy_version import StrategyVersion
 from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.customer import (
     CustomerInteraction,

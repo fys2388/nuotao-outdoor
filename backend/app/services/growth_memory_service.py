@@ -380,3 +380,64 @@ async def get_memory_stats(
         "by_status": by_status,
         "pending_review": by_status.get("pending_review", 0),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 记忆置信度人工审核（P1-6）
+# --------------------------------------------------------------------------- #
+
+async def list_pending_review(
+    session: AsyncSession,
+    *,
+    agent_id: str | None = None,
+    limit: int = 50,
+) -> list[GrowthMemory]:
+    """列出待人工审核的记忆（status=pending_review，按置信度升序）。"""
+    stmt = (
+        select(GrowthMemory)
+        .where(GrowthMemory.status == "pending_review")
+        .order_by(GrowthMemory.confidence.asc())
+        .limit(limit)
+    )
+    if agent_id:
+        stmt = stmt.where(GrowthMemory.agent_id == agent_id)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def approve_memory(
+    session: AsyncSession,
+    memory_id: int,
+    *,
+    approved_by: str,
+) -> GrowthMemory | None:
+    """人工审核通过：状态置 active，置信度提升至 >=0.7。"""
+    memory = await get_memory(session, memory_id)
+    if memory is None:
+        return None
+    memory.status = "active"
+    memory.confidence = max(memory.confidence, 0.7)
+    memory.metadata_ = {**(memory.metadata_ or {}), "reviewed_by": approved_by, "reviewed_at": datetime.now(UTC).isoformat()}
+    await session.commit()
+    await session.refresh(memory)
+    logger.info("记忆审核通过: id=%s by=%s confidence=%.2f", memory.id, approved_by, memory.confidence)
+    return memory
+
+
+async def reject_memory(
+    session: AsyncSession,
+    memory_id: int,
+    *,
+    rejected_by: str,
+    reason: str = "",
+) -> GrowthMemory | None:
+    """人工审核拒绝：状态置 archived（不再注入上下文）。"""
+    memory = await get_memory(session, memory_id)
+    if memory is None:
+        return None
+    memory.status = "archived"
+    memory.metadata_ = {**(memory.metadata_ or {}), "rejected_by": rejected_by, "rejected_at": datetime.now(UTC).isoformat(), "reject_reason": reason}
+    await session.commit()
+    await session.refresh(memory)
+    logger.info("记忆审核拒绝: id=%s by=%s reason=%s", memory.id, rejected_by, reason)
+    return memory

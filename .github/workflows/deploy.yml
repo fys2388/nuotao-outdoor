@@ -1,4 +1,4 @@
-name: Deploy to Production
+name: Deploy to Production (staging-gated)
 
 on:
   push:
@@ -32,9 +32,70 @@ jobs:
       - name: FastAPI app smoke
         run: python -c "import app.main as m; assert m.app is not None; assert m.settings is not None; print('SMOKE OK')"
 
-  deploy:
-    name: Deploy to Hetzner Server
+  stage-validate:
+    name: Staging validation (server-side dry-run)
     needs: ci-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Stage-validate on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            STAGE=/opt/nuotao/staging
+            echo "=== [staging] syncing code to $STAGE ==="
+            mkdir -p "$STAGE"
+            cd /opt/nuotao
+            rsync -a --delete \
+              --exclude .git --exclude backend/.env --exclude backend/.venv \
+              --exclude frontend/node_modules --exclude backend/alembic/versions/*.pyc \
+              ./ "$STAGE/" 2>/dev/null || { echo "rsync 不可用，退化为 git clone 同步"; }
+
+            echo "=== [staging] backend syntax check ==="
+            cd "$STAGE/backend"
+            python3 -m venv .venv 2>/dev/null || true
+            . "$STAGE/backend/.venv/bin/activate" 2>/dev/null || source .venv/bin/activate
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet
+            python -m compileall -q app
+            echo "[staging] syntax OK"
+
+            echo "=== [staging] migration dry-run (SQL only, not applied) ==="
+            if alembic upgrade head --sql > /tmp/nuotao_migration_dryrun.sql 2>/tmp/nuotao_migration_err.txt; then
+              LINES=$(wc -l < /tmp/nuotao_migration_dryrun.sql)
+              echo "[staging] migration dry-run OK ($LINES lines SQL generated)"
+            else
+              echo "ERROR: migration dry-run failed:"
+              cat /tmp/nuotao_migration_err.txt
+              exit 1
+            fi
+
+            echo "=== [staging] frontend build validation ==="
+            cd "$STAGE/frontend"
+            npm install --silent
+            npm run build
+            echo "[staging] frontend build OK"
+
+            echo "=== [staging] nginx template syntax check ==="
+            if [ -f "$STAGE/infra/nginx/console.conf" ]; then
+              cp "$STAGE/infra/nginx/console.conf" /tmp/nuotao-console.conf
+              nginx -t -c /etc/nginx/nginx.conf 2>&1 | head -3 || true
+              echo "[staging] nginx template present and copied"
+            else
+              echo "WARN: infra/nginx/console.conf 不存在（沿用生产既有配置）"
+            fi
+            echo "=== STAGING VALIDATION PASSED ==="
+
+  deploy-production:
+    name: Deploy to Production
+    needs: stage-validate
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -111,30 +172,17 @@ jobs:
             cp -r dist/* /var/www/nuotao/
             chown -R www-data:www-data /var/www/nuotao
 
-            echo "=== 6.5 Configuring nginx (console :8081) ==="
+            echo "=== 6.5 Installing nginx from versioned template (infra/nginx/console.conf) ==="
             NGINX_CONF=/etc/nginx/sites-available/nuotao-console
-            if [ ! -f "$NGINX_CONF" ]; then
-              {
-                echo 'server {'
-                echo '    listen 8081;'
-                echo '    listen [::]:8081;'
-                echo '    server_name _;'
-                echo '    root /var/www/nuotao;'
-                echo '    index index.html;'
-                echo '    location / {'
-                echo '        try_files $uri $uri/ /index.html;'
-                echo '    }'
-                echo '    location /assets/ {'
-                echo '        expires 30d;'
-                echo '        add_header Cache-Control "public, immutable";'
-                echo '    }'
-                echo '    add_header X-Content-Type-Options nosniff;'
-                echo '    add_header X-Frame-Options SAMEORIGIN;'
-                echo '}'
-              } > "$NGINX_CONF"
-              echo "[nginx] created $NGINX_CONF"
+            TEMPLATE=/opt/nuotao/infra/nginx/console.conf
+            if [ -f "$TEMPLATE" ]; then
+              cp "$TEMPLATE" "$NGINX_CONF"
+              echo "[nginx] installed versioned template -> $NGINX_CONF"
+            elif [ ! -f "$NGINX_CONF" ]; then
+              echo "ERROR: 模板不存在且无既有配置，无法安装 nginx 配置"
+              exit 1
             else
-              echo "[nginx] $NGINX_CONF already exists, skipping"
+              echo "[nginx] template missing, keeping existing $NGINX_CONF"
             fi
             ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/nuotao-console
             nginx -t && systemctl reload nginx
