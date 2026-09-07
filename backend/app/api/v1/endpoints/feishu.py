@@ -46,7 +46,7 @@ def _build_updated_card(
         status_color = "red"
         action_label = "已拒绝"
 
-    return {
+    card = {
         "config": {"wide_screen_mode": True},
         "header": {
             "title": {"tag": "plain_text", "content": f"{status_text} | {title[:40]}"},
@@ -90,6 +90,8 @@ def _build_updated_card(
             },
         ],
     }
+    # 飞书卡片回调要求用 type:raw + data 包裹卡片内容
+    return {"type": "raw", "data": card}
 
 
 async def _execute_suggestion_async(suggestion_id: int) -> None:
