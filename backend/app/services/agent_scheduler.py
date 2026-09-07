@@ -1,4 +1,4 @@
-﻿"""Agent 调度器 — 替代独立 Cron shell 脚本，通过 agent_runtime 统一调度。
+"""Agent 调度器 — 替代独立 Cron shell 脚本，通过 agent_runtime 统一调度。
 
 设计：
 - 轻量级定时调度器，使用 asyncio 事件循环
@@ -53,6 +53,26 @@ SCHEDULE_FEEDBACK_HOUR, SCHEDULE_FEEDBACK_MINUTE = _get_schedule_time("SCHEDULE_
 
 # 调度任务注册表: name -> (cron_expr, func, description)
 SCHEDULED_TASKS: dict[str, dict[str, Any]] = {}
+
+# Agent 间协作规则：当源 Agent 完成任务后，自动触发目标 Agent
+# 格式：{ "源任务名": { "target": "目标任务名", "condition": "触发条件描述", "delay_seconds": 延迟秒数 } }
+COLLABORATION_RULES: dict[str, dict[str, Any]] = {
+    "daily_product_analyst": {
+        "target": "daily_marketing_manager",
+        "condition": "产品分析师生成选品/优化建议后，自动触发营销经理生成推广文案",
+        "delay_seconds": 5,
+    },
+    "daily_supply_chain_manager": {
+        "target": "daily_product_analyst",
+        "condition": "供应链经理生成库存预警/补货建议后，自动触发产品分析师更新产品状态",
+        "delay_seconds": 5,
+    },
+    "daily_marketing_manager": {
+        "target": "feedback_learning",
+        "condition": "营销经理生成活动优化建议后，自动触发反馈学习汇总效果",
+        "delay_seconds": 10,
+    },
+}
 
 
 def register_scheduled_task(
@@ -254,6 +274,41 @@ class AgentScheduler:
             except Exception:
                 logger.exception("发送告警失败")
 
+        # Agent 间协作：任务完成后检查是否需要触发相关 Agent
+        if name in COLLABORATION_RULES:
+            rule = COLLABORATION_RULES[name]
+            target_name = rule["target"]
+            if target_name in SCHEDULED_TASKS:
+                delay = rule.get("delay_seconds", 5)
+                logger.info(
+                    "🤝 Agent协作触发: %s 完成 -> %s 秒后触发 %s (%s)",
+                    name, delay, target_name, rule["condition"]
+                )
+                # 延迟触发协作任务（不阻塞当前流程）
+                asyncio.create_task(_trigger_collaboration_task(target_name, delay))
+
+    async def _trigger_collaboration_task(target_name: str, delay_seconds: int):
+        """延迟触发协作任务。"""
+        try:
+            await asyncio.sleep(delay_seconds)
+            target_task = SCHEDULED_TASKS.get(target_name)
+            if target_task:
+                logger.info("🤝 协作任务开始执行: %s", target_name)
+                # 直接执行目标任务（不经过调度检查，立即执行）
+                try:
+                    async with async_session_factory() as session:
+                        result = await target_task["func"](session)
+                    target_task["last_run"] = datetime.now(UTC)
+                    target_task["run_count"] = target_task.get("run_count", 0) + 1
+                    target_task["last_result"] = result
+                    target_task["last_error"] = None
+                    logger.info("🤝 协作任务完成: %s, 结果: %s", target_name, _summarize_result(result))
+                except Exception as e:
+                    target_task["last_error"] = str(e)
+                    logger.exception("🤝 协作任务失败: %s", target_name)
+        except Exception as e:
+            logger.exception("🤝 协作触发异常: %s", e)
+
     def get_status(self) -> dict[str, Any]:
         """获取调度器状态（所有任务的运行状态）。"""
         return {
@@ -269,8 +324,17 @@ class AgentScheduler:
                     "last_run": task["last_run"].isoformat() if task.get("last_run") else None,
                     "last_error": task.get("last_error"),
                     "run_count": task.get("run_count", 0),
+                    "collaboration_trigger": COLLABORATION_RULES.get(name, {}).get("target"),
                 }
                 for name, task in SCHEDULED_TASKS.items()
+            },
+            "collaboration_rules": {
+                name: {
+                    "target": rule["target"],
+                    "condition": rule["condition"],
+                    "delay_seconds": rule.get("delay_seconds", 5),
+                }
+                for name, rule in COLLABORATION_RULES.items()
             },
         }
 
