@@ -7,8 +7,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.services.real_business_data import build_business_data_from_db
 
 from app.services.weekly_report_service import (
     generate_weekly_report,
@@ -31,6 +35,7 @@ class GenerateReportRequest(BaseModel):
     week_start: str | None = Field(None, description="周报开始日期（YYYY-MM-DD）")
     week_end: str | None = Field(None, description="周报结束日期（YYYY-MM-DD）")
     business_data: dict[str, Any] | None = Field(None, description="经营数据（可选，不提供则使用模拟数据）")
+    data_source: str = Field("auto", description="auto=DB real data (mock fallback marked); mock=simulated")
 
 
 # ============================================
@@ -52,6 +57,7 @@ async def get_status() -> dict[str, Any]:
 )
 async def generate_report_endpoint(
     request: GenerateReportRequest,
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """
     生成 AI 经营周报
@@ -62,11 +68,37 @@ async def generate_report_endpoint(
     可自定义时间范围和经营数据，不提供数据则使用模拟数据。
     """
     try:
+        business_data = request.business_data
+        if request.data_source == "mock":
+            business_data = business_data or {}
+            business_data.setdefault("data_source", "mock")
+        elif request.data_source in ("auto", "database"):
+            try:
+                from datetime import datetime, timedelta
+
+                now = datetime.utcnow()
+                week_start = request.week_start or (now - timedelta(days=7)).strftime("%Y-%m-%d")
+                week_end = request.week_end or now.strftime("%Y-%m-%d")
+                db_data = await build_business_data_from_db(db, week_start, week_end)
+                if (
+                    request.data_source == "database"
+                    or db_data["key_metrics"]["total_orders"]["current"] > 0
+                ):
+                    business_data = db_data
+                else:
+                    business_data = business_data or {}
+                    business_data.setdefault("data_source", "mock")
+            except Exception as exc:
+                logger.warning("DB data source failed, falling back to mock: %s", exc)
+                business_data = business_data or {}
+                business_data.setdefault("data_source", "mock")
+
         report = generate_weekly_report(
             week_start=request.week_start,
             week_end=request.week_end,
-            business_data=request.business_data,
+            business_data=business_data,
         )
+        report["data_source"] = business_data.get("data_source", "unknown")
         return {
             "success": True,
             "report": report,
