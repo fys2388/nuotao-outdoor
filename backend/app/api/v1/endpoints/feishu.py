@@ -120,13 +120,13 @@ async def feishu_card_callback(
         logger.info("飞书 URL 验证挑战: %s", challenge[:20])
         return {"challenge": challenge}
 
-    # 2. 卡片动作回调
+    # 2. 卡片动作回调（支持两种格式：卡片回调顶层type / 事件订阅header.event_type）
     header = body.get("header", {})
     event = body.get("event", {})
-    event_type = header.get("event_type", "")
+    event_type = body.get("type", "") or header.get("event_type", "")
 
     if event_type != "card.action.trigger":
-        logger.info("忽略非卡片动作事件: %s", event_type)
+        logger.info("忽略非卡片动作事件: type=%s header_event_type=%s", body.get("type"), header.get("event_type"))
         return {"code": 0, "msg": "ignored"}
 
     # 解析按钮值
