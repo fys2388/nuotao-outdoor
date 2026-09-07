@@ -50,6 +50,16 @@ def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool,
 
 _execution_handlers: dict[str, callable] = {}
 
+# Action 别名映射：旧 action 名称 -> 已注册的处理器名称
+# 用于兼容 daily_agents.py 中使用的旧 action 名称
+ACTION_ALIASES: dict[str, str] = {
+    "restock_inventory": "create_purchase_order",       # 库存补货 -> 创建采购单
+    "optimize_listing": "update_product_listing",         # 上架优化 -> 更新商品上架信息
+    "investigate_revenue_gap": "generate_marketing_content",  # 收入差距分析 -> 生成营销内容
+    "optimize_campaign": "generate_marketing_content",    # 优化营销活动 -> 生成营销内容
+    "start_sourcing": "start_product_sourcing",           # 开始选品 -> 开始产品选品
+}
+
 
 def register_handler(action: str):
     """装饰器：注册执行动作处理器。"""
@@ -82,6 +92,20 @@ async def execute_suggestion(
 
     action = suggestion.execution_action
     params = suggestion.execution_params or {}
+
+    # Action 别名解析：如果 action 不在已注册处理器中，尝试通过别名映射解析
+    if action and action not in _execution_handlers and action in ACTION_ALIASES:
+        logger.info("Action 别名映射: %s -> %s", action, ACTION_ALIASES[action])
+        action = ACTION_ALIASES[action]
+
+    # 如果 execution_action 为空，但 execution_params 中有 action 字段，也尝试解析
+    if not action and isinstance(params, dict) and params.get("action"):
+        param_action = params["action"]
+        if param_action in _execution_handlers:
+            action = param_action
+        elif param_action in ACTION_ALIASES:
+            logger.info("Params action 别名映射: %s -> %s", param_action, ACTION_ALIASES[param_action])
+            action = ACTION_ALIASES[param_action]
 
     logger.info(
         "开始执行建议: id=%s agent=%s action=%s type=%s",
@@ -188,10 +212,18 @@ async def _execute_by_type(
 async def _handle_product_optimization(
     session: AsyncSession, params: dict, suggestion: AgentSuggestion
 ) -> dict[str, Any]:
-    """产品优化：更新产品信息。"""
+    """产品优化：更新产品信息或开始选品。"""
+    # 如果是选品动作，转发到 start_product_sourcing 处理器
+    param_action = params.get("action")
+    if param_action in ("start_sourcing", "start_product_sourcing"):
+        handler = _execution_handlers.get("start_product_sourcing")
+        if handler:
+            return await handler(session, params)
+        return {"success": False, "error": "start_product_sourcing 处理器未注册"}
+
     product_id = params.get("product_id")
     if not product_id:
-        return {"success": False, "error": "缺少 product_id 参数"}
+        return {"success": False, "error": "缺少 product_id 参数，且未指定选品动作"}
 
     ok, result = _safe_call("app.services.product_service", "update_product",
                              session, product_id, params.get("updates", {}))

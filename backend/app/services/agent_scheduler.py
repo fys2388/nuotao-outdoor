@@ -58,15 +58,22 @@ SCHEDULED_TASKS: dict[str, dict[str, Any]] = {}
 def register_scheduled_task(
     name: str,
     *,
-    hour: int,
+    hour: int | None = None,
     minute: int = 0,
+    interval_minutes: int | None = None,
     description: str = "",
 ):
-    """装饰器：注册每日定时任务（指定小时和分钟）。"""
+    """装饰器：注册定时任务。
+
+    支持两种模式：
+    - 每日定时：指定 hour 和 minute，每天运行一次
+    - 间隔调度：指定 interval_minutes，每隔 N 分钟运行一次（24小时不停）
+    """
     def decorator(func: Callable[[AsyncSession], Coroutine[Any, Any, dict[str, Any]]]):
         SCHEDULED_TASKS[name] = {
             "hour": hour,
             "minute": minute,
+            "interval_minutes": interval_minutes,
             "func": func,
             "description": description,
             "last_run": None,
@@ -74,7 +81,10 @@ def register_scheduled_task(
             "last_error": None,
             "run_count": 0,
         }
-        logger.info("注册定时任务: %s @ %02d:%02d - %s", name, hour, minute, description)
+        if interval_minutes:
+            logger.info("注册间隔任务: %s @ 每%d分钟 - %s", name, interval_minutes, description)
+        else:
+            logger.info("注册定时任务: %s @ %02d:%02d - %s", name, hour or 0, minute, description)
         return func
     return decorator
 
@@ -85,8 +95,8 @@ def register_scheduled_task(
 
 @register_scheduled_task(
     "daily_product_analyst",
-    hour=SCHEDULE_PRODUCT_HOUR, minute=SCHEDULE_PRODUCT_MINUTE,
-    description="产品分析师每日分析：选品评分、竞品监控、利润模型",
+    interval_minutes=30,
+    description="产品分析师分析：选品评分、竞品监控、利润模型（每30分钟）",
 )
 async def daily_product_analyst(session: AsyncSession) -> dict[str, Any]:
     """每日产品分析师任务。"""
@@ -96,8 +106,8 @@ async def daily_product_analyst(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "daily_marketing_manager",
-    hour=SCHEDULE_MARKETING_HOUR, minute=SCHEDULE_MARKETING_MINUTE,
-    description="营销经理每日分析：活动ROAS、文案优化、SEO建议",
+    interval_minutes=30,
+    description="营销经理分析：活动ROAS、文案优化、SEO建议（每30分钟）",
 )
 async def daily_marketing_manager(session: AsyncSession) -> dict[str, Any]:
     """每日营销经理任务。"""
@@ -107,8 +117,8 @@ async def daily_marketing_manager(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "daily_supply_chain_manager",
-    hour=SCHEDULE_SUPPLY_CHAIN_HOUR, minute=SCHEDULE_SUPPLY_CHAIN_MINUTE,
-    description="供应链经理每日分析：库存预警、补货建议、物流跟踪",
+    interval_minutes=30,
+    description="供应链经理分析：库存预警、补货建议、物流跟踪（每30分钟）",
 )
 async def daily_supply_chain_manager(session: AsyncSession) -> dict[str, Any]:
     """每日供应链经理任务。"""
@@ -118,8 +128,8 @@ async def daily_supply_chain_manager(session: AsyncSession) -> dict[str, Any]:
 
 @register_scheduled_task(
     "execute_pending_suggestions",
-    hour=SCHEDULE_EXECUTION_HOUR, minute=SCHEDULE_EXECUTION_MINUTE,
-    description="批量执行所有已审批待执行的建议",
+    interval_minutes=15,
+    description="批量执行所有已审批待执行的建议（每15分钟）",
 )
 async def execute_pending_suggestions_task(session: AsyncSession) -> dict[str, Any]:
     """执行已审批建议。"""
@@ -130,8 +140,8 @@ async def execute_pending_suggestions_task(session: AsyncSession) -> dict[str, A
 
 @register_scheduled_task(
     "feedback_learning",
-    hour=SCHEDULE_FEEDBACK_HOUR, minute=SCHEDULE_FEEDBACK_MINUTE,
-    description="处理可学习建议，生成Agent学习摘要",
+    interval_minutes=60,
+    description="处理可学习建议，生成Agent学习摘要（每60分钟）",
 )
 async def feedback_learning_task(session: AsyncSession) -> dict[str, Any]:
     """反馈学习处理。"""
@@ -198,18 +208,31 @@ class AgentScheduler:
         current_minute = now.minute
 
         for name, task in SCHEDULED_TASKS.items():
-            # 检查是否到点（小时和分钟匹配）
-            if task["hour"] != current_hour or task["minute"] != current_minute:
-                continue
+            interval = task.get("interval_minutes")
 
-            # 检查今天是否已经运行过（避免重复执行）
-            last_run = task.get("last_run")
-            if last_run and last_run.date() == now.date():
-                continue
+            if interval:
+                # 间隔调度模式：每隔 N 分钟运行一次（24小时不停）
+                last_run = task.get("last_run")
+                if last_run:
+                    elapsed = (now - last_run).total_seconds() / 60
+                    if elapsed < interval:
+                        continue
+                # 首次运行或间隔已到，执行任务
+                logger.info("间隔任务触发: %s (每%d分钟)", name, interval)
+                await self._run_task(name, task)
+            else:
+                # 每日定时模式：小时和分钟匹配
+                if task["hour"] != current_hour or task["minute"] != current_minute:
+                    continue
 
-            # 执行任务
-            logger.info("定时任务触发: %s", name)
-            await self._run_task(name, task)
+                # 检查今天是否已经运行过（避免重复执行）
+                last_run = task.get("last_run")
+                if last_run and last_run.date() == now.date():
+                    continue
+
+                # 执行任务
+                logger.info("定时任务触发: %s", name)
+                await self._run_task(name, task)
 
     async def _run_task(self, name: str, task: dict[str, Any]):
         """执行单个定时任务。"""
@@ -240,6 +263,8 @@ class AgentScheduler:
                 name: {
                     "hour": task["hour"],
                     "minute": task["minute"],
+                    "interval_minutes": task.get("interval_minutes"),
+                    "schedule": f"每{task['interval_minutes']}分钟" if task.get("interval_minutes") else f"每日{task['hour'] or 0:02d}:{task['minute']:02d}",
                     "description": task["description"],
                     "last_run": task["last_run"].isoformat() if task.get("last_run") else None,
                     "last_error": task.get("last_error"),
