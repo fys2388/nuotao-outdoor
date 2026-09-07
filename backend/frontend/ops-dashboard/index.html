@@ -202,6 +202,7 @@
         .agent-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
         .agent-status { font-size: 11px; color: #4ade80; margin-bottom: 8px; }
         .agent-stats { font-size: 11px; color: #888; }
+        .agent-schedule { font-size: 10px; color: #6b7280; margin-top: 2px; }
 
         /* Loading */
         .loading { color: #666; font-style: italic; }
@@ -536,11 +537,11 @@
             const suggList = sugg.items || sugg || [];
 
             const agents = [
-                { id: 'product-analyst', name: '产品分析师', icon: '📦', desc: '选品/定价/优化' },
-                { id: 'marketing-manager', name: '营销经理', icon: '📢', desc: '文案/活动/SEO' },
-                { id: 'supply-chain-manager', name: '供应链经理', icon: '🚚', desc: '采购/物流/库存' },
-                { id: 'customer-manager', name: '客户经理', icon: '👥', desc: '分群/触达/留存' },
-                { id: 'business-analyst', name: '商业分析师', icon: '📊', desc: '报表/趋势/洞察' },
+                { id: 'product_analyst', name: '产品分析师', icon: '📦', desc: '选品/定价/优化', schedule: '每日 06:00' },
+                { id: 'marketing_manager', name: '营销经理', icon: '📢', desc: '文案/活动/SEO', schedule: '每日 07:00' },
+                { id: 'supply_chain_manager', name: '供应链经理', icon: '🚚', desc: '采购/物流/库存', schedule: '每日 08:00' },
+                { id: 'customer_manager', name: '客户经理', icon: '👥', desc: '分群/触达/留存', schedule: '未配置定时任务' },
+                { id: 'business_analyst', name: '商业分析师', icon: '📊', desc: '报表/趋势/洞察', schedule: '未配置定时任务' },
             ];
 
             const agentData = {};
@@ -561,6 +562,7 @@
                     <div class="agent-icon">${a.icon}</div>
                     <div class="agent-name">${a.name}</div>
                     <div class="agent-status">${active ? '● 运行中' : '○ 待激活'}</div>
+                    <div class="agent-schedule">${a.schedule}</div>
                     <div class="agent-stats">
                         生成 ${d.total} 条建议<br>
                         已完成 ${d.completed} · 待审 ${d.pending}
