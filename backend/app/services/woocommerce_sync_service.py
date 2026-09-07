@@ -800,3 +800,158 @@ async def sync_orders_to_db(
         "errors": errors[:10],  # 只返回前10个错误
         "total_processed": imported + updated + failed,
     }
+
+
+async def update_product_listing(product_id: str, updates: dict) -> dict:
+    """更新产品上架信息（本地数据库）。
+
+    执行器 listing_optimization / update_product_listing 动作调用。
+    更新产品的 name/description/tags/attributes 等字段，记录到 meta.history。
+
+    Args:
+        product_id: 产品 ID
+        updates: 要更新的字段字典，支持 name/description/tags/attributes
+
+    Returns:
+        更新结果字典
+    """
+    import sys as _sys
+    if "app.core.database" not in _sys.modules:
+        from app.core.database import async_session_factory
+    else:
+        async_session_factory = _sys.modules["app.core.database"].async_session_factory
+    from app.models.product import Product
+    from sqlalchemy import select
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    async with async_session_factory() as session:
+        product = await session.get(Product, UUID(str(product_id).replace("-", "")))
+        if not product:
+            # 尝试带横线的 UUID
+            try:
+                product = await session.get(Product, UUID(str(product_id)))
+            except Exception:
+                pass
+        if not product:
+            return {"success": False, "error": f"产品不存在: {product_id}"}
+
+        updated_fields = []
+        old_values = {}
+
+        if "name" in updates and updates["name"]:
+            old_values["name"] = product.name
+            product.name = str(updates["name"])[:255]
+            updated_fields.append("name")
+
+        if "description" in updates and updates["description"]:
+            old_values["description"] = product.description
+            product.description = str(updates["description"])[:2000]
+            updated_fields.append("description")
+
+        if "tags" in updates and updates["tags"]:
+            old_values["tags"] = product.tags
+            if isinstance(updates["tags"], list):
+                product.tags = updates["tags"]
+            else:
+                product.tags = [str(t) for t in str(updates["tags"]).split(",")]
+            updated_fields.append("tags")
+
+        if "attributes" in updates and updates["attributes"]:
+            old_values["attributes"] = product.attributes
+            if isinstance(updates["attributes"], dict):
+                existing = product.attributes or {}
+                existing.update(updates["attributes"])
+                product.attributes = existing
+            updated_fields.append("attributes")
+
+        # 记录更新历史到 meta
+        meta = product.meta or {}
+        history = meta.get("listing_update_history", [])
+        history.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "updated_fields": updated_fields,
+            "old_values": old_values,
+            "source": "agent_execution",
+        })
+        meta["listing_update_history"] = history[-20:]  # 保留最近20条
+        product.meta = meta
+
+        await session.commit()
+
+        # ── 同步到 WooCommerce 远程商品（杜绝假成功）──
+        wc_id = None
+        if product.meta and isinstance(product.meta, dict):
+            wc_id = product.meta.get("woocommerce_id")
+
+        wc_result = None
+        wc_error = None
+
+        if wc_id and updated_fields:
+            try:
+                wc_payload = {}
+                if "name" in updated_fields:
+                    wc_payload["name"] = product.name
+                if "description" in updated_fields:
+                    wc_payload["description"] = product.description
+                if "tags" in updated_fields and product.tags:
+                    wc_payload["tags"] = [{"name": t} for t in product.tags if t]
+
+                wc_url = f"{WC_URL}/wp-json/wc/v3/products/{wc_id}"
+                logger.info("同步产品到 WooCommerce: PUT %s, fields=%s", wc_url, list(wc_payload.keys()))
+
+                put_resp = requests.put(wc_url, auth=_get_wc_auth(), headers=_get_wc_headers(), json=wc_payload, timeout=30)
+                put_resp.raise_for_status()
+
+                # 回读验证：GET /products/{id}，确认字段真的变了
+                get_resp = requests.get(wc_url, auth=_get_wc_auth(), headers=_get_wc_headers(), timeout=30)
+                get_resp.raise_for_status()
+                wc_verified = get_resp.json()
+
+                verification = {}
+                if "name" in updated_fields:
+                    verification["name"] = wc_verified.get("name") == product.name
+                if "description" in updated_fields:
+                    verification["description"] = wc_verified.get("description") == product.description
+
+                all_verified = all(verification.values()) if verification else True
+                wc_result = {
+                    "woocommerce_id": wc_id,
+                    "updated_fields": list(wc_payload.keys()),
+                    "verified": all_verified,
+                    "verification_detail": verification,
+                }
+                if not all_verified:
+                    wc_error = f"WooCommerce 回读验证失败: {verification}"
+                    logger.warning("WooCommerce 回读验证未全部通过: %s", verification)
+
+            except requests.exceptions.HTTPError as e:
+                wc_error = f"WooCommerce API HTTP错误: {e.response.status_code} - {e.response.text[:200]}"
+                logger.error("WooCommerce 产品同步失败(HTTP): %s", wc_error)
+            except requests.exceptions.RequestException as e:
+                wc_error = f"WooCommerce API 请求异常: {str(e)}"
+                logger.error("WooCommerce 产品同步失败(请求异常): %s", wc_error)
+            except Exception as e:
+                wc_error = f"WooCommerce 同步未知错误: {type(e).__name__}: {str(e)}"
+                logger.exception("WooCommerce 产品同步异常")
+        elif not wc_id:
+            wc_error = "产品未关联 WooCommerce ID（meta.woocommerce_id 为空），仅更新了本地数据库"
+            logger.warning("产品 %s 无 woocommerce_id，跳过远程同步", product_id)
+
+        result = {
+            "success": wc_error is None,
+            "product_id": str(product_id),
+            "updated_fields": updated_fields,
+            "old_values": old_values,
+            "local_updated": True,
+            "woocommerce_synced": wc_result is not None and wc_error is None,
+            "woocommerce_result": wc_result,
+            "woocommerce_error": wc_error,
+        }
+        if wc_error:
+            result["message"] = f"本地已更新，但 WooCommerce 同步失败: {wc_error}"
+        elif updated_fields:
+            result["message"] = f"产品上架信息已更新（本地+WooCommerce），字段: {', '.join(updated_fields)}"
+        else:
+            result["message"] = "无变更字段需要更新"
+        return result

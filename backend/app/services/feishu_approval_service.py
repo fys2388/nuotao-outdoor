@@ -242,7 +242,7 @@ def send_approval_card(
             if data.get("code") == 0 or data.get("StatusCode") == 0:
                 logger.info("Webhook 发送审批卡片成功（注意：Webhook卡片不支持按钮回调）: suggestion_id=%s", suggestion_id)
                 return {"success": True, "message_id": None, "channel": "webhook"}
-        return {"success": False, "error": result.get("msg", str(result))}
+        return {"success": False, "error": data.get("msg", str(data))}
     except Exception as e:
         logger.error("飞书审批卡片发送异常(Webhook): %s", e)
         return {"success": False, "error": str(e)}
