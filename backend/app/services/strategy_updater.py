@@ -21,8 +21,10 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import StrategyVersion
 from app.services import agent_suggestion_service
 
 logger = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ def evaluate_ab_test_result(
             "details": {},
         }
 
-    # 简化 Z 检验
+    # Z 检验（双侧）：置信度 = 1 - p_value
     pooled_se = math.sqrt(
         (rate_a * (1 - rate_a) / sample_size_a) +
         (rate_b * (1 - rate_b) / sample_size_b)
@@ -103,8 +105,10 @@ def evaluate_ab_test_result(
     else:
         z_score = (rate_b - rate_a) / pooled_se
 
-    # 简化置信度计算（实际应使用标准正态分布CDF）
-    confidence = min(0.999, abs(z_score) / 3.0) if z_score != 0 else 0.5
+    # 标准正态 CDF。由评测集 mm-003/004/006 暴露：旧的 z/3 简化公式
+    # 低估置信度（z=2.589 时真实 0.990 被算成 0.863 而误报"不显著"）。
+    cdf_z = 0.5 * (1 + math.erf(abs(z_score) / math.sqrt(2)))
+    confidence = max(0.0, min(0.999, 2 * cdf_z - 1))
 
     relative_lift = ((rate_b - rate_a) / rate_a) if rate_a > 0 else 0.0
     significant = confidence >= confidence_threshold
@@ -215,6 +219,17 @@ async def update_strategy_from_ab_test(
             comment="A/B测试自动应用（低风险策略）",
             auto_execute=True,
         )
+        # 持久化策略版本（A/B 结论 → 策略更新 → 可回滚闭环）
+        await record_strategy_change(
+            session,
+            strategy_type=strategy_type,
+            old_config={},
+            new_config=winning_variant_config or {},
+            reason=f"A/B测试自动应用: {experiment_name} - {winner}胜出（置信度{evaluation['confidence']:.1%}）",
+            changed_by="ab_test_auto",
+            experiment_id=experiment_id,
+            suggestion_id=suggestion.id,
+        )
         applied = True
     else:
         applied = False
@@ -243,30 +258,59 @@ async def record_strategy_change(
     reason: str,
     changed_by: str,
     experiment_id: str | None = None,
+    suggestion_id: int | None = None,
+    change_type: str = "update",
 ) -> dict[str, Any]:
-    """记录策略变更（用于回滚和审计）。
+    """记录策略变更并持久化到 strategy_versions 表（可审计、可回滚）。
 
-    简化版：记录到日志，实际应写入 strategy_versions 表。
+    版本号按策略类型自增：同类型已有版本的最大值 + 1。
     """
-    change_record = {
+    # 计算下一个版本号（同类型内自增）
+    result = await session.execute(
+        select(StrategyVersion.version)
+        .where(
+            StrategyVersion.workspace_id == DEFAULT_WORKSPACE_ID,
+            StrategyVersion.strategy_type == strategy_type,
+        )
+        .order_by(StrategyVersion.version.desc())
+        .limit(1)
+    )
+    row = result.scalar_one_or_none()
+    next_version = (row or 0) + 1
+
+    version = StrategyVersion(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        strategy_type=strategy_type,
+        version=next_version,
+        old_config=old_config or {},
+        new_config=new_config or {},
+        reason=reason,
+        changed_by=changed_by,
+        experiment_id=experiment_id,
+        suggestion_id=suggestion_id,
+        change_type=change_type,
+    )
+    session.add(version)
+    await session.commit()
+    await session.refresh(version)
+
+    logger.info(
+        "策略变更已持久化: type=%s v%d by=%s reason=%s",
+        strategy_type, version.version, changed_by, reason,
+    )
+
+    return {
         "strategy_type": strategy_type,
+        "version": version.version,
+        "version_id": version.id,
         "old_config": old_config,
         "new_config": new_config,
         "reason": reason,
         "changed_by": changed_by,
         "experiment_id": experiment_id,
-        "changed_at": datetime.now(UTC).isoformat(),
+        "change_type": change_type,
+        "changed_at": version.created_at.isoformat(),
     }
-
-    logger.info(
-        "策略变更记录: type=%s by=%s reason=%s",
-        strategy_type, changed_by, reason,
-    )
-
-    # TODO: 写入 strategy_versions 表
-    # 目前先记录到日志，后续添加模型后持久化
-
-    return change_record
 
 
 async def rollback_strategy(
@@ -276,20 +320,55 @@ async def rollback_strategy(
     version_id: str,
     reason: str,
 ) -> dict[str, Any]:
-    """回滚策略到指定版本。
+    """回滚策略到指定版本：从 strategy_versions 表恢复配置。
 
-    简化版：记录回滚操作，实际应从 strategy_versions 表恢复配置。
+    - 读取目标版本的 new_config 作为恢复后的当前配置；
+    - 写入一条 change_type=rollback 的版本记录，保证回滚本身可审计；
+    - 恢复的配置由调用方写入实际策略存储（strategy_config 表/配置服务）。
     """
-    logger.warning(
-        "策略回滚: type=%s version=%s reason=%s",
-        strategy_type, version_id, reason,
+    try:
+        vid = int(version_id)
+    except (TypeError, ValueError):
+        return {
+            "rolled_back": False,
+            "error": f"无效版本ID: {version_id}",
+            "strategy_type": strategy_type,
+        }
+
+    target = await session.get(StrategyVersion, vid)
+    if target is None or target.strategy_type != strategy_type:
+        return {
+            "rolled_back": False,
+            "error": f"未找到策略版本: type={strategy_type} id={version_id}",
+            "strategy_type": strategy_type,
+        }
+
+    restored_config = target.new_config
+
+    # 写入回滚记录（change_type=rollback，new_config 为恢复后的配置）
+    record = await record_strategy_change(
+        session,
+        strategy_type=strategy_type,
+        old_config={},
+        new_config=restored_config,
+        reason=f"回滚至版本 v{target.version}（{target.reason[:120]}）：{reason}",
+        changed_by="rollback",
+        experiment_id=target.experiment_id,
+        change_type="rollback",
     )
 
-    # TODO: 从 strategy_versions 表恢复配置
+    logger.warning(
+        "策略已回滚: type=%s 目标 v%s -> 新记录 v%s, reason=%s",
+        strategy_type, target.version, record["version"], reason,
+    )
+
     return {
         "rolled_back": True,
         "strategy_type": strategy_type,
         "version_id": version_id,
+        "restored_config": restored_config,
+        "restored_version": target.version,
+        "rollback_record_version": record["version"],
         "reason": reason,
         "rolled_back_at": datetime.now(UTC).isoformat(),
     }

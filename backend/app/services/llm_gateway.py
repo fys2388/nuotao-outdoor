@@ -127,6 +127,61 @@ def _provider_config(provider: str) -> tuple[str, str, str]:
     raise LLMError(f"unsupported provider '{provider}'", kind="invalid_response")
 
 
+
+
+# --------------------------------------------------------------------------- #
+# Circuit breaker（熔断器）
+# --------------------------------------------------------------------------- #
+# 目标：primary provider 持续故障时，避免每个请求都先等待其超时再走 fallback。
+# 规则：
+# - 连续失败 >=3 次 -> 熔断开启 60s（冷却期内直接跳过该 provider）；
+# - 冷却期结束后放行探测请求；
+# - 成功调用复位失败计数。
+# 状态为进程内存态（重启即复位），仅用于故障降级，不承载审计。
+
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 60
+_circuit_state: dict[str, dict[str, float | int]] = {}
+
+
+def _circuit_is_open(provider: str) -> bool:
+    state = _circuit_state.get(provider)
+    if not state:
+        return False
+    return float(state.get("open_until", 0)) > time.time()
+
+
+def _circuit_record_failure(provider: str) -> None:
+    now = time.time()
+    state = _circuit_state.setdefault(provider, {"failures": 0, "open_until": 0.0})
+    state["failures"] = int(state.get("failures", 0)) + 1
+    if int(state["failures"]) >= _CIRCUIT_FAILURE_THRESHOLD:
+        state["open_until"] = now + _CIRCUIT_COOLDOWN_SECONDS
+        logger.warning(
+            "circuit breaker OPEN for provider %s (cooldown %ds)",
+            provider, _CIRCUIT_COOLDOWN_SECONDS,
+        )
+
+
+def _circuit_record_success(provider: str) -> None:
+    state = _circuit_state.get(provider)
+    if state:
+        state["failures"] = 0
+        state["open_until"] = 0.0
+
+
+def circuit_status() -> dict[str, dict[str, Any]]:
+    """当前熔断状态（供监控/测试观察）。"""
+    now = time.time()
+    return {
+        provider: {
+            "open": _circuit_is_open(provider),
+            "failures": int(state.get("failures", 0)),
+            "cooldown_remaining_s": max(0, int(float(state.get("open_until", 0)) - now)),
+        }
+        for provider, state in _circuit_state.items()
+    }
+
 def _provider_chain(request: LLMRequest, *, allow_fallback: bool) -> list[tuple[str, dict]]:
     """Ordered provider candidates: explicit/primary first, fallback second."""
     settings = get_settings()
@@ -175,10 +230,14 @@ async def complete(
     trace_id = trace_id or uuid4().hex
     last_error: LLMError | None = None
     for provider, overrides in _provider_chain(request, allow_fallback=allow_fallback):
+        # 熔断开启：冷却期内跳过该 provider（避免每次都等待超时）
+        if _circuit_is_open(provider):
+            logger.info("circuit breaker open, skipping provider %s", provider)
+            continue
         api_key = overrides["api_key"]
         base_url = overrides["base_url"]
         try:
-            return await _post(
+            response = await _post(
                 request,
                 provider=provider,
                 api_key=api_key,
@@ -186,11 +245,14 @@ async def complete(
                 trace_id=trace_id,
                 client=client,
             )
+            _circuit_record_success(provider)
+            return response
         except LLMError as exc:
             # Auth / malformed responses are not worth a failover attempt.
             if exc.kind in ("auth", "invalid_response"):
                 raise
             logger.warning("llm provider %s failed (%s): %s", provider, exc.kind, exc)
+            _circuit_record_failure(provider)
             last_error = exc
     raise LLMError(
         f"all LLM providers failed: {last_error}" if last_error else "no providers configured",
