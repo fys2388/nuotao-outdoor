@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import requests
 
