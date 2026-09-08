@@ -1,0 +1,71 @@
+name: Debug Readyz PermissionError
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug readyz database PermissionError
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== journalctl nuotao-backend (last 40 lines) ==="
+            journalctl -u nuotao-backend --no-pager -n 40 | grep -iE "permission|error|traceback|database|socket|ssl" | tail -20
+
+            echo ""
+            echo "=== DATABASE_URL (masked) ==="
+            grep DATABASE_URL /opt/nuotao/backend/.env | sed 's/:[^:@]*@/:***@/'
+
+            echo ""
+            echo "=== PostgreSQL socket dir ==="
+            ls -la /var/run/postgresql/ 2>/dev/null || echo "no /var/run/postgresql"
+            ls -la /tmp/.s.PGSQL* 2>/dev/null || echo "no /tmp socket"
+
+            echo ""
+            echo "=== nuotao user groups ==="
+            id nuotao 2>/dev/null || echo "nuotao user not found"
+
+            echo ""
+            echo "=== Test DB connection as nuotao user ==="
+            sudo -u nuotao bash -c 'cd /opt/nuotao/backend && source .venv/bin/activate && python3 -c "
+import asyncio
+from sqlalchemy.ext.asyncio import create_async_engine
+import os
+url = os.environ.get(\"DATABASE_URL\", \"\")
+print(\"URL:\", url[:50] + \"...\" if len(url)>50 else url)
+async def test():
+    engine = create_async_engine(url)
+    async with engine.connect() as conn:
+        r = await conn.execute(__import__(\"sqlalchemy\").text(\"SELECT 1\"))
+        print(\"DB SELECT 1:\", r.scalar())
+    await engine.dispose()
+asyncio.run(test())
+" 2>&1' | head -20
+
+            echo ""
+            echo "=== Test DB connection as root ==="
+            cd /opt/nuotao/backend && source .venv/bin/activate && python3 -c "
+import asyncio, os
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+url = os.environ.get('DATABASE_URL', '')
+print('URL:', url[:60])
+async def test():
+    engine = create_async_engine(url)
+    async with engine.connect() as conn:
+        r = await conn.execute(text('SELECT 1'))
+        print('DB SELECT 1:', r.scalar())
+    await engine.dispose()
+asyncio.run(test())
+" 2>&1 | head -15
+
+            echo ""
+            echo "=== PostgreSQL pg_hba.conf (local lines) ==="
+            grep -v '^#' /etc/postgresql/*/main/pg_hba.conf 2>/dev/null | grep -v '^$' | head -10 || echo "pg_hba not found"
