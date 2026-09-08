@@ -1,0 +1,98 @@
+name: Fix Staging Venv
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Recreate staging venv and reinstall dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix staging venv
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Stop staging service ==="
+            systemctl stop nuotao-backend-staging
+            sleep 2
+
+            echo ""
+            echo "=== 2. Kill any remaining processes on 8001 ==="
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                echo "Killing PIDs: $PIDS"
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            sleep 2
+
+            echo ""
+            echo "=== 3. Remove old venv ==="
+            rm -rf /opt/nuotao/staging/backend/.venv
+            echo "Old venv removed"
+
+            echo ""
+            echo "=== 4. Clear pycache ==="
+            find /opt/nuotao/staging/backend/app -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+            find /opt/nuotao/staging/backend -name "*.pyc" -delete 2>/dev/null
+            echo "Pycache cleared"
+
+            echo ""
+            echo "=== 5. Create new venv ==="
+            cd /opt/nuotao/staging/backend
+            python3 -m venv .venv
+            echo "New venv created"
+
+            echo ""
+            echo "=== 6. Upgrade pip ==="
+            .venv/bin/pip install --upgrade pip --quiet
+            echo "Pip upgraded"
+
+            echo ""
+            echo "=== 7. Install dependencies ==="
+            .venv/bin/pip install -e . --quiet 2>&1 | tail -5
+            echo "Dependencies installed"
+
+            echo ""
+            echo "=== 8. Verify FastAPI version ==="
+            .venv/bin/python -c "import fastapi; print(f'FastAPI: {fastapi.__version__}')"
+
+            echo ""
+            echo "=== 9. Verify import routes ==="
+            .venv/bin/python -c "
+            import sys
+            sys.path.insert(0, '.')
+            from app.main import app
+            routes = [r.path for r in app.routes if hasattr(r, 'path')]
+            print(f'Import routes: {len(routes)}')
+            health = [r for r in routes if 'health' in r or 'ready' in r]
+            print(f'Health routes: {health}')
+            " 2>&1 | tail -5
+
+            echo ""
+            echo "=== 10. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            sleep 10
+
+            echo ""
+            echo "=== 11. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 12. Test endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz; do
+                RESULT=$(curl -s -w " HTTP %{http_code}" --max-time 5 "http://127.0.0.1:8001$path" || echo " FAILED")
+                echo "  $path -> $RESULT"
+            done
+
+            echo ""
+            echo "=== 13. Openapi paths count ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | .venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Total paths: {len(paths)}')
+            " 2>&1
