@@ -1,0 +1,58 @@
+name: Debug Staging Env
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging environment and Python path
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging env
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Staging service config ==="
+            cat /etc/systemd/system/nuotao-backend-staging.service
+
+            echo ""
+            echo "=== 2. Python path when running via uvicorn ==="
+            cd /opt/nuotao/staging/backend
+            .venv/bin/python -c "
+            import sys
+            print('sys.path:')
+            for p in sys.path: print(f'  {p}')
+            import app.main
+            print(f'app.main file: {app.main.__file__}')
+            from app.api.v1 import router
+            print(f'router file: {router.__file__}')
+            " 2>&1 | tail -15
+
+            echo ""
+            echo "=== 3. Check for duplicate app modules ==="
+            find /opt/nuotao -name "main.py" -path "*/app/*" 2>/dev/null
+            find /opt/nuotao -name "router.py" -path "*/api/v1/*" 2>/dev/null
+
+            echo ""
+            echo "=== 4. Check .env PYTHONPATH ==="
+            grep -i "pythonpath\|PYTHONPATH" /opt/nuotao/staging/backend/.env || echo "No PYTHONPATH in .env"
+
+            echo ""
+            echo "=== 5. Test uvicorn directly (not systemd) ==="
+            cd /opt/nuotao/staging/backend
+            timeout 10 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002 --workers 1 &
+            sleep 6
+            curl -s --max-time 3 http://127.0.0.1:8002/openapi.json | .venv/bin/python -c "
+            import sys, json
+            try:
+                d = json.load(sys.stdin)
+                paths = list(d.get('paths', {}).keys())
+                print(f'Direct uvicorn paths: {len(paths)}')
+            except Exception as e:
+                print(f'Error: {e}')
+            " 2>&1
+            kill %1 2>/dev/null || true
