@@ -52,6 +52,7 @@ jobs:
             sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='nuotao_staging'" | grep -q 1 || \
               sudo -u postgres createdb nuotao_staging
             sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE nuotao_staging TO nuotao"
+            sudo -u postgres psql -c "ALTER DATABASE nuotao_staging OWNER TO nuotao"
             echo "Database nuotao_staging ready"
 
             echo ""

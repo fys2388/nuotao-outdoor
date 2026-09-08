@@ -11,11 +11,10 @@ BACKUP_DIR="/opt/nuotao/backups"
 TEST_DB="nuotao_restore_test"
 ENV_FILE="/opt/nuotao/backend/.env"
 
-# Load env from correct path
+# Extract DATABASE_URL from .env (do NOT source entire .env - values with spaces break bash)
 if [ -f "$ENV_FILE" ]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
+    DATABASE_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+    export DATABASE_URL
 fi
 
 # Parse DATABASE_URL if available
