@@ -9,6 +9,8 @@ Generates procurement suggestions based on product metrics:
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -19,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductScore
+from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.models.product import Product
 
 logger = logging.getLogger(__name__)
 
@@ -202,4 +206,98 @@ async def generate_procurement_suggestions(
             "total_units": total_units,
             "total_estimated_cost": str(total_estimated_cost),
         },
+    }
+
+
+async def create_purchase_order(
+    session: AsyncSession,
+    product_id: str,
+    quantity: int,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """创建采购单（真实写入 purchase_orders + purchase_order_items 表）。
+
+    Args:
+        session: 数据库会话
+        product_id: 产品 ID
+        quantity: 采购数量
+        params: 额外参数（supplier_id, unit_cost, workspace_id 等）
+
+    Returns:
+        采购单信息字典
+    """
+    params = params or {}
+
+    # 查询产品信息
+    product_result = await session.execute(
+        select(Product).where(Product.id == product_id)
+    )
+    product = product_result.scalar_one_or_none()
+    if not product:
+        return {"success": False, "error": f"产品 {product_id} 不存在"}
+
+    workspace_id = params.get("workspace_id") or str(product.workspace_id)
+    supplier_id = params.get("supplier_id")
+    unit_cost = float(params.get("unit_cost", 0))
+    sku = params.get("sku") or product.sku or "UNKNOWN"
+    product_name = product.name or "Unknown Product"
+
+    # 生成唯一采购单号
+    po_number = f"PO-AGENT-{int(datetime.now(timezone.utc).timestamp())}-{uuid.uuid4().hex[:6].upper()}"
+
+    # 计算金额
+    subtotal = unit_cost * quantity
+    shipping_cost = float(params.get("shipping_cost", 0))
+    total = subtotal + shipping_cost
+
+    # 创建采购单
+    po_id = str(uuid.uuid4())
+    po = PurchaseOrder(
+        id=po_id,
+        po_number=po_number,
+        supplier_id=supplier_id,
+        status="approved",
+        currency=params.get("currency", "USD"),
+        subtotal=subtotal,
+        shipping_cost=shipping_cost,
+        total=total,
+        expected_delivery_at=datetime.now(timezone.utc) + timedelta(days=15),
+        notes=params.get("notes", f"Agent 自动创建: {product_name} 补货 {quantity} 件"),
+        trace_id=params.get("trace_id"),
+        workspace_id=workspace_id,
+    )
+    session.add(po)
+
+    # 创建采购单明细
+    item = PurchaseOrderItem(
+        id=str(uuid.uuid4()),
+        purchase_order_id=po_id,
+        product_id=product_id,
+        sku=sku,
+        name=product_name,
+        quantity=quantity,
+        unit_cost=unit_cost,
+        line_total=subtotal,
+        workspace_id=workspace_id,
+    )
+    session.add(item)
+
+    await session.flush()
+
+    logger.info("Agent 自动创建采购单: %s product=%s qty=%d total=%.2f", po_number, product_name, quantity, total)
+
+    return {
+        "success": True,
+        "po_number": po_number,
+        "purchase_order_id": po_id,
+        "product_id": product_id,
+        "product_name": product_name,
+        "sku": sku,
+        "quantity": quantity,
+        "unit_cost": str(unit_cost),
+        "subtotal": str(subtotal),
+        "total": str(total),
+        "status": "approved",
+        "supplier_id": supplier_id,
+        "expected_delivery_at": (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
     }

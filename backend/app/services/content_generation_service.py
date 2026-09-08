@@ -598,3 +598,69 @@ def get_content_generation_status() -> dict[str, Any]:
         "workflow": "Generate content → Quality check → Draft → Submit for review → Approve/Reject → Publish",
         "note": "Content generation system is ready. Supports product selling points, SEO articles, EDM emails, batch generation, and human-in-the-loop review workflow.",
     }
+
+
+def generate_content(
+    content_type: str,
+    *,
+    product_name: str = "",
+    product_category: str = "",
+    key_features: list[str] | None = None,
+    target_audience: str = "outdoor enthusiasts",
+    price: float | None = None,
+    seo_keywords: list[str] | None = None,
+    campaign_name: str = "",
+    discount: str = "",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """统一内容生成入口：按 content_type 分发到具体生成函数。
+
+    Args:
+        content_type: 内容类型 (selling_points | seo | edm)
+        product_name: 产品名称
+        product_category: 产品分类
+        key_features: 核心特性列表
+        target_audience: 目标受众
+        price: 价格
+        seo_keywords: SEO 关键词列表
+        campaign_name: 营销活动名称
+        discount: 折扣信息
+        **kwargs: 额外参数
+
+    Returns:
+        生成的内容字典
+    """
+    content_type = (content_type or "").lower().strip()
+
+    if content_type in ("selling_points", "selling_point", "bullets"):
+        return generate_selling_points(
+            product_name=product_name,
+            product_category=product_category,
+            key_features=key_features,
+            target_audience=target_audience,
+            price=price,
+        )
+
+    if content_type in ("seo", "seo_content", "article"):
+        return generate_seo_content(
+            product_name=product_name,
+            product_category=product_category,
+            key_features=key_features or [],
+            target_audience=target_audience,
+            seo_keywords=seo_keywords or [],
+        )
+
+    if content_type in ("edm", "email", "newsletter"):
+        return generate_edm_content(
+            product_name=product_name,
+            product_category=product_category,
+            key_features=key_features or [],
+            target_audience=target_audience,
+            campaign_name=campaign_name,
+            discount=discount,
+        )
+
+    return {
+        "success": False,
+        "error": f"不支持的内容类型: {content_type}，支持: selling_points, seo, edm",
+    }
