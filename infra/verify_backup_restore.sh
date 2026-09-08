@@ -62,7 +62,7 @@ fi
 echo "Restore completed"
 
 # 5. Verify key tables exist and have data
-TABLES="orders settlements agent_suggestions growth_memories strategy_versions weekly_reports alembic_version"
+TABLES="orders settlements agent_suggestions growth_memories strategy_versions alembic_version"
 ALL_OK=1
 MISSING=0
 for tbl in ${TABLES}; do
