@@ -1,0 +1,57 @@
+name: Fix Staging Port
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Fix staging port conflict and restart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix staging port
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Stop staging service ==="
+            systemctl stop nuotao-backend-staging 2>/dev/null || true
+            sleep 2
+
+            echo ""
+            echo "=== 2. Kill any process on port 8001 ==="
+            fuser -k 8001/tcp 2>/dev/null || true
+            sleep 1
+            # Also kill any leftover uvicorn processes
+            pkill -f "uvicorn.*8001" 2>/dev/null || true
+            sleep 1
+
+            echo ""
+            echo "=== 3. Verify port 8001 is free ==="
+            if ss -tlnp | grep -q ':8001'; then
+                echo "WARNING: Port 8001 still in use:"
+                ss -tlnp | grep ':8001'
+            else
+                echo "Port 8001 is free"
+            fi
+
+            echo ""
+            echo "=== 4. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            sleep 5
+
+            echo ""
+            echo "=== 5. Check staging service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -10
+
+            echo ""
+            echo "=== 6. Test staging health ==="
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "000")
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8082/ || echo "000")
+            echo "Staging backend :8001/readyz -> HTTP $BACKEND_CODE"
+            echo "Staging frontend :8082/ -> HTTP $FRONTEND_CODE"
+            echo ""
+            echo "Staging readyz body:"
+            curl -s --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "(no response)"
