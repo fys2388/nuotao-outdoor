@@ -53,18 +53,18 @@ jobs:
             echo "=========================================="
             cd /opt/nuotao/backend
             source .venv/bin/activate
-            python3 -c "
-from app.core.database import engine
-import asyncio
-async def check():
-    async with engine.connect() as conn:
-        r = await conn.execute(text('SELECT count(*) FROM information_schema.tables WHERE table_schema=\\'public\\''))
-        print(f'  Public tables: {r.scalar()}')
-        r2 = await conn.execute(text('SELECT version_num FROM alembic_version'))
-        print(f'  Alembic version: {r2.scalar()}')
-from sqlalchemy import text
-asyncio.run(check())
-" 2>&1 | head -10 || echo "  DB check failed"
+            python3 << 'PYEOF' 2>&1 | head -10 || echo "  DB check failed"
+            import asyncio
+            from sqlalchemy import text
+            from app.core.database import engine
+            async def check():
+                async with engine.connect() as conn:
+                    r = await conn.execute(text("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"))
+                    print(f"  Public tables: {r.scalar()}")
+                    r2 = await conn.execute(text("SELECT version_num FROM alembic_version"))
+                    print(f"  Alembic version: {r2.scalar()}")
+            asyncio.run(check())
+            PYEOF
 
             echo ""
             echo "=========================================="
