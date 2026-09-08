@@ -165,8 +165,8 @@ jobs:
             pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 依赖安装失败，请检查 pip 源与 requirements.txt"; exit 1; }
 
             echo "=== 2.5 .env variable drift check ==="
-            ENV_FILE=/opt/nuotao/.env
-            TEMPLATE=/opt/nuotao/.env.production.template
+            ENV_FILE=/opt/nuotao/backend/.env
+            TEMPLATE=/opt/nuotao/backend/.env.production.template
             if [ -f "$TEMPLATE" ] && [ -f "$ENV_FILE" ]; then
               MISSING=0
               while IFS='=' read -r key _; do
@@ -180,7 +180,7 @@ jobs:
               done < "$TEMPLATE"
               if [ "$MISSING" -gt 0 ]; then
                 echo "WARNING: $MISSING variable(s) in template missing from server .env"
-                echo "  Fix: ssh to server and add missing vars to /opt/nuotao/.env"
+                echo "  Fix: ssh to server and add missing vars to /opt/nuotao/backend/.env"
               else
                 echo "[env] all template variables present in server .env"
               fi
@@ -349,8 +349,8 @@ jobs:
             else
               echo "[monitoring] grafana not installed, skipping"
             fi
-            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao/infra/alertmanager/alertmanager.yml ]; then
-              cp /opt/nuotao/infra/alertmanager/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
+            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao/infra/monitoring/alertmanager.yml ]; then
+              cp /opt/nuotao/infra/monitoring/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
               systemctl reload alertmanager 2>/dev/null || systemctl restart alertmanager 2>/dev/null || true
               echo "[monitoring] alertmanager config deployed"
             fi
