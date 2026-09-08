@@ -9,8 +9,8 @@ User=nuotao
 Group=nuotao
 WorkingDirectory=/opt/nuotao/backend
 Environment="PATH=/opt/nuotao/backend/.venv/bin"
-EnvironmentFile=/opt/nuotao/.env
-ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
+EnvironmentFile=/opt/nuotao/backend/.env
+ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=5
