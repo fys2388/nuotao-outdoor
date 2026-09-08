@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/nuotao/backend
 Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/opt/nuotao/.env
+EnvironmentFile=/opt/nuotao/backend/.env
 ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler
 Restart=always
 RestartSec=10
