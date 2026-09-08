@@ -9,7 +9,7 @@ User=nuotao
 Group=nuotao
 WorkingDirectory=/opt/nuotao/staging/backend
 Environment="PATH=/opt/nuotao/staging/backend/.venv/bin"
-EnvironmentFile=/opt/nuotao/staging/.env
+EnvironmentFile=/opt/nuotao/staging/backend/.env
 ExecStart=/opt/nuotao/staging/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 2
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
@@ -21,9 +21,9 @@ SyslogIdentifier=nuotao-backend-staging
 # 安全限制
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/nuotao/staging/backend/data /opt/nuotao/staging/backend/logs
+ReadWritePaths=/opt/nuotao/staging/backend/data /opt/nuotao/staging/backend/logs /opt/nuotao/staging/backend/app/data /opt/nuotao/staging/backend/app/logs
 
 [Install]
 WantedBy=multi-user.target
