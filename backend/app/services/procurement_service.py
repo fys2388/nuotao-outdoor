@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductScore
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
-from app.models.product import Product
 
 logger = logging.getLogger(__name__)
 
