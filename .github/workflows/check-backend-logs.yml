@@ -21,17 +21,20 @@ jobs:
             grep -E "FEISHU" /opt/nuotao/.env | sed 's/=.*/=***/'
             echo ""
             echo "=== 检查数据库字段 ==="
-            cd /opt/nuotao/backend && python3 -c "
-import sys, os
-sys.path.insert(0, '.')
-os.chdir('.')
-from sqlalchemy import create_engine, inspect, text
-from app.core.config import get_settings
-settings = get_settings()
-sync_url = settings.database_url.replace('+asyncpg', '')
-engine = create_engine(sync_url)
-insp = inspect(engine)
-cols = [c['name'] for c in insp.get_columns('agent_suggestions')]
-print('agent_suggestions 表字段:', cols)
-print('feishu_message_id 存在:', 'feishu_message_id' in cols)
-"
+            cd /opt/nuotao/backend && source .venv/bin/activate
+            cat > /tmp/check_feishu_col.py << 'PYEOF'
+            import sys, os
+            sys.path.insert(0, '.')
+            os.chdir('.')
+            from sqlalchemy import create_engine, inspect
+            from app.core.config import get_settings
+            settings = get_settings()
+            sync_url = settings.database_url.replace('+asyncpg', '')
+            engine = create_engine(sync_url)
+            insp = inspect(engine)
+            cols = [c['name'] for c in insp.get_columns('agent_suggestions')]
+            print('agent_suggestions 表字段:', cols)
+            print('feishu_message_id 存在:', 'feishu_message_id' in cols)
+            PYEOF
+            python3 /tmp/check_feishu_col.py
+            rm -f /tmp/check_feishu_col.py
