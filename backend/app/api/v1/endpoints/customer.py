@@ -144,6 +144,7 @@ async def update_profile(
     "/customer-profiles/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a customer profile",
+    response_model=None,
 )
 async def delete_profile(
     profile_id: UUID,
@@ -258,6 +259,7 @@ async def update_interaction(
     "/customer-interactions/{interaction_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a customer interaction",
+    response_model=None,
 )
 async def delete_interaction(
     interaction_id: UUID,
@@ -353,6 +355,7 @@ async def update_review(
     "/product-reviews/{review_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a product review",
+    response_model=None,
 )
 async def delete_review(
     review_id: UUID,
@@ -462,6 +465,7 @@ async def update_refund(
     "/refund-cases/{refund_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a refund case",
+    response_model=None,
 )
 async def delete_refund(
     refund_id: UUID,

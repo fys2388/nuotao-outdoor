@@ -334,6 +334,7 @@ async def list_roles(db: DbSession, workspace_id: WorkspaceId) -> list[ApprovalR
     "/approval-roles/{role_name}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete one approval role",
+    response_model=None,
 )
 async def delete_role(
     role_name: str,
