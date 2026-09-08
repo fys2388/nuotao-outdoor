@@ -1,0 +1,60 @@
+name: Debug Staging Router Code
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging router code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging router code
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            echo "=== 1. main.py include_router section ==="
+            grep -n "include_router\|api_router\|api_prefix" app/main.py | head -10
+
+            echo ""
+            echo "=== 2. router.py content (first 50 lines) ==="
+            head -50 app/api/v1/router.py
+
+            echo ""
+            echo "=== 3. Check if health.py exists ==="
+            ls -la app/api/v1/endpoints/health.py 2>&1
+
+            echo ""
+            echo "=== 4. health.py content ==="
+            cat app/api/v1/endpoints/health.py
+
+            echo ""
+            echo "=== 5. Test api_router directly ==="
+            cat > /tmp/test_router.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '/opt/nuotao/staging/backend')
+            from app.api.v1.router import api_router
+            print(f'api_router type: {type(api_router)}')
+            print(f'api_router.routes count: {len(api_router.routes)}')
+            for i, r in enumerate(api_router.routes[:5]):
+                print(f'  Route {i}: type={type(r).__name__}, path={getattr(r, "path", "N/A")}')
+            PYEOF
+            .venv/bin/python /tmp/test_router.py 2>&1
+
+            echo ""
+            echo "=== 6. Kill port 8001 and restart staging ==="
+            ss -tlnp | grep ':8001' || echo "Port 8001 not in use"
+            fuser -k 8001/tcp 2>/dev/null || true
+            sleep 2
+            systemctl restart nuotao-backend-staging
+            sleep 5
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 7. Test after restart ==="
+            curl -s -w "\nHTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8001/api/v1/readyz 2>&1
