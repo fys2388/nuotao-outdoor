@@ -22,44 +22,35 @@ jobs:
             ls -la app/api/v1/endpoints/health.py 2>&1
 
             echo ""
-            echo "=== 2. Check health.py first 5 lines ==="
-            head -5 app/api/v1/endpoints/health.py 2>&1
+            echo "=== 2. Write debug script ==="
+            cat > /tmp/debug_routes.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '.')
+            try:
+                from app.main import app
+                routes = []
+                for route in app.routes:
+                    if hasattr(route, 'path'):
+                        routes.append(route.path)
+                routes.sort()
+                print(f'Total routes: {len(routes)}')
+                health_routes = [r for r in routes if 'health' in r or 'ready' in r]
+                print(f'Health routes: {health_routes}')
+                for r in routes[:30]:
+                    print(f'  {r}')
+            except Exception as e:
+                print(f'ERROR importing app: {type(e).__name__}: {e}')
+                import traceback
+                traceback.print_exc()
+            PYEOF
 
             echo ""
-            echo "=== 3. Import app and list all routes ==="
-            .venv/bin/python -c "
-import sys
-sys.path.insert(0, '.')
-try:
-    from app.main import app
-    routes = []
-    for route in app.routes:
-        if hasattr(route, 'path'):
-            routes.append(route.path)
-    routes.sort()
-    print(f'Total routes: {len(routes)}')
-    health_routes = [r for r in routes if 'health' in r or 'ready' in r]
-    print(f'Health routes: {health_routes}')
-    # Print first 20 routes
-    for r in routes[:20]:
-        print(f'  {r}')
-except Exception as e:
-    print(f'ERROR importing app: {type(e).__name__}: {e}')
-    import traceback
-    traceback.print_exc()
-" 2>&1
+            echo "=== 3. Run debug script ==="
+            .venv/bin/python /tmp/debug_routes.py 2>&1
 
             echo ""
-            echo "=== 4. Check if api_router includes health ==="
-            .venv/bin/python -c "
-import sys
-sys.path.insert(0, '.')
-try:
-    from app.api.v1.router import api_router
-    # Check included routers
-    for attr in dir(api_router):
-        if 'include' in attr.lower() or 'route' in attr.lower():
-            print(f'  {attr}: {getattr(api_router, attr, None)}')
-except Exception as e:
-    print(f'ERROR: {type(e).__name__}: {e}')
-" 2>&1 | head -20
+            echo "=== 4. Test endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz /docs; do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:8001$path" || echo "000")
+                echo "  $path -> HTTP $CODE"
+            done
