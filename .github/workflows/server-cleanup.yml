@@ -1,0 +1,38 @@
+name: Server Cleanup (staging + disk)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    name: Clean staging dir and check disk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== Before cleanup ==="
+            df -h /
+            du -sh /opt/nuotao/staging 2>/dev/null || echo "staging dir not found"
+
+            echo ""
+            echo "=== Removing /opt/nuotao/staging (recursive nesting filled disk) ==="
+            rm -rf /opt/nuotao/staging
+            echo "staging removed"
+
+            echo ""
+            echo "=== Cleaning apt cache and tmp ==="
+            apt-get clean 2>/dev/null || true
+            rm -rf /tmp/nuotao_* 2>/dev/null || true
+
+            echo ""
+            echo "=== After cleanup ==="
+            df -h /
+            echo ""
+            echo "=== Cleanup complete ==="
