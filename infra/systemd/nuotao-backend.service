@@ -21,8 +21,8 @@ SyslogIdentifier=nuotao-backend
 # 安全限制
 NoNewPrivileges=true
 PrivateTmp=true
-# ProtectSystem=strict  # temporarily disabled for PermissionError debugging
-# ProtectHome=true  # temporarily disabled for PermissionError debugging
+ProtectSystem=full
+ProtectHome=true
 ReadWritePaths=/opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
 
 [Install]
