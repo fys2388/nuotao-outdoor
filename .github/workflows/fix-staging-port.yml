@@ -16,6 +16,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
+            set +e
             echo "=== 1. Stop staging service ==="
             systemctl stop nuotao-backend-staging 2>/dev/null || true
             sleep 2
@@ -44,7 +45,11 @@ jobs:
 
             echo ""
             echo "=== 5. Check staging service status ==="
-            systemctl status nuotao-backend-staging --no-pager | head -10
+            sleep 3
+            systemctl status nuotao-backend-staging --no-pager | head -15
+            echo ""
+            echo "=== 5b. Staging service logs (last 10) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 10
 
             echo ""
             echo "=== 6. Test staging health ==="
