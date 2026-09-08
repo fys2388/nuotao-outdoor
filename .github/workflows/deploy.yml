@@ -63,15 +63,28 @@ jobs:
             echo "=== [staging] syncing code to $STAGE ==="
             mkdir -p "$STAGE"
             cd /opt/nuotao
-            rsync -a --delete \
-              --exclude .git --exclude backend/.env --exclude backend/.venv \
-              --exclude frontend/node_modules --exclude backend/alembic/versions/*.pyc \
-              ./ "$STAGE/" 2>/dev/null || { echo "rsync 不可用，退化为 git clone 同步"; }
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a --delete \
+                --exclude .git --exclude backend/.env --exclude backend/.venv \
+                --exclude frontend/node_modules --exclude backend/alembic/versions/*.pyc \
+                ./ "$STAGE/"
+              echo "[staging] synced via rsync"
+            else
+              echo "[staging] rsync not available, using cp -a fallback"
+              rm -rf "$STAGE"/*
+              cp -a ./ "$STAGE/" 2>/dev/null || true
+              rm -rf "$STAGE/.git" "$STAGE/backend/.env" "$STAGE/backend/.venv" "$STAGE/frontend/node_modules" 2>/dev/null || true
+              echo "[staging] synced via cp -a"
+            fi
+            if [ ! -f "$STAGE/backend/pyproject.toml" ]; then
+              echo "ERROR: staging code sync failed — pyproject.toml not found"
+              exit 1
+            fi
 
             echo "=== [staging] backend syntax check ==="
             cd "$STAGE/backend"
-            python3 -m venv .venv 2>/dev/null || true
-            . "$STAGE/backend/.venv/bin/activate" 2>/dev/null || source .venv/bin/activate
+            python3 -m venv .venv
+            . "$STAGE/backend/.venv/bin/activate"
             pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet
             python -m compileall -q app
             echo "[staging] syntax OK"
