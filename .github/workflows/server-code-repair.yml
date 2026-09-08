@@ -52,12 +52,24 @@ jobs:
 
             echo ""
             echo "=== Try alembic upgrade head ==="
-            alembic upgrade head 2>&1 || {
-              echo "alembic upgrade failed, checking if tables already exist..."
-              # If 0026 fails due to DuplicateTable, stamp and continue
-              alembic stamp 0025 2>/dev/null || true
-              alembic upgrade head 2>&1 || echo "still failed, manual intervention needed"
-            }
+            set +e
+            UPGRADE_OUTPUT=$(alembic upgrade head 2>&1)
+            UPGRADE_EXIT=$?
+            echo "$UPGRADE_OUTPUT"
+            set -e
+            if [ $UPGRADE_EXIT -ne 0 ]; then
+              echo "alembic upgrade failed (exit=$UPGRADE_EXIT)"
+              if echo "$UPGRADE_OUTPUT" | grep -qiE "DuplicateTable|already exists|relation .* already exists"; then
+                echo "Detected DuplicateTable — tables likely created via create_all. Stamping 0026 and continuing..."
+                alembic stamp 0026
+                echo "Stamped to 0026. Continuing upgrade to head..."
+                alembic upgrade head
+              else
+                echo "Non-DuplicateTable failure. Attempting stamp 0025 and retry..."
+                alembic stamp 0025
+                alembic upgrade head || echo "still failed, manual intervention needed"
+              fi
+            fi
 
             echo ""
             echo "=== Alembic current after upgrade ==="
