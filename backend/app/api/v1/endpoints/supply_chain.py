@@ -124,6 +124,7 @@ async def update_supplier_profile(
     "/supplier-profiles/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a supplier profile",
+    response_model=None,
 )
 async def delete_supplier_profile(
     profile_id: UUID,
@@ -411,6 +412,7 @@ async def update_inventory(
     "/inventory-snapshots/{inventory_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an inventory snapshot",
+    response_model=None,
 )
 async def delete_inventory(
     inventory_id: UUID,
@@ -544,6 +546,7 @@ async def list_logistics_events(
     "/shipments/{shipment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a shipment",
+    response_model=None,
 )
 async def delete_shipment(
     shipment_id: UUID,

@@ -132,6 +132,7 @@ async def update_campaign(
     return _campaign_out(campaign)
 
 
+    response_model=None,
 @router.delete("/campaigns/{campaign_id}", status_code=204, summary="Delete a campaign")
 async def delete_campaign(
     campaign_id: UUID,
@@ -219,6 +220,7 @@ async def update_creative(
     return CreativeOut.model_validate(creative)
 
 
+    response_model=None,
 @router.delete("/creatives/{creative_id}", status_code=204, summary="Delete a creative")
 async def delete_creative(
     creative_id: UUID,
@@ -312,6 +314,7 @@ async def update_feedback(
     return FeedbackOut.model_validate(feedback)
 
 
+    response_model=None,
 @router.delete("/feedback/{feedback_id}", status_code=204, summary="Delete feedback")
 async def delete_feedback(
     feedback_id: UUID,
