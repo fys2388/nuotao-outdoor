@@ -9,19 +9,33 @@ set -euo pipefail
 
 BACKUP_DIR="/opt/nuotao/backups"
 TEST_DB="nuotao_restore_test"
+ENV_FILE="/opt/nuotao/backend/.env"
 
-if [ -f /opt/nuotao/.env ]; then
+# Load env from correct path
+if [ -f "$ENV_FILE" ]; then
     set -a
-    source /opt/nuotao/.env
+    source "$ENV_FILE"
     set +a
 fi
 
-DB_USER="${POSTGRES_USER:-nuotao}"
-DB_HOST="${POSTGRES_HOST:-localhost}"
-DB_PORT="${POSTGRES_PORT:-5432}"
-export PGPASSWORD="${POSTGRES_PASSWORD:-}"
+# Parse DATABASE_URL if available
+if [ -n "${DATABASE_URL:-}" ]; then
+    # Extract from postgresql+asyncpg://user:pass@host:port/dbname
+    DB_USER=$(echo "$DATABASE_URL" | sed -E 's|.*://([^:]+):.*|\1|')
+    DB_PASSWORD=$(echo "$DATABASE_URL" | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')
+    DB_HOST=$(echo "$DATABASE_URL" | sed -E 's|.*@([^:]+):.*|\1|')
+    DB_PORT=$(echo "$DATABASE_URL" | sed -E 's|.*@[^:]+:([^/]+)/.*|\1|')
+else
+    DB_USER="${POSTGRES_USER:-nuotao}"
+    DB_HOST="${POSTGRES_HOST:-localhost}"
+    DB_PORT="${POSTGRES_PORT:-5432}"
+    DB_PASSWORD="${POSTGRES_PASSWORD:-}"
+fi
+
+export PGPASSWORD="$DB_PASSWORD"
 
 echo "=== Backup Restore Verification: $(date) ==="
+echo "DB: $DB_USER@$DB_HOST:$DB_PORT"
 
 # 1. Find latest backup
 LATEST=$(ls -t "${BACKUP_DIR}"/nuotao_*.sql.gz 2>/dev/null | head -1 || true)
@@ -38,18 +52,18 @@ dropdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" --if-exists "${TEST_DB}" 
 createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${TEST_DB}"
 echo "Created temp DB: ${TEST_DB}"
 
-# 4. Restore
+# 4. Restore (with timeout to prevent hanging)
 echo "Restoring backup..."
-gunzip -c "${LATEST}" | psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${TEST_DB}" -q -o /dev/null 2>/tmp/restore_err.log || {
-    echo "ERROR: Restore failed:"
+if ! gunzip -c "${LATEST}" | timeout 120 psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${TEST_DB}" -q -o /dev/null 2>/tmp/restore_err.log; then
+    echo "ERROR: Restore failed or timed out:"
     cat /tmp/restore_err.log | head -20
     dropdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" --if-exists "${TEST_DB}" 2>/dev/null || true
     exit 1
-}
+fi
 echo "Restore completed"
 
 # 5. Verify key tables exist and have data
-TABLES="orders settlements agent_suggestions growth_memories strategy_versions weekly_reports"
+TABLES="orders settlements agent_suggestions growth_memories strategy_versions weekly_reports alembic_version"
 ALL_OK=1
 MISSING=0
 for tbl in ${TABLES}; do
