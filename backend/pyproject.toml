@@ -1,4 +1,4 @@
-[project]
+﻿[project]
 name = "nuotao-ai-os-backend"
 version = "0.1.0"
 description = "Nuotao Outdoor AI OS - backend service (M0 engineering foundation)"
@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.115.12",
     "uvicorn[standard]>=0.30.0",
+    "gunicorn>=21.2.0",
     "pydantic[email]>=2.8.0",
     "pydantic-settings>=2.4.0",
     "passlib[bcrypt]>=1.7.4",
@@ -49,8 +50,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
-# 忽略 aiosqlite/SQLAlchemy 在测试结束时连接未关闭的环境警告
-# （coroutine 'Connection._cancel' was never awaited），避免退出码被污染
+# 蹇界暐 aiosqlite/SQLAlchemy 鍦ㄦ祴璇曠粨鏉熸椂杩炴帴鏈叧闂殑鐜璀﹀憡
+# 锛坈oroutine 'Connection._cancel' was never awaited锛夛紝閬垮厤閫€鍑虹爜琚薄鏌?
 filterwarnings = [
     "ignore:coroutine 'Connection\\._cancel' was never awaited:RuntimeWarning",
 ]
