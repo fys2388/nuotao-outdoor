@@ -1,0 +1,45 @@
+name: Get Env Vars and Debug Alertmanager
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Get env var names and debug alertmanager
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== .env variable names (values masked) ==="
+            grep '^[A-Z]' /opt/nuotao/backend/.env | cut -d= -f1 | sort
+
+            echo ""
+            echo "=== .env empty values ==="
+            grep '^[A-Z].*=$' /opt/nuotao/backend/.env | cut -d= -f1 || echo "(none)"
+
+            echo ""
+            echo "=== Alertmanager service status ==="
+            systemctl status alertmanager --no-pager | head -15
+
+            echo ""
+            echo "=== Alertmanager journalctl (last 20) ==="
+            journalctl -u alertmanager --no-pager -n 20 | tail -20
+
+            echo ""
+            echo "=== Alertmanager config ==="
+            cat /etc/alertmanager/alertmanager.yml | head -40
+
+            echo ""
+            echo "=== Alertmanager binary ==="
+            which alertmanager 2>/dev/null || echo "alertmanager not in PATH"
+            ls -la /usr/local/bin/alertmanager /usr/bin/alertmanager 2>/dev/null || echo "no alertmanager binary found"
+
+            echo ""
+            echo "=== Port 9093 ==="
+            ss -tlnp | grep 9093 || echo "port 9093 not listening"
