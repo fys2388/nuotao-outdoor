@@ -208,7 +208,7 @@ jobs:
 
             echo "=== 3.4 Ensure nuotao system user and permissions ==="
             id nuotao >/dev/null 2>&1 || useradd -r -s /bin/false nuotao
-            mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs
+            mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
             chown -R nuotao:nuotao /opt/nuotao/backend
             echo "[user] nuotao user ready, backend dir owned by nuotao"
 
