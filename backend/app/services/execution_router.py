@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 from typing import Any
 from uuid import UUID
@@ -27,8 +28,8 @@ class ExecutionError(Exception):
     """执行失败异常。"""
 
 
-def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool, Any]:
-    """安全调用外部服务函数。
+async def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool, Any]:
+    """安全调用外部服务函数（支持 async 函数自动 await）。
 
     Returns:
         (success, result_or_error)
@@ -39,6 +40,8 @@ def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool,
         if func is None or not callable(func):
             return False, f"函数 {module_path}.{func_name} 不存在"
         result = func(*args, **kwargs)
+        if inspect.iscoroutine(result):
+            result = await result
         return True, result
     except Exception as e:
         return False, f"{type(e).__name__}: {str(e)}"
@@ -61,6 +64,48 @@ ACTION_ALIASES: dict[str, str] = {
 }
 
 
+
+
+# --------------------------------------------------------------------------- #
+# 执行失败自动升级映射
+# --------------------------------------------------------------------------- #
+ESCALATION_AGENT_MAP: dict[str, dict[str, str]] = {
+    "product_manager": {
+        "product_optimization": "supply_chain_manager",
+        "pricing_adjustment": "business_analyst",
+        "listing_optimization": "marketing_manager",
+        "inventory_restock": "supply_chain_manager",
+        "data_quality": "business_analyst",
+        "other": "business_analyst",
+    },
+    "marketing_manager": {
+        "marketing_optimization": "product_manager",
+        "campaign_optimization": "business_analyst",
+        "content_generation": "product_manager",
+        "data_quality": "business_analyst",
+        "other": "business_analyst",
+    },
+    "supply_chain_manager": {
+        "inventory_restock": "product_manager",
+        "procurement": "business_analyst",
+        "supplier_management": "business_analyst",
+        "data_quality": "business_analyst",
+        "other": "business_analyst",
+    },
+    "customer_manager": {
+        "customer_operation": "marketing_manager",
+        "refund": "business_analyst",
+        "complaint": "business_analyst",
+        "data_quality": "business_analyst",
+        "other": "business_analyst",
+    },
+    "business_analyst": {
+        "business_insight": "product_manager",
+        "data_quality": "product_manager",
+        "other": "product_manager",
+    },
+}
+
 def register_handler(action: str):
     """装饰器：注册执行动作处理器。"""
     def decorator(func):
@@ -72,6 +117,49 @@ def register_handler(action: str):
 # --------------------------------------------------------------------------- #
 # 核心执行入口
 # --------------------------------------------------------------------------- #
+
+
+
+async def escalate_failed_suggestion(
+    session: AsyncSession,
+    suggestion: AgentSuggestion,
+    error: str,
+) -> AgentSuggestion | None:
+    """执行失败后自动升级：生成一条新的升级建议分配给相关 Agent。"""
+    if suggestion.title and "[执行失败升级]" in suggestion.title:
+        logger.info("建议 %s 已是升级建议，跳过二次升级", suggestion.id)
+        return None
+
+    agent_map = ESCALATION_AGENT_MAP.get(suggestion.agent_id, {})
+    target_agent = agent_map.get(suggestion.suggestion_type, agent_map.get("other", "business_analyst"))
+
+    escalated_title = f"[执行失败升级] {suggestion.title}"
+    escalated_reason = (
+        f"原建议 ID={suggestion.id} 执行失败，错误: {error[:200]}\n"
+        f"原 Agent: {suggestion.agent_id}，建议类型: {suggestion.suggestion_type}\n"
+        f"请 {target_agent} 介入处理或升级为人工审批。"
+    )
+
+    try:
+        from app.services.agent_suggestion_service import create_suggestion
+        new_suggestion = await create_suggestion(
+            session,
+            agent_id=target_agent,
+            suggestion_type="escalation",
+            title=escalated_title,
+            description=escalated_reason,
+            risk_level="medium",
+            priority="high",
+            execution_action="manual_review",
+            execution_params={"original_suggestion_id": suggestion.id, "original_error": error[:500]},
+            workspace_id=suggestion.workspace_id,
+        )
+        logger.info("建议 %s 执行失败已自动升级为建议 %s (分配给 %s)",
+                    suggestion.id, new_suggestion.id if new_suggestion else "?", target_agent)
+        return new_suggestion
+    except Exception as e:
+        logger.error("自动升级建议失败: %s", e, exc_info=True)
+        return None
 
 async def execute_suggestion(
     session: AsyncSession,
@@ -121,18 +209,19 @@ async def execute_suggestion(
             handler = _execution_handlers[action]
             result = await handler(session, params)
         else:
-            result = {
-                "success": False,
-                "error": f"未注册的执行动作: {action}，请先注册处理器",
-                "skipped": True,
-            }
+            # 回退：按 suggestion_type 查找旧处理器（兼容未迁移到 @register_handler 的动作）
+            logger.warning("动作 %s 未注册到 _execution_handlers，回退到按类型执行", action)
+            result = await _execute_by_type(session, suggestion)
 
         if result.get("success"):
             await agent_suggestion_service.mark_completed(session, suggestion.id, result=result)
         else:
-            await agent_suggestion_service.mark_failed(
-                session, suggestion.id, error=result.get("error", "未知错误")
-            )
+            err_msg = result.get("error", "未知错误")
+            await agent_suggestion_service.mark_failed(session, suggestion.id, error=err_msg)
+            try:
+                await escalate_failed_suggestion(session, suggestion, err_msg)
+            except Exception as esc_e:
+                logger.warning("自动升级失败（不影响主流程）: %s", esc_e)
         return result
 
     except Exception as e:
@@ -225,16 +314,15 @@ async def _handle_product_optimization(
     if not product_id:
         return {"success": False, "error": "缺少 product_id 参数，且未指定选品动作"}
 
-    ok, result = _safe_call("app.services.product_service", "update_product",
+    ok, result = await _safe_call("app.services.product_service", "update_product",
                              session, product_id, params.get("updates", {}))
     if ok:
         return {"success": True, "action": "product_optimization", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "product_optimization",
-        "result": {"note": "产品优化服务待接入，建议已记录待人工执行", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": f"产品优化执行失败: {result}",
     }
 
 
@@ -242,17 +330,16 @@ async def _handle_marketing_optimization(
     session: AsyncSession, params: dict, suggestion: AgentSuggestion
 ) -> dict[str, Any]:
     """营销优化：生成/更新营销文案或活动。"""
-    ok, result = _safe_call("app.services.content_generation_service", "generate_content",
+    ok, result = await _safe_call("app.services.content_generation_service", "generate_content",
                              prompt=params.get("prompt", suggestion.description),
                              content_type=params.get("content_type", "marketing_copy"))
     if ok:
         return {"success": True, "action": "marketing_optimization", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "marketing_optimization",
-        "result": {"note": "营销文案服务待接入，建议已记录", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": f"营销优化执行失败: {result}",
     }
 
 
@@ -265,16 +352,15 @@ async def _handle_inventory_restock(
     if not product_id or not quantity:
         return {"success": False, "error": "缺少 product_id 或 quantity 参数"}
 
-    ok, result = _safe_call("app.services.procurement_service", "create_purchase_order",
+    ok, result = await _safe_call("app.services.procurement_service", "create_purchase_order",
                              session, product_id, quantity, params)
     if ok:
         return {"success": True, "action": "inventory_restock", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "inventory_restock",
-        "result": {"note": "采购服务待接入，补货建议已记录待人工执行", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": f"采购单创建失败: {result}",
     }
 
 
@@ -287,16 +373,15 @@ async def _handle_pricing_adjustment(
     if not product_id or not new_price:
         return {"success": False, "error": "缺少 product_id 或 new_price 参数"}
 
-    ok, result = _safe_call("app.services.product_service", "update_price",
+    ok, result = await _safe_call("app.services.product_service", "update_price",
                              session, product_id, new_price)
     if ok:
         return {"success": True, "action": "pricing_adjustment", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "pricing_adjustment",
-        "result": {"note": "价格调整已记录，待人工执行", "product_id": product_id, "new_price": new_price},
-        "deferred": True,
+        "error": f"定价调整执行失败: {result}",
     }
 
 
@@ -308,16 +393,15 @@ async def _handle_listing_optimization(
     if not product_id:
         return {"success": False, "error": "缺少 product_id 参数"}
 
-    ok, result = _safe_call("app.services.woocommerce_sync_service", "update_product_listing",
+    ok, result = await _safe_call("app.services.woocommerce_sync_service", "update_product_listing",
                              product_id, params.get("updates", {}))
     if ok:
         return {"success": True, "action": "listing_optimization", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "listing_optimization",
-        "result": {"note": "WooCommerce 同步服务待接入，优化建议已记录", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": f"上架优化执行失败: {result}",
     }
 
 
@@ -326,10 +410,9 @@ async def _handle_customer_operation(
 ) -> dict[str, Any]:
     """客户运营：分群/触达。"""
     return {
-        "success": True,
+        "success": False,
         "action": "customer_operation",
-        "result": {"note": "客户运营建议已记录，待人工执行", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": "客户运营功能待接入，建议已记录待人工执行",
     }
 
 
@@ -338,10 +421,9 @@ async def _handle_supply_chain(
 ) -> dict[str, Any]:
     """供应链优化。"""
     return {
-        "success": True,
+        "success": False,
         "action": "supply_chain",
-        "result": {"note": "供应链优化建议已记录，待人工执行", "suggestion_id": suggestion.id},
-        "deferred": True,
+        "error": "供应链优化功能待接入，建议已记录待人工执行",
     }
 
 
@@ -350,9 +432,9 @@ async def _handle_business_insight(
 ) -> dict[str, Any]:
     """商业洞察：纯建议，无需执行，直接标记完成。"""
     return {
-        "success": True,
+        "success": False,
         "action": "business_insight",
-        "result": {"note": "商业洞察已记录，无需执行动作", "suggestion_id": suggestion.id},
+        "error": f"商业洞察执行失败: {result}",
     }
 
 
@@ -444,7 +526,7 @@ async def handle_generate_marketing_content(session: AsyncSession, params: dict)
     product_id = params.get("product_id")
 
     # 尝试调用内容生成服务，不存在则降级
-    ok, result = _safe_call(
+    ok, result = await _safe_call(
         "app.services.content_generation_service", "generate_content",
         prompt=prompt, content_type=content_type,
     )
@@ -453,16 +535,9 @@ async def handle_generate_marketing_content(session: AsyncSession, params: dict)
         return {"success": True, "action": "generate_marketing_content", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "generate_marketing_content",
-        "result": {
-            "note": "营销内容生成任务已创建，待 AI 服务接入后自动生成",
-            "content_type": content_type,
-            "product_id": product_id,
-            "prompt_preview": prompt[:200] if prompt else "",
-            "status": "pending",
-        },
-        "deferred": True,
+        "error": f"生成营销内容执行失败: {result}",
     }
 
 
@@ -478,7 +553,7 @@ async def handle_create_purchase_order(session: AsyncSession, params: dict) -> d
         return {"success": False, "error": "缺少 product_id 或 quantity 参数"}
 
     # 尝试调用采购服务，不存在则记录待人工执行
-    ok, result = _safe_call(
+    ok, result = await _safe_call(
         "app.services.procurement_service", "create_purchase_order",
         session, product_id, quantity, params,
     )
@@ -489,19 +564,9 @@ async def handle_create_purchase_order(session: AsyncSession, params: dict) -> d
     total_cost = float(unit_cost) * int(quantity) if unit_cost and quantity else None
 
     return {
-        "success": True,
+        "success": False,
         "action": "create_purchase_order",
-        "result": {
-            "note": "采购单已创建（待人工确认）",
-            "product_id": product_id,
-            "quantity": quantity,
-            "supplier_id": supplier_id,
-            "unit_cost": unit_cost,
-            "total_cost": total_cost,
-            "status": "pending_confirmation",
-            "next_step": "人工确认采购单后发送给供应商",
-        },
-        "deferred": True,
+        "error": f"创建采购单执行失败: {result}",
     }
 
 
@@ -538,15 +603,9 @@ async def handle_adjust_product_price(session: AsyncSession, params: dict) -> di
     await session.commit()
 
     return {
-        "success": True,
+        "success": False,
         "action": "adjust_product_price",
-        "result": {
-            "note": "产品价格已调整（本地记录，WooCommerce 同步待接入）",
-            "product_id": product_id,
-            "old_price": old_price,
-            "new_price": new_price,
-            "reason": reason,
-        },
+        "error": f"调整产品价格执行失败: {result}",
     }
 
 
@@ -560,7 +619,7 @@ async def handle_update_product_listing(session: AsyncSession, params: dict) -> 
         return {"success": False, "error": "缺少 product_id 参数"}
 
     # 尝试调用 WooCommerce 同步服务，不存在则降级
-    ok, result = _safe_call(
+    ok, result = await _safe_call(
         "app.services.woocommerce_sync_service", "update_product_listing",
         product_id, updates,
     )
@@ -569,15 +628,9 @@ async def handle_update_product_listing(session: AsyncSession, params: dict) -> 
         return {"success": True, "action": "update_product_listing", "result": result}
 
     return {
-        "success": True,
+        "success": False,
         "action": "update_product_listing",
-        "result": {
-            "note": "商品上架优化建议已记录，WooCommerce 同步待接入",
-            "product_id": product_id,
-            "updates": updates,
-            "status": "pending_sync",
-        },
-        "deferred": True,
+        "error": f"更新商品上架执行失败: {result}",
     }
 
 
@@ -589,17 +642,9 @@ async def handle_execute_customer_operation(session: AsyncSession, params: dict)
     message = params.get("message", "")
 
     return {
-        "success": True,
+        "success": False,
         "action": "execute_customer_operation",
-        "result": {
-            "note": "客户运营任务已创建，待人工执行",
-            "operation_type": operation_type,
-            "target_segment": target_segment,
-            "message_preview": message[:200] if message else "",
-            "status": "pending",
-            "next_step": "人工确认后通过 EDM/短信渠道触达客户",
-        },
-        "deferred": True,
+        "error": f"执行客户运营失败: {result}",
     }
 
 
@@ -610,16 +655,9 @@ async def handle_optimize_supply_chain(session: AsyncSession, params: dict) -> d
     suggestions = params.get("suggestions", [])
 
     return {
-        "success": True,
+        "success": False,
         "action": "optimize_supply_chain",
-        "result": {
-            "note": "供应链优化建议已记录，待人工评估执行",
-            "optimization_type": optimization_type,
-            "suggestion_count": len(suggestions) if isinstance(suggestions, list) else 0,
-            "suggestions": suggestions[:5] if isinstance(suggestions, list) else suggestions,
-            "status": "pending_review",
-        },
-        "deferred": True,
+        "error": f"优化供应链执行失败: {result}",
     }
 
 
