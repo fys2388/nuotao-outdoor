@@ -1,0 +1,68 @@
+name: Debug DB PermissionError v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug DB PermissionError with correct imports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cat > /tmp/test_db2.py << 'PYEOF'
+            import asyncio, os, sys, traceback
+            os.chdir("/opt/nuotao/backend")
+            sys.path.insert(0, "/opt/nuotao/backend")
+            from sqlalchemy import text
+            from app.core.database import _engine, get_db
+            from app.core.config import settings
+            print("DATABASE_URL:", str(settings.DATABASE_URL)[:60])
+            print("Engine:", _engine)
+            async def test():
+                print("\n--- Test 1: direct _engine.connect ---")
+                try:
+                    async with _engine.connect() as conn:
+                        r = await conn.execute(text("SELECT 1"))
+                        print("OK:", r.scalar())
+                except Exception as e:
+                    print("FAILED:", type(e).__name__, str(e))
+                    traceback.print_exc()
+                print("\n--- Test 2: get_db async generator ---")
+                try:
+                    async for db in get_db():
+                        r = await db.execute(text("SELECT 1"))
+                        print("OK:", r.scalar())
+                        break
+                except Exception as e:
+                    print("FAILED:", type(e).__name__, str(e))
+                    traceback.print_exc()
+            asyncio.run(test())
+            PYEOF
+
+            echo "=== As root ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            set -a; source .env; set +a
+            python3 /tmp/test_db2.py 2>&1
+
+            echo ""
+            echo "=== As nuotao user ==="
+            sudo -u nuotao bash -c 'cd /opt/nuotao/backend && source .venv/bin/activate && set -a && source .env && set +a && python3 /tmp/test_db2.py' 2>&1
+
+            echo ""
+            echo "=== nuotao user home and shell ==="
+            grep nuotao /etc/passwd
+
+            echo ""
+            echo "=== Check if nuotao can read .env ==="
+            sudo -u nuotao test -r /opt/nuotao/backend/.env && echo ".env readable" || echo ".env NOT readable"
+            ls -la /opt/nuotao/backend/.env
+
+            rm -f /tmp/test_db2.py
