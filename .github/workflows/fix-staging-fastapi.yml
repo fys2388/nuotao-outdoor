@@ -1,0 +1,40 @@
+name: Fix Staging FastAPI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Fix staging FastAPI version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix staging FastAPI
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            echo "=== 1. Current FastAPI version ==="
+            .venv/bin/python -c "import fastapi; print(f'FastAPI: {fastapi.__version__}')" 2>&1
+
+            echo ""
+            echo "=== 2. Reinstall dependencies (downgrade FastAPI) ==="
+            .venv/bin/pip install -e . --quiet 2>&1 | tail -5
+
+            echo ""
+            echo "=== 3. New FastAPI version ==="
+            .venv/bin/python -c "import fastapi; print(f'FastAPI: {fastapi.__version__}')" 2>&1
+
+            echo ""
+            echo "=== 4. Restart staging service ==="
+            systemctl restart nuotao-backend-staging
+            sleep 5
+
+            echo ""
+            echo "=== 5. Test staging readyz ==="
+            curl -s -w "\nHTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8001/api/v1/readyz 2>&1
+            curl -s -w "\nHTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8001/api/v1/healthz 2>&1
