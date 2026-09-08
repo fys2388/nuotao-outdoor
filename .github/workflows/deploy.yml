@@ -206,6 +206,12 @@ jobs:
             python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
             echo "[db] table check done"
 
+            echo "=== 3.4 Ensure nuotao system user and permissions ==="
+            id nuotao >/dev/null 2>&1 || useradd -r -s /bin/false nuotao
+            mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs
+            chown -R nuotao:nuotao /opt/nuotao/backend
+            echo "[user] nuotao user ready, backend dir owned by nuotao"
+
             echo "=== 3.5 Installing backend systemd from versioned template ==="
             BACKEND_SERVICE=/etc/systemd/system/nuotao-backend.service
             BACKEND_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-backend.service
