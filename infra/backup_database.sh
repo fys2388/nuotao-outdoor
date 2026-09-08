@@ -12,10 +12,10 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 ENV_FILE="/opt/nuotao/backend/.env"
 
 # 加载环境变量（正确路径）
+# Extract DATABASE_URL from .env (do NOT source entire .env - values with spaces break bash)
 if [ -f "$ENV_FILE" ]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
+    DATABASE_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
+    export DATABASE_URL
 fi
 
 # 从 DATABASE_URL 解析连接参数（优先）
