@@ -45,10 +45,10 @@ fi
 echo "Latest backup: ${LATEST} ($(du -h "${LATEST}" | cut -f1))"
 
 # 2. Clean up old test DB
-dropdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" --if-exists "${TEST_DB}" 2>/dev/null || true
+sudo -u postgres dropdb --if-exists "${TEST_DB}" 2>/dev/null || true
 
 # 3. Create test DB
-createdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${TEST_DB}"
+sudo -u postgres createdb -O nuotao "${TEST_DB}"
 echo "Created temp DB: ${TEST_DB}"
 
 # 4. Restore (with timeout to prevent hanging)
@@ -56,7 +56,7 @@ echo "Restoring backup..."
 if ! gunzip -c "${LATEST}" | timeout 120 psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${TEST_DB}" -q -o /dev/null 2>/tmp/restore_err.log; then
     echo "ERROR: Restore failed or timed out:"
     cat /tmp/restore_err.log | head -20
-    dropdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" --if-exists "${TEST_DB}" 2>/dev/null || true
+    sudo -u postgres dropdb --if-exists "${TEST_DB}" 2>/dev/null || true
     exit 1
 fi
 echo "Restore completed"
@@ -77,7 +77,7 @@ for tbl in ${TABLES}; do
 done
 
 # 6. Clean up
-dropdb -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" "${TEST_DB}"
+sudo -u postgres dropdb "${TEST_DB}"
 echo "Cleaned up temp DB"
 
 # 7. Result

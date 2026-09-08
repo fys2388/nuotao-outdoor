@@ -23,5 +23,10 @@ jobs:
           port: 22
           script: |
             cd /opt/nuotao
+            echo "=== Step 1: Run fresh backup ==="
+            chmod +x infra/backup_database.sh
+            bash infra/backup_database.sh
+            echo ""
+            echo "=== Step 2: Verify backup can be restored ==="
             chmod +x infra/verify_backup_restore.sh
             bash infra/verify_backup_restore.sh
