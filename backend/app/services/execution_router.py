@@ -434,7 +434,7 @@ async def _handle_business_insight(
     return {
         "success": False,
         "action": "business_insight",
-        "error": f"商业洞察执行失败: {result}",
+        "error": "商业洞察功能待接入，建议已记录待人工执行",
     }
 
 
@@ -644,7 +644,7 @@ async def handle_execute_customer_operation(session: AsyncSession, params: dict)
     return {
         "success": False,
         "action": "execute_customer_operation",
-        "error": f"执行客户运营失败: {result}",
+        "error": "客户运营功能待接入，建议已记录待人工执行",
     }
 
 
@@ -657,7 +657,7 @@ async def handle_optimize_supply_chain(session: AsyncSession, params: dict) -> d
     return {
         "success": False,
         "action": "optimize_supply_chain",
-        "error": f"优化供应链执行失败: {result}",
+        "error": "供应链优化功能待接入，建议已记录待人工执行",
     }
 
 
