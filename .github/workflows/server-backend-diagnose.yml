@@ -1,0 +1,53 @@
+name: Server Backend Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Diagnose backend service failure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== systemctl status nuotao-backend ==="
+            systemctl status nuotao-backend.service --no-pager | head -20
+
+            echo ""
+            echo "=== journalctl -xeu nuotao-backend (last 60 lines) ==="
+            journalctl -xeu nuotao-backend.service --no-pager | tail -60
+
+            echo ""
+            echo "=== /etc/systemd/system/nuotao-backend.service ==="
+            cat /etc/systemd/system/nuotao-backend.service
+
+            echo ""
+            echo "=== Check .env exists ==="
+            ls -la /opt/nuotao/backend/.env 2>&1 || echo ".env NOT FOUND"
+
+            echo ""
+            echo "=== Check key .env vars ==="
+            if [ -f /opt/nuotao/backend/.env ]; then
+              grep -E "^(DATABASE_URL|REDIS_URL|APP_ENV|SECRET_KEY|LLM_PROVIDER)" /opt/nuotao/backend/.env | sed 's/=.*/=***/' || echo "no matching vars"
+            fi
+
+            echo ""
+            echo "=== Try manual backend start (capture error) ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            timeout 10 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 2>&1 | head -40 || echo "(timeout or exit expected)"
+
+            echo ""
+            echo "=== Check port 8000 ==="
+            ss -tlnp | grep 8000 || echo "port 8000 not in use"
+
+            echo ""
+            echo "=== Disk and memory ==="
+            df -h / | tail -1
+            free -h | head -2
