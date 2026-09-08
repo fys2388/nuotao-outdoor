@@ -67,7 +67,8 @@ jobs:
             echo "=== 6. Run alembic migrations ==="
             cd "$STAGE/backend"
             source .venv/bin/activate
-            set -a; source .env; set +a
+            # 只提取DATABASE_URL, 不source整个.env(避免带空格值如APP_NAME导致bash报错)
+            export DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
             alembic upgrade head
             echo "Migrations applied"
 
