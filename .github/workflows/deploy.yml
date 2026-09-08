@@ -24,13 +24,21 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
       - name: Install backend dependencies
-        run: pip install -e .
+        run: pip install -e ".[dev]"
       - name: Syntax check
         run: python -m compileall -q app
       - name: App internal import integrity
         run: python scripts/check_app_imports.py
       - name: FastAPI app smoke
         run: python -c "import app.main as m; assert m.app is not None; assert m.settings is not None; print('SMOKE OK')"
+      - name: Ruff lint
+        run: ruff check app tests
+      - name: Unit tests (SQLite in-memory)
+        run: pytest tests/ --ignore=tests/integration -q --no-header -p no:warnings
+      - name: Dependency vulnerability scan
+        run: |
+          pip install pip-audit -q
+          pip-audit --desc on || true
 
   stage-validate:
     name: Staging validation (server-side dry-run)
@@ -139,6 +147,30 @@ jobs:
             source .venv/bin/activate
             pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 依赖安装失败，请检查 pip 源与 requirements.txt"; exit 1; }
 
+            echo "=== 2.5 .env variable drift check ==="
+            ENV_FILE=/opt/nuotao/.env
+            TEMPLATE=/opt/nuotao/.env.production.template
+            if [ -f "$TEMPLATE" ] && [ -f "$ENV_FILE" ]; then
+              MISSING=0
+              while IFS='=' read -r key _; do
+                case "$key" in
+                  \#*|'') continue ;;
+                esac
+                if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+                  echo "  [MISSING] $key"
+                  MISSING=$((MISSING+1))
+                fi
+              done < "$TEMPLATE"
+              if [ "$MISSING" -gt 0 ]; then
+                echo "WARNING: $MISSING variable(s) in template missing from server .env"
+                echo "  Fix: ssh to server and add missing vars to /opt/nuotao/.env"
+              else
+                echo "[env] all template variables present in server .env"
+              fi
+            else
+              echo "[env] template or .env not found, skipping drift check"
+            fi
+
             echo "=== 3. Running database migrations ==="
             if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
               echo "[db] 连接配置(密码已隐藏): $DBURL"
@@ -156,6 +188,44 @@ jobs:
             echo "[db] ensure all model tables exist (create_all idempotent)..."
             python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
             echo "[db] table check done"
+
+            echo "=== 3.5 Installing backend systemd from versioned template ==="
+            BACKEND_SERVICE=/etc/systemd/system/nuotao-backend.service
+            BACKEND_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-backend.service
+            if [ -f "$BACKEND_TEMPLATE" ]; then
+              cp "$BACKEND_TEMPLATE" "$BACKEND_SERVICE"
+              chmod 644 "$BACKEND_SERVICE"
+              echo "[backend] installed versioned template -> $BACKEND_SERVICE"
+            elif [ ! -f "$BACKEND_SERVICE" ]; then
+              {
+                echo '[Unit]'
+                echo 'Description=Nuotao AI OS Backend API Server'
+                echo 'After=network.target postgresql.service redis.service'
+                echo 'Wants=postgresql.service redis.service'
+                echo ''
+                echo '[Service]'
+                echo 'Type=simple'
+                echo 'User=nuotao'
+                echo 'Group=nuotao'
+                echo 'WorkingDirectory=/opt/nuotao/backend'
+                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin"'
+                echo 'EnvironmentFile=/opt/nuotao/.env'
+                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4'
+                echo 'Restart=always'
+                echo 'RestartSec=5'
+                echo 'StandardOutput=journal'
+                echo 'StandardError=journal'
+                echo ''
+                echo '[Install]'
+                echo 'WantedBy=multi-user.target'
+              } > "$BACKEND_SERVICE"
+              echo "[backend] template missing, generated inline fallback"
+            else
+              echo "[backend] template missing, keeping existing $BACKEND_SERVICE"
+              sed -i 's|/opt/nuotao-ai-os/|/opt/nuotao/|g' "$BACKEND_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-backend 2>/dev/null || true
 
             echo "=== 4. Restarting backend service ==="
             systemctl restart nuotao-backend
@@ -208,7 +278,7 @@ jobs:
 
             echo "=== 7. Health check ==="
             sleep 5
-            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs || true)
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/readyz || true)
             FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
             echo "Backend API: $BACKEND_CODE"
             echo "Frontend: $FRONTEND_CODE"
@@ -238,6 +308,28 @@ jobs:
                 /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED"
               fi
               exit 1
+            fi
+
+            echo "=== 7.4 Deploy monitoring configs (prometheus/grafana/alertmanager) ==="
+            if [ -d /etc/prometheus ]; then
+              cp /opt/nuotao/infra/monitoring/prometheus.yml /etc/prometheus/prometheus.yml 2>/dev/null || true
+              cp /opt/nuotao/infra/monitoring/alerts.yml /etc/prometheus/alerts.yml 2>/dev/null || true
+              systemctl reload prometheus 2>/dev/null || systemctl restart prometheus 2>/dev/null || echo "[monitoring] prometheus reload skipped"
+              echo "[monitoring] prometheus config deployed"
+            else
+              echo "[monitoring] prometheus not installed, skipping"
+            fi
+            if [ -d /etc/grafana/provisioning ]; then
+              cp -r /opt/nuotao/infra/grafana/provisioning/* /etc/grafana/provisioning/ 2>/dev/null || true
+              systemctl restart grafana-server 2>/dev/null || echo "[monitoring] grafana restart skipped"
+              echo "[monitoring] grafana provisioning deployed"
+            else
+              echo "[monitoring] grafana not installed, skipping"
+            fi
+            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao/infra/alertmanager/alertmanager.yml ]; then
+              cp /opt/nuotao/infra/alertmanager/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
+              systemctl reload alertmanager 2>/dev/null || systemctl restart alertmanager 2>/dev/null || true
+              echo "[monitoring] alertmanager config deployed"
             fi
 
             echo "=== 7.5 Configuring AI Agent Scheduler ==="

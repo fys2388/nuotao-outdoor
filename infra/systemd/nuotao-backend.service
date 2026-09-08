@@ -7,10 +7,10 @@ Wants=postgresql.service redis.service
 Type=simple
 User=nuotao
 Group=nuotao
-WorkingDirectory=/opt/nuotao-ai-os/backend
-Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin"
-EnvironmentFile=/opt/nuotao-ai-os/.env
-ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
+WorkingDirectory=/opt/nuotao/backend
+Environment="PATH=/opt/nuotao/backend/.venv/bin"
+EnvironmentFile=/opt/nuotao/.env
+ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -23,7 +23,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs
+ReadWritePaths=/opt/nuotao/backend/data /opt/nuotao/backend/logs
 
 [Install]
 WantedBy=multi-user.target
