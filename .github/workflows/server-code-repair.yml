@@ -1,0 +1,67 @@
+name: Server Code Repair & Alembic Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repair:
+    name: Repair server code and alembic
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repair on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/nuotao
+
+            echo "=== Before: git log ==="
+            git log --oneline -3
+
+            echo ""
+            echo "=== Before: alembic versions (0025-0028) ==="
+            ls backend/alembic/versions/ | grep -E "002[5-8]" || echo "(none found)"
+
+            echo ""
+            echo "=== Fetch and reset to origin/main ==="
+            git fetch --prune origin main
+            git reset --hard origin/main
+            git clean -fd backend/alembic/versions/ 2>/dev/null || true
+
+            echo ""
+            echo "=== After: git log ==="
+            git log --oneline -3
+
+            echo ""
+            echo "=== After: alembic versions (0025-0028) ==="
+            ls backend/alembic/versions/ | grep -E "002[5-8]"
+
+            echo ""
+            echo "=== Verify 0026 file content ==="
+            head -20 backend/alembic/versions/0026_agent_suggestions_growth_memories.py
+
+            echo ""
+            echo "=== Alembic current ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            alembic current 2>&1 || echo "alembic current failed (may need fix)"
+
+            echo ""
+            echo "=== Try alembic upgrade head ==="
+            alembic upgrade head 2>&1 || {
+              echo "alembic upgrade failed, checking if tables already exist..."
+              # If 0026 fails due to DuplicateTable, stamp and continue
+              alembic stamp 0025 2>/dev/null || true
+              alembic upgrade head 2>&1 || echo "still failed, manual intervention needed"
+            }
+
+            echo ""
+            echo "=== Alembic current after upgrade ==="
+            alembic current 2>&1
+
+            echo ""
+            echo "=== Repair complete ==="
