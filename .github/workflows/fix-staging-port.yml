@@ -16,24 +16,24 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-            set +e
             echo "=== 1. Stop staging service ==="
-            systemctl stop nuotao-backend-staging 2>/dev/null || true
-            sleep 2
+            systemctl stop nuotao-backend-staging
+            echo "Service stopped"
 
             echo ""
-            echo "=== 2. Kill any process on port 8001 ==="
-            fuser -k 8001/tcp 2>/dev/null || true
-            sleep 1
-            # Also kill any leftover uvicorn processes
-            pkill -f "uvicorn.*8001" 2>/dev/null || true
-            sleep 1
+            echo "=== 2. Wait for port release (5s) ==="
+            sleep 5
 
             echo ""
-            echo "=== 3. Verify port 8001 is free ==="
+            echo "=== 3. Check port 8001 ==="
             if ss -tlnp | grep -q ':8001'; then
-                echo "WARNING: Port 8001 still in use:"
-                ss -tlnp | grep ':8001'
+                echo "Port 8001 still in use, killing process..."
+                PID=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | head -1)
+                if [ -n "$PID" ]; then
+                    echo "Killing PID $PID"
+                    kill -9 "$PID" 2>/dev/null || true
+                    sleep 2
+                fi
             else
                 echo "Port 8001 is free"
             fi
@@ -41,22 +41,19 @@ jobs:
             echo ""
             echo "=== 4. Start staging service ==="
             systemctl start nuotao-backend-staging
-            sleep 5
+            echo "Service started, waiting 8s..."
+            sleep 8
 
             echo ""
-            echo "=== 5. Check staging service status ==="
-            sleep 3
-            systemctl status nuotao-backend-staging --no-pager | head -15
-            echo ""
-            echo "=== 5b. Staging service logs (last 10) ==="
-            journalctl -u nuotao-backend-staging --no-pager -n 10
+            echo "=== 5. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -12
 
             echo ""
-            echo "=== 6. Test staging health ==="
+            echo "=== 6. Health check ==="
             BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "000")
             FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8082/ || echo "000")
-            echo "Staging backend :8001/readyz -> HTTP $BACKEND_CODE"
-            echo "Staging frontend :8082/ -> HTTP $FRONTEND_CODE"
+            echo "Backend :8001/readyz -> HTTP $BACKEND_CODE"
+            echo "Frontend :8082/ -> HTTP $FRONTEND_CODE"
             echo ""
-            echo "Staging readyz body:"
+            echo "Readyz body:"
             curl -s --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "(no response)"
