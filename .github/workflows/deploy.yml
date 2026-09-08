@@ -67,14 +67,16 @@ jobs:
               rsync -a --delete \
                 --exclude .git --exclude backend/.env --exclude backend/.venv \
                 --exclude frontend/node_modules --exclude backend/alembic/versions/*.pyc \
+                --exclude '/staging' \
                 ./ "$STAGE/"
               echo "[staging] synced via rsync"
             else
-              echo "[staging] rsync not available, using cp -a fallback"
+              echo "[staging] rsync not available, using tar pipe fallback"
               rm -rf "$STAGE"/*
-              cp -a ./ "$STAGE/" 2>/dev/null || true
-              rm -rf "$STAGE/.git" "$STAGE/backend/.env" "$STAGE/backend/.venv" "$STAGE/frontend/node_modules" 2>/dev/null || true
-              echo "[staging] synced via cp -a"
+              tar --exclude='./.git' --exclude='./backend/.env' --exclude='./backend/.venv' \
+                  --exclude='./frontend/node_modules' --exclude='./staging' \
+                  -cf - . | tar -xf - -C "$STAGE/"
+              echo "[staging] synced via tar pipe"
             fi
             if [ ! -f "$STAGE/backend/pyproject.toml" ]; then
               echo "ERROR: staging code sync failed — pyproject.toml not found"
