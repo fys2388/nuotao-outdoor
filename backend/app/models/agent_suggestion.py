@@ -110,7 +110,7 @@ class AgentSuggestion(Base, TimestampMixin, WorkspaceMixin):
     learned: Mapped[bool] = mapped_column(default=False, comment="是否已被Agent学习吸收")
 
     # --- 关联 ---
-    agent_run: Mapped["AiAgentRun | None"] = relationship("AiAgentRun", backref="suggestions", lazy="selectin")
+    agent_run: Mapped["AiAgentRun | None"] = relationship("AiAgentRun", backref="suggestions", lazy="selectin")  # noqa: F821 (SQLAlchemy string relationship reference)
 
     __table_args__ = (
         # 复合索引：按 Agent + 状态 + 优先级查询

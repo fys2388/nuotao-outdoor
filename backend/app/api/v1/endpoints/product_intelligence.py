@@ -735,26 +735,6 @@ async def get_procurement_suggestions(
     return result
 
 
-@product_router.post(
-    "/sync-inventory",
-    summary="Trigger inventory sync from WooCommerce and 1688",
-)
-async def sync_inventory(
-    db: DbSession,
-    workspace_id: WorkspaceId,
-) -> dict[str, Any]:
-    """Manually trigger inventory sync and low stock alert."""
-    from app.tasks.inventory_sync import sync_inventory_from_woocommerce, sync_inventory_from_1688
-    
-    woocommerce_result = await sync_inventory_from_woocommerce()
-    alibaba_result = await sync_inventory_from_1688()
-    
-    return {
-        "success": True,
-        "woocommerce": woocommerce_result,
-        "alibaba_1688": alibaba_result,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
 
 
 @product_router.get(
