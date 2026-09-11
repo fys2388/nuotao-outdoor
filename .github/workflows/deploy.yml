@@ -1,0 +1,399 @@
+name: Deploy to Production (staging-gated)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  ci-gate:
+    name: Pre-deploy check (syntax + imports + smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install backend dependencies
+        run: pip install -e ".[dev]"
+      - name: Syntax check
+        run: python -m compileall -q app
+      - name: App internal import integrity
+        run: python scripts/check_app_imports.py
+      - name: FastAPI app smoke
+        run: python -c "import app.main as m; assert m.app is not None; assert m.settings is not None; print('SMOKE OK')"
+      - name: Ruff lint
+        run: |
+          ruff check app tests --select F821,F811,E9  # critical: undefined name, redefinition, syntax error
+          ruff check app tests --exit-zero  # full report (non-blocking)
+      - name: Unit tests (SQLite in-memory)
+        run: pytest tests/ --ignore=tests/integration -q --no-header -p no:warnings
+      - name: Dependency vulnerability scan
+        run: |
+          pip install pip-audit -q
+          pip-audit --desc on || true
+
+  stage-validate:
+    name: Staging validation (server-side dry-run)
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Stage-validate on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            STAGE=/opt/nuotao/staging
+            echo "=== [staging] syncing code to $STAGE ==="
+            mkdir -p "$STAGE"
+            cd /opt/nuotao
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a --delete \
+                --exclude .git --exclude backend/.env --exclude backend/.venv \
+                --exclude frontend/node_modules --exclude backend/alembic/versions/*.pyc \
+                --exclude '/staging' \
+                ./ "$STAGE/"
+              echo "[staging] synced via rsync"
+            else
+              echo "[staging] rsync not available, using tar pipe fallback"
+              rm -rf "$STAGE"/*
+              tar --exclude='./.git' --exclude='./backend/.env' --exclude='./backend/.venv' \
+                  --exclude='./frontend/node_modules' --exclude='./staging' \
+                  -cf - . | tar -xf - -C "$STAGE/"
+              echo "[staging] synced via tar pipe"
+            fi
+            if [ ! -f "$STAGE/backend/pyproject.toml" ]; then
+              echo "ERROR: staging code sync failed — pyproject.toml not found"
+              exit 1
+            fi
+
+            echo "=== [staging] backend syntax check ==="
+            cd "$STAGE/backend"
+            python3 -m venv .venv
+            . "$STAGE/backend/.venv/bin/activate"
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet
+            python -m compileall -q app
+            echo "[staging] syntax OK"
+
+            echo "=== [staging] migration dry-run (SQL only, not applied) ==="
+            if alembic upgrade head --sql > /tmp/nuotao_migration_dryrun.sql 2>/tmp/nuotao_migration_err.txt; then
+              LINES=$(wc -l < /tmp/nuotao_migration_dryrun.sql)
+              echo "[staging] migration dry-run OK ($LINES lines SQL generated)"
+            else
+              echo "ERROR: migration dry-run failed:"
+              cat /tmp/nuotao_migration_err.txt
+              exit 1
+            fi
+
+            echo "=== [staging] frontend build validation ==="
+            cd "$STAGE/frontend"
+            npm install --silent
+            npm run build
+            echo "[staging] frontend build OK"
+
+            echo "=== [staging] nginx template syntax check ==="
+            if [ -f "$STAGE/infra/nginx/console.conf" ]; then
+              cp "$STAGE/infra/nginx/console.conf" /tmp/nuotao-console.conf
+              nginx -t -c /etc/nginx/nginx.conf 2>&1 | head -3 || true
+              echo "[staging] nginx template present and copied"
+            else
+              echo "WARN: infra/nginx/console.conf 不存在（沿用生产既有配置）"
+            fi
+            echo "=== STAGING VALIDATION PASSED ==="
+
+  deploy-production:
+    name: Deploy to Production
+    needs: stage-validate
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Deployment info
+        run: |
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deploying to: ${{ env.SERVER_HOST }}"
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/nuotao
+
+            echo "=== 0. Pre-deploy backup (code + db + frontend) ==="
+            chmod +x /opt/nuotao/infra/deploy-rollback.sh 2>/dev/null || true
+            if [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+              BACKUP_DIR=$(/opt/nuotao/infra/deploy-rollback.sh backup)
+              echo "Backup created: $BACKUP_DIR"
+              echo "$BACKUP_DIR" > /tmp/nuotao_last_backup
+            else
+              echo "WARN: deploy-rollback.sh not found, skipping backup"
+            fi
+
+            echo "=== 1. Pulling latest code ==="
+            git fetch --prune origin ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }}
+            git clean -fd backend/alembic/versions/ 2>/dev/null || true
+            echo "[git] cleaned untracked migration files"
+
+            echo "=== 2. Installing backend dependencies ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 依赖安装失败，请检查 pip 源与 requirements.txt"; exit 1; }
+
+            echo "=== 2.5 .env variable drift check ==="
+            ENV_FILE=/opt/nuotao/backend/.env
+            TEMPLATE=/opt/nuotao/backend/.env.production.template
+            if [ -f "$TEMPLATE" ] && [ -f "$ENV_FILE" ]; then
+              MISSING=0
+              while IFS='=' read -r key _; do
+                case "$key" in
+                  \#*|'') continue ;;
+                esac
+                if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+                  echo "  [MISSING] $key"
+                  MISSING=$((MISSING+1))
+                fi
+              done < "$TEMPLATE"
+              if [ "$MISSING" -gt 0 ]; then
+                echo "WARNING: $MISSING variable(s) in template missing from server .env"
+                echo "  Fix: ssh to server and add missing vars to /opt/nuotao/backend/.env"
+              else
+                echo "[env] all template variables present in server .env"
+              fi
+            else
+              echo "[env] template or .env not found, skipping drift check"
+            fi
+
+            echo "=== 3. Running database migrations ==="
+            if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
+              echo "[db] 连接配置(密码已隐藏): $DBURL"
+            else
+              echo "[db] 警告: 未在 /opt/nuotao/backend/.env 找到 DATABASE_URL"
+            fi
+            echo "[db] 执行数据库迁移..."
+            if ! alembic upgrade head; then
+              echo "ERROR: 数据库迁移失败，请登录服务器排查:"
+              echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
+              echo "  2) 确认数据库已启动: systemctl status postgresql"
+              echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\""
+              exit 1
+            fi
+            echo "[db] ensure all model tables exist (create_all idempotent)..."
+            python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
+            echo "[db] table check done"
+
+            echo "=== 3.4 Ensure nuotao system user and permissions ==="
+            id nuotao >/dev/null 2>&1 || useradd -r -s /bin/false nuotao
+            mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
+            chown -R nuotao:nuotao /opt/nuotao/backend
+            echo "[user] nuotao user ready, backend dir owned by nuotao"
+
+            echo "=== 3.5 Installing backend systemd from versioned template ==="
+            BACKEND_SERVICE=/etc/systemd/system/nuotao-backend.service
+            BACKEND_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-backend.service
+            if [ -f "$BACKEND_TEMPLATE" ]; then
+              cp "$BACKEND_TEMPLATE" "$BACKEND_SERVICE"
+              chmod 644 "$BACKEND_SERVICE"
+              echo "[backend] installed versioned template -> $BACKEND_SERVICE"
+            elif [ ! -f "$BACKEND_SERVICE" ]; then
+              {
+                echo '[Unit]'
+                echo 'Description=Nuotao AI OS Backend API Server'
+                echo 'After=network.target postgresql.service redis.service'
+                echo 'Wants=postgresql.service redis.service'
+                echo ''
+                echo '[Service]'
+                echo 'Type=simple'
+                echo 'User=nuotao'
+                echo 'Group=nuotao'
+                echo 'WorkingDirectory=/opt/nuotao/backend'
+                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin"'
+                echo 'EnvironmentFile=/opt/nuotao/.env'
+                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4'
+                echo 'Restart=always'
+                echo 'RestartSec=5'
+                echo 'StandardOutput=journal'
+                echo 'StandardError=journal'
+                echo ''
+                echo '[Install]'
+                echo 'WantedBy=multi-user.target'
+              } > "$BACKEND_SERVICE"
+              echo "[backend] template missing, generated inline fallback"
+            else
+              echo "[backend] template missing, keeping existing $BACKEND_SERVICE"
+              sed -i 's|/opt/nuotao-ai-os/|/opt/nuotao/|g' "$BACKEND_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-backend 2>/dev/null || true
+
+            echo "=== 4. Restarting backend service ==="
+            systemctl restart nuotao-backend
+            sleep 3
+            systemctl status nuotao-backend --no-pager
+
+            echo "=== 5. Building frontend ==="
+            cd /opt/nuotao/frontend
+            npm install --silent
+            npm run build
+
+            echo "=== 6. Deploying frontend ==="
+            rm -rf /var/www/nuotao/*
+            cp -r dist/* /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+
+            echo "=== 6.5 Installing nginx from versioned template (infra/nginx/console.conf) ==="
+            NGINX_CONF=/etc/nginx/sites-available/nuotao-console
+            TEMPLATE=/opt/nuotao/infra/nginx/console.conf
+            if [ -f "$TEMPLATE" ]; then
+              cp "$TEMPLATE" "$NGINX_CONF"
+              echo "[nginx] installed versioned template -> $NGINX_CONF"
+            elif [ ! -f "$NGINX_CONF" ]; then
+              echo "ERROR: 模板不存在且无既有配置，无法安装 nginx 配置"
+              exit 1
+            else
+              echo "[nginx] template missing, keeping existing $NGINX_CONF"
+            fi
+            ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/nuotao-console
+            nginx -t && systemctl reload nginx
+            echo "[nginx] console :8081 ready"
+
+            echo "=== 6.6 nginx server_name conflict check ==="
+            grep -rn "admin.nuotaooutdoor.com" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null || echo "(no admin.nuotaooutdoor.com references)"
+
+            echo "=== 6.7 cleaning stale nginx site backups ==="
+            CLEANED=0
+            for f in /etc/nginx/sites-enabled/nuotao.bak.*; do
+              [ -e "$f" ] || continue
+              mv "$f" /etc/nginx/sites-available/
+              echo "[nginx] moved $f -> sites-available"
+              CLEANED=1
+            done
+            if [ "$CLEANED" = "1" ]; then
+              nginx -t && systemctl reload nginx
+              echo "[nginx] reloaded after cleanup"
+            else
+              echo "[nginx] no stale backups, nothing to do"
+            fi
+
+            echo "=== 7. Health check ==="
+            sleep 5
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/readyz || true)
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
+            echo "Backend API: $BACKEND_CODE"
+            echo "Frontend: $FRONTEND_CODE"
+            if [ "$BACKEND_CODE" != "200" ]; then
+              echo "=== backend diagnostics ==="
+              echo "-- is-active:"; systemctl is-active nuotao-backend || true
+              echo "-- status:"; systemctl status nuotao-backend --no-pager | head -15 || true
+              echo "-- journal:"; journalctl -u nuotao-backend -n 25 --no-pager || true
+              echo "-- listeners:"; ss -tlnp 2>/dev/null | grep -E ':8000|:5432' || echo "(none on 8000/5432)"
+              echo "-- postgres:"; systemctl status postgresql --no-pager | head -6 || true
+              echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"
+              echo "=== AUTO ROLLBACK ==="
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+                BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
+                echo "Rolling back to: $BACKUP_DIR"
+                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED - manual intervention required"
+              else
+                echo "No backup found, cannot auto-rollback"
+              fi
+              exit 1
+            fi
+            if [ "$FRONTEND_CODE" != "200" ]; then
+              echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"
+              echo "=== AUTO ROLLBACK ==="
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+                BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
+                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED"
+              fi
+              exit 1
+            fi
+
+            echo "=== 7.4 Deploy monitoring configs (prometheus/grafana/alertmanager) ==="
+            if [ -d /etc/prometheus ]; then
+              cp /opt/nuotao/infra/monitoring/prometheus.yml /etc/prometheus/prometheus.yml 2>/dev/null || true
+              cp /opt/nuotao/infra/monitoring/alerts.yml /etc/prometheus/alerts.yml 2>/dev/null || true
+              systemctl reload prometheus 2>/dev/null || systemctl restart prometheus 2>/dev/null || echo "[monitoring] prometheus reload skipped"
+              echo "[monitoring] prometheus config deployed"
+            else
+              echo "[monitoring] prometheus not installed, skipping"
+            fi
+            if [ -d /etc/grafana/provisioning ]; then
+              cp -r /opt/nuotao/infra/grafana/provisioning/* /etc/grafana/provisioning/ 2>/dev/null || true
+              systemctl restart grafana-server 2>/dev/null || echo "[monitoring] grafana restart skipped"
+              echo "[monitoring] grafana provisioning deployed"
+            else
+              echo "[monitoring] grafana not installed, skipping"
+            fi
+            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao/infra/monitoring/alertmanager.yml ]; then
+              cp /opt/nuotao/infra/monitoring/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
+              systemctl reload alertmanager 2>/dev/null || systemctl restart alertmanager 2>/dev/null || true
+              echo "[monitoring] alertmanager config deployed"
+            fi
+
+            echo "=== 7.5 Configuring AI Agent Scheduler ==="
+            SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
+            SCHEDULER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-scheduler.service
+            if [ -f "$SCHEDULER_TEMPLATE" ]; then
+              # 模板优先：以仓库版本化模板为准（docs/agent_scheduler_deployment.md）
+              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
+              chmod 644 "$SCHEDULER_SERVICE"
+              echo "[scheduler] installed versioned template -> $SCHEDULER_SERVICE"
+            elif [ ! -f "$SCHEDULER_SERVICE" ]; then
+              # 兜底：模板缺失且服务不存在时内联生成
+              {
+                echo '[Unit]'
+                echo 'Description=Nuotao AI Agent Scheduler'
+                echo 'After=network.target postgresql.service'
+                echo ''
+                echo '[Service]'
+                echo 'Type=simple'
+                echo 'User=root'
+                echo 'WorkingDirectory=/opt/nuotao/backend'
+                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
+                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler'
+                echo 'Restart=always'
+                echo 'RestartSec=10'
+                echo 'StandardOutput=journal'
+                echo 'StandardError=journal'
+                echo ''
+                echo '[Install]'
+                echo 'WantedBy=multi-user.target'
+              } > "$SCHEDULER_SERVICE"
+              echo "[scheduler] template missing, generated inline fallback"
+            else
+              echo "[scheduler] template missing, keeping existing $SCHEDULER_SERVICE"
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler|' "$SCHEDULER_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-agent-scheduler 2>/dev/null || true
+            systemctl restart nuotao-agent-scheduler
+            sleep 3
+            systemctl status nuotao-agent-scheduler --no-pager | head -8 || echo "[scheduler] status check failed"
+            echo "[scheduler] AI Agent Scheduler configured and started"
+
+            echo "=== Deployment completed successfully ==="

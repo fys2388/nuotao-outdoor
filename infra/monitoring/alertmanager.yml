@@ -1,0 +1,32 @@
+# ============================================================
+# Alertmanager 配置 - Nuotao AI OS
+# 最小化有效配置: 仅邮件接收者, 不引用环境变量
+# 扩展钉钉/企业微信/Slack时需在此文件直接填入webhook URL
+# ============================================================
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@nuotaooutdoor.com'
+  smtp_auth_username: 'alerts@nuotaooutdoor.com'
+  smtp_auth_password: ''
+  smtp_require_tls: true
+
+route:
+  receiver: 'default-receiver'
+  group_by: ['alertname', 'severity', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'admin@nuotaooutdoor.com'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service']

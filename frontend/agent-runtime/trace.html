@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nuotao AI OS - Agent Trace</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --line:#2a3448; --text:#dbe4f3; --muted:#8b98ad; --ok:#2ecc71; --warn:#f1c40f; --bad:#e74c3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:14px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; }
+  header .trace { color:var(--muted); font-size:12px; }
+  main { padding:20px; max-width:960px; margin:0 auto; }
+  .chain { list-style:none; padding:0; margin:0; }
+  .chain li { position:relative; padding:10px 14px 10px 44px; background:var(--panel); border:1px solid var(--line); border-radius:8px; margin-bottom:10px; }
+  .chain li::before { content:""; position:absolute; left:18px; top:14px; bottom:-10px; width:2px; background:var(--line); }
+  .chain li:last-child::before { display:none; }
+  .dot { position:absolute; left:12px; top:16px; width:14px; height:14px; border-radius:50%; background:var(--line); }
+  .dot.completed, .dot.approved, .dot.ok { background:var(--ok); }
+  .dot.failed, .dot.rejected, .dot.bad { background:var(--bad); }
+  .dot.running, .dot.pending, .dot.waiting_approval { background:var(--warn); }
+  .node-head { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  .node-type { font-weight:700; text-transform:uppercase; font-size:12px; color:var(--muted); }
+  .node-status { font-size:12px; }
+  .node-meta { color:var(--muted); font-size:12px; margin-top:4px; display:flex; gap:14px; flex-wrap:wrap; }
+  .node-data { margin-top:6px; font-size:12px; color:var(--text); background:rgba(255,255,255,.03); border-radius:6px; padding:6px 8px; overflow-wrap:anywhere; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .error { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Trace</h1>
+  <span class="trace" id="traceId">loading…</span>
+  <a href="/agent-runtime" style="margin-left:auto; color:#5aa7ff;">Back to console</a>
+</header>
+<main>
+  <div class="error" id="error"></div>
+  <ol class="chain" id="chain"></ol>
+</main>
+<script>
+const API = "/api/v1";
+function esc(value) {
+  if (value == null) return "";
+  return String(value).replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+function safeData(data) {
+  // Only surface audit-safe fields; never raw prompt / PII / credentials.
+  if (!data || typeof data !== "object") return data;
+  const allow = new Set(["attempt_count", "priority", "error_message", "idempotency_key",
+    "result", "provider", "model", "tokens", "cost", "latency_ms", "tool_name",
+    "permission_level", "decision", "confidence", "error_type", "error", "status",
+    "agent_id", "task_id", "execution_id", "approval", "actor", "action", "note",
+    "event_type", "payload"]);
+  const out = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (allow.has(key)) out[key] = value;
+  }
+  return out;
+}
+function nodeClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (["completed", "approved", "ok", "healthy", "succeeded"].includes(s)) return "completed";
+  if (["failed", "rejected", "bad", "unhealthy", "error"].includes(s)) return "failed";
+  if (["running", "pending", "waiting_approval", "retried", "degraded"].includes(s)) return "running";
+  return "";
+}
+async function load() {
+  const params = new URLSearchParams(location.search);
+  const traceId = params.get("trace_id");
+  const target = (location.pathname.split("/").filter(Boolean).pop() || "").replace(/^traces\/?/, "") || traceId || "";
+  if (!target) {
+    document.getElementById("error").textContent = "Missing trace_id in URL: /agent-runtime/traces/{trace_id}";
+    return;
+  }
+  document.getElementById("traceId").textContent = `trace_id: ${target}`;
+  const response = await fetch(`${API}/agent-traces/${encodeURIComponent(target)}`);
+  if (!response.ok) {
+    document.getElementById("error").textContent = `Trace not found (${response.status})`;
+    return;
+  }
+  const trace = await response.json();
+  const chain = document.getElementById("chain");
+  chain.innerHTML = (trace.nodes || []).map((node) => {
+    const data = safeData(node.data);
+    const meta = [];
+    if (node.status) meta.push(`status: ${node.status}`);
+    if (node.timestamp) meta.push(`at: ${node.timestamp}`);
+    if (node.duration_ms != null) meta.push(`duration: ${node.duration_ms}ms`);
+    if (data && data.model) meta.push(`model: ${data.model}`);
+    if (data && data.tokens && data.tokens.total_tokens != null) meta.push(`tokens: ${data.tokens.total_tokens}`);
+    if (data && data.cost != null) meta.push(`cost: ${data.cost}`);
+    if (data && data.error_type) meta.push(`error_type: ${data.error_type}`);
+    return `
+      <li>
+        <span class="dot ${nodeClass(node.status)}"></span>
+        <div class="node-head">
+          <span class="node-type">${esc(node.type)}</span>
+          <span class="node-status">${esc(node.status || "")}</span>
+          <span style="color:var(--muted); font-size:11px;">${esc(node.id || "")}</span>
+        </div>
+        <div class="node-meta">${meta.map(esc).join(" · ")}</div>
+        ${Object.keys(data || {}).length ? `<div class="node-data">${esc(JSON.stringify(data))}</div>` : ""}
+      </li>`;
+  }).join("") || `<li>no nodes for this trace</li>`;
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+/**
+ * Nuotao Social Enhancements - Admin Styles
+ * Version: 1.0.0
+ */
+
+.nuotao-social-settings .form-table th {
+    width: 200px;
+}
+
+.nuotao-social-settings .nuotao-checkbox-group label {
+    font-weight: normal;
+}
+
+.nuotao-social-utm-builder {
+    margin-top: 30px;
+    padding: 20px;
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.nuotao-social-utm-builder h2 {
+    margin-top: 0;
+}
+
+.nuotao-social-utm-builder .required {
+    color: #dc3232;
+}

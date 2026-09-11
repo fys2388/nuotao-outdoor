@@ -1,0 +1,68 @@
+name: Fix Staging Pycache
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Fix staging pycache and restart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix staging pycache
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Stop staging service ==="
+            systemctl stop nuotao-backend-staging
+            sleep 2
+
+            echo ""
+            echo "=== 2. Kill any remaining processes on 8001 ==="
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                echo "Killing PIDs: $PIDS"
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            sleep 2
+
+            echo ""
+            echo "=== 3. Clear all __pycache__ directories ==="
+            find /opt/nuotao/staging/backend/app -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+            find /opt/nuotao/staging/backend -name "*.pyc" -delete 2>/dev/null
+            echo "Pycache cleared"
+
+            echo ""
+            echo "=== 4. Verify code is latest ==="
+            grep -c "response_model=None" /opt/nuotao/staging/backend/app/api/v1/endpoints/agent_platform.py
+            grep "fastapi" /opt/nuotao/staging/backend/pyproject.toml
+
+            echo ""
+            echo "=== 5. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            sleep 10
+
+            echo ""
+            echo "=== 6. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 7. Test endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz /docs; do
+                RESULT=$(curl -s -w " HTTP %{http_code}" --max-time 5 "http://127.0.0.1:8001$path" || echo " FAILED")
+                echo "  $path -> $RESULT"
+            done
+
+            echo ""
+            echo "=== 8. Openapi paths count ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | /opt/nuotao/staging/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Total paths: {len(paths)}')
+            health = [p for p in paths if 'health' in p.lower() or 'ready' in p.lower()]
+            print(f'Health paths: {health}')
+            " 2>&1

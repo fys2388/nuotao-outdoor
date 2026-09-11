@@ -1,0 +1,52 @@
+name: Update Feishu Env on Production
+
+on:
+  push:
+    paths:
+      - '.github/workflows/update-feishu-env.yml'
+  workflow_dispatch:
+
+jobs:
+  update-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update .env via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            ENV_FILE=/opt/nuotao/backend/.env
+
+            echo "=== 1. 备份现有 .env ==="
+            cp $ENV_FILE ${ENV_FILE}.bak.$(date +%Y%m%d_%H%M%S)
+            echo "备份完成"
+
+            echo "=== 2. 移除旧的 FEISHU_* 变量 ==="
+            sed -i '/^FEISHU_/d' $ENV_FILE
+            echo "已移除旧变量"
+
+            echo "=== 3. 写入新的 FEISHU_* 变量 ==="
+            printf 'FEISHU_APP_ID=%s\n' '${{ secrets.FEISHU_APP_ID }}' >> $ENV_FILE
+            printf 'FEISHU_APP_SECRET=%s\n' '${{ secrets.FEISHU_APP_SECRET }}' >> $ENV_FILE
+            printf 'FEISHU_CHAT_ID=%s\n' '${{ secrets.FEISHU_CHAT_ID }}' >> $ENV_FILE
+            printf 'FEISHU_CALLBACK_BASE_URL=%s\n' '${{ secrets.FEISHU_CALLBACK_BASE_URL }}' >> $ENV_FILE
+            echo "已写入新变量"
+
+            echo "=== 4. 验证 .env 中的 FEISHU_* 变量（密钥脱敏） ==="
+            grep '^FEISHU_' $ENV_FILE | sed -E 's/(SECRET=).*/\1***/'
+
+            echo "=== 5. 重启 nuotao-backend 服务 ==="
+            systemctl restart nuotao-backend
+            sleep 5
+            systemctl is-active nuotao-backend && echo "服务状态: 运行中" || echo "服务状态: 未运行"
+
+            echo "=== 6. 健康检查 ==="
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs || echo "000")
+            echo "Backend /docs: HTTP $CODE"
+
+            echo "=== 7. 完成 ==="
+            echo "FEISHU_* 环境变量已更新，nuotao-backend 已重启"

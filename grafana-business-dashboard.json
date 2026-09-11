@@ -1,0 +1,159 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "nuotao-business",
+    "title": "Nuotao 业务仪表盘",
+    "tags": ["business", "nuotao"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "5m",
+    "time": {
+      "from": "now-30d",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "订单总数",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT COUNT(*) as value FROM orders WHERE created_at >= $__timeFrom() AND created_at <= $__timeTo()",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "总收入",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT COALESCE(SUM(total), 0) as value FROM orders WHERE created_at >= $__timeFrom() AND created_at <= $__timeTo()",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "平均订单金额",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT COALESCE(AVG(total), 0) as value FROM orders WHERE created_at >= $__timeFrom() AND created_at <= $__timeTo()",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}}
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "退款金额",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT COALESCE(SUM(refunded_amount), 0) as value FROM orders WHERE created_at >= $__timeFrom() AND created_at <= $__timeTo()",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}]}}}
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "订单趋势（按天）",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT DATE(created_at) as time, COUNT(*) as order_count, SUM(total) as revenue FROM orders WHERE created_at >= $__timeFrom() AND created_at <= $__timeTo() GROUP BY DATE(created_at) ORDER BY time",
+            "format": "time_series"
+          }
+        ],
+        "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+        "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineInterpolation": "smooth", "lineWidth": 2, "fillOpacity": 10}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "revenue"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "custom.drawStyle", "value": "bars"}, {"id": "custom.fillOpacity", "value": 30}]}]}
+      },
+      {
+        "id": 6,
+        "type": "piechart",
+        "title": "订单状态分布",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 4},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT status, COUNT(*) as count FROM orders GROUP BY status ORDER BY count DESC",
+            "format": "table"
+          }
+        ],
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "tooltip": {"mode": "single"}, "legend": {"displayMode": "list", "placement": "right"}},
+        "fieldConfig": {"defaults": {"unit": "short"}}
+      },
+      {
+        "id": 7,
+        "type": "table",
+        "title": "最近订单",
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 4},
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {"type": "grafana-postgresql-datasource", "uid": "P1"},
+            "rawSql": "SELECT external_order_id as order_id, status, total, currency, country, created_at FROM orders ORDER BY created_at DESC LIMIT 10",
+            "format": "table"
+          }
+        ],
+        "options": {"showHeader": true, "cellHeight": "sm"},
+        "fieldConfig": {"defaults": {"custom": {"align": "left"}}, "overrides": [{"matcher": {"id": "byName", "options": "total"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "custom.align", "value": "right"}]}, {"matcher": {"id": "byName", "options": "created_at"}, "properties": [{"id": "custom.width", "value": 150}]}]}
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}

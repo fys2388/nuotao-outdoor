@@ -1,0 +1,227 @@
+# ============================================================
+# Alertmanager 配置 - Nuotao AI OS
+# 支持: 邮件、钉钉、企业微信、Slack
+# ============================================================
+
+global:
+  # 邮件配置 (SMTP)
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@nuotaooutdoor.com'
+  smtp_auth_username: 'alerts@nuotaooutdoor.com'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+
+  # 钉钉机器人配置
+  # 参考: https://open.dingtalk.com/document/robots/custom-robot-access
+  dingtalk_api_url: 'https://oapi.dingtalk.com/robot/send?access_token=${DINGTALK_ACCESS_TOKEN}'
+
+  # 企业微信机器人配置
+  wechat_api_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${WECHAT_WEBHOOK_KEY}'
+
+  # Slack 配置
+  slack_api_url: 'https://hooks.slack.com/services/${SLACK_WEBHOOK_PATH}'
+
+  # 解决超时
+  resolve_timeout: 5m
+
+# 模板文件
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# 路由配置
+route:
+  # 默认接收者
+  receiver: 'default-receiver'
+
+  # 分组配置
+  group_by: ['alertname', 'severity', 'service']
+
+  # 等待时间
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  # 子路由
+  routes:
+    # 严重告警 - 立即通知所有渠道
+    - matchers:
+        - severity = critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # 警告告警 - 邮件 + 钉钉
+    - matchers:
+        - severity = warning
+      receiver: 'warning-alerts'
+      group_wait: 30s
+      repeat_interval: 4h
+
+    # API 相关告警
+    - matchers:
+        - service = api
+      receiver: 'api-alerts'
+      continue: true
+
+    # 数据库相关告警
+    - matchers:
+        - service = database
+      receiver: 'database-alerts'
+      continue: true
+
+    # AI/LLM 相关告警
+    - matchers:
+        - service = ai
+      receiver: 'ai-alerts'
+      continue: true
+
+# 接收者配置
+receivers:
+  # 默认接收者
+  - name: 'default-receiver'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
+    email_configs:
+      - to: 'admin@nuotaooutdoor.com'
+        send_resolved: true
+        headers:
+          Subject: '[Nuotao AI OS] {{ .GroupLabels.alertname }}'
+
+  # 严重告警接收者
+  - name: 'critical-alerts'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
+    # 邮件
+    email_configs:
+      - to: 'admin@nuotaooutdoor.com,ops@nuotaooutdoor.com'
+        send_resolved: true
+        headers:
+          Subject: '[严重][Nuotao AI OS] {{ .GroupLabels.alertname }}'
+
+    # 钉钉
+    dingtalk_configs:
+      - message_type: markdown
+        markdown:
+          title: '🚨 严重告警: {{ .GroupLabels.alertname }}'
+          text: |
+            ## 🚨 严重告警
+
+            **告警名称**: {{ .GroupLabels.alertname }}
+            **严重程度**: {{ .GroupLabels.severity }}
+            **服务**: {{ .GroupLabels.service }}
+
+            {{ range .Alerts }}
+            **实例**: {{ .Labels.instance }}
+            **描述**: {{ .Annotations.description }}
+            **触发时间**: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+            {{ end }}
+
+            @所有人 请立即处理！
+
+    # 企业微信
+    wechat_configs:
+      - corp_id: '${WECHAT_CORP_ID}'
+        to_party: '1'
+        to_tag: '1'
+        agent_id: '${WECHAT_AGENT_ID}'
+        api_secret: '${WECHAT_API_SECRET}'
+        message_type: markdown
+        markdown:
+          content: |
+            ## 🚨 严重告警
+
+            **告警名称**: {{ .GroupLabels.alertname }}
+            **严重程度**: {{ .GroupLabels.severity }}
+            **服务**: {{ .GroupLabels.service }}
+
+            {{ range .Alerts }}
+            **实例**: {{ .Labels.instance }}
+            **描述**: {{ .Annotations.description }}
+            **触发时间**: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+            {{ end }}
+
+    # Slack
+    slack_configs:
+      - channel: '#alerts-critical'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        text: |
+          *Severity*: {{ .GroupLabels.severity }}
+          *Service*: {{ .GroupLabels.service }}
+          {{ range .Alerts }}
+          *Instance*: {{ .Labels.instance }}
+          *Description*: {{ .Annotations.description }}
+          {{ end }}
+
+  # 警告告警接收者
+  - name: 'warning-alerts'
+    # 飞书通知（通过适配器）
+    webhook_configs:
+      - url: 'http://feishu-adapter:8060/webhook'
+        send_resolved: true
+        max_alerts: 10
+    email_configs:
+      - to: 'ops@nuotaooutdoor.com'
+        send_resolved: true
+        headers:
+          Subject: '[警告][Nuotao AI OS] {{ .GroupLabels.alertname }}'
+
+    dingtalk_configs:
+      - message_type: markdown
+        markdown:
+          title: '⚠️ 警告: {{ .GroupLabels.alertname }}'
+          text: |
+            ## ⚠️ 警告
+
+            **告警名称**: {{ .GroupLabels.alertname }}
+            **严重程度**: {{ .GroupLabels.severity }}
+            **服务**: {{ .GroupLabels.service }}
+
+            {{ range .Alerts }}
+            **实例**: {{ .Labels.instance }}
+            **描述**: {{ .Annotations.description }}
+            **触发时间**: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+            {{ end }}
+
+  # API 告警接收者
+  - name: 'api-alerts'
+    email_configs:
+      - to: 'backend-team@nuotaooutdoor.com'
+        send_resolved: true
+
+  # 数据库告警接收者
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'dba@nuotaooutdoor.com'
+        send_resolved: true
+
+  # AI 告警接收者
+  - name: 'ai-alerts'
+    email_configs:
+      - to: 'ai-team@nuotaooutdoor.com'
+        send_resolved: true
+
+# 抑制规则
+inhibit_rules:
+  # 当服务宕机时，抑制该服务的其他告警
+  - source_matchers:
+      - alertname = 'ServiceDown'
+      - severity = critical
+    target_matchers:
+      - severity =~ 'warning|critical'
+    equal: ['service', 'instance']
+
+  # 当数据库宕机时，抑制依赖数据库的告警
+  - source_matchers:
+      - alertname = 'PostgreSQLDown'
+      - severity = critical
+    target_matchers:
+      - service = api
+    equal: ['instance']

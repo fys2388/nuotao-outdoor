@@ -1,0 +1,111 @@
+# ============================================================
+# Alertmanager 配置模板
+# 复制为 alertmanager.yml 并填写实际配置
+# ============================================================
+
+global:
+  # 邮件配置
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@your-domain.com'
+  smtp_auth_username: 'alerts@your-domain.com'
+  smtp_auth_password: 'your-email-password'
+  smtp_require_tls: true
+
+  # 钉钉机器人配置
+  dingtalk_api_url: 'https://oapi.dingtalk.com/robot/send?access_token=your-access-token'
+
+  # 企业微信机器人配置
+  wechat_api_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-webhook-key'
+
+  # Slack Webhook 配置
+  slack_api_url: 'https://hooks.slack.com/services/your/webhook/path'
+
+  # 超时设置
+  resolve_timeout: 5m
+
+# 路由配置
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+
+  # 分级路由
+  routes:
+    # Critical 级别：立即通知所有渠道
+    - match:
+        severity: critical
+      receiver: 'critical'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Warning 级别：邮件 + 钉钉
+    - match:
+        severity: warning
+      receiver: 'warning'
+      repeat_interval: 4h
+
+    # Info 级别：仅记录
+    - match:
+        severity: info
+      receiver: 'info'
+      repeat_interval: 24h
+
+# 接收者配置
+receivers:
+  # 默认接收者
+  - name: 'default'
+    email_configs:
+      - to: 'admin@your-domain.com'
+        send_resolved: true
+        headers:
+          Subject: '[Nuotao AI OS] {{ .GroupLabels.alertname }}'
+
+  # Critical 接收者
+  - name: 'critical'
+    email_configs:
+      - to: 'admin@your-domain.com, oncall@your-domain.com'
+        send_resolved: true
+        headers:
+          Subject: '[CRITICAL][Nuotao AI OS] {{ .GroupLabels.alertname }}'
+    # 钉钉通知
+    webhook_configs:
+      - url: '{{ .Global.dingtalk_api_url }}'
+        send_resolved: true
+        max_alerts: 10
+    # 企业微信通知
+    # webhook_configs:
+    #   - url: '{{ .Global.wechat_api_url }}'
+    #     send_resolved: true
+
+  # Warning 接收者
+  - name: 'warning'
+    email_configs:
+      - to: 'admin@your-domain.com'
+        send_resolved: true
+        headers:
+          Subject: '[WARNING][Nuotao AI OS] {{ .GroupLabels.alertname }}'
+    webhook_configs:
+      - url: '{{ .Global.dingtalk_api_url }}'
+        send_resolved: true
+
+  # Info 接收者（仅记录，不通知）
+  - name: 'info'
+    # 不配置任何通知渠道，仅记录到日志
+
+# 抑制规则
+inhibit_rules:
+  # 当 Critical 告警触发时，抑制相同服务的 Warning 告警
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
+
+  # 当服务宕机时，抑制该服务的其他告警
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '.+'
+    equal: ['service']
