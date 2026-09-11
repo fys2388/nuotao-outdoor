@@ -1,0 +1,362 @@
+# ============================================
+# Prometheus Alert Rules for Nuotao AI OS
+# ============================================
+
+groups:
+  # ============================================
+  # API Service Alerts
+  # ============================================
+  - name: api-service
+    rules:
+      # API service down
+      - alert: ApiServiceDown
+        expr: up{job="nuotao-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: api
+        annotations:
+          summary: "API service is down"
+          description: "The Nuotao AI OS API service has been down for more than 1 minute."
+          runbook: "Check API container logs: docker compose logs api"
+
+      # High error rate (5xx)
+      - alert: ApiHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="nuotao-api", status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="nuotao-api"}[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          category: api
+        annotations:
+          summary: "High API error rate (>5%)"
+          description: "API 5xx error rate is above 5% for the last 5 minutes."
+          runbook: "Check API logs and recent deployments."
+
+      # High latency (p95 > 2s)
+      - alert: ApiHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="nuotao-api"}[5m]))
+            by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          category: api
+        annotations:
+          summary: "High API latency (p95 > 2s)"
+          description: "API p95 response time is above 2 seconds for the last 5 minutes."
+          runbook: "Check database performance, external API calls, and resource utilization."
+
+      # Too many requests (rate limiting)
+      - alert: ApiRateLimitExceeded
+        expr: rate(http_requests_total{job="nuotao-api", status="429"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: info
+          category: api
+        annotations:
+          summary: "API rate limit frequently exceeded"
+          description: "More than 10 rate-limited requests per second in the last 5 minutes."
+          runbook: "Check if rate limits need adjustment or if there's a misbehaving client."
+
+  # ============================================
+  # Database Alerts
+  # ============================================
+  - name: postgresql
+    rules:
+      # PostgreSQL down
+      - alert: PostgresqlDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: database
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL service has been down for more than 1 minute."
+          runbook: "Check PostgreSQL container: docker compose logs postgres"
+
+      # High connection usage
+      - alert: PostgresqlHighConnections
+        expr: |
+          pg_stat_activity_count
+          /
+          pg_settings_max_connections
+          > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "PostgreSQL high connection usage (>80%)"
+          description: "PostgreSQL is using more than 80% of available connections."
+          runbook: "Check for connection leaks, consider increasing max_connections or using PgBouncer."
+
+      # Slow queries
+      - alert: PostgresqlSlowQueries
+        expr: rate(pg_stat_statements_mean_time_seconds[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "PostgreSQL slow queries detected"
+          description: "Average query execution time is above 1 second for the last 10 minutes."
+          runbook: "Check pg_stat_statements for slow queries, add indexes or optimize queries."
+
+      # Replication lag (if replication is configured)
+      - alert: PostgresqlReplicationLag
+        expr: pg_replication_lag_seconds > 30
+        for: 5m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "PostgreSQL replication lag > 30s"
+          description: "Replication lag is above 30 seconds for the last 5 minutes."
+          runbook: "Check network connectivity and replication slot status."
+
+  # ============================================
+  # Redis Alerts
+  # ============================================
+  - name: redis
+    rules:
+      # Redis down
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: cache
+        annotations:
+          summary: "Redis is down"
+          description: "Redis service has been down for more than 1 minute."
+          runbook: "Check Redis container: docker compose logs redis"
+
+      # High memory usage
+      - alert: RedisHighMemoryUsage
+        expr: |
+          redis_memory_used_bytes
+          /
+          redis_memory_max_bytes
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          category: cache
+        annotations:
+          summary: "Redis high memory usage (>85%)"
+          description: "Redis is using more than 85% of available memory."
+          runbook: "Check for memory leaks, consider increasing maxmemory or eviction policy."
+
+      # High number of connected clients
+      - alert: RedisHighConnections
+        expr: redis_connected_clients > 1000
+        for: 5m
+        labels:
+          severity: warning
+          category: cache
+        annotations:
+          summary: "Redis high number of connections (>1000)"
+          description: "Redis has more than 1000 connected clients."
+          runbook: "Check for connection leaks, consider using connection pooling."
+
+      # Redis evictions (keys being evicted due to memory pressure)
+      - alert: RedisEvictions
+        expr: rate(redis_evicted_keys_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          category: cache
+        annotations:
+          summary: "Redis high eviction rate"
+          description: "More than 10 keys are being evicted per second due to memory pressure."
+          runbook: "Increase Redis memory or optimize key usage patterns."
+
+  # ============================================
+  # Worker / Task Queue Alerts
+  # ============================================
+  - name: worker
+    rules:
+      # Worker down (no heartbeat)
+      - alert: WorkerDown
+        expr: nuotao_worker_heartbeat == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: worker
+        annotations:
+          summary: "Worker process is down"
+          description: "No worker heartbeat detected for more than 2 minutes."
+          runbook: "Check worker container: docker compose logs worker"
+
+      # Task queue backlog growing
+      - alert: TaskQueueBacklog
+        expr: nuotao_task_queue_length > 100
+        for: 10m
+        labels:
+          severity: warning
+          category: worker
+        annotations:
+          summary: "Task queue backlog growing (>100 tasks)"
+          description: "Task queue has more than 100 pending tasks for the last 10 minutes."
+          runbook: "Scale up workers: docker compose up -d --scale worker=4"
+
+      # High task failure rate
+      - alert: HighTaskFailureRate
+        expr: |
+          rate(nuotao_task_failures_total[5m])
+          /
+          rate(nuotao_task_total[5m])
+          > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          category: worker
+        annotations:
+          summary: "High task failure rate (>10%)"
+          description: "More than 10% of tasks are failing in the last 10 minutes."
+          runbook: "Check worker logs for error details."
+
+  # ============================================
+  # AI / LLM Alerts
+  # ============================================
+  - name: ai-llm
+    rules:
+      # LLM API high error rate
+      - alert: LlmHighErrorRate
+        expr: |
+          rate(nuotao_llm_requests_total{status="error"}[5m])
+          /
+          rate(nuotao_llm_requests_total[5m])
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          category: ai
+        annotations:
+          summary: "High LLM API error rate (>10%)"
+          description: "More than 10% of LLM API calls are failing in the last 5 minutes."
+          runbook: "Check LLM provider status, API key validity, and rate limits."
+
+      # LLM high latency
+      - alert: LlmHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(nuotao_llm_request_duration_seconds_bucket[5m]))
+            by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+          category: ai
+        annotations:
+          summary: "High LLM latency (p95 > 30s)"
+          description: "LLM API p95 response time is above 30 seconds for the last 5 minutes."
+          runbook: "Check LLM provider performance, consider switching to fallback provider."
+
+      # Monthly LLM cost approaching limit
+      - alert: LlmCostApproachingLimit
+        expr: nuotao_llm_monthly_cost_usd > 40
+        for: 1h
+        labels:
+          severity: warning
+          category: ai
+        annotations:
+          summary: "Monthly LLM cost approaching limit ($40/$50)"
+          description: "Monthly LLM cost has exceeded $40, approaching the $50 monthly limit."
+          runbook: "Review LLM usage, consider reducing model complexity or increasing budget."
+
+  # ============================================
+  # System / Resource Alerts
+  # ============================================
+  - name: system
+    rules:
+      # High CPU usage
+      - alert: HighCpuUsage
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "High CPU usage (>85%)"
+          description: "CPU usage is above 85% for the last 10 minutes."
+          runbook: "Check processes using top/htop, consider scaling up resources."
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+          > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "High memory usage (>85%)"
+          description: "Memory usage is above 85% for the last 10 minutes."
+          runbook: "Check processes using free/top, consider adding more RAM or optimizing memory usage."
+
+      # High disk usage
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100
+          > 85
+        for: 1h
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "High disk usage (>85%)"
+          description: "Disk usage is above 85% for the last 1 hour."
+          runbook: "Clean up old logs, backups, and unused Docker images."
+
+      # Disk will fill in 24 hours (prediction)
+      - alert: DiskFillingUp
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[6h], 24*3600) < 0
+        for: 1h
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "Disk will fill up within 24 hours"
+          description: "Based on current growth rate, disk will be full within 24 hours."
+          runbook: "Immediately clean up disk space, check for runaway log files."
+
+  # ============================================
+  # Backup Alerts
+  # ============================================
+  - name: backup
+    rules:
+      # No successful backup in last 25 hours
+      - alert: BackupFailed
+        expr: time() - nuotao_last_backup_timestamp > 90000
+        for: 1h
+        labels:
+          severity: critical
+          category: backup
+        annotations:
+          summary: "No successful backup in last 25 hours"
+          description: "The last successful database backup was more than 25 hours ago."
+          runbook: "Check backup service logs and disk space."
+
+      # Backup size anomaly (too small might indicate failure)
+      - alert: BackupSizeAnomaly
+        expr: |
+          nuotao_last_backup_size_bytes
+          <
+          (avg_over_time(nuotao_last_backup_size_bytes[7d]) * 0.5)
+        for: 1h
+        labels:
+          severity: warning
+          category: backup
+        annotations:
+          summary: "Backup size anomaly (<50% of average)"
+          description: "The latest backup is less than 50% of the 7-day average size, possibly indicating incomplete backup."
+          runbook: "Verify backup integrity and check backup logs."

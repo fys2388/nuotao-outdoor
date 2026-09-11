@@ -1,0 +1,68 @@
+name: Verify Staging Final
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Final verification of staging environment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify staging
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -10
+
+            echo ""
+            echo "=== 2. Port 8001 listening ==="
+            ss -tlnp | grep ':8001'
+
+            echo ""
+            echo "=== 3. Test all endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz /docs /openapi.json; do
+                RESULT=$(curl -s -w " HTTP %{http_code}" --max-time 5 "http://127.0.0.1:8001$path" || echo " FAILED")
+                echo "  $path -> $RESULT"
+            done
+
+            echo ""
+            echo "=== 4. Readyz full response ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/api/v1/readyz
+            echo ""
+
+            echo ""
+            echo "=== 5. Healthz full response ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/api/v1/healthz
+            echo ""
+
+            echo ""
+            echo "=== 6. Openapi paths count ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | /opt/nuotao/staging/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Total paths: {len(paths)}')
+            health = [p for p in paths if 'health' in p.lower() or 'ready' in p.lower()]
+            print(f'Health paths: {health}')
+            " 2>&1
+
+            echo ""
+            echo "=== 7. Staging nginx test (port 8082) ==="
+            curl -s -w " HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8082/ || echo "Nginx staging not available"
+
+            echo ""
+            echo "=== 8. Production comparison ==="
+            echo "Production readyz:"
+            curl -s -w " HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8000/api/v1/readyz
+            echo "Production paths:"
+            curl -s --max-time 5 http://127.0.0.1:8000/openapi.json | /opt/nuotao/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Production paths: {len(paths)}')
+            " 2>&1

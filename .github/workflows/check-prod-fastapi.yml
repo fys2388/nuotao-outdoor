@@ -1,0 +1,35 @@
+name: Check Prod FastAPI Version
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check production FastAPI version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check FastAPI version
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== Production FastAPI version ==="
+            /opt/nuotao/backend/.venv/bin/python -c "import fastapi; print(f'Production FastAPI: {fastapi.__version__}')" 2>&1
+
+            echo ""
+            echo "=== Staging FastAPI version ==="
+            /opt/nuotao/staging/backend/.venv/bin/python -c "import fastapi; print(f'Staging FastAPI: {fastapi.__version__}')" 2>&1
+
+            echo ""
+            echo "=== Production app routes count ==="
+            /opt/nuotao/backend/.venv/bin/python -c "
+            import sys; sys.path.insert(0, '/opt/nuotao/backend')
+            from app.main import app
+            routes = [r.path for r in app.routes if hasattr(r, 'path')]
+            print(f'Production routes: {len(routes)}')
+            health = [r for r in routes if 'health' in r or 'ready' in r]
+            print(f'Health routes: {health}')
+            " 2>&1 | tail -5

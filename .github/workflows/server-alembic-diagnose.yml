@@ -1,0 +1,48 @@
+name: Server Alembic Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Check alembic state on server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== Git status ==="
+            cd /opt/nuotao
+            git log --oneline -3
+            git status --short | head -10
+
+            echo ""
+            echo "=== Alembic versions dir ==="
+            ls -la backend/alembic/versions/ | tail -10
+
+            echo ""
+            echo "=== Alembic current ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            alembic current 2>&1 || echo "alembic current failed"
+
+            echo ""
+            echo "=== Alembic heads ==="
+            alembic heads 2>&1 || echo "alembic heads failed"
+
+            echo ""
+            echo "=== Alembic history (last 5) ==="
+            alembic history 2>&1 | tail -10 || echo "alembic history failed"
+
+            echo ""
+            echo "=== Try import 0026 ==="
+            python3 -c "import importlib.util; spec = importlib.util.spec_from_file_location('m', 'alembic/versions/0026_agent_suggestions_growth_memories.py'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print('0026 loaded, revision=', m.revision, 'down=', m.down_revision)" 2>&1
+
+            echo ""
+            echo "=== Disk space ==="
+            df -h /

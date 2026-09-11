@@ -1,0 +1,17 @@
+{
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "TestAlert",
+        "severity": "warning",
+        "instance": "nuotao-server"
+      },
+      "annotations": {
+        "summary": "Nuotao AI OS 测试告警",
+        "description": "Alertmanager 飞书告警通知功能验证测试"
+      },
+      "startsAt": "2026-09-03T00:00:00Z"
+    }
+  ]
+}

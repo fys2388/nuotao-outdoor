@@ -1,0 +1,84 @@
+name: Debug Staging Port Process
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging port 8001 process
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging port process
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Who is listening on port 8001 ==="
+            ss -tlnp | grep ':8001'
+
+            echo ""
+            echo "=== 2. Process details ==="
+            PID=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | head -1)
+            if [ -n "$PID" ]; then
+                echo "PID: $PID"
+                ps -p $PID -o pid,ppid,user,start,cmd --no-headers
+                echo ""
+                echo "Process cwd:"
+                ls -la /proc/$PID/cwd 2>/dev/null || echo "Cannot read cwd"
+                echo ""
+                echo "Process exe:"
+                ls -la /proc/$PID/exe 2>/dev/null || echo "Cannot read exe"
+            fi
+
+            echo ""
+            echo "=== 3. All python processes ==="
+            ps aux | grep python | grep -v grep
+
+            echo ""
+            echo "=== 4. Stop staging service and kill all 8001 processes ==="
+            systemctl stop nuotao-backend-staging
+            sleep 2
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                echo "Killing PIDs: $PIDS"
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            sleep 2
+
+            echo ""
+            echo "=== 5. Verify port 8001 is free ==="
+            ss -tlnp | grep ':8001' || echo "Port 8001 is free"
+
+            echo ""
+            echo "=== 6. Clear pycache ==="
+            find /opt/nuotao/staging/backend/app -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+            find /opt/nuotao/staging/backend -name "*.pyc" -delete 2>/dev/null
+            echo "Pycache cleared"
+
+            echo ""
+            echo "=== 7. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            sleep 10
+
+            echo ""
+            echo "=== 8. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 9. Test endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz; do
+                RESULT=$(curl -s -w " HTTP %{http_code}" --max-time 5 "http://127.0.0.1:8001$path" || echo " FAILED")
+                echo "  $path -> $RESULT"
+            done
+
+            echo ""
+            echo "=== 10. Openapi paths count ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | /opt/nuotao/staging/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Total paths: {len(paths)}')
+            " 2>&1

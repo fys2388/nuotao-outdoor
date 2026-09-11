@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nuotao Outdoor 网站修复检验报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; background: #f5f2eb; color: #1a1b1c; line-height: 1.6; padding: 24px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 24px; color: #1a2b4a; margin-bottom: 4px; }
+  .subtitle { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  .summary-cards { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { flex: 1 1 140px; background: #fff; border-radius: 10px; padding: 16px; border: 1px solid #e4e3dd; }
+  .card .num { font-size: 28px; font-weight: 700; }
+  .card .label { font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .card.pass .num { color: #52c41a; }
+  .card.warn .num { color: #faad14; }
+  .card.total .num { color: #1a2b4a; }
+  h2 { font-size: 17px; color: #1a2b4a; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #1a2b4a; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; font-size: 13px; }
+  th { background: #1a2b4a; color: #fff; padding: 10px 12px; text-align: left; font-weight: 600; font-size: 12px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f0efea; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge.p0 { background: #fde8e8; color: #c0392b; }
+  .badge.p1 { background: #fef3cd; color: #b8860b; }
+  .badge.ok { background: #e6f7e6; color: #2d8a2d; }
+  .badge.warn { background: #fff4e0; color: #d48806; }
+  .evidence { font-size: 11px; color: #6b7280; margin-top: 4px; font-style: italic; }
+  .note-box { background: #fff8e6; border-left: 3px solid #faad14; padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 13px; }
+  .footer-note { margin-top: 32px; padding-top: 16px; border-top: 1px solid #e4e3dd; font-size: 11px; color: #9ca3af; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Nuotao Outdoor 网站修复检验报告</h1>
+  <div class="subtitle">检验时间：2026-09-07 | 检验范围：全站 P0/P1 问题 | 检验方式：浏览器实测 + DOM 验证</div>
+
+  <div class="summary-cards">
+    <div class="card total"><div class="num">17</div><div class="label">总修复项</div></div>
+    <div class="card pass"><div class="num">15</div><div class="label">验证通过</div></div>
+    <div class="card warn"><div class="num">2</div><div class="label">遗留小项</div></div>
+    <div class="card pass"><div class="num">100%</div><div class="label">P0 修复率</div></div>
+  </div>
+
+  <h2>P0 严重问题 — 全部修复并验证通过</h2>
+  <table>
+    <thead><tr><th style="width:60px">编号</th><th style="width:200px">问题</th><th>修复内容</th><th style="width:140px">验证证据</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge p0">P0-1</span></td>
+        <td>满$150免邮未生效</td>
+        <td>北美/英国/EU 三个配送区域添加 Free shipping 方法，最低订单金额 $150</td>
+        <td><span class="badge ok">通过</span><div class="evidence">购物车 $234.96，运费显示 "Free shipping"</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p0">P0-2</span></td>
+        <td>图片带 AI 水印/1688中文</td>
+        <td>重新生成 9 张视觉资产（Logo×2、Hero、6 分类图），全部无水印无文字，上传替换</td>
+        <td><span class="badge ok">通过</span><div class="evidence">首页 DOM 检测无"图片由AI生成"，无"1688/揭阳"中文；分类图为实景图</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p0">P0-3</span></td>
+        <td>页脚仅分类链接，无政策/信任页</td>
+        <td>footer.php 硬编码四栏页脚：Shop（7链接）/Help（4链接）/Company（3链接）/Get in Touch（邮箱+营业时间+服务承诺），底部版权行+支付图标</td>
+        <td><span class="badge ok">通过</span><div class="evidence">footer.nuotao-footer 元素存在，包含 14+ 链接，© 2026 版权，5 种支付标识</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p0">P0-4</span></td>
+        <td>空分类/死链（Outlet 0产品）</td>
+        <td>Outlet 填充 6 个产品，首页链接修正，旧 URL /titanium-cookware-utensils/ 加 301 重定向到 /cookware-picnic/</td>
+        <td><span class="badge ok">通过</span><div class="evidence">Outlet 分类页 6 产品；Tents 3 产品；Sleeping 3 产品；无空分类</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p0">P0-5</span></td>
+        <td>Terms 页面内容缺失/条款链接指回自身</td>
+        <td>Terms 页面填充完整 9 条款（General/Products/Orders/Shipping/Returns/IP/Liability/Governing Law/Contact）；结算页条款链接修正为 /terms-conditions/</td>
+        <td><span class="badge ok">通过</span><div class="evidence">Terms 页 1962 字符完整内容；结算页 2 个条款链接均指向 /terms-conditions/，不再指回结算页</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p0">P0-6</span></td>
+        <td>WP 11个更新待处理/generator meta泄露版本</td>
+        <td>WP 核心 7.0.4→7.1，8 插件+2 主题全更新，Elementor 数据更新；functions.php 移除 generator meta</td>
+        <td><span class="badge ok">通过</span><div class="evidence">首页 meta[name="generator"] 不存在（已移除）；后台无待处理更新</div></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>P1 中等问题 — 修复情况</h2>
+  <table>
+    <thead><tr><th style="width:60px">编号</th><th style="width:200px">问题</th><th>修复内容</th><th style="width:140px">验证证据</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge p1">P1-7</span></td>
+        <td>SEO 标题/H1 不规范</td>
+        <td>首页标题改为 "Nuotao Outdoor | Lightweight Camping Tents & Hiking Gear"；H1 改为 "Lightweight Gear for Every Outdoor Adventure"</td>
+        <td><span class="badge ok">通过</span><div class="evidence">document.title 和 h1 均已更新</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p1">P1-8</span></td>
+        <td>产品无 SKU/规格不全</td>
+        <td>5 个主产品补 SKU：TENT-001/BAG-001/COOK-001/COT-001/SLEEP-001</td>
+        <td><span class="badge ok">通过</span><div class="evidence">Camping Cot 详情页显示 "SKU: COT-001"</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p1">P1-9</span></td>
+        <td>仅 Stripe 无 PayPal</td>
+        <td>评估：无 PayPal 插件，Stripe + WooPayments 活跃。PayPal 接入需账户配置，暂未接入</td>
+        <td><span class="badge warn">待决策</span><div class="evidence">需用户决定是否接入 PayPal（涉及账户/费用）</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p1">P1-10</span></td>
+        <td>品牌口径不统一（About深圳 vs Contact香港）</td>
+        <td>About 页面改为 "headquartered in Hong Kong with operations and supply chain in Shenzhen, China"；Contact 保持香港地址</td>
+        <td><span class="badge ok">通过</span><div class="evidence">About 页已更新；Contact 页香港地址一致；缓存已清除</div></td>
+      </tr>
+      <tr>
+        <td><span class="badge p1">P1-11</span></td>
+        <td>jQuery 版本/控制台警告</td>
+        <td>检查：jQuery 3.7.1 + Migrate 3.4.1，无控制台警告</td>
+        <td><span class="badge ok">通过</span><div class="evidence">无需修复</div></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>品牌 Logo + UI 优化（深墨绿设计系统）</h2>
+  <table>
+    <thead><tr><th style="width:160px">项目</th><th>优化内容</th><th style="width:120px">状态</th></tr></thead>
+    <tbody>
+      <tr><td>品牌风格</td><td>选定 A（极简户外科技风）+ D（日系极简）融合方案</td><td><span class="badge ok">已确定</span></td></tr>
+      <tr><td>Logo v2 重设计</td><td>深墨绿 N 字母几何变形 + 山峰负空间 + NUOTAO OUTDOOR 文字，单色无渐变无阴影，极简可缩放到 favicon。附件 ID 1395，已替换线上 Logo</td><td><span class="badge ok">已上线</span></td></tr>
+      <tr><td>配色方案</td><td><strong>深墨绿 #2D4A3E</strong>（主色：Logo/标题/背景/导航）+ 暖橙 #E8743B（强调：CTA/价格/标签）+ 米白 #F5F2EB（底色）+ 深灰 #1A1B1C（正文），全站统一</td><td><span class="badge ok">已应用</span></td></tr>
+      <tr><td>全局 CSS 覆盖</td><td>通过 Additional CSS 覆盖：.nt-brand 背景→深墨绿、h1-h6 标题→深墨绿、产品标题→深灰（保可读性）、链接 hover→深墨绿。0 个深蓝残留元素</td><td><span class="badge ok">已完成</span></td></tr>
+      <tr><td>Hero 图</td><td>替换为自然风景实景图（山脉/湖泊/帐篷/人物），无水印无文字</td><td><span class="badge ok">已替换</span></td></tr>
+      <tr><td>分类图</td><td>6 张分类图全部替换为实景图（森林帐篷/帐篷内睡袋/炊具/背包等），无 AI 水印无中文</td><td><span class="badge ok">已替换</span></td></tr>
+      <tr><td>页脚 UI</td><td><strong>深墨绿底</strong>四栏结构（Shop/Help/Company/Get in Touch），白色标题+浅灰链接+暖橙强调（Outlet Sale/邮箱），版权行+5 种支付图标</td><td><span class="badge ok">已完成</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>深墨绿配色系统验证（DOM 实测）</h2>
+  <table>
+    <thead><tr><th>验证项</th><th>期望值</th><th>实测值</th><th style="width:80px">结果</th></tr></thead>
+    <tbody>
+      <tr><td>Logo 图片</td><td>logo-primary-v2.jpg</td><td>logo-primary-v2.jpg（附件 ID 1395）</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>页脚背景色</td><td>#2D4A3E / rgb(45,74,62)</td><td>rgb(45, 74, 62)</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>Why Nuotao 区块背景</td><td>#2D4A3E</td><td>rgb(45, 74, 62)</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>H2 标题颜色</td><td>#2D4A3E</td><td>rgb(45, 74, 62)</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>产品标题颜色</td><td>#1A1B1C（深灰保可读性）</td><td>rgb(26, 27, 28)</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>深蓝残留元素</td><td>0 个</td><td>0 个</td><td><span class="badge ok">通过</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>客户浏览体验优化（第二轮模拟客户全流程）</h2>
+  <div class="note-box">
+    <strong>模拟流程：</strong>首页 → 分类页 → 产品详情页 → 加入购物车 → 购物车 → 结算页，逐页检查客户视角的体验问题。
+  </div>
+  <table>
+    <thead><tr><th style="width:60px">编号</th><th style="width:180px">问题</th><th>问题描述（客户视角）</th><th>修复措施</th><th style="width:120px">验证结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>UX-1</td>
+        <td><strong>Logo 尺寸过大</strong></td>
+        <td>Logo 显示 800×800px，占据整个首屏，客户打开网站看不到 Hero 图和核心内容，需滚动很久才能看到产品。Header 高度 984px。</td>
+        <td>Additional CSS 限制 .custom-logo max-width: 180px，.site-header min-height: auto，.header-inner padding: 12px 24px</td>
+        <td><span class="badge ok">Logo 180px<br>Header 358px</span></td>
+      </tr>
+      <tr>
+        <td>UX-2</td>
+        <td><strong>导航链接颜色错误</strong></td>
+        <td>全站导航链接显示为粉红色 #CC3366（rgb(204,51,102)），与深墨绿品牌色完全不符，视觉突兀。</td>
+        <td>Additional CSS 设置 .site-navigation a color: #2D4A3E，hover 改为暖橙 #E8743B</td>
+        <td><span class="badge ok">rgb(45,74,62)<br>深墨绿</span></td>
+      </tr>
+      <tr>
+        <td>UX-3</td>
+        <td><strong>Add to cart 按钮紫色</strong></td>
+        <td>产品详情页"Add to cart"按钮为 WooCommerce 默认紫色，不符合品牌色，CTA 视觉不统一。</td>
+        <td>Additional CSS 设置 .single_add_to_cart_button 背景 #2D4A3E，hover 暖橙 #E8743B，圆角 6px</td>
+        <td><span class="badge ok">深墨绿按钮<br>白字圆角</span></td>
+      </tr>
+      <tr>
+        <td>UX-4</td>
+        <td><strong>WooCommerce 链接粉红</strong></td>
+        <td>购物车产品标题链接、优惠券链接、结算页链接均为粉红色，与品牌色不一致。</td>
+        <td>Additional CSS 统一 .woocommerce a 颜色为 #2D4A3E，hover 暖橙；购物车表头背景改为深墨绿</td>
+        <td><span class="badge ok">全站统一<br>深墨绿</span></td>
+      </tr>
+      <tr>
+        <td>UX-5</td>
+        <td><strong>导航布局优化</strong></td>
+        <td>Hello Elementor 主题 "menu-dropdown-tablet" 模式导致重复的下拉导航（绝对定位在 Header 下方），site-description 占用空间，Header 高度 358px。</td>
+        <td>隐藏重复的 .site-navigation-dropdown；隐藏 .site-description；.site-branding 限制 max-width 200px；导航 flex 布局右对齐；移动端断点 768px 切换汉堡菜单</td>
+        <td><span class="badge ok">Header 269px<br>导航清晰</span></td>
+      </tr>
+      <tr>
+        <td>UX-6</td>
+        <td><strong>首页产品展示异常</strong></td>
+        <td>首页 "Best Sellers" 区域 8 个产品卡片宽度仅 47px（grid 列宽 214px），产品图片被压缩到 46×46px，标题文字被截断，Add to cart 按钮为浅紫色。根因是 .woocommerce-LoopProduct-link 宽度被内容压缩。</td>
+        <td>Additional CSS 修复：首页专用 .home ul.products li.product width: 100%；产品链接 display: block width: 100%；产品图片 width: 100% height: auto；Add to cart 按钮背景深墨绿 #2D4A3E，hover 暖橙。使用 .home 限定选择器避免影响分类页多列布局</td>
+        <td><span class="badge ok">卡片 214px<br>图片 213px<br>按钮深墨绿</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>客户全流程验证结果</h2>
+  <table>
+    <thead><tr><th>页面</th><th>验证项</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>首页</td><td>Logo 180px / Header 358px / 导航深墨绿 / Hero 首屏可见</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>分类页</td><td>面包屑 / H1 标题 / 3 个产品卡片 / 产品图清晰无水印</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>产品详情页</td><td>左图右文布局 / 12 张缩略图 / 价格 $59.99 / SKU TENT-001 / Add to cart 深墨绿按钮</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>加入购物车</td><td>点击后显示成功消息 / 产品正确添加</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>购物车</td><td>产品列表 / 小计 $209.96 / 免邮生效 / 结算按钮 / 优惠券输入</td><td><span class="badge ok">通过</span></td></tr>
+      <tr><td>结算页</td><td>Billing 表单完整 / Shipping 表单 / 订单摘要 / Stripe 支付 / Terms 链接正确 / Place order 按钮</td><td><span class="badge ok">通过</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>遗留小项与后续建议</h2>
+  <div class="note-box">
+    <strong>1. Contact 页面邮箱（已修复）：</strong>用户已自行将 fys2388@gmail.com 替换为 support@nuotaooutdoor.com，验证通过。<br><br>
+    <strong>2. 支付方式（已决策）：</strong>用户已确认暂时仅使用 Stripe，不接入 PayPal。后续如欧美市场 PayPal 需求增长，可再评估接入。<br><br>
+    <strong>3. 产品评论：</strong>全站 0 评论，建议上架后主动邀请首批买家留评，或导入评测内容。<br><br>
+    <strong>4. 产品数量：</strong>当前约 15-20 个产品，建议持续扩充至 30+ 以提升品类丰富度和 SEO 覆盖。<br><br>
+    <strong>5. 导航布局（已优化）：</strong>已隐藏重复的下拉导航和 site-description，Header 高度从 358px 降至 269px，11 个导航链接分两行清晰显示，Hero 图首屏完全可见。<br><br>
+    <strong>6. 移动端汉堡菜单：</strong>当前 768px 以下断点切换为汉堡菜单，但汉堡菜单图标可能需要进一步样式优化。建议后续在真实移动设备上测试菜单展开效果。
+  </div>
+
+  <div class="footer-note">
+    本报告由 Nuotao Outdoor AI OS 自动生成 | 检验工具：浏览器实测 + DOM 验证 + 购物车免邮实测<br>
+    所有 P0 严重问题已 100% 修复并通过验证 | 网站可正常运营
+  </div>
+</div>
+</body>
+</html>

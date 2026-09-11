@@ -1,0 +1,41 @@
+name: Debug Staging Backend
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging backend on server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging backend
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Staging service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -15
+
+            echo ""
+            echo "=== 2. Staging service logs (last 30 lines) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 30
+
+            echo ""
+            echo "=== 3. Staging .env (keys only, no values) ==="
+            grep -o '^[A-Z_]*' /opt/nuotao/staging/backend/.env | head -20
+
+            echo ""
+            echo "=== 4. Staging DATABASE_URL (password masked) ==="
+            grep '^DATABASE_URL=' /opt/nuotao/staging/backend/.env | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'
+
+            echo ""
+            echo "=== 5. Test staging DB connection ==="
+            sudo -u postgres psql -d nuotao_staging -c "SELECT count(*) FROM alembic_version;" 2>&1
+
+            echo ""
+            echo "=== 6. Try starting uvicorn manually (5s timeout) ==="
+            cd /opt/nuotao/staging/backend
+            timeout 5 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1 2>&1 | head -20 || true

@@ -1,0 +1,13 @@
+[
+  {
+    "labels": {
+      "alertname": "FullChainTest",
+      "severity": "critical",
+      "instance": "nuotao-server"
+    },
+    "annotations": {
+      "summary": "完整链路测试告警",
+      "description": "Alertmanager -> 飞书适配器 -> 飞书 完整告警链路验证"
+    }
+  }
+]

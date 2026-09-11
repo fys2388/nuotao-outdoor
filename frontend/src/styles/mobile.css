@@ -1,0 +1,87 @@
+/* 移动端响应式优化 */
+@media (max-width: 768px) {
+  .ant-layout-sider {
+    position: fixed !important;
+    z-index: 1000;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .ant-layout-sider.mobile-open {
+    transform: translateX(0);
+  }
+
+  .ant-layout-content {
+    margin-left: 0 !important;
+    padding: 12px !important;
+  }
+
+  .ant-table {
+    font-size: 12px;
+  }
+
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 8px 4px !important;
+  }
+
+  .ant-card {
+    margin-bottom: 12px;
+  }
+
+  .ant-statistic-title {
+    font-size: 12px;
+  }
+
+  .ant-statistic-content {
+    font-size: 18px;
+  }
+
+  /* 表格横向滚动 */
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+
+  /* 按钮适配 */
+  .ant-btn {
+    font-size: 14px;
+  }
+
+  /* 隐藏移动端次要列 */
+  .hide-mobile {
+    display: none !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .ant-layout-header {
+    padding: 0 12px !important;
+  }
+
+  .ant-page-header-heading-title {
+    font-size: 16px !important;
+  }
+
+  .ant-modal {
+    margin: 8px !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+}
+
+/* 安全区域适配（刘海屏） */
+@supports (padding: max(0px)) {
+  .ant-layout-header {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+}
+
+/* 触摸优化 */
+@media (hover: none) and (pointer: coarse) {
+  .ant-btn,
+  .ant-menu-item,
+  .ant-table-row {
+    min-height: 44px;
+  }
+}
