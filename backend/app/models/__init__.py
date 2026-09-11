@@ -2,6 +2,7 @@
 
 from app.models.activity_plan import ActivityPlan
 from app.models.agent import AiAgentRun
+from app.models.b2b import B2BAgent, B2BOrder, B2BOrderItem, B2BProductPrice
 from app.models.agent_operations import AgentAlert, AgentApproval
 from app.models.agent_platform import AgentApprovalRole, AgentApprovalSla, AgentVersion
 from app.models.agent_runtime import (
@@ -109,6 +110,10 @@ __all__ = [
     "AgentTool",
     "AgentVersion",
     "AiAgentRun",
+    "B2BAgent",
+    "B2BOrder",
+    "B2BOrderItem",
+    "B2BProductPrice",
     "BusinessRecommendation",
     "Campaign",
     "CampaignAiEvaluation",

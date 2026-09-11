@@ -1,0 +1,32 @@
+{
+  "common": {
+    "dashboard": "Dashboard",
+    "products": "Produkte",
+    "orders": "Bestellungen",
+    "customers": "Kunden",
+    "marketing": "Marketing",
+    "inventory": "Lagerbestand",
+    "logistics": "Logistik",
+    "settings": "Einstellungen",
+    "search": "Suchen",
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "delete": "Löschen",
+    "edit": "Bearbeiten",
+    "create": "Erstellen",
+    "loading": "Laden...",
+    "success": "Erfolg",
+    "error": "Fehler",
+    "warning": "Warnung",
+    "total": "Gesamt",
+    "status": "Status",
+    "actions": "Aktionen"
+  },
+  "dashboard": {
+    "title": "Geschäfts-Dashboard",
+    "revenue": "Umsatz",
+    "orders": "Bestellungen",
+    "customers": "Kunden",
+    "conversion": "Konversionsrate"
+  }
+}

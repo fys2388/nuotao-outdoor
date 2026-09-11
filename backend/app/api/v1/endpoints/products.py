@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -111,4 +111,80 @@ async def sync_woocommerce_products(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"WooCommerce 产品同步失败: {str(e)}",
+        ) from e
+
+
+
+@router.post(
+    "/push-woocommerce",
+    status_code=status.HTTP_200_OK,
+    summary="批量推送产品到 WooCommerce / Push products to WooCommerce",
+)
+async def push_products_to_woocommerce(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    body: dict = Body(default={}),
+) -> dict:
+    """批量推送产品到 WooCommerce。
+
+    如果请求体中包含 product_ids，则推送指定产品；
+    否则推送所有 active 状态的产品。
+    """
+    from app.services.woocommerce_sync_service import batch_push_products_to_woocommerce
+    from app.models.product import Product
+    from sqlalchemy import select
+
+    try:
+        product_ids = body.get("product_ids", [])
+
+        if not product_ids:
+            # 推送所有 active 产品
+            rows = (await db.execute(
+                select(Product.id).where(
+                    Product.workspace_id == workspace_id,
+                    Product.status == "active",
+                )
+            )).scalars().all()
+            product_ids = [str(r) for r in rows]
+
+        if not product_ids:
+            return {"success": True, "total": 0, "success": 0, "failed": 0, "message": "没有需要推送的产品"}
+
+        result = await batch_push_products_to_woocommerce(product_ids, db)
+        return result
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"推送到 WooCommerce 失败: {str(e)}",
+        ) from e
+
+
+@router.post(
+    "/{product_id}/push-woocommerce",
+    status_code=status.HTTP_200_OK,
+    summary="推送单个产品到 WooCommerce / Push single product to WooCommerce",
+)
+async def push_single_product_to_woocommerce(
+    product_id: str,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict:
+    """推送单个产品到 WooCommerce（创建或更新）。"""
+    from app.services.woocommerce_sync_service import push_product_to_woocommerce
+
+    try:
+        result = await push_product_to_woocommerce(product_id, db)
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.get("error", "推送失败"),
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"推送到 WooCommerce 失败: {str(e)}",
         ) from e

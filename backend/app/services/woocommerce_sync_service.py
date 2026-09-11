@@ -955,3 +955,190 @@ async def update_product_listing(product_id: str, updates: dict) -> dict:
         else:
             result["message"] = "无变更字段需要更新"
         return result
+
+
+
+# ============================================================================ #
+# 推送到 WooCommerce（Nuotao AI OS → WooCommerce）
+# ============================================================================ #
+
+async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
+    """将单个产品推送到 WooCommerce（创建或更新）。
+
+    如果产品已有 woocommerce_id，则执行更新（PUT）；
+    如果没有，则执行创建（POST），并将返回的 ID 写回本地数据库。
+
+    Args:
+        product_id: 本地产品 ID
+        db_session: 可选的数据库会话（用于复用连接）
+
+    Returns:
+        推送结果字典，包含 success、woocommerce_id、action、error 等字段
+    """
+    import sys as _sys
+    if "app.core.database" not in _sys.modules:
+        from app.core.database import async_session_factory
+    else:
+        async_session_factory = _sys.modules["app.core.database"].async_session_factory
+    from app.models.product import Product
+    from sqlalchemy import select
+    from uuid import UUID
+    import requests as _requests
+
+    async def _get_session():
+        if db_session:
+            return db_session
+        return async_session_factory()
+
+    session = await _get_session()
+    own_session = db_session is None
+
+    try:
+        # 查找产品
+        try:
+            product = await session.get(Product, UUID(str(product_id)))
+        except Exception:
+            product = None
+
+        if not product:
+            return {"success": False, "error": f"产品不存在: {product_id}", "action": "none"}
+
+        # 获取 WooCommerce ID
+        wc_id = None
+        if product.meta and isinstance(product.meta, dict):
+            wc_id = product.meta.get("woocommerce_id")
+
+        # 构建 WooCommerce 产品数据
+        wc_product = {
+            "name": product.name,
+            "sku": product.sku,
+            "status": "publish" if product.status == "active" else "draft",
+            "description": product.description or "",
+            "short_description": (product.description or "")[:200] if product.description else "",
+        }
+
+        # 添加价格（从 meta 中获取）
+        if product.meta and isinstance(product.meta, dict):
+            if product.meta.get("regular_price"):
+                wc_product["regular_price"] = str(product.meta["regular_price"])
+            if product.meta.get("sale_price"):
+                wc_product["sale_price"] = str(product.meta["sale_price"])
+            if product.meta.get("price"):
+                wc_product["price"] = str(product.meta["price"])
+
+        # 添加标签
+        if product.tags and isinstance(product.tags, list):
+            wc_product["tags"] = [{"name": t} for t in product.tags if t]
+
+        # 添加分类
+        if product.category:
+            wc_product["categories"] = [{"name": product.category}]
+
+        action = "update" if wc_id else "create"
+
+        try:
+            if wc_id:
+                # 更新现有产品
+                wc_url = f"{WC_URL}/wp-json/wc/v3/products/{wc_id}"
+                logger.info("更新产品到 WooCommerce: PUT %s, sku=%s", wc_url, product.sku)
+
+                resp = _requests.put(
+                    wc_url,
+                    auth=_get_wc_auth(),
+                    headers=_get_wc_headers(),
+                    json=wc_product,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                wc_result = resp.json()
+
+            else:
+                # 创建新产品
+                wc_url = f"{WC_URL}/wp-json/wc/v3/products"
+                logger.info("创建产品到 WooCommerce: POST %s, sku=%s", wc_url, product.sku)
+
+                resp = _requests.post(
+                    wc_url,
+                    auth=_get_wc_auth(),
+                    headers=_get_wc_headers(),
+                    json=wc_product,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                wc_result = resp.json()
+
+                # 将 WooCommerce ID 写回本地数据库
+                new_wc_id = wc_result.get("id")
+                if new_wc_id:
+                    meta = product.meta or {}
+                    meta["woocommerce_id"] = new_wc_id
+                    meta["woocommerce_slug"] = wc_result.get("slug", "")
+                    product.meta = meta
+                    await session.commit()
+                    wc_id = new_wc_id
+
+            # 回读验证
+            verify_url = f"{WC_URL}/wp-json/wc/v3/products/{wc_id}"
+            verify_resp = _requests.get(
+                verify_url,
+                auth=_get_wc_auth(),
+                headers=_get_wc_headers(),
+                timeout=30,
+            )
+            verify_resp.raise_for_status()
+            verified = verify_resp.json()
+
+            return {
+                "success": True,
+                "action": action,
+                "product_id": str(product.id),
+                "sku": product.sku,
+                "name": product.name,
+                "woocommerce_id": wc_id,
+                "woocommerce_url": verified.get("permalink", ""),
+                "verified": verified.get("name") == product.name,
+            }
+
+        except _requests.exceptions.RequestException as e:
+            logger.error("推送到 WooCommerce 失败: %s, error=%s", product.sku, str(e))
+            return {
+                "success": False,
+                "action": action,
+                "product_id": str(product.id),
+                "sku": product.sku,
+                "error": f"WooCommerce API 调用失败: {str(e)}",
+            }
+
+    finally:
+        if own_session:
+            await session.close()
+
+
+async def batch_push_products_to_woocommerce(product_ids: list[str], db_session=None) -> dict:
+    """批量推送产品到 WooCommerce。
+
+    Args:
+        product_ids: 产品 ID 列表
+        db_session: 可选的数据库会话
+
+    Returns:
+        批量推送结果，包含 total、success、failed、results 等字段
+    """
+    results = []
+    success_count = 0
+    failed_count = 0
+
+    for product_id in product_ids:
+        result = await push_product_to_woocommerce(product_id, db_session)
+        results.append(result)
+        if result.get("success"):
+            success_count += 1
+        else:
+            failed_count += 1
+
+    return {
+        "total": len(product_ids),
+        "success": success_count,
+        "failed": failed_count,
+        "results": results,
+    }

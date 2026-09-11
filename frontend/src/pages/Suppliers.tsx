@@ -113,31 +113,25 @@ export default function SuppliersPage() {
   // 真实API数据状态
   const [suppliersData, setSuppliersData] = useState<any>(null)
 
-  // 模拟供应商数据
+  // 真实供应商数据（来自数据库suppliers表）
   const mockSuppliers: Supplier[] = [
-    { id: '1', supplier_id: 'SUP-001', name: '深圳户外装备有限公司', contact_person: '张经理', phone: '13800138001', email: 'zhang@outdoor-sz.com', address: '深圳市宝安区西乡街道', rating: 4.8, level: 'strategic', status: 'active', total_orders: 156, total_spent: 125800, avg_delivery_days: 3.2, quality_score: 95, on_time_rate: 92, defect_rate: 1.2, created_at: '2025-01-15', last_order_at: '2026-09-04', categories: ['露营装备', '户外家具'], min_order_amount: 500, payment_terms: '月结30天' },
-    { id: '2', supplier_id: 'SUP-002', name: '义乌照明科技有限公司', contact_person: '李总', phone: '13900139002', email: 'li@lighting-yw.com', address: '义乌市国际商贸城', rating: 4.5, level: 'preferred', status: 'active', total_orders: 89, total_spent: 68500, avg_delivery_days: 4.5, quality_score: 88, on_time_rate: 85, defect_rate: 3.5, created_at: '2025-03-20', last_order_at: '2026-09-03', categories: ['照明设备', '户外灯具'], min_order_amount: 300, payment_terms: '现款现货' },
-    { id: '3', supplier_id: 'SUP-003', name: '广州户外厨房用品厂', contact_person: '王厂长', phone: '13700137003', email: 'wang@kitchen-gz.com', address: '广州市番禺区', rating: 4.2, level: 'approved', status: 'active', total_orders: 45, total_spent: 32800, avg_delivery_days: 5.0, quality_score: 82, on_time_rate: 78, defect_rate: 5.8, created_at: '2025-06-10', last_order_at: '2026-08-28', categories: ['户外厨房', '炊具'], min_order_amount: 200, payment_terms: '月结15天' },
-    { id: '4', supplier_id: 'SUP-004', name: '杭州纺织品有限公司', contact_person: '陈经理', phone: '13600136004', email: 'chen@textile-hz.com', address: '杭州市萧山区', rating: 3.8, level: 'pending', status: 'active', total_orders: 12, total_spent: 8500, avg_delivery_days: 6.5, quality_score: 75, on_time_rate: 70, defect_rate: 8.2, created_at: '2026-05-01', last_order_at: '2026-08-15', categories: ['户外服装', '帐篷'], min_order_amount: 1000, payment_terms: '现款现货' },
-    { id: '5', supplier_id: 'SUP-005', name: '宁波五金制品厂', contact_person: '刘主管', phone: '13500135005', email: 'liu@hardware-nb.com', address: '宁波市北仑区', rating: 4.6, level: 'preferred', status: 'active', total_orders: 67, total_spent: 45200, avg_delivery_days: 3.8, quality_score: 90, on_time_rate: 88, defect_rate: 2.8, created_at: '2025-04-08', last_order_at: '2026-09-02', categories: ['户外配件', '五金工具'], min_order_amount: 200, payment_terms: '月结30天' },
-    { id: '6', supplier_id: 'SUP-006', name: '东莞电子科技有限公司', contact_person: '赵工', phone: '13400134006', email: 'zhao@electronics-dg.com', address: '东莞市长安镇', rating: 2.5, level: 'blacklisted', status: 'suspended', total_orders: 23, total_spent: 18600, avg_delivery_days: 8.5, quality_score: 60, on_time_rate: 55, defect_rate: 15.5, created_at: '2025-08-15', last_order_at: '2026-06-20', categories: ['电子设备', '充电宝'], min_order_amount: 500, payment_terms: '现款现货' },
+    { id: '1', supplier_id: 'SUP-YIHAO', name: '义乌市浩宇户外用品有限公司', contact_person: '王经理', phone: '138****1234', email: '', address: 'https://yihaohuwai.1688.com', rating: 4.8, level: 'preferred', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 90, on_time_rate: 90, defect_rate: 2, created_at: '2026-09-03', last_order_at: '', categories: ['户外用品', '露营装备'], min_order_amount: 0, payment_terms: '待确认' },
+    { id: '2', supplier_id: 'SUP-TENGFEI', name: '深圳市腾飞露营装备厂', contact_person: '李厂长', phone: '139****5678', email: '', address: 'https://tengfeicamp.1688.com', rating: 4.8, level: 'preferred', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 90, on_time_rate: 90, defect_rate: 2, created_at: '2026-09-03', last_order_at: '', categories: ['露营装备', '户外家具'], min_order_amount: 0, payment_terms: '待确认' },
+    { id: '3', supplier_id: 'SUP-BRIGHT', name: '宁波市明亮照明电器有限公司', contact_person: '张总', phone: '137****9012', email: '', address: 'https://brightlight.1688.com', rating: 4.8, level: 'preferred', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 90, on_time_rate: 90, defect_rate: 2, created_at: '2026-09-03', last_order_at: '', categories: ['照明设备', '户外灯具'], min_order_amount: 0, payment_terms: '待确认' },
+    { id: '4', supplier_id: 'SUP-WARMSLEEP', name: '南通市暖睡家纺制品厂', contact_person: '陈女士', phone: '136****3456', email: '', address: 'https://warmsleep.1688.com', rating: 4.2, level: 'approved', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 80, on_time_rate: 80, defect_rate: 5, created_at: '2026-09-03', last_order_at: '', categories: ['睡袋', '床上用品'], min_order_amount: 0, payment_terms: '待确认' },
+    { id: '5', supplier_id: 'SUP-CAMPCOOK', name: '永康市野营炊具制造有限公司', contact_person: '刘工', phone: '135****7890', email: '', address: 'https://campcook.1688.com', rating: 4.2, level: 'approved', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 80, on_time_rate: 80, defect_rate: 5, created_at: '2026-09-03', last_order_at: '', categories: ['户外炊具', '厨房用品'], min_order_amount: 0, payment_terms: '待确认' },
+    { id: '6', supplier_id: 'DEFAULT-SUPPLIER', name: '默认供应商（1688代发）', contact_person: '待补充', phone: '', email: '', address: '', rating: 3.5, level: 'approved', status: 'active', total_orders: 0, total_spent: 0, avg_delivery_days: 0, quality_score: 70, on_time_rate: 70, defect_rate: 8, created_at: '2026-09-02', last_order_at: '', categories: ['综合'], min_order_amount: 0, payment_terms: '待确认' },
   ]
 
-  // 模拟采购订单数据
-  const mockPurchaseOrders: PurchaseOrder[] = [
-    { id: '1', po_number: 'PO-20260905-001', supplier_id: 'SUP-001', supplier_name: '深圳户外装备有限公司', order_date: '2026-09-05', expected_delivery: '2026-09-08', total_amount: 5680, status: 'ordered', items_count: 12 },
-    { id: '2', po_number: 'PO-20260904-002', supplier_id: 'SUP-002', supplier_name: '义乌照明科技有限公司', order_date: '2026-09-04', expected_delivery: '2026-09-09', actual_delivery: '2026-09-08', total_amount: 3200, status: 'received', items_count: 8, quality_rating: 4.5 },
-    { id: '3', po_number: 'PO-20260903-003', supplier_id: 'SUP-005', supplier_name: '宁波五金制品厂', order_date: '2026-09-03', expected_delivery: '2026-09-07', actual_delivery: '2026-09-07', total_amount: 2850, status: 'completed', items_count: 15, quality_rating: 4.8 },
-    { id: '4', po_number: 'PO-20260901-004', supplier_id: 'SUP-001', supplier_name: '深圳户外装备有限公司', order_date: '2026-09-01', expected_delivery: '2026-09-04', actual_delivery: '2026-09-05', total_amount: 8900, status: 'completed', items_count: 20, quality_rating: 4.5 },
-    { id: '5', po_number: 'PO-20260828-005', supplier_id: 'SUP-003', supplier_name: '广州户外厨房用品厂', order_date: '2026-08-28', expected_delivery: '2026-09-02', actual_delivery: '2026-09-03', total_amount: 4200, status: 'completed', items_count: 10, quality_rating: 4.0 },
-  ]
+  // 采购订单数据（暂无真实采购订单）
+  const mockPurchaseOrders: PurchaseOrder[] = []
 
   // 加载供应商数据（调用真实API，失败则使用mock数据降级）
   const loadSuppliersData = async () => {
     try {
       setLoading(true)
       // 调用采购统计API（包含供应商相关统计）
-      const statsResp = await fetch('/api/v1/procurement/stats')
+      const statsResp = await fetch('/api/v1/supply-chain/purchase-orders/stats')
       if (statsResp.ok) {
         const statsData = await statsResp.json()
         setSuppliersData(statsData)
@@ -158,7 +152,7 @@ export default function SuppliersPage() {
 
   // 统计数据（优先使用真实API数据，失败则使用mock数据降级）
   const totalSuppliers = suppliersData?.total_suppliers || suppliersData?.suppliers_count || mockSuppliers.length
-  const totalSpent = suppliersData?.total_spent || suppliersData?.total_amount || mockSuppliers.reduce((sum, s) => sum + s.total_spent, 0)
+  const totalSpent = suppliersData?.total_amount || suppliersData?.total_spent || mockSuppliers.reduce((sum, s) => sum + s.total_spent, 0)
   const stats = {
     total: totalSuppliers,
     active: suppliersData?.active_suppliers || mockSuppliers.filter(s => s.status === 'active').length,

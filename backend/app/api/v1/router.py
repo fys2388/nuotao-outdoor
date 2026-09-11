@@ -15,6 +15,8 @@ from app.api.v1.endpoints import (
     agents_generic,
     alerts,
     auth,
+    b2b_admin,
+    b2b_portal,
     cache,
     calibration,
     connectors,
@@ -151,3 +153,5 @@ api_router.include_router(growth_memory.router)
 api_router.include_router(settlements.router)
 api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
+api_router.include_router(b2b_portal.router)
+api_router.include_router(b2b_admin.router)

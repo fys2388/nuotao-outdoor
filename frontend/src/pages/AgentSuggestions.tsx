@@ -102,11 +102,12 @@ export default function AgentSuggestionsPage() {
       }
       const response = await fetch(`${API_BASE}?${params.toString()}`)
       const data = await response.json()
-      setSuggestions(data || [])
+      setSuggestions(data.items || data || [])
 
       // 统计
       const allResponse = await fetch(`${API_BASE}?limit=200`)
-      const all = await allResponse.json()
+      const allData = await allResponse.json()
+      const all = allData.items || allData || []
       setStats({
         pending: all.filter((s: AgentSuggestion) => s.status === 'pending_approval').length,
         approved: all.filter((s: AgentSuggestion) => s.status === 'approved').length,

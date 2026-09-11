@@ -75,6 +75,7 @@ const AgentSuggestionsPage = lazy(() => import('./pages/AgentSuggestions'))
 const AgentMonitorPage = lazy(() => import('./pages/AgentMonitor'))
 const MemoryReviewPage = lazy(() => import('./pages/MemoryReview'))
 const SettlementsPage = lazy(() => import('./pages/Settlements'))
+const PurchaseOrdersPage = lazy(() => import('./pages/PurchaseOrders'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -131,6 +132,7 @@ type MenuKey =
   | 'agent-monitor'
   | 'memory-review'
   | 'settlements'
+  | 'purchase-orders'
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: '经营看板' },
@@ -304,6 +306,8 @@ function App() {
           return <MemoryReviewPage />
         case 'settlements':
           return <SettlementsPage />
+        case 'purchase-orders':
+          return <PurchaseOrdersPage />
         case 'inventory':
           return <InventoryPage />
         case 'newton-sourcing':

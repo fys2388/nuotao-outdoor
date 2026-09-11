@@ -154,33 +154,58 @@ export default function Products() {
     }
   }
 
-  // 同步到WooCommerce
+  // 同步到WooCommerce（推送到店铺）
   const handleSyncWooCommerce = async (product: Product) => {
     try {
       setSyncing(true)
-      // 这里可以调用后端API同步到WooCommerce
-      message.success(`已同步到WooCommerce: ${product.name}`)
+      message.loading({ content: `正在同步到WooCommerce: ${product.name}`, key: 'sync' })
+      
+      const resp = await fetch(`/api/v1/products/${product.id}/push-woocommerce`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      
+      if (resp.ok) {
+        const data = await resp.json()
+        message.success({ content: `已同步到WooCommerce: ${product.name}`, key: 'sync' })
+      } else {
+        const err = await resp.json().catch(() => ({}))
+        message.error({ content: `同步失败: ${err.detail || resp.statusText}`, key: 'sync' })
+      }
       loadProducts()
-    } catch (e) {
-      message.error('同步失败')
+    } catch (e: any) {
+      message.error({ content: `同步失败: ${e.message}`, key: 'sync' })
     } finally {
       setSyncing(false)
     }
   }
 
-  // 批量同步WooCommerce
+  // 批量同步WooCommerce（推送到店铺）
   const handleBatchSync = async () => {
     try {
       setSyncing(true)
-      message.info('正在批量同步到WooCommerce...')
-      // 这里可以调用后端API批量同步
-      setTimeout(() => {
-        message.success('批量同步完成')
-        setSyncing(false)
-        loadProducts()
-      }, 2000)
-    } catch (e) {
-      message.error('批量同步失败')
+      message.loading({ content: '正在批量同步到WooCommerce...', key: 'batch-sync' })
+      
+      const resp = await fetch('/api/v1/products/push-woocommerce', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_ids: [] }),
+      })
+      
+      if (resp.ok) {
+        const data = await resp.json()
+        message.success({ 
+          content: `批量同步完成: 成功${data.success || 0}个，失败${data.failed || 0}个`, 
+          key: 'batch-sync' 
+        })
+      } else {
+        const err = await resp.json().catch(() => ({}))
+        message.error({ content: `批量同步失败: ${err.detail || resp.statusText}`, key: 'batch-sync' })
+      }
+      loadProducts()
+    } catch (e: any) {
+      message.error({ content: `批量同步失败: ${e.message}`, key: 'batch-sync' })
+    } finally {
       setSyncing(false)
     }
   }
@@ -217,6 +242,24 @@ export default function Products() {
       key: 'category',
       width: 120,
       render: (text: string) => text || '-',
+    },
+    {
+      title: '供应商',
+      dataIndex: 'supplier_code',
+      key: 'supplier',
+      width: 110,
+      render: (code: string) => {
+        const supplierNames: Record<string, string> = {
+          'SUP-YIHAO': '义乌浩宇',
+          'SUP-TENGFEI': '深圳腾飞',
+          'SUP-BRIGHT': '宁波明亮',
+          'SUP-WARMSLEEP': '南通暖睡',
+          'SUP-CAMPCOOK': '永康野营',
+          'DEFAULT-SUPPLIER': '默认供应商',
+        };
+        const name = supplierNames[code] || code || '未关联';
+        return code ? <Tag color="blue">{name}</Tag> : <Tag color="default">未关联</Tag>;
+      },
     },
     {
       title: '状态',
@@ -455,6 +498,22 @@ export default function Products() {
                   <Text type="secondary">未同步</Text>
                 )}
               </Descriptions.Item>
+              <Descriptions.Item label="供应商">
+                {(() => {
+                  const code = (viewingProduct as any).supplier_code;
+                  const supplierNames: Record<string, string> = {
+                    'SUP-YIHAO': '义乌市浩宇户外用品有限公司',
+                    'SUP-TENGFEI': '深圳市腾飞露营装备厂',
+                    'SUP-BRIGHT': '宁波市明亮照明电器有限公司',
+                    'SUP-WARMSLEEP': '南通市暖睡家纺制品厂',
+                    'SUP-CAMPCOOK': '永康市野营炊具制造有限公司',
+                    'DEFAULT-SUPPLIER': '默认供应商（1688代发）',
+                  };
+                  const name = supplierNames[code] || code || '未关联';
+                  return code ? <Tag color="blue">{name}</Tag> : <Tag color="default">未关联</Tag>;
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item label="供应商编号">{(viewingProduct as any).supplier_code || '-'}</Descriptions.Item>
               <Descriptions.Item label="来源">{(viewingProduct as any).source || '-'}</Descriptions.Item>
               <Descriptions.Item label="目标市场">{(viewingProduct as any).target_market || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建时间" span={2}>{viewingProduct.created_at ? new Date(viewingProduct.created_at).toLocaleString() : '-'}</Descriptions.Item>

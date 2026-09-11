@@ -428,6 +428,165 @@ For any questions, please contact support@nuotaooutdoor.com.
     return subject, html_content, text_content
 
 
+def render_b2b_approval_email(agent: dict[str, Any]) -> tuple[str, str, str]:
+    """渲染 B2B 代理商审批通过邮件
+
+    Returns:
+        (subject, html_content, text_content)
+    """
+    company_name = agent.get("company_name", "Valued Partner")
+    contact_name = agent.get("contact_name", "")
+    tier = agent.get("tier", "bronze")
+    tier_label = tier.capitalize()
+    login_url = "https://b2b.nuotaooutdoor.com/login"
+    apply_url = "https://b2b.nuotaooutdoor.com/apply"
+
+    subject = f"Your Nuotao Outdoor B2B Account Has Been Approved!"
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: #2D4A3E; color: white; padding: 30px 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .header p {{ margin: 8px 0 0; opacity: 0.9; }}
+            .content {{ padding: 30px; background: #ffffff; border: 1px solid #e5e7eb; border-top: none; }}
+            .badge {{ display: inline-block; background: #E8743B; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 16px; }}
+            .details {{ background: #f9fafb; padding: 20px; border-radius: 6px; margin: 20px 0; }}
+            .details p {{ margin: 8px 0; }}
+            .details strong {{ color: #2D4A3E; }}
+            .btn {{ display: inline-block; background: #2D4A3E; color: white; padding: 14px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 20px; }}
+            .btn:hover {{ background: #1E3529; }}
+            .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; border-top: 1px solid #eee; margin-top: 30px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Nuotao Outdoor</h1>
+            <p>B2B Wholesale Partner Portal</p>
+        </div>
+        <div class="content">
+            <span class="badge">Account Approved</span>
+            <h2>Congratulations, {company_name}!</h2>
+            <p>Dear {contact_name or 'Partner'},</p>
+            <p>We are pleased to inform you that your B2B wholesale partner application has been <strong>approved</strong>. You can now log in to our B2B Partner Portal to access exclusive wholesale pricing and place bulk orders.</p>
+
+            <div class="details">
+                <p><strong>Company:</strong> {company_name}</p>
+                <p><strong>Partner Tier:</strong> {tier_label}</p>
+                <p><strong>Login Email:</strong> {agent.get('email', '')}</p>
+            </div>
+
+            <p><strong>Next Steps:</strong></p>
+            <ol>
+                <li>Click the button below to log in to the B2B Portal</li>
+                <li>Use your registered email and the password you set during application</li>
+                <li>Browse wholesale catalog and place your first order</li>
+            </ol>
+
+            <a href="{login_url}" class="btn">Log In to B2B Portal</a>
+
+            <p style="margin-top: 24px;">If you have any questions, please contact our B2B team at <a href="mailto:partners@nuotaooutdoor.com">partners@nuotaooutdoor.com</a>.</p>
+
+            <p>Welcome to the Nuotao Outdoor partner family!</p>
+            <p>Best regards,<br>The Nuotao Outdoor Team</p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 Nuotao Outdoor. All rights reserved.</p>
+            <p>Nuotao Outdoor | Lightweight Camping Tents & Hiking Gear</p>
+        </div>
+    </body>
+    </html>
+    """
+
+    text_content = f"""
+YOUR NUOTAO OUTDOOR B2B ACCOUNT HAS BEEN APPROVED!
+====================================================
+
+Dear {contact_name or 'Partner'},
+
+Congratulations! Your B2B wholesale partner application for {company_name} has been approved.
+
+Your Account Details:
+- Company: {company_name}
+- Partner Tier: {tier_label}
+- Login Email: {agent.get('email', '')}
+
+Next Steps:
+1. Visit {login_url} to log in
+2. Use your registered email and password
+3. Browse wholesale catalog and place orders
+
+If you have any questions, contact us at partners@nuotaooutdoor.com.
+
+Welcome to the Nuotao Outdoor partner family!
+
+Best regards,
+The Nuotao Outdoor Team
+
+(c) 2026 Nuotao Outdoor. All rights reserved.
+    """
+
+    return subject, html_content, text_content
+
+
+def render_b2b_rejection_email(agent: dict[str, Any], reason: str = "") -> tuple[str, str, str]:
+    """渲染 B2B 代理商申请被拒邮件"""
+    company_name = agent.get("company_name", "Valued Partner")
+    contact_name = agent.get("contact_name", "")
+
+    subject = "Update on Your Nuotao Outdoor B2B Application"
+
+    reason_html = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
+    reason_text = f"Reason: {reason}\n" if reason else ""
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: #6B7280; color: white; padding: 30px 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+        .content {{ padding: 30px; background: #fff; border: 1px solid #e5e7eb; border-top: none; }}
+        .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; border-top: 1px solid #eee; margin-top: 30px; }}
+    </style></head>
+    <body>
+        <div class="header"><h1>Nuotao Outdoor</h1></div>
+        <div class="content">
+            <h2>Update on Your B2B Application</h2>
+            <p>Dear {contact_name or 'Partner'},</p>
+            <p>Thank you for your interest in becoming a Nuotao Outdoor B2B partner. After careful review, we regret to inform you that we are unable to approve your application at this time.</p>
+            {reason_html}
+            <p>If you believe this is in error or would like to provide additional information, please contact our B2B team at <a href="mailto:partners@nuotaooutdoor.com">partners@nuotaooutdoor.com</a>.</p>
+            <p>We appreciate your understanding.</p>
+            <p>Best regards,<br>The Nuotao Outdoor Team</p>
+        </div>
+        <div class="footer"><p>&copy; 2026 Nuotao Outdoor. All rights reserved.</p></div>
+    </body>
+    </html>
+    """
+
+    text_content = f"""
+UPDATE ON YOUR NUOTAO OUTDOOR B2B APPLICATION
+===============================================
+
+Dear {contact_name or 'Partner'},
+
+Thank you for your interest in becoming a Nuotao Outdoor B2B partner.
+After careful review, we are unable to approve your application at this time.
+
+{reason_text}
+If you have questions, contact partners@nuotaooutdoor.com.
+
+Best regards,
+The Nuotao Outdoor Team
+    """
+
+    return subject, html_content, text_content
+
+
 # 全局邮件服务实例
 _email_service: EmailService | None = None
 

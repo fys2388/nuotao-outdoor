@@ -81,3 +81,20 @@ webhook_secret.txt
 
 # 备份目录
 /backups/
+# === M0-M4.1 Production cleanup ===
+backend/app/data/
+*.backup
+*.bak
+check_*.py
+debug_*.py
+_*.py
+.rivet/
+backup/
+*.der
+*.crt
+*.cert
+feishu_config.txt
+admin_token*.txt
+*token*.txt
+/backend/_*.py
+/backend/scripts/*.py
