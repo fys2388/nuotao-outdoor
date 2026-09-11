@@ -6,7 +6,7 @@ Data capture + lifecycle only. No Supply Chain Agent, no automatic purchasing.
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -32,6 +32,7 @@ from app.schemas.supply_chain import (
     SupplyChainKnowledgeCreate,
     SupplyChainKnowledgeOut,
 )
+from app.models.supplier import Supplier
 from app.services import supply_chain
 
 router = APIRouter(tags=["supply-chain"])
@@ -48,6 +49,50 @@ def _http_error(exc: supply_chain.SupplyChainError) -> HTTPException:
     if "already exists" in message:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+
+
+# --------------------------------------------------------------------------- #
+# Suppliers (master data)
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/suppliers",
+    summary="List suppliers",
+)
+async def list_suppliers(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    status: str | None = Query(default=None, max_length=16),
+    limit: int = 100,
+) -> list[dict]:
+    """Return suppliers, newest first, with optional status filter."""
+    from sqlalchemy import select
+    
+    stmt = select(Supplier).where(Supplier.workspace_id == workspace_id)
+    if status:
+        stmt = stmt.where(Supplier.status == status)
+    stmt = stmt.order_by(Supplier.created_at.desc()).limit(limit)
+    
+    rows = (await db.execute(stmt)).scalars().all()
+    
+    result = []
+    for row in rows:
+        result.append({
+            "id": str(row.id),
+            "code": row.code,
+            "name": row.name,
+            "platform": row.platform,
+            "shop_url": row.shop_url,
+            "rating": row.rating,
+            "status": row.status,
+            "contact": row.contact,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        })
+    
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -613,3 +658,192 @@ async def list_knowledge_entries(
         limit=limit,
     )
     return [SupplyChainKnowledgeOut.model_validate(row) for row in rows]
+
+
+
+# --------------------------------------------------------------------------- #
+# Purchase order statistics
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/purchase-orders/stats",
+    summary="Get purchase order statistics by supplier",
+)
+async def get_purchase_order_stats(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict:
+    """Return purchase order statistics grouped by supplier."""
+    from app.models.supplier import Supplier
+    from sqlalchemy import select, func
+    
+    # 查询所有供应商
+    suppliers = (await db.execute(
+        select(Supplier).where(Supplier.workspace_id == workspace_id)
+    )).scalars().all()
+    
+    # 查询采购订单统计（使用原生SQL）
+    result = await db.execute("""
+        SELECT 
+            s.id as supplier_id,
+            s.code as supplier_code,
+            s.name as supplier_name,
+            COUNT(po.id) as order_count,
+            COALESCE(SUM(po.total), 0) as total_amount,
+            COUNT(CASE WHEN po.status = 'received' THEN 1 END) as received_count,
+            COUNT(CASE WHEN po.status = 'shipped' THEN 1 END) as shipped_count,
+            COUNT(CASE WHEN po.status = 'ordered' THEN 1 END) as ordered_count
+        FROM suppliers s
+        LEFT JOIN purchase_orders po ON po.supplier_id = s.id
+        WHERE s.workspace_id = :workspace_id
+        GROUP BY s.id, s.code, s.name
+        ORDER BY total_amount DESC
+    """, {"workspace_id": str(workspace_id)})
+    
+    rows = result.fetchall()
+    
+    stats = []
+    for row in rows:
+        stats.append({
+            "supplier_id": str(row[0]),
+            "supplier_code": row[1],
+            "supplier_name": row[2],
+            "order_count": row[3],
+            "total_amount": float(row[4]) if row[4] else 0,
+            "received_count": row[5],
+            "shipped_count": row[6],
+            "ordered_count": row[7],
+        })
+    
+    return {
+        "total_suppliers": len(suppliers),
+        "total_orders": sum(s["order_count"] for s in stats),
+        "total_amount": sum(s["total_amount"] for s in stats),
+        "by_supplier": stats,
+    }
+
+
+
+@router.post(
+    "/purchase-orders",
+    summary="Create a new purchase order",
+)
+async def create_purchase_order(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    body: dict = Body(...),
+) -> dict:
+    """Create a new purchase order."""
+    from sqlalchemy import text
+    from uuid import uuid4
+    from datetime import datetime
+    
+    try:
+        po_id = str(uuid4())
+        po_number = body.get("po_number") or f"PO-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:4].upper()}"
+        supplier_id = body.get("supplier_id")
+        status = body.get("status", "pending")
+        currency = body.get("currency", "CNY")
+        subtotal = float(body.get("subtotal", 0))
+        shipping_cost = float(body.get("shipping_cost", 0))
+        total = float(body.get("total", subtotal + shipping_cost))
+        expected_delivery_at = body.get("expected_delivery_at")
+        notes = body.get("notes", "")
+        
+        await db.execute(text("""
+            INSERT INTO purchase_orders 
+            (id, workspace_id, po_number, supplier_id, status, currency, 
+             subtotal, shipping_cost, total, expected_delivery_at, notes, created_at, updated_at)
+            VALUES (:id, :workspace_id, :po_number, :supplier_id, :status, :currency,
+                    :subtotal, :shipping_cost, :total, :expected_delivery_at, :notes, NOW(), NOW())
+        """), {
+            "id": po_id,
+            "workspace_id": str(workspace_id),
+            "po_number": po_number,
+            "supplier_id": supplier_id,
+            "status": status,
+            "currency": currency,
+            "subtotal": subtotal,
+            "shipping_cost": shipping_cost,
+            "total": total,
+            "expected_delivery_at": expected_delivery_at,
+            "notes": notes,
+        })
+        await db.commit()
+        
+        return {
+            "success": True,
+            "id": po_id,
+            "po_number": po_number,
+            "message": "采购订单创建成功",
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"创建采购订单失败: {str(e)}",
+        )
+
+
+
+@router.patch(
+    "/purchase-orders/{po_id}/status",
+    summary="Update purchase order status",
+)
+async def update_purchase_order_status(
+    po_id: str,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    body: dict = Body(...),
+) -> dict:
+    """Update purchase order status (pending -> ordered -> shipped -> received)."""
+    from sqlalchemy import text
+    
+    valid_statuses = ["pending", "ordered", "shipped", "received", "completed", "cancelled"]
+    new_status = body.get("status")
+    
+    if not new_status or new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无效的状态: {new_status}，有效状态: {', '.join(valid_statuses)}",
+        )
+    
+    try:
+        # 更新状态
+        update_fields = "status = :status, updated_at = NOW()"
+        params = {"status": new_status, "id": po_id, "workspace_id": str(workspace_id)}
+        
+        # 如果状态变为received，设置received_at
+        if new_status == "received":
+            update_fields += ", received_at = NOW()"
+        
+        result = await db.execute(text(f"""
+            UPDATE purchase_orders 
+            SET {update_fields}
+            WHERE id = :id AND workspace_id = :workspace_id
+            RETURNING po_number, status
+        """), params)
+        await db.commit()
+        
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="采购订单不存在",
+            )
+        
+        return {
+            "success": True,
+            "po_number": row[0],
+            "status": row[1],
+            "message": f"状态已更新为: {new_status}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"更新状态失败: {str(e)}",
+        )

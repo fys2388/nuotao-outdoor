@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "nuotao-ai-os-backend"
 version = "0.1.0"
 description = "Nuotao Outdoor AI OS - backend service (M0 engineering foundation)"

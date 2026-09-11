@@ -1,0 +1,32 @@
+{
+  "common": {
+    "dashboard": "Dashboard",
+    "products": "Products",
+    "orders": "Orders",
+    "customers": "Customers",
+    "marketing": "Marketing",
+    "inventory": "Inventory",
+    "logistics": "Logistics",
+    "settings": "Settings",
+    "search": "Search",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "loading": "Loading...",
+    "success": "Success",
+    "error": "Error",
+    "warning": "Warning",
+    "total": "Total",
+    "status": "Status",
+    "actions": "Actions"
+  },
+  "dashboard": {
+    "title": "Business Dashboard",
+    "revenue": "Revenue",
+    "orders": "Orders",
+    "customers": "Customers",
+    "conversion": "Conversion Rate"
+  }
+}

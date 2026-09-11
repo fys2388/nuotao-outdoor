@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 1500
 
+    # --- Email / SMTP -------------------------------------------------------
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    from_email: str = "noreply@nuotaooutdoor.com"
+    from_name: str = "Nuotao Outdoor"
+
     # --- M5.1 Agent Runtime production hardening ------------------------------
     # Task queue: Redis Streams for Phase 1 (modular monolith; no Celery/Kafka).
     # ``task_queue_backend`` may be ``redis`` (default) or ``memory`` (tests).

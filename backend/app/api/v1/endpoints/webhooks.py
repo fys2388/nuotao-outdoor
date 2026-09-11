@@ -31,6 +31,7 @@ from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
 from app.schemas.order import WebhookOrderPayload, WebhookResponse
 from app.services import order_service
+from app.services.woocommerce_sync_service import sync_products_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +135,60 @@ async def receive_woocommerce_order(
         status.HTTP_201_CREATED if result.status == "created" else status.HTTP_200_OK
     )
     return result
+
+
+PRODUCT_TOPICS = {"product.created", "product.updated", "product.deleted", "product.restored"}
+
+
+@router.post(
+    "/woocommerce-product",
+    summary="Receive WooCommerce product webhook (created/updated/deleted)",
+)
+async def receive_woocommerce_product(
+    request: Request,
+    response: Response,
+    db: DbSession,
+) -> dict:
+    """接收 WooCommerce 产品变更 webhook，触发产品同步到本地数据库。
+    以 WooCommerce 为唯一产品数据源，内部系统只读同步。"""
+    trace_id = get_trace_id()
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty request body")
+
+    try:
+        raw = json.loads(body)
+    except json.JSONDecodeError as exc:
+        logger.warning("product webhook rejected: invalid JSON trace=%s", trace_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="payload must be valid JSON"
+        ) from exc
+
+    settings = get_settings()
+    signature = request.headers.get(SIGNATURE_HEADER)
+    if not _verify_signature(body, signature, settings.woocommerce_webhook_secret):
+        logger.warning("product webhook rejected: invalid signature trace=%s", trace_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid webhook signature"
+        )
+
+    topic = request.headers.get("x-wc-webhook-topic", "")
+    logger.info("product webhook received: topic=%s trace=%s", topic, trace_id)
+
+    # 触发全量产品同步（产品数量少，全量同步简单可靠）
+    try:
+        workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+        result = await sync_products_to_db(db, workspace_id=workspace_id, per_page=100)
+        await db.commit()
+        logger.info("product webhook sync done: imported=%d updated=%d failed=%d trace=%s",
+                    result.get("imported", 0), result.get("updated", 0),
+                    result.get("failed", 0), trace_id)
+        response.status_code = status.HTTP_200_OK
+        return {"status": "ok", "topic": topic, "sync": result}
+    except Exception as e:
+        await db.rollback()
+        logger.exception("product webhook sync failed trace=%s: %s", trace_id, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"product sync failed: {e!s}",
+        )

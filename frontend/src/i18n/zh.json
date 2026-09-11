@@ -1,0 +1,32 @@
+{
+  "common": {
+    "dashboard": "经营看板",
+    "products": "产品管理",
+    "orders": "订单管理",
+    "customers": "客户管理",
+    "marketing": "营销中心",
+    "inventory": "库存管理",
+    "logistics": "物流追踪",
+    "settings": "系统设置",
+    "search": "搜索",
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "loading": "加载中...",
+    "success": "成功",
+    "error": "错误",
+    "warning": "警告",
+    "total": "总计",
+    "status": "状态",
+    "actions": "操作"
+  },
+  "dashboard": {
+    "title": "经营看板",
+    "revenue": "收入",
+    "orders": "订单",
+    "customers": "客户",
+    "conversion": "转化率"
+  }
+}

@@ -15,7 +15,7 @@ from app.core.config import get_settings
 _ENGINE_OPTIONS: dict[str, object] = {
     "pool_pre_ping": True,
     "echo": False,
-    "connect_args": {"timeout": 5},
+    "connect_args": {"timeout": 5, "ssl": False},
 }
 
 
