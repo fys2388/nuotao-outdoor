@@ -1,0 +1,64 @@
+name: Debug Staging Health Router
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging health router
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging health router
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            echo "=== 1. Check health.py exists and md5 ==="
+            ls -la app/api/v1/endpoints/health.py
+            md5sum app/api/v1/endpoints/health.py
+
+            echo ""
+            echo "=== 2. Check router.py health include ==="
+            grep -n "health" app/api/v1/router.py
+
+            echo ""
+            echo "=== 3. Check health router routes ==="
+            cat > /tmp/check_health.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '/opt/nuotao/staging/backend')
+            from app.api.v1.endpoints.health import router
+            print(f'Health router type: {type(router)}')
+            print(f'Health router routes: {len(router.routes)}')
+            for r in router.routes:
+                print(f'  path={getattr(r, "path", "N/A")}, methods={getattr(r, "methods", "N/A")}')
+            PYEOF
+            .venv/bin/python /tmp/check_health.py 2>&1
+
+            echo ""
+            echo "=== 4. Check api_router routes for health ==="
+            cat > /tmp/check_api_health.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '/opt/nuotao/staging/backend')
+            from app.api.v1.router import api_router
+            print(f'api_router routes: {len(api_router.routes)}')
+            for i, r in enumerate(api_router.routes):
+                rtype = type(r).__name__
+                path = getattr(r, 'path', 'N/A')
+                if 'health' in str(path).lower() or 'ready' in str(path).lower() or rtype == '_IncludedRouter':
+                    orig = getattr(r, 'original_router', None)
+                    orig_routes = len(getattr(orig, 'routes', [])) if orig else 'N/A'
+                    print(f'  [{i}] type={rtype}, path={path}, original_router_routes={orig_routes}')
+            PYEOF
+            .venv/bin/python /tmp/check_api_health.py 2>&1
+
+            echo ""
+            echo "=== 5. Test healthz and readyz ==="
+            for path in /api/v1/healthz /api/v1/readyz /healthz /readyz; do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:8001$path" || echo "000")
+                echo "  $path -> HTTP $CODE"
+            done

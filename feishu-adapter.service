@@ -1,0 +1,15 @@
+[Unit]
+Description=Feishu Alert Adapter
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/feishu-adapter
+Environment=FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/1035e5f2-8984-44d1-83f4-9fb60f274371
+ExecStart=/usr/bin/python3 -m uvicorn feishu_adapter:app --host 0.0.0.0 --port 8060
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

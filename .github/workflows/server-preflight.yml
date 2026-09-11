@@ -1,0 +1,138 @@
+name: Server Pre-flight Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  preflight:
+    name: Comprehensive server health & config check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run server pre-flight checks
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "============================================================"
+            echo "  Nuotao AI OS - Server Pre-flight Check"
+            echo "  $(date)"
+            echo "============================================================"
+
+            echo ""
+            echo "=== 1. Systemd Services ==="
+            for svc in nuotao-backend nuotao-agent-scheduler postgresql redis-server prometheus grafana-server alertmanager node-exporter nginx; do
+              if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                echo "  [RUNNING] $svc"
+              else
+                echo "  [STOPPED] $svc (or not installed)"
+              fi
+            done
+
+            echo ""
+            echo "=== 2. HTTP Health ==="
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/readyz 2>/dev/null || echo "000")
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ 2>/dev/null || echo "000")
+            METRICS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/metrics 2>/dev/null || echo "000")
+            echo "  Backend readyz:  $BACKEND_CODE"
+            echo "  Frontend :8081:  $FRONTEND_CODE"
+            echo "  Metrics /metrics: $METRICS_CODE"
+
+            echo ""
+            echo "=== 3. .env Variable Drift ==="
+            ENV_FILE=/opt/nuotao/.env
+            TEMPLATE=/opt/nuotao/.env.production.template
+            if [ -f "$TEMPLATE" ] && [ -f "$ENV_FILE" ]; then
+              MISSING=0
+              while IFS='=' read -r key _; do
+                case "$key" in
+                  \#*|'') continue ;;
+                esac
+                if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+                  echo "  [MISSING] $key"
+                  MISSING=$((MISSING+1))
+                fi
+              done < "$TEMPLATE"
+              if [ "$MISSING" -eq 0 ]; then
+                echo "  All template variables present in server .env"
+              else
+                echo "  Total missing: $MISSING"
+              fi
+            else
+              echo "  Template or .env not found"
+            fi
+
+            echo ""
+            echo "=== 4. Monitoring Stack ==="
+            if systemctl is-active --quiet prometheus 2>/dev/null; then
+              PROM_TARGETS=$(curl -s http://127.0.0.1:9090/api/v1/targets 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d[\"data\"][\"activeTargets\"])} targets, {sum(1 for t in d[\"data\"][\"activeTargets\"] if t[\"health\"]==\"up\")} up')" 2>/dev/null || echo "query failed")
+              echo "  Prometheus: $PROM_TARGETS"
+            else
+              echo "  Prometheus: not running"
+            fi
+            if systemctl is-active --quiet grafana-server 2>/dev/null; then
+              echo "  Grafana: running (http://127.0.0.1:3000)"
+            else
+              echo "  Grafana: not running"
+            fi
+            if systemctl is-active --quiet alertmanager 2>/dev/null; then
+              echo "  Alertmanager: running (http://127.0.0.1:9093)"
+            else
+              echo "  Alertmanager: not running"
+            fi
+
+            echo ""
+            echo "=== 5. Staging Environment ==="
+            if [ -d /opt/nuotao/staging ]; then
+              STAGING_SIZE=$(du -sh /opt/nuotao/staging 2>/dev/null | cut -f1)
+              echo "  Staging dir: /opt/nuotao/staging ($STAGING_SIZE)"
+              if [ -f /opt/nuotao/staging/backend/.env ]; then
+                echo "  Staging .env: present"
+              else
+                echo "  Staging .env: MISSING"
+              fi
+              if systemctl is-active --quiet nuotao-backend-staging 2>/dev/null; then
+                echo "  Staging backend: running"
+              else
+                echo "  Staging backend: not running (dry-run only)"
+              fi
+            else
+              echo "  Staging dir: not found"
+            fi
+
+            echo ""
+            echo "=== 6. Database ==="
+            if [ -f /opt/nuotao/.env ]; then
+              set -a; source /opt/nuotao/.env; set +a
+              DB_NAME="${POSTGRES_DB:-nuotao}"
+              DB_USER="${POSTGRES_USER:-nuotao}"
+              TABLE_COUNT=$(PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ')
+              echo "  Database: $DB_NAME@localhost ($TABLE_COUNT tables)"
+              LATEST_MIGRATION=$(PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT version_num FROM alembic_version;" 2>/dev/null | tr -d ' ')
+              echo "  Alembic version: $LATEST_MIGRATION"
+            fi
+
+            echo ""
+            echo "=== 7. Disk & Backups ==="
+            df -h / | tail -1 | awk '{print "  Root disk: " $3 " used / " $2 " total (" $5 ")"}'
+            if [ -d /opt/nuotao/backups ]; then
+              BACKUP_COUNT=$(ls /opt/nuotao/backups/nuotao_*.sql.gz 2>/dev/null | wc -l)
+              LATEST_BACKUP=$(ls -t /opt/nuotao/backups/nuotao_*.sql.gz 2>/dev/null | head -1)
+              if [ -n "$LATEST_BACKUP" ]; then
+                BACKUP_SIZE=$(du -h "$LATEST_BACKUP" | cut -f1)
+                BACKUP_AGE=$(( ($(date +%s) - $(stat -c %Y "$LATEST_BACKUP")) / 86400 ))
+                echo "  Backups: $BACKUP_COUNT files, latest $BACKUP_SIZE ($BACKUP_AGE days old)"
+              fi
+            else
+              echo "  Backups: dir not found"
+            fi
+
+            echo ""
+            echo "============================================================"
+            echo "  Pre-flight check complete"
+            echo "============================================================"

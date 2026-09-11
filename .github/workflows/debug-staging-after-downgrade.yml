@@ -1,0 +1,48 @@
+name: Debug Staging After Downgrade
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging after FastAPI downgrade
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            echo "=== 1. Staging service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -10
+
+            echo ""
+            echo "=== 2. Staging logs (last 20) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 20
+
+            echo ""
+            echo "=== 3. Check app routes ==="
+            cat > /tmp/check_routes.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '/opt/nuotao/staging/backend')
+            from app.main import app
+            routes = [r.path for r in app.routes if hasattr(r, 'path')]
+            print(f'Total routes: {len(routes)}')
+            health = [r for r in routes if 'health' in r or 'ready' in r]
+            print(f'Health routes: {health}')
+            for r in routes[:10]:
+                print(f'  {r}')
+            PYEOF
+            .venv/bin/python /tmp/check_routes.py 2>&1
+
+            echo ""
+            echo "=== 4. Test various endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz /docs /openapi.json; do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:8001$path" || echo "000")
+                echo "  $path -> HTTP $CODE"
+            done

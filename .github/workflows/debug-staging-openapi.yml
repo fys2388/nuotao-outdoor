@@ -1,0 +1,49 @@
+name: Debug Staging Openapi
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging openapi paths
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging openapi
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Staging service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 2. Staging logs (last 15) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 15
+
+            echo ""
+            echo "=== 3. Staging openapi.json paths count ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | /opt/nuotao/staging/backend/.venv/bin/python -c "
+            import sys, json
+            try:
+                d = json.load(sys.stdin)
+                paths = list(d.get('paths', {}).keys())
+                print(f'Total paths: {len(paths)}')
+                health = [p for p in paths if 'health' in p or 'ready' in p]
+                print(f'Health paths: {health}')
+                for p in paths[:15]:
+                    print(f'  {p}')
+            except Exception as e:
+                print(f'Error: {e}')
+                print(sys.stdin.read()[:500])
+            " 2>&1
+
+            echo ""
+            echo "=== 4. Direct test with verbose ==="
+            curl -v --max-time 5 http://127.0.0.1:8001/api/v1/readyz 2>&1 | head -20
+
+            echo ""
+            echo "=== 5. Check if port 8001 is staging service ==="
+            ss -tlnp | grep ':8001'

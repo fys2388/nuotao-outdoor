@@ -1,0 +1,87 @@
+name: Debug Staging Final2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging final - check startup error and port process
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging final
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Current port 8001 process ==="
+            ss -tlnp | grep ':8001'
+            PID=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | head -1)
+            if [ -n "$PID" ]; then
+                echo "PID: $PID"
+                ps -p $PID -o pid,ppid,user,start,cmd --no-headers
+                echo "cwd: $(readlink /proc/$PID/cwd 2>/dev/null || echo 'unknown')"
+            fi
+
+            echo ""
+            echo "=== 2. Staging service full startup log (last 40) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 40 --no-hostname
+
+            echo ""
+            echo "=== 3. Stop staging service ==="
+            systemctl stop nuotao-backend-staging
+            sleep 3
+
+            echo ""
+            echo "=== 4. Kill ALL processes on 8001 ==="
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                echo "Killing: $PIDS"
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            else
+                echo "No processes on 8001"
+            fi
+            sleep 3
+
+            echo ""
+            echo "=== 5. Verify port free ==="
+            ss -tlnp | grep ':8001' || echo "Port 8001 is FREE"
+
+            echo ""
+            echo "=== 6. Test uvicorn directly (foreground, 8 seconds) ==="
+            cd /opt/nuotao/staging/backend
+            timeout 8 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1 2>&1 &
+            UVICORN_PID=$!
+            sleep 6
+            echo "Uvicorn PID: $UVICORN_PID"
+            echo "Port check:"
+            ss -tlnp | grep ':8001'
+            echo "Readyz test:"
+            curl -s -w " HTTP %{http_code}\n" --max-time 3 http://127.0.0.1:8001/api/v1/readyz
+            echo "Openapi paths:"
+            curl -s --max-time 3 http://127.0.0.1:8001/openapi.json | .venv/bin/python -c "
+            import sys, json
+            try:
+                d = json.load(sys.stdin)
+                paths = list(d.get('paths', {}).keys())
+                print(f'Paths: {len(paths)}')
+            except Exception as e:
+                print(f'Error: {e}')
+            " 2>&1
+            kill $UVICORN_PID 2>/dev/null || true
+            sleep 2
+
+            echo ""
+            echo "=== 7. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            sleep 8
+
+            echo ""
+            echo "=== 8. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -6
+
+            echo ""
+            echo "=== 9. Final readyz test ==="
+            curl -s -w " HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8001/api/v1/readyz

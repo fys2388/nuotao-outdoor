@@ -1,0 +1,567 @@
+# ============================================================
+# Nuotao AI OS - AI Agent 管控流程编排配置
+# 版本：v1.0
+# 按照 AGENTS.md 3.1-3.4 原则设计
+# ============================================================
+
+# ============================================================
+# 一、产品全生命周期状态机
+# ============================================================
+product_lifecycle:
+  states:
+    - name: draft
+      label: 草稿
+      description: 初始状态，产品信息未完善
+    - name: candidate
+      label: 选品候选
+      description: 1688选品导入，等待选品分析和人工确认
+    - name: selection_approved
+      label: 选品通过
+      description: 选品分析通过，人工确认进入下一步
+    - name: copy_generated
+      label: 文案已生成
+      description: AI文案生成完成，等待合规检查
+    - name: copy_approved
+      label: 文案已通过
+      description: 文案合规检查通过，人工确认
+    - name: image_checking
+      label: 图片合规检查中
+      description: 检查1688原图是否合规
+    - name: image_generating
+      label: AI生图中
+      description: 原图不合规，进入AI生图流程
+    - name: image_approved
+      label: 图片已通过
+      description: 图片（原图或AI生成）质量检查通过
+    - name: ready_to_list
+      label: 待上架
+      description: 文案和图片都已就绪，等待上架审批
+    - name: listing_draft
+      label: 上架草稿
+      description: WooCommerce产品已创建（草稿状态）
+    - name: published
+      label: 已上架
+      description: WooCommerce产品已发布，可销售
+    - name: out_of_stock
+      label: 缺货
+      description: 库存不足，暂时下架
+    - name: archived
+      label: 已归档
+      description: 产品停止销售
+
+  transitions:
+    - from: draft
+      to: candidate
+      trigger: import_from_1688
+      agent: product-manager
+      tool: import_product_to_system
+      approval: none
+
+    - from: candidate
+      to: selection_approved
+      trigger: selection_analysis_pass
+      agent: product-manager
+      tool: analyze_product_selection
+      approval: human  # 选品决策必须人工确认
+
+    - from: selection_approved
+      to: copy_generated
+      trigger: generate_copy
+      agent: marketing-manager
+      tool: generate_product_copy
+      approval: none
+
+    - from: copy_generated
+      to: copy_approved
+      trigger: copy_compliance_pass
+      agent: marketing-manager
+      tool: check_copy_compliance
+      approval: human  # 文案需人工确认
+
+    - from: copy_approved
+      to: image_checking
+      trigger: start_image_check
+      agent: product-manager
+      tool: check_image_compliance
+      approval: none
+
+    - from: image_checking
+      to: image_approved
+      trigger: original_image_compliant
+      agent: product-manager
+      tool: check_image_compliance
+      approval: none
+      condition: 1688原图合规（白底、无文字、无水印）
+
+    - from: image_checking
+      to: image_generating
+      trigger: original_image_not_compliant
+      agent: marketing-manager
+      tool: generate_main_images + generate_detail_images
+      approval: none
+      condition: 1688原图不合规，进入AI生图流程
+
+    - from: image_generating
+      to: image_approved
+      trigger: ai_image_quality_pass
+      agent: marketing-manager
+      tool: check_image_quality
+      approval: human  # AI生图需人工确认质量
+
+    - from: image_approved
+      to: ready_to_list
+      trigger: all_assets_ready
+      agent: product-manager
+      tool: none
+      approval: none
+
+    - from: ready_to_list
+      to: listing_draft
+      trigger: create_woocommerce_draft
+      agent: product-manager
+      tool: create_woocommerce_product + upload_woocommerce_images
+      approval: none
+
+    - from: listing_draft
+      to: published
+      trigger: publish_product
+      agent: product-manager
+      tool: publish_woocommerce_product
+      approval: human  # 高风险操作，必须人工审批
+
+    - from: published
+      to: out_of_stock
+      trigger: inventory_zero
+      agent: supply-chain-manager
+      tool: update_woocommerce_inventory
+      approval: none
+
+    - from: out_of_stock
+      to: published
+      trigger: inventory_restocked
+      agent: supply-chain-manager
+      tool: update_woocommerce_inventory
+      approval: none
+
+    - from: published
+      to: archived
+      trigger: archive_product
+      agent: product-manager
+      tool: none
+      approval: human
+
+# ============================================================
+# 二、订单与采购流程状态机
+# ============================================================
+order_procurement_lifecycle:
+  states:
+    - name: order_received
+      label: 订单已接收
+      description: WooCommerce收到新订单
+    - name: order_verified
+      label: 订单已验证
+      description: 订单信息验证通过（支付、地址、库存）
+    - name: purchase_order_created
+      label: 采购单已创建
+      description: 已创建1688采购单（半自动模式）
+    - name: waiting_purchase_approval
+      label: 等待采购审批
+      description: 采购单等待人工审批确认
+    - name: purchase_submitted
+      label: 采购已提交
+      description: 1688订单已提交，等待供应商发货
+    - name: supplier_shipped
+      label: 供应商已发货
+      description: 1688供应商已发货，有国内物流单号
+    - name: warehouse_received
+      label: 仓库已收货
+      description: 海外仓/物流仓已收到货物
+    - name: international_shipped
+      label: 国际物流已发出
+      description: 国际专线物流已发出，有国际单号
+    - name: delivered
+      label: 已送达
+      description: 客户已收到货物
+    - name: completed
+      label: 已完成
+      description: 订单全流程完成
+
+  transitions:
+    - from: order_received
+      to: order_verified
+      trigger: verify_order
+      agent: supply-chain-manager
+      tool: none
+      approval: none
+
+    - from: order_verified
+      to: purchase_order_created
+      trigger: create_purchase_order
+      agent: supply-chain-manager
+      tool: create_purchase_order
+      approval: none
+
+    - from: purchase_order_created
+      to: waiting_purchase_approval
+      trigger: submit_for_approval
+      agent: supply-chain-manager
+      tool: create_approval_request
+      approval: none
+
+    - from: waiting_purchase_approval
+      to: purchase_submitted
+      trigger: approve_and_submit
+      agent: supply-chain-manager
+      tool: submit_1688_order
+      approval: human  # 高风险操作，必须人工审批
+
+    - from: purchase_submitted
+      to: supplier_shipped
+      trigger: track_supplier_shipment
+      agent: supply-chain-manager
+      tool: track_purchase_order
+      approval: none
+
+    - from: supplier_shipped
+      to: warehouse_received
+      trigger: warehouse_confirm_receipt
+      agent: supply-chain-manager
+      tool: none
+      approval: none
+
+    - from: warehouse_received
+      to: international_shipped
+      trigger: create_international_shipment
+      agent: supply-chain-manager
+      tool: sync_logistics_to_woocommerce
+      approval: none
+
+    - from: international_shipped
+      to: delivered
+      trigger: customer_confirm_delivery
+      agent: customer-manager
+      tool: none
+      approval: none
+
+    - from: delivered
+      to: completed
+      trigger: order_complete
+      agent: business-analyst
+      tool: none
+      approval: none
+
+# ============================================================
+# 三、AI生图SOP流程（严格按照学习的公众号流程）
+# ============================================================
+image_generation_sop:
+  main_image_flow:
+    name: 主图生产流程（8步）
+    steps:
+      - step: 1
+        name: 先喂商品信息
+        description: 上传商品资料（名称、卖点、目标人群、使用场景、禁用表达）
+        agent: marketing-manager
+        tool: get_product_data
+
+      - step: 2
+        name: 先出3套主图方向
+        description: 白底清爽 / 真实场景 / 促销转化
+        agent: marketing-manager
+        tool: generate_main_images
+        directions:
+          - white_background: 纯白背景，产品居中，无文字
+          - real_scene: 真实使用场景（骑行/露营/徒步）
+          - promotion: 带促销文案（≤10字，一个卖点）
+
+      - step: 3
+        name: 把方案改成绘图提示词
+        description: 主体+画面+文字+禁止项，使用I2I图生图以1688原图为参考
+        agent: marketing-manager
+        tool: none
+
+      - step: 4
+        name: 一张跑通后再批量
+        description: 先生成1张验证产品外观一致性，通过后再批量生成
+        agent: marketing-manager
+        tool: check_image_quality
+
+      - step: 5
+        name: 主图文案只讲一个卖点
+        description: 每条≤10字，直接具体不过度承诺
+        agent: marketing-manager
+        tool: none
+
+      - step: 6
+        name: 整理成执行清单
+        description: 文件名+检查商品+检查中文+检查合规
+        agent: marketing-manager
+        tool: check_image_quality
+
+      - step: 7
+        name: 把商品资料粘进去
+        description: 可直接照抄的Prompt模板
+        agent: marketing-manager
+        tool: none
+
+      - step: 8
+        name: 核心理念
+        description: 先拆商品资料，再交给图像模型；必须用I2I图生图，禁止纯文字T2I
+        agent: marketing-manager
+        tool: none
+
+  detail_image_flow:
+    name: 详情图生产流程（4步+6板块）
+    steps:
+      - step: 1
+        name: 先让AI读懂产品
+        description: 上传产品图，AI全面分析（外观、结构、材质、功能）
+        agent: marketing-manager
+        tool: get_product_data
+
+      - step: 2
+        name: 先检查，再生成
+        description: 产品信息报告+人工检查清单
+        agent: marketing-manager
+        tool: check_image_compliance
+
+      - step: 3
+        name: 最后再写提示词
+        description: 8部分结构：产品主体/品牌风格/画面场景/详情页类型/色调光影/构图比例/视觉效果/禁止内容
+        agent: marketing-manager
+        tool: generate_detail_images
+
+      - step: 4
+        name: 输入提示词，开始生成
+        description: AI理解→生成草图→优化调整→输出成品
+        agent: marketing-manager
+        tool: check_image_quality
+
+    sections:
+      - section: 1
+        name: 品牌主视觉
+        description: 品牌Logo+产品大图+品牌标语
+        ratio: 3:4
+
+      - section: 2
+        name: 核心卖点
+        description: 3-4个核心卖点配图标和文字
+        ratio: 3:4
+
+      - section: 3
+        name: 功能结构展示
+        description: 爆炸图/剖面图，标注各组件名称和功能
+        ratio: 3:4
+
+      - section: 4
+        name: 融入使用场景
+        description: 2x2网格，4个不同使用场景（骑行/徒步/露营/跑步）
+        ratio: 3:4
+
+      - section: 5
+        name: 产品细节展示
+        description: 2x2网格，4个不同细节特写（材质/接口/拉链/扣件）
+        ratio: 3:4
+
+      - section: 6
+        name: 品牌品质与保障
+        description: 品质保障图标+售后承诺+品牌信息
+        ratio: 3:4
+
+  strict_rules:
+    - 主图和详情图逻辑必须严格区分，不得混用
+    - 必须使用I2I图生图，以1688原图为参考基准，确保产品外观100%一致
+    - 禁止纯文字T2I生成产品图
+    - 生图后必须逐张检查产品外观一致性、文字语言（纯英文）、构图合理性
+    - 发现问题立即重新生成，不得批量通过
+    - 所有文字必须是英文，禁止中文混入
+
+# ============================================================
+# 四、审批节点配置
+# ============================================================
+approval_config:
+  approval_types:
+    - type: PRODUCT_SELECTION
+      label: 选品决策
+      description: 选品分析结果需人工确认是否进入下一步
+      agent: product-manager
+      sla_hours: 24
+      auto_expire: false
+
+    - type: PRODUCT_COPY
+      label: 文案确认
+      description: AI生成的文案需人工确认质量和合规性
+      agent: marketing-manager
+      sla_hours: 12
+      auto_expire: false
+
+    - type: PRODUCT_IMAGES
+      label: 图片质量确认
+      description: AI生成的图片需人工确认产品外观一致性和质量
+      agent: marketing-manager
+      sla_hours: 12
+      auto_expire: false
+
+    - type: PRODUCT_PUBLISH
+      label: 产品上架审批
+      description: 高风险操作，WooCommerce产品发布必须人工审批
+      agent: product-manager
+      sla_hours: 24
+      auto_expire: false
+
+    - type: PURCHASE_ORDER
+      label: 采购单审批
+      description: 高风险操作，1688实际下单必须人工审批
+      agent: supply-chain-manager
+      sla_hours: 4
+      auto_expire: false
+
+    - type: L3_TOOL
+      label: 高风险工具执行
+      description: L3权限工具调用必须人工审批
+      agent: any
+      sla_hours: 4
+      auto_expire: false
+
+  rbac:
+    roles:
+      - role: admin
+        permissions: [all]
+      - role: operator
+        permissions: [PRODUCT_SELECTION, PRODUCT_COPY, PRODUCT_IMAGES, PRODUCT_PUBLISH]
+      - role: procurement
+        permissions: [PURCHASE_ORDER]
+      - role: viewer
+        permissions: [view_only]
+
+# ============================================================
+# 五、成本护栏与降级链
+# ============================================================
+cost_guardrails:
+  monthly_budgets:
+    product-manager: 50.00    # 美元/月
+    marketing-manager: 100.00 # 生图成本较高
+    supply-chain-manager: 30.00
+    customer-manager: 20.00
+    business-analyst: 30.00
+
+  per_run_limits:
+    max_tokens: 10000
+    max_tool_calls: 20
+    max_latency_seconds: 120
+
+  alerts:
+    - threshold: 80%
+      action: warning_notification
+    - threshold: 95%
+      action: auto_downgrade_model
+    - threshold: 100%
+      action: pause_agent + human_notification
+
+  degradation_chain:
+    llm_unavailable:
+      - 降级到低配模型（deepseek-chat → gpt-3.5-turbo）
+      - 规则引擎处理（预定义模板）
+      - 人工处理
+
+    image_generation_failed:
+      - 重试1次（相同参数）
+      - 重试1次（简化参数）
+      - 使用1688原图（如合规）
+      - 人工处理
+
+    api_timeout:
+      - 重试1次（指数退避）
+      - 降级到缓存数据
+      - 人工处理
+
+  customer_service_rule: 回复不了也比乱回复强，不确定时降级到人工
+
+# ============================================================
+# 六、全链路审计配置
+# ============================================================
+audit_config:
+  required_fields:
+    - agent_id
+    - input
+    - plan
+    - tool_calls
+    - output
+    - approval
+    - cost
+    - status
+    - trace_id
+    - created_at
+    - completed_at
+
+  retention:
+    ai_agent_runs: 365 days
+    agent_executions: 365 days
+    agent_tasks: 180 days
+    approval_records: 730 days
+
+  pii_protection:
+    - 日志/提示词/Agent运行记录中禁止出现PII明文
+    - 需要时脱敏（mask/截断）
+    - 客户姓名/邮箱/地址/支付信息加密存储
+
+# ============================================================
+# 七、Agent工具权限矩阵
+# ============================================================
+tool_permission_matrix:
+  product-manager:
+    allowed_tools:
+      - search_1688_products
+      - get_1688_product_detail
+      - analyze_product_selection
+      - import_product_to_system
+      - check_image_compliance
+      - download_1688_images
+      - create_woocommerce_product
+      - upload_woocommerce_images
+      - get_product_data
+      - list_products
+      - create_approval_request
+      - log_agent_run
+    high_risk_tools:
+      - publish_woocommerce_product  # L3，需人工审批
+
+  marketing-manager:
+    allowed_tools:
+      - generate_product_copy
+      - check_copy_compliance
+      - save_product_copy
+      - generate_main_images
+      - generate_detail_images
+      - check_image_quality
+      - save_product_images
+      - get_product_data
+      - create_approval_request
+      - log_agent_run
+    high_risk_tools: []
+
+  supply-chain-manager:
+    allowed_tools:
+      - create_purchase_order
+      - track_purchase_order
+      - sync_logistics_to_woocommerce
+      - sync_inventory_from_1688
+      - update_woocommerce_inventory
+      - get_product_data
+      - create_approval_request
+      - log_agent_run
+    high_risk_tools:
+      - submit_1688_order  # L3，需人工审批
+
+  customer-manager:
+    allowed_tools:
+      - get_product_data
+      - list_products
+      - log_agent_run
+    high_risk_tools: []
+
+  business-analyst:
+    allowed_tools:
+      - get_product_data
+      - list_products
+      - log_agent_run
+    high_risk_tools: []

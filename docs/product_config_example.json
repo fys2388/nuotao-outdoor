@@ -1,0 +1,43 @@
+{
+  "name": "Portable Folding Camping Moon Chair - 63cm Wide Seat, Heavy Duty Carbon Steel, 300 lbs Capacity",
+  "sku": "NTO-FOLDING-CHAIR-001",
+  "regular_price": 39.99,
+  "sale_price": 34.99,
+  "description": "<p>Experience ultimate comfort outdoors with our Premium Folding Camping Moon Chair. Featuring an extra-wide 63cm seat and ergonomic crescent design, this chair provides exceptional support for camping, fishing, picnics, and backyard gatherings.</p><p><strong>Key Features:</strong></p><ul><li>Extra-wide 63cm seat for maximum comfort</li><li>Heavy-duty carbon steel frame supports up to 300 lbs</li><li>Durable 600D Oxford fabric with breathable mesh</li><li>Quick fold design - sets up in seconds</li><li>Lightweight at only 2.5kg for easy transport</li><li>Side pocket for phone, keys, and small items</li><li>Carry bag included</li></ul>",
+  "short_description": "Premium folding camping moon chair with 63cm extra-wide seat, heavy-duty carbon steel frame supports 300 lbs. Quick fold, lightweight, perfect for camping, fishing, and outdoor adventures.",
+  "categories": ["Camp Furniture", "Camping Chairs"],
+  "attributes": [
+    {"name": "Color", "options": ["Khaki", "Black", "Army Green"]},
+    {"name": "Material", "options": ["Carbon Steel Frame + 600D Oxford Fabric"]},
+    {"name": "Seat Width", "options": ["63cm / 24.8 inches"]},
+    {"name": "Weight Capacity", "options": ["300 lbs / 136 kg"]},
+    {"name": "Foldable", "options": ["Yes"]}
+  ],
+  "stock_quantity": 100,
+  "low_stock_threshold": 10,
+  "status": "publish",
+  "images": [
+    "01_white_background.jpg",
+    "02_camping_scene.jpg",
+    "03_promotion.jpg",
+    "04_detail.jpg",
+    "05_multiple_colors.jpg",
+    "06_detail_brand_hero.jpg",
+    "07_detail_key_selling_points.jpg",
+    "08_detail_function_structure.jpg",
+    "09_detail_usage_scenarios.jpg",
+    "10_detail_product_details.jpg",
+    "11_detail_quality_assurance.jpg"
+  ],
+  "purchase": {
+    "offer_url": "https://detail.1688.com/offer/1080577976321.html",
+    "offer_id": "1080577976321",
+    "supplier_name": "广州欣荟户外用品制造有限公司",
+    "supplier_rating": "超级工厂, 回头率88%, 品质达标率99%",
+    "cost_price_cny": 40.88,
+    "cost_price_usd": 5.60,
+    "profit_margin": "86%",
+    "sourcing_method": "1688_dropshipping"
+  },
+  "tags": ["camping chair", "moon chair", "folding chair", "outdoor furniture", "portable chair", "camping gear"]
+}

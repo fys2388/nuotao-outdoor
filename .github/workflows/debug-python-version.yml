@@ -1,0 +1,62 @@
+name: Debug Python Version
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug Python version comparison
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug Python version
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Production Python version ==="
+            /opt/nuotao/backend/.venv/bin/python --version
+            /opt/nuotao/backend/.venv/bin/python -c "import sys; print(f'Python: {sys.version}')"
+
+            echo ""
+            echo "=== 2. Staging Python version ==="
+            /opt/nuotao/staging/backend/.venv/bin/python --version
+            /opt/nuotao/staging/backend/.venv/bin/python -c "import sys; print(f'Python: {sys.version}')"
+
+            echo ""
+            echo "=== 3. Production openapi paths ==="
+            curl -s --max-time 5 http://127.0.0.1:8000/openapi.json | /opt/nuotao/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Production paths: {len(paths)}')
+            health = [p for p in paths if 'health' in p.lower() or 'ready' in p.lower()]
+            print(f'Health paths: {health}')
+            " 2>&1
+
+            echo ""
+            echo "=== 4. Staging openapi paths ==="
+            curl -s --max-time 5 http://127.0.0.1:8001/openapi.json | /opt/nuotao/staging/backend/.venv/bin/python -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = list(d.get('paths', {}).keys())
+            print(f'Staging paths: {len(paths)}')
+            print(f'All paths: {paths}')
+            " 2>&1
+
+            echo ""
+            echo "=== 5. Production readyz ==="
+            curl -s -w " HTTP %{http_code}\n" --max-time 5 http://127.0.0.1:8000/api/v1/readyz
+
+            echo ""
+            echo "=== 6. Check if production has same issue ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -c "
+            import sys
+            sys.path.insert(0, '.')
+            from app.main import app
+            routes = [r.path for r in app.routes if hasattr(r, 'path')]
+            print(f'Production import routes: {len(routes)}')
+            " 2>&1 | tail -3

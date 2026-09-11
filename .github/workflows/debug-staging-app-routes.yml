@@ -1,0 +1,56 @@
+name: Debug Staging App Routes
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging app routes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging routes
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            echo "=== 1. Check health.py exists ==="
+            ls -la app/api/v1/endpoints/health.py 2>&1
+
+            echo ""
+            echo "=== 2. Write debug script ==="
+            cat > /tmp/debug_routes.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '.')
+            try:
+                from app.main import app
+                routes = []
+                for route in app.routes:
+                    if hasattr(route, 'path'):
+                        routes.append(route.path)
+                routes.sort()
+                print(f'Total routes: {len(routes)}')
+                health_routes = [r for r in routes if 'health' in r or 'ready' in r]
+                print(f'Health routes: {health_routes}')
+                for r in routes[:30]:
+                    print(f'  {r}')
+            except Exception as e:
+                print(f'ERROR importing app: {type(e).__name__}: {e}')
+                import traceback
+                traceback.print_exc()
+            PYEOF
+
+            echo ""
+            echo "=== 3. Run debug script ==="
+            .venv/bin/python /tmp/debug_routes.py 2>&1
+
+            echo ""
+            echo "=== 4. Test endpoints ==="
+            for path in /api/v1/readyz /api/v1/healthz /docs; do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:8001$path" || echo "000")
+                echo "  $path -> HTTP $CODE"
+            done

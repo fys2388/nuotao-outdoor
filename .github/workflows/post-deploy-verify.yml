@@ -1,0 +1,116 @@
+name: Post-deploy Verification (功能+env+监控)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Full post-deploy verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=========================================="
+            echo " 1. SYSTEMD SERVICES"
+            echo "=========================================="
+            for svc in nuotao-backend nuotao-agent-scheduler postgresql redis prometheus grafana-server alertmanager; do
+              status=$(systemctl is-active $svc 2>/dev/null || echo "not-found")
+              enabled=$(systemctl is-enabled $svc 2>/dev/null || echo "n/a")
+              printf "%-30s active=%-12s enabled=%s\n" "$svc" "$status" "$enabled"
+            done
+
+            echo ""
+            echo "=========================================="
+            echo " 2. BACKEND API ENDPOINTS"
+            echo "=========================================="
+            for ep in "/api/v1/readyz" "/api/v1/health" "/docs" "/openapi.json"; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8000$ep 2>/dev/null || echo "000")
+              printf "  %-30s HTTP %s\n" "$ep" "$code"
+            done
+
+            echo ""
+            echo "  --- Readyz response body ---"
+            curl -s --max-time 5 http://127.0.0.1:8000/api/v1/readyz 2>/dev/null | head -5 || echo "(no response)"
+
+            echo ""
+            echo "=========================================="
+            echo " 3. FRONTEND"
+            echo "=========================================="
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8081/ 2>/dev/null || echo "000")
+            echo "  Console :8081/ -> HTTP $code"
+            echo "  Frontend files:"
+            ls /var/www/nuotao/ 2>/dev/null | head -5 || echo "  (no files)"
+
+            echo ""
+            echo "=========================================="
+            echo " 4. DATABASE"
+            echo "=========================================="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            python3 << 'PYEOF' 2>&1 | head -10 || echo "  DB check failed"
+            import asyncio
+            from sqlalchemy import text
+            from app.core.database import engine
+            async def check():
+                async with engine.connect() as conn:
+                    r = await conn.execute(text("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"))
+                    print(f"  Public tables: {r.scalar()}")
+                    r2 = await conn.execute(text("SELECT version_num FROM alembic_version"))
+                    print(f"  Alembic version: {r2.scalar()}")
+            asyncio.run(check())
+            PYEOF
+
+            echo ""
+            echo "=========================================="
+            echo " 5. .ENV DRIFT CHECK"
+            echo "=========================================="
+            TEMPLATE=/opt/nuotao/backend/.env.production.template
+            ACTUAL=/opt/nuotao/backend/.env
+            if [ -f "$TEMPLATE" ] && [ -f "$ACTUAL" ]; then
+              echo "  Template vars: $(grep -c '^[A-Z]' $TEMPLATE)"
+              echo "  Actual vars:   $(grep -c '^[A-Z]' $ACTUAL)"
+              echo ""
+              echo "  --- Missing in actual (in template but not in .env) ---"
+              comm -23 <(grep '^[A-Z]' $TEMPLATE | cut -d= -f1 | sort -u) <(grep '^[A-Z]' $ACTUAL | cut -d= -f1 | sort -u) | head -30
+              echo ""
+              echo "  --- Empty values in actual ---"
+              grep '^[A-Z].*=$' $ACTUAL | cut -d= -f1 | head -10 || echo "  (none)"
+            else
+              echo "  Template or .env not found"
+              ls -la /opt/nuotao/backend/.env* 2>/dev/null
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo " 6. MONITORING STACK"
+            echo "=========================================="
+            echo "  --- Prometheus :9090 ---"
+            curl -s --max-time 3 http://127.0.0.1:9090/-/healthy 2>/dev/null && echo "  Prometheus healthy" || echo "  Prometheus not responding"
+            echo "  --- Grafana :3000 ---"
+            curl -s -o /dev/null -w "  Grafana HTTP %{http_code}\n" --max-time 3 http://127.0.0.1:3000/api/health 2>/dev/null || echo "  Grafana not responding"
+            echo "  --- Alertmanager :9093 ---"
+            curl -s --max-time 3 http://127.0.0.1:9093/-/healthy 2>/dev/null && echo "  Alertmanager healthy" || echo "  Alertmanager not responding"
+
+            echo ""
+            echo "  --- Monitoring config files ---"
+            ls -la /etc/prometheus/prometheus.yml /etc/grafana/grafana.ini /etc/alertmanager/alertmanager.yml 2>/dev/null || echo "  (some configs missing)"
+
+            echo ""
+            echo "=========================================="
+            echo " 7. DISK & RESOURCES"
+            echo "=========================================="
+            df -h / | tail -1
+            free -h | head -2
+            echo "  Top 5 memory processes:"
+            ps aux --sort=-%mem | head -6 | tail -5 | awk '{printf "  %-10s %5s%% %s\n", $1, $4, $11}'
+
+            echo ""
+            echo "=========================================="
+            echo " VERIFICATION COMPLETE"
+            echo "=========================================="

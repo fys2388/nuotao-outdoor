@@ -1,0 +1,57 @@
+name: Debug Staging Import
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging import errors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging import
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Staging uvicorn logs (last 30) ==="
+            journalctl -u nuotao-backend-staging --no-pager -n 30
+
+            echo ""
+            echo "=== 2. Check router.py line count ==="
+            wc -l /opt/nuotao/staging/backend/app/api/v1/router.py
+            wc -l /opt/nuotao/backend/app/api/v1/router.py
+
+            echo ""
+            echo "=== 3. Compare router.py files ==="
+            diff /opt/nuotao/staging/backend/app/api/v1/router.py /opt/nuotao/backend/app/api/v1/router.py | head -20 || echo "Files are identical"
+
+            echo ""
+            echo "=== 4. Compare main.py files ==="
+            diff /opt/nuotao/staging/backend/app/main.py /opt/nuotao/backend/app/main.py | head -20 || echo "Files are identical"
+
+            echo ""
+            echo "=== 5. Test import with verbose errors ==="
+            cd /opt/nuotao/staging/backend
+            .venv/bin/python -c "
+            import sys
+            sys.path.insert(0, '.')
+            import traceback
+            try:
+                from app.main import app
+                routes = [r.path for r in app.routes if hasattr(r, 'path')]
+                print(f'Import OK: {len(routes)} routes')
+            except Exception as e:
+                print(f'Import FAILED: {e}')
+                traceback.print_exc()
+            " 2>&1 | tail -10
+
+            echo ""
+            echo "=== 6. Check if sourcing_enhanced is last in router ==="
+            grep -n "include_router" /opt/nuotao/staging/backend/app/api/v1/router.py | tail -5
+
+            echo ""
+            echo "=== 7. Check .env differences ==="
+            diff <(grep -v '^#' /opt/nuotao/staging/backend/.env | grep -v '^$' | sort) <(grep -v '^#' /opt/nuotao/backend/.env | grep -v '^$' | sort) | head -20 || echo "No differences"
