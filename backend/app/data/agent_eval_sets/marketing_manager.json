@@ -1,0 +1,918 @@
+{
+  "agent_id": "marketing_manager",
+  "description": "营销经理 Agent 评测集：报告防造假 R1-R7 与 A/B 显著性判断（确定性用例）",
+  "cases": [
+    {
+      "id": "mm-001",
+      "category": "ab_significance",
+      "title": "样本量不足必须判不显著",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.02
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.03
+        },
+        "sample_size_a": 30,
+        "sample_size_b": 30,
+        "primary_metric": "conversion_rate"
+      },
+      "expected": {
+        "output_keys": [
+          "significant",
+          "winner"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "significant",
+            "value": false
+          },
+          {
+            "type": "value_equal",
+            "key": "winner",
+            "value": "none"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "n<50 不得下结论（R4）"
+    },
+    {
+      "id": "mm-002",
+      "category": "ab_significance",
+      "title": "双零转化率不显著",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0
+        },
+        "sample_size_a": 200,
+        "sample_size_b": 200
+      },
+      "expected": {
+        "output_keys": [
+          "significant",
+          "winner"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "significant",
+            "value": false
+          },
+          {
+            "type": "value_equal",
+            "key": "winner",
+            "value": "none"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "无转化数据无法评估"
+    },
+    {
+      "id": "mm-003",
+      "category": "ab_significance",
+      "title": "B 显著优于 A 判 B 胜",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.02
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.05
+        },
+        "sample_size_a": 500,
+        "sample_size_b": 500,
+        "confidence_threshold": 0.95
+      },
+      "expected": {
+        "output_keys": [
+          "significant",
+          "winner"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "significant",
+            "value": true
+          },
+          {
+            "type": "value_equal",
+            "key": "winner",
+            "value": "B"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "大样本明显差异应显著"
+    },
+    {
+      "id": "mm-004",
+      "category": "ab_significance",
+      "title": "A 显著优于 B 判 A 胜",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.04
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.01
+        },
+        "sample_size_a": 400,
+        "sample_size_b": 400,
+        "confidence_threshold": 0.95
+      },
+      "expected": {
+        "output_keys": [
+          "winner"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "winner",
+            "value": "A"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "A 胜出应保持 A"
+    },
+    {
+      "id": "mm-005",
+      "category": "ab_significance",
+      "title": "微小差异判不显著",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.03
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.031
+        },
+        "sample_size_a": 300,
+        "sample_size_b": 300,
+        "confidence_threshold": 0.95
+      },
+      "expected": {
+        "output_keys": [
+          "significant"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "significant",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "0.1pct 差异不可信"
+    },
+    {
+      "id": "mm-006",
+      "category": "ab_significance",
+      "title": "A/B 样本不平衡仍须可计算",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.02
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.06
+        },
+        "sample_size_a": 100,
+        "sample_size_b": 900
+      },
+      "expected": {
+        "output_keys": [
+          "significant",
+          "winner"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "winner",
+            "value": "B"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "pooled SE 处理不平衡样本"
+    },
+    {
+      "id": "mm-007",
+      "category": "ab_significance",
+      "title": "confidence 必须在 0-1 区间",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.02
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.07
+        },
+        "sample_size_a": 800,
+        "sample_size_b": 800
+      },
+      "expected": {
+        "output_keys": [
+          "confidence"
+        ],
+        "rules": [
+          {
+            "type": "value_range",
+            "key": "confidence",
+            "min": 0,
+            "max": 1
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "置信度输出合法性"
+    },
+    {
+      "id": "mm-008",
+      "category": "ab_significance",
+      "title": "相对提升计算正确",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.04
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.05
+        },
+        "sample_size_a": 600,
+        "sample_size_b": 600
+      },
+      "expected": {
+        "output_keys": [
+          "relative_lift"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "relative_lift",
+            "value": 0.25
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "lift = (0.05-0.04)/0.04 = 0.25"
+    },
+    {
+      "id": "mm-009",
+      "category": "ab_significance",
+      "title": "rate_a=0 时 lift 为 0 不崩溃",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.03
+        },
+        "sample_size_a": 200,
+        "sample_size_b": 200
+      },
+      "expected": {
+        "output_keys": [
+          "relative_lift"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "relative_lift",
+            "value": 0
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "除零防御"
+    },
+    {
+      "id": "mm-010",
+      "category": "ab_significance",
+      "title": "高置信阈值 0.99 更保守",
+      "eval_mode": "deterministic",
+      "input": {
+        "variant_a_metrics": {
+          "conversion_rate": 0.02
+        },
+        "variant_b_metrics": {
+          "conversion_rate": 0.045
+        },
+        "sample_size_a": 300,
+        "sample_size_b": 300,
+        "confidence_threshold": 0.99
+      },
+      "expected": {
+        "output_keys": [
+          "significant"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "significant",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "同一数据在 0.95 显著、0.99 不显著属正常"
+    },
+    {
+      "id": "mm-011",
+      "category": "report_truthfulness",
+      "title": "活动收入与分群收入对不平必须披露缺口",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 1200,
+            "revenue": 8500,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 120,
+            "revenue": 529.88,
+            "source": "crm"
+          }
+        ],
+        "actions": [],
+        "output": {
+          "summary": "活动收入 8500 美元"
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid",
+          "issues"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          },
+          {
+            "type": "truthy",
+            "key": "issues"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R2：缺口 7970.12 未披露即拦截"
+    },
+    {
+      "id": "mm-012",
+      "category": "report_truthfulness",
+      "title": "无来源数字禁止出现",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 300,
+            "revenue": null,
+            "source": null
+          }
+        ],
+        "segments": [],
+        "actions": [
+          {
+            "action": "conclusion",
+            "text": "ROAS 达到 5.6 倍"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid",
+          "issues"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R1：无来源数字必须拒绝"
+    },
+    {
+      "id": "mm-013",
+      "category": "report_truthfulness",
+      "title": "预测无模型公式拒绝",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "google",
+            "status": "active",
+            "spend": 500,
+            "revenue": 1500,
+            "source": "ga4"
+          }
+        ],
+        "segments": [],
+        "actions": [
+          {
+            "action": "forecast",
+            "text": "预计下月收入翻倍",
+            "basis": null,
+            "formula": null
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R3：预测必须带模型/假设"
+    },
+    {
+      "id": "mm-014",
+      "category": "report_truthfulness",
+      "title": "小样本禁止统计性结论",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "tiktok",
+            "status": "active",
+            "spend": 100,
+            "revenue": 800,
+            "source": "tiktok_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 12,
+            "revenue": 800,
+            "source": "crm"
+          }
+        ],
+        "actions": [
+          {
+            "action": "conclusion",
+            "text": "客单价极高，该客群价值 5.6 倍"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R4：样本 12<30 禁结论"
+    },
+    {
+      "id": "mm-015",
+      "category": "report_truthfulness",
+      "title": "planned 活动不得写 0 ROAS",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "planned",
+            "spend": 0,
+            "revenue": 0,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [],
+        "actions": [
+          {
+            "action": "instruction",
+            "text": "该活动 ROAS 0.00，建议删除"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R5：未投放活动标 N/A"
+    },
+    {
+      "id": "mm-016",
+      "category": "report_truthfulness",
+      "title": "输出缺字段视为生成失败",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 300,
+            "revenue": 900,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [],
+        "actions": [],
+        "output": null
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R6：输出不完整禁止交付"
+    },
+    {
+      "id": "mm-017",
+      "category": "report_truthfulness",
+      "title": "对账一致且来源齐全应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 1200,
+            "revenue": 8500,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 200,
+            "revenue": 8500,
+            "source": "crm"
+          }
+        ],
+        "actions": [],
+        "output": {
+          "summary": "活动收入 8500 美元",
+          "action_items": [
+            "继续投放表现最佳素材"
+          ],
+          "confidence_score": 0.9,
+          "data_sources": [
+            "meta_ads",
+            "crm"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R1+R2 全通过的正例"
+    },
+    {
+      "id": "mm-018",
+      "category": "report_truthfulness",
+      "title": "segment 计数缺失不得影响对账拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 500,
+            "revenue": 2000,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 0,
+            "revenue": null,
+            "source": null
+          }
+        ],
+        "actions": [
+          {
+            "action": "conclusion",
+            "text": "客群贡献 2000 美元"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "无来源客群收入禁用于结论"
+    },
+    {
+      "id": "mm-019",
+      "category": "report_truthfulness",
+      "title": "非数字结论动作不触发对账拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 300,
+            "revenue": 900,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 100,
+            "revenue": 900,
+            "source": "crm"
+          }
+        ],
+        "actions": [
+          {
+            "action": "note",
+            "text": "建议优化素材方向"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "无数字建议不应被误拦截"
+    },
+    {
+      "id": "mm-020",
+      "category": "report_truthfulness",
+      "title": "分段输出部分缺失拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 400,
+            "revenue": 1200,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 60,
+            "revenue": 1200,
+            "source": "crm"
+          }
+        ],
+        "actions": [
+          {
+            "action": "summary",
+            "text": ""
+          }
+        ],
+        "output": {}
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R6：空输出视为生成失败，禁止交付"
+    },
+    {
+      "id": "mm-021",
+      "category": "report_truthfulness",
+      "title": "活动收入与分群一致但 spend 缺失",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "meta",
+            "status": "active",
+            "spend": 300,
+            "revenue": 800,
+            "source": "meta_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 80,
+            "revenue": 800,
+            "source": "crm"
+          }
+        ],
+        "actions": [],
+        "output": {
+          "summary": "本月花费 300 美元",
+          "action_items": [],
+          "confidence_score": 0.8
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R1：output 含数字但 data_sources 为空必须拦截"
+    },
+    {
+      "id": "mm-022",
+      "category": "report_truthfulness",
+      "title": "客单价爆表结论被小样本拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "campaigns": [
+          {
+            "name": "c1",
+            "channel": "tiktok",
+            "status": "active",
+            "spend": 50,
+            "revenue": 400,
+            "source": "tiktok_ads"
+          }
+        ],
+        "segments": [
+          {
+            "name": "s1",
+            "customer_count": 5,
+            "revenue": 400,
+            "source": "crm"
+          }
+        ],
+        "actions": [
+          {
+            "action": "conclusion",
+            "text": "客单价 80 美元显著高于均值"
+          }
+        ]
+      },
+      "expected": {
+        "output_keys": [
+          "is_valid"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_valid",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R4：n=5 只做描述禁统计结论"
+    },
+    {
+      "id": "mm-023",
+      "category": "llm_copy",
+      "title": "文案生成-主图卖点 ≤10 字",
+      "eval_mode": "llm",
+      "input": {
+        "product": "露营折叠椅",
+        "target_market": "US",
+        "image_type": "main_image"
+      },
+      "expected": {
+        "output_keys": [
+          "headline"
+        ],
+        "rules": [
+          {
+            "type": "max_length",
+            "key": "headline",
+            "value": 10
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "生图 SOP：主图文案只讲一个卖点"
+    },
+    {
+      "id": "mm-024",
+      "category": "llm_copy",
+      "title": "文案合规-禁中文混入英文页面",
+      "eval_mode": "llm",
+      "input": {
+        "product": "保温杯",
+        "target_market": "DE",
+        "language": "en"
+      },
+      "expected": {
+        "output_keys": [
+          "copy"
+        ],
+        "rules": [
+          {
+            "type": "forbidden_text",
+            "key": "copy",
+            "values": [
+              "中文",
+              "质量保证",
+              "厂家直供"
+            ]
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "Listing 全英文"
+    }
+  ]
+}

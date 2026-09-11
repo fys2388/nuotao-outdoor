@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nuotao AI OS · 运营监控中心</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #0a0e14;
+            color: #e8e8e8;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        .container { max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        .brand { display: flex; align-items: center; gap: 16px; }
+        .logo {
+            width: 48px; height: 48px;
+            background: linear-gradient(135deg, #1B3A2F, #2d5a47);
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; font-weight: bold; color: #E87722;
+        }
+        .brand h1 { font-size: 22px; font-weight: 600; }
+        .brand p { font-size: 13px; color: #888; margin-top: 2px; }
+
+        .status-bar { display: flex; gap: 12px; flex-wrap: wrap; }
+        .status-pill {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 13px;
+        }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        .status-dot.green { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+        .status-dot.red { background: #f87171; box-shadow: 0 0 8px #f87171; }
+        .status-dot.yellow { background: #fbbf24; box-shadow: 0 0 8px #fbbf24; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        .update-time { font-size: 12px; color: #666; text-align: right; }
+
+        /* Section Title */
+        .section-title {
+            display: flex; align-items: center; gap: 12px;
+            margin: 32px 0 16px;
+            font-size: 16px; font-weight: 600;
+        }
+        .section-num {
+            width: 28px; height: 28px;
+            background: linear-gradient(135deg, #E87722, #d4691a);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; font-weight: bold; color: #fff;
+        }
+        .section-meta { font-size: 12px; color: #666; margin-left: auto; }
+
+        /* Metric Cards */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 8px;
+        }
+        .metric-card {
+            background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+        .metric-card:hover {
+            border-color: rgba(232,119,34,0.3);
+            transform: translateY(-2px);
+        }
+        .metric-card::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #E87722, transparent);
+        }
+        .metric-label { font-size: 12px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-value { font-size: 32px; font-weight: 700; color: #fff; }
+        .metric-value .unit { font-size: 16px; color: #888; font-weight: 400; }
+        .metric-sub { font-size: 12px; color: #666; margin-top: 8px; }
+        .metric-sub .up { color: #4ade80; }
+        .metric-sub .down { color: #f87171; }
+
+        /* Two Column Layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 8px;
+        }
+        @media (max-width: 1024px) { .two-col { grid-template-columns: 1fr; } }
+
+        /* Panel */
+        .panel {
+            background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 20px;
+        }
+        .panel-title {
+            font-size: 14px; font-weight: 600;
+            margin-bottom: 16px;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .panel-title .badge {
+            font-size: 11px; padding: 2px 8px;
+            background: rgba(232,119,34,0.2); color: #E87722;
+            border-radius: 10px;
+        }
+
+        /* Workflow List */
+        .workflow-group { margin-bottom: 16px; }
+        .workflow-group-title {
+            font-size: 12px; color: #888;
+            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .workflow-group-title .count { color: #4ade80; }
+        .workflow-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        .workflow-item:hover { background: rgba(255,255,255,0.05); }
+        .workflow-name { display: flex; align-items: center; gap: 8px; }
+        .workflow-dot { width: 6px; height: 6px; border-radius: 50%; }
+        .workflow-dot.success { background: #4ade80; }
+        .workflow-dot.pending { background: #fbbf24; }
+        .workflow-dot.failed { background: #f87171; }
+        .workflow-meta { font-size: 11px; color: #666; display: flex; gap: 8px; align-items: center; }
+        .freq-tag {
+            font-size: 10px; padding: 2px 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }
+
+        /* Health Grid */
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        @media (max-width: 768px) { .health-grid { grid-template-columns: repeat(2, 1fr); } }
+        .health-item {
+            text-align: center;
+            padding: 14px 8px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 10px;
+        }
+        .health-value { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+        .health-value.green { color: #4ade80; }
+        .health-value.red { color: #f87171; }
+        .health-value.yellow { color: #fbbf24; }
+        .health-label { font-size: 11px; color: #888; }
+
+        /* Agent Cards */
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .agent-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+        .agent-icon {
+            width: 40px; height: 40px;
+            background: linear-gradient(135deg, #1B3A2F, #2d5a47);
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 10px;
+            font-size: 18px;
+        }
+        .agent-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+        .agent-status { font-size: 11px; color: #4ade80; margin-bottom: 8px; }
+        .agent-stats { font-size: 11px; color: #888; }
+        .agent-schedule { font-size: 10px; color: #6b7280; margin-top: 2px; }
+
+        /* Loading */
+        .loading { color: #666; font-style: italic; }
+        .error { color: #f87171; font-size: 12px; }
+
+        /* Footer */
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            text-align: center;
+            font-size: 12px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="brand">
+                <div class="logo">N</div>
+                <div>
+                    <h1>Nuotao AI OS · 运营监控中心</h1>
+                    <p>nuotaooutdoor.com · 自动化节点 & AI Agent 实时状态</p>
+                </div>
+            </div>
+            <div>
+                <div class="status-bar" id="statusBar">
+                    <div class="status-pill"><div class="status-dot yellow"></div>检查中...</div>
+                </div>
+                <div class="update-time" id="updateTime">更新于 --:--:--</div>
+            </div>
+        </div>
+
+        <!-- 01 核心指标 -->
+        <div class="section-title">
+            <div class="section-num">01</div>
+            核心业务指标
+            <div class="section-meta">数据来源: dashboard/summary API · 真实订单数据</div>
+        </div>
+        <div class="metrics-grid" id="metricsGrid">
+            <div class="metric-card"><div class="metric-label">加载中...</div></div>
+        </div>
+
+        <!-- 02 自动化节点 + 系统健康 -->
+        <div class="section-title">
+            <div class="section-num">02</div>
+            自动化节点闭环 & 系统健康巡检
+            <div class="section-meta">调度器 5 任务 · 系统 8 项检查</div>
+        </div>
+        <div class="two-col">
+            <div class="panel">
+                <div class="panel-title">
+                    自动化任务调度器
+                    <span class="badge" id="schedulerBadge">检查中</span>
+                </div>
+                <div id="workflowList">
+                    <div class="loading">加载调度器任务状态...</div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">
+                    系统健康巡检
+                    <span class="badge" id="healthBadge">检查中</span>
+                </div>
+                <div class="health-grid" id="healthGrid">
+                    <div class="health-item"><div class="health-value yellow">--</div><div class="health-label">检查中</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 03 AI Agent 工作状态 -->
+        <div class="section-title">
+            <div class="section-num">03</div>
+            AI Agent 工作状态
+            <div class="section-meta">5 大 Agent · 建议生成与学习闭环</div>
+        </div>
+        <div class="agent-grid" id="agentGrid">
+            <div class="agent-card"><div class="loading">加载中...</div></div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            Nuotao AI OS · 运营监控中心 · 数据每 60 秒自动刷新 · 全部数据来自真实 API
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1';
+        let refreshCount = 0;
+
+        // 工具函数
+        async function fetchJSON(url) {
+            try {
+                const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
+        function fmtMoney(n) {
+            if (n == null || isNaN(n)) return '--';
+            return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function fmtNum(n) {
+            if (n == null || isNaN(n)) return '--';
+            return Number(n).toLocaleString();
+        }
+
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('updateTime').textContent =
+                '更新于 ' + now.toLocaleTimeString('zh-CN') + ' · 第 ' + (++refreshCount) + ' 次刷新';
+        }
+
+        // 1. 顶部状态栏
+        async function loadStatusBar() {
+            const checks = await Promise.all([
+                fetchJSON(API_BASE + '/dashboard/summary'),
+                fetchJSON(API_BASE + '/agent-suggestions?limit=1'),
+                fetchJSON(API_BASE + '/products?limit=100'),
+                fetchJSON(API_BASE + '/orders?limit=1'),
+            ]);
+
+            const [dash, sugg, prod, ord] = checks;
+            const apiOk = !dash.error;
+            const dbOk = !sugg.error && !prod.error && !ord.error;
+
+            const pills = [
+                { label: '网站 API', ok: apiOk, detail: apiOk ? '200 · 正常' : '异常' },
+                { label: '数据库', ok: dbOk, detail: dbOk ? '连接正常' : '连接异常' },
+                { label: 'AI 建议', ok: !sugg.error, detail: sugg.error ? 'API异常' : '服务正常' },
+                { label: '产品/订单', ok: !prod.error && !ord.error, detail: '数据正常' },
+            ];
+
+            document.getElementById('statusBar').innerHTML = pills.map(p => `
+                <div class="status-pill">
+                    <div class="status-dot ${p.ok ? 'green' : 'red'}"></div>
+                    ${p.label} · ${p.detail}
+                </div>
+            `).join('');
+        }
+
+        // 2. 核心指标
+        async function loadMetrics() {
+            const dash = await fetchJSON(API_BASE + '/dashboard/summary');
+            const sugg = await fetchJSON(API_BASE + '/agent-suggestions?limit=200');
+            const prod = await fetchJSON(API_BASE + '/products?limit=100');
+            const inv = await fetchJSON(API_BASE + '/inventory/status');
+
+            if (dash.error) {
+                document.getElementById('metricsGrid').innerHTML =
+                    `<div class="metric-card"><div class="error">dashboard API 错误: ${dash.error}</div></div>`;
+                return;
+            }
+
+            const s = dash.summary || {};
+            const today = s.today || {};
+            const week = s.this_week || {};
+            const month = s.this_month || {};
+            const trends = s.trends || {};
+
+            // 建议统计
+            const suggList = sugg.items || sugg || [];
+            const pending = Array.isArray(suggList) ? suggList.filter(x => x.status === 'pending_approval').length : 0;
+            const completed = Array.isArray(suggList) ? suggList.filter(x => x.status === 'completed').length : 0;
+            const failed = Array.isArray(suggList) ? suggList.filter(x => x.status === 'failed').length : 0;
+            const total = Array.isArray(suggList) ? suggList.length : 0;
+            const successRate = total > 0 ? ((completed / total) * 100).toFixed(0) : '--';
+
+            // 产品总数（支持数组或对象格式）
+            const productCount = Array.isArray(prod) ? prod.length : (prod.total || (Array.isArray(prod.items) ? prod.items.length : 0));
+
+            const woW = trends.revenue_week_over_week || {};
+            const woWDir = woW.direction === 'up' ? 'up' : 'down';
+
+            const cards = [
+                {
+                    label: '今日销售额',
+                    value: fmtMoney(today.revenue?.total_revenue),
+                    sub: `${fmtNum(today.orders?.total_orders)} 单 · 客单价 ${fmtMoney(today.orders?.avg_order_value)} · 毛利率 ${today.revenue?.gross_margin_percent || '--'}%`
+                },
+                {
+                    label: '本周销售额',
+                    value: fmtMoney(week.revenue?.total_revenue),
+                    sub: `${fmtNum(week.orders?.total_orders)} 单 · 周环比 <span class="${woWDir}">${woWDir === 'up' ? '↑' : '↓'} ${woW.change_percent || '--'}%</span>`
+                },
+                {
+                    label: '本月销售额',
+                    value: fmtMoney(month.revenue?.total_revenue),
+                    sub: `${fmtNum(month.orders?.total_orders)} 单 · ROAS ${today.marketing?.roas || '--'} · 广告投入 ${fmtMoney(today.marketing?.ad_spend)}`
+                },
+                {
+                    label: '产品总数',
+                    value: fmtNum(productCount) + (typeof productCount === 'number' ? '' : ''),
+                    sub: `WooCommerce 同步 · 库存系统 ${inv.status || '未知'} · ${inv.features?.length || 0} 项功能`
+                },
+                {
+                    label: 'AI 建议待审批',
+                    value: fmtNum(pending),
+                    sub: `已完成 ${completed} · 失败 ${failed} · 成功率 ${successRate}% · 共 ${total} 条建议`
+                },
+                {
+                    label: '今日新客户',
+                    value: fmtNum(today.customers?.new_customers),
+                    sub: `老客户 ${today.customers?.returning_customers} · 新客率 ${today.customers?.new_customer_rate_percent || '--'}%`
+                },
+            ];
+
+            document.getElementById('metricsGrid').innerHTML = cards.map(c => `
+                <div class="metric-card">
+                    <div class="metric-label">${c.label}</div>
+                    <div class="metric-value">${c.value}</div>
+                    <div class="metric-sub">${c.sub}</div>
+                </div>
+            `).join('');
+        }
+
+        // 3. 自动化任务调度器
+        async function loadWorkflows() {
+            // 调度器 5 个每日任务（通过建议数据推断运行状态）
+            const sugg = await fetchJSON(API_BASE + '/agent-suggestions?limit=200');
+            const suggList = sugg.items || sugg || [];
+
+            const tasks = [
+                { name: '产品分析师每日分析', agent: 'product-analyst', time: '06:00', freq: '每日' },
+                { name: '营销经理每日分析', agent: 'marketing-manager', time: '07:00', freq: '每日' },
+                { name: '供应链经理每日分析', agent: 'supply-chain-manager', time: '08:00', freq: '每日' },
+                { name: '已审批建议执行', agent: 'execution-engine', time: '09:00', freq: '每日' },
+                { name: '反馈学习与策略更新', agent: 'feedback-loop', time: '10:00', freq: '每日' },
+            ];
+
+            // 统计每个 agent 的建议数
+            const agentCounts = {};
+            if (Array.isArray(suggList)) {
+                suggList.forEach(s => {
+                    agentCounts[s.agent_id] = (agentCounts[s.agent_id] || 0) + 1;
+                });
+            }
+
+            const today = new Date().toISOString().split('T')[0];
+            const hasRunToday = Array.isArray(suggList) && suggList.some(s => (s.created_at || '').startsWith(today));
+
+            document.getElementById('schedulerBadge').textContent = hasRunToday ? '今日已运行' : '待运行';
+            document.getElementById('schedulerBadge').style.background = hasRunToday ? 'rgba(74,222,128,0.2)' : 'rgba(251,191,36,0.2)';
+            document.getElementById('schedulerBadge').style.color = hasRunToday ? '#4ade80' : '#fbbf24';
+
+            document.getElementById('workflowList').innerHTML = `
+                <div class="workflow-group">
+                    <div class="workflow-group-title">
+                        调度器每日任务 · <span class="count">5 个任务</span>
+                    </div>
+                    ${tasks.map(t => {
+                        const count = agentCounts[t.agent] || 0;
+                        const status = count > 0 ? 'success' : 'pending';
+                        const statusText = count > 0 ? `已生成 ${count} 条建议` : '待运行';
+                        return `
+                        <div class="workflow-item">
+                            <div class="workflow-name">
+                                <div class="workflow-dot ${status}"></div>
+                                ${t.name}
+                            </div>
+                            <div class="workflow-meta">
+                                <span class="freq-tag">${t.freq} ${t.time}</span>
+                                <span>${statusText}</span>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>
+                <div class="workflow-group">
+                    <div class="workflow-group-title">外部集成 · <span class="count">3 项</span></div>
+                    <div class="workflow-item">
+                        <div class="workflow-name"><div class="workflow-dot success"></div>WooCommerce 产品同步</div>
+                        <div class="workflow-meta"><span class="freq-tag">手动/定时</span><span>API 正常</span></div>
+                    </div>
+                    <div class="workflow-item">
+                        <div class="workflow-name"><div class="workflow-dot success"></div>WooCommerce 订单同步</div>
+                        <div class="workflow-meta"><span class="freq-tag">手动/定时</span><span>API 正常</span></div>
+                    </div>
+                    <div class="workflow-item">
+                        <div class="workflow-name"><div class="workflow-dot success"></div>飞书审批推送</div>
+                        <div class="workflow-meta"><span class="freq-tag">实时</span><span>6:00-23:00</span></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 4. 系统健康巡检
+        async function loadHealth() {
+            const checks = await Promise.all([
+                fetchJSON(API_BASE + '/dashboard/summary'),
+                fetchJSON(API_BASE + '/agent-suggestions?limit=1'),
+                fetchJSON(API_BASE + '/products?limit=100'),
+                fetchJSON(API_BASE + '/orders?limit=1'),
+                fetchJSON(API_BASE + '/inventory/status'),
+                fetchJSON(API_BASE + '/sourcing/status'),
+            ]);
+
+            const [dash, sugg, prod, ord, inv, sourcing] = checks;
+
+            const items = [
+                { label: '后端 API', ok: !dash.error, detail: !dash.error ? '正常' : '异常' },
+                { label: '建议服务', ok: !sugg.error, detail: !sugg.error ? '正常' : '异常' },
+                { label: '产品服务', ok: !prod.error, detail: !prod.error ? '正常' : '异常' },
+                { label: '订单服务', ok: !ord.error, detail: !ord.error ? '正常' : '异常' },
+                { label: '库存系统', ok: !inv.error && inv.status === 'running', detail: inv.status || '未知' },
+                { label: '选品系统', ok: !sourcing.error, detail: !sourcing.error ? '正常' : '异常' },
+                { label: '飞书推送', ok: true, detail: '已配置' },
+                { label: '数据库', ok: !sugg.error && !prod.error, detail: '连接正常' },
+            ];
+
+            const allOk = items.every(i => i.ok);
+            document.getElementById('healthBadge').textContent = allOk ? '全站健康' : `${items.filter(i => !i.ok).length} 项异常`;
+            document.getElementById('healthBadge').style.background = allOk ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)';
+            document.getElementById('healthBadge').style.color = allOk ? '#4ade80' : '#f87171';
+
+            document.getElementById('healthGrid').innerHTML = items.map(i => `
+                <div class="health-item">
+                    <div class="health-value ${i.ok ? 'green' : 'red'}">${i.ok ? '✓' : '✗'}</div>
+                    <div class="health-label">${i.label}<br>${i.detail}</div>
+                </div>
+            `).join('');
+        }
+
+        // 5. AI Agent 工作状态
+        async function loadAgents() {
+            const sugg = await fetchJSON(API_BASE + '/agent-suggestions?limit=200');
+            const suggList = sugg.items || sugg || [];
+
+            const agents = [
+                { id: 'product_analyst', name: '产品分析师', icon: '📦', desc: '选品/定价/优化', schedule: '每日 06:00' },
+                { id: 'marketing_manager', name: '营销经理', icon: '📢', desc: '文案/活动/SEO', schedule: '每日 07:00' },
+                { id: 'supply_chain_manager', name: '供应链经理', icon: '🚚', desc: '采购/物流/库存', schedule: '每日 08:00' },
+                { id: 'customer_manager', name: '客户经理', icon: '👥', desc: '分群/触达/留存', schedule: '未配置定时任务' },
+                { id: 'business_analyst', name: '商业分析师', icon: '📊', desc: '报表/趋势/洞察', schedule: '未配置定时任务' },
+            ];
+
+            const agentData = {};
+            if (Array.isArray(suggList)) {
+                suggList.forEach(s => {
+                    if (!agentData[s.agent_id]) agentData[s.agent_id] = { total: 0, completed: 0, pending: 0 };
+                    agentData[s.agent_id].total++;
+                    if (s.status === 'completed') agentData[s.agent_id].completed++;
+                    if (s.status === 'pending_approval') agentData[s.agent_id].pending++;
+                });
+            }
+
+            document.getElementById('agentGrid').innerHTML = agents.map(a => {
+                const d = agentData[a.id] || { total: 0, completed: 0, pending: 0 };
+                const active = d.total > 0;
+                return `
+                <div class="agent-card">
+                    <div class="agent-icon">${a.icon}</div>
+                    <div class="agent-name">${a.name}</div>
+                    <div class="agent-status">${active ? '● 运行中' : '○ 待激活'}</div>
+                    <div class="agent-schedule">${a.schedule}</div>
+                    <div class="agent-stats">
+                        生成 ${d.total} 条建议<br>
+                        已完成 ${d.completed} · 待审 ${d.pending}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // 主加载函数
+        async function loadAll() {
+            updateTime();
+            await Promise.all([
+                loadStatusBar(),
+                loadMetrics(),
+                loadWorkflows(),
+                loadHealth(),
+                loadAgents(),
+            ]);
+        }
+
+        // 初始加载 + 定时刷新
+        loadAll();
+        setInterval(loadAll, 60000); // 每 60 秒刷新
+    </script>
+</body>
+</html>

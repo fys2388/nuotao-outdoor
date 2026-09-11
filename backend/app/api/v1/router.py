@@ -1,0 +1,161 @@
+"""API v1 router aggregating all endpoint routers."""
+
+from fastapi import APIRouter
+
+from app.api.v1.endpoints import (
+    activity_planner,
+    agent_analysis,
+    ai_capability,
+    agent_operations,
+    agent_platform,
+    agent_runtime,
+    agent_runtime_hardening,
+    agent_suggestions,
+    agents,
+    agents_generic,
+    alerts,
+    auth,
+    b2b_admin,
+    b2b_portal,
+    cache,
+    calibration,
+    connectors,
+    growth_memory,
+    settlements,
+    content_generation,
+    content_marketing,
+    cost_model,
+    customer,
+    customer_learning,
+    customer_service,
+    dashboard,
+    database_backup,
+    deployment,
+    edm_automation,
+    emails,
+    events,
+    fulfillment,
+    feishu,
+    health,
+    i18n_tax,
+    identity,
+    image_gen,
+    influencer,
+    inventory,
+    knowledge,
+    llm_gateway,
+    logistics,
+    main_image,
+    m6_extras,
+    m5_m6,
+    marketing,
+    marketing_learning,
+    notifications,
+    newton_agent,
+    operation_logs,
+    orders,
+    overseas_warehouse,
+    p3,
+    product_intelligence,
+    product_listing,
+    products,
+    product_analysis,
+    product_pipeline,
+    prompts,
+    procurement_workbench,
+    purchase_automation,
+    refunds,
+    rules,
+    scraping,
+    selection,
+    seo,
+    sourcing,
+    sourcing_enhanced,
+    supply_chain,
+    supply_chain_learning,
+    system_settings,
+    webhooks,
+    webhooks_generic,
+    weekly_report,
+    woocommerce_sync,
+)
+
+api_router = APIRouter()
+api_router.include_router(auth.router)
+api_router.include_router(health.router)
+api_router.include_router(i18n_tax.router)
+api_router.include_router(events.router)
+api_router.include_router(identity.router)
+api_router.include_router(rules.router)
+api_router.include_router(products.router)
+api_router.include_router(product_analysis.router)
+api_router.include_router(product_pipeline.router)
+api_router.include_router(purchase_automation.router)
+api_router.include_router(procurement_workbench.router)
+api_router.include_router(refunds.router)
+api_router.include_router(webhooks.router)
+api_router.include_router(webhooks_generic.router)
+api_router.include_router(weekly_report.router)
+api_router.include_router(woocommerce_sync.router)
+api_router.include_router(orders.router)
+api_router.include_router(overseas_warehouse.router)
+api_router.include_router(p3.router)
+api_router.include_router(cost_model.router)
+api_router.include_router(product_intelligence.product_router)
+api_router.include_router(product_intelligence.decision_router)
+api_router.include_router(product_intelligence.candidate_router)
+api_router.include_router(product_listing.router)
+api_router.include_router(scraping.router)
+api_router.include_router(selection.router)
+api_router.include_router(seo.router)
+api_router.include_router(sourcing.router)
+api_router.include_router(sourcing_enhanced.router)
+api_router.include_router(agents.router)
+api_router.include_router(agents.evaluation_router)
+api_router.include_router(agents_generic.router)
+api_router.include_router(alerts.router)
+api_router.include_router(prompts.router)
+api_router.include_router(calibration.router)
+api_router.include_router(cache.router)
+api_router.include_router(content_generation.router)
+api_router.include_router(content_marketing.router)
+api_router.include_router(customer.router)
+api_router.include_router(customer_learning.router)
+api_router.include_router(customer_service.router)
+api_router.include_router(dashboard.router)
+api_router.include_router(database_backup.router)
+api_router.include_router(deployment.router)
+api_router.include_router(emails.router)
+api_router.include_router(edm_automation.router)
+api_router.include_router(fulfillment.router)
+api_router.include_router(image_gen.router)
+api_router.include_router(inventory.router)
+api_router.include_router(activity_planner.router)
+api_router.include_router(influencer.router)
+api_router.include_router(m6_extras.router)
+api_router.include_router(m5_m6.router)
+api_router.include_router(knowledge.router)
+api_router.include_router(llm_gateway.router)
+api_router.include_router(logistics.router)
+api_router.include_router(main_image.router)
+api_router.include_router(marketing.router)
+api_router.include_router(marketing_learning.router)
+api_router.include_router(notifications.router)
+api_router.include_router(newton_agent.router)
+api_router.include_router(operation_logs.router)
+api_router.include_router(supply_chain.router)
+api_router.include_router(supply_chain_learning.router)
+api_router.include_router(system_settings.router)
+api_router.include_router(connectors.router)
+api_router.include_router(agent_runtime.router)
+api_router.include_router(agent_runtime_hardening.router)
+api_router.include_router(agent_operations.router)
+api_router.include_router(agent_platform.router)
+api_router.include_router(agent_analysis.router)
+api_router.include_router(agent_suggestions.router)
+api_router.include_router(growth_memory.router)
+api_router.include_router(settlements.router)
+api_router.include_router(feishu.router)
+api_router.include_router(ai_capability.router)
+api_router.include_router(b2b_portal.router)
+api_router.include_router(b2b_admin.router)

@@ -1,0 +1,85 @@
+name: Debug Staging Trace
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging with uvicorn trace logging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug staging trace
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Stop staging service and kill all 8001 processes ==="
+            systemctl stop nuotao-backend-staging
+            sleep 2
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            sleep 2
+            ss -tlnp | grep ':8001' || echo "Port 8001 is FREE"
+
+            echo ""
+            echo "=== 2. Clear pycache ==="
+            find /opt/nuotao/staging/backend/app -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+            find /opt/nuotao/staging/backend -name "*.pyc" -delete 2>/dev/null
+
+            echo ""
+            echo "=== 3. Start uvicorn with trace logging (foreground, 12 seconds) ==="
+            cd /opt/nuotao/staging/backend
+            timeout 12 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1 --log-level trace 2>&1 | head -80 &
+            sleep 8
+
+            echo ""
+            echo "=== 4. Test endpoints while uvicorn is running ==="
+            curl -s -w " HTTP %{http_code}\n" --max-time 3 http://127.0.0.1:8001/api/v1/readyz
+            curl -s --max-time 3 http://127.0.0.1:8001/openapi.json | .venv/bin/python -c "
+            import sys, json
+            try:
+                d = json.load(sys.stdin)
+                paths = list(d.get('paths', {}).keys())
+                print(f'Paths: {len(paths)}')
+                print(f'All: {paths}')
+            except Exception as e:
+                print(f'Error: {e}')
+            " 2>&1
+
+            echo ""
+            echo "=== 5. Check uvicorn process details ==="
+            ps aux | grep uvicorn | grep -v grep
+
+            echo ""
+            echo "=== 6. Test with PYTHONPATH explicitly set ==="
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            sleep 2
+
+            cd /opt/nuotao/staging/backend
+            PYTHONPATH=/opt/nuotao/staging/backend timeout 10 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1 2>&1 &
+            sleep 6
+            curl -s --max-time 3 http://127.0.0.1:8001/openapi.json | .venv/bin/python -c "
+            import sys, json
+            try:
+                d = json.load(sys.stdin)
+                paths = list(d.get('paths', {}).keys())
+                print(f'With PYTHONPATH - Paths: {len(paths)}')
+            except Exception as e:
+                print(f'Error: {e}')
+            " 2>&1
+
+            echo ""
+            echo "=== 7. Cleanup ==="
+            PIDS=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | sort -u)
+            if [ -n "$PIDS" ]; then
+                for PID in $PIDS; do kill -9 $PID 2>/dev/null || true; done
+            fi
+            echo "Cleanup done"

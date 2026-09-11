@@ -1,0 +1,43 @@
+name: Check Feishu Logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check feishu related logs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== 最近100条后端日志（飞书相关）==="
+            journalctl -u nuotao-backend -n 200 --no-pager | grep -iE "feishu|飞书|message_id|Agent建议|suggestion_id|卡片" | tail -40
+            echo ""
+            echo "=== 检查建议6的详细信息 ==="
+            cd /opt/nuotao/backend && source .venv/bin/activate
+            cat > /tmp/check_feishu_sug.py << 'PYEOF'
+            import asyncio
+            from app.core.database import async_session_factory
+            from app.models.agent_suggestion import AgentSuggestion
+            from sqlalchemy import select
+
+            async def main():
+                async with async_session_factory() as s:
+                    r = await s.execute(select(AgentSuggestion).where(AgentSuggestion.id == 6))
+                    sug = r.scalar_one_or_none()
+                    if sug:
+                        print(f"建议ID: {sug.id}")
+                        print(f"状态: {sug.status}")
+                        print(f"feishu_message_id: '{sug.feishu_message_id}'")
+                        print(f"标题: {sug.title[:50]}")
+                    else:
+                        print("建议6不存在")
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/check_feishu_sug.py
+            rm -f /tmp/check_feishu_sug.py

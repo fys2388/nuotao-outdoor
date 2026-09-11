@@ -1,0 +1,120 @@
+name: Enable Staging Environment
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enable-staging:
+    name: Enable staging environment on server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable staging on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            STAGE=/opt/nuotao/staging
+
+            echo "=== 1. Create staging directory ==="
+            mkdir -p "$STAGE"
+            echo "Staging dir: $STAGE"
+
+            echo ""
+            echo "=== 2. Copy code from production (excluding .git/.env/.venv/node_modules) ==="
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a --delete \
+                --exclude .git --exclude backend/.env --exclude backend/.venv \
+                --exclude frontend/node_modules --exclude staging \
+                /opt/nuotao/ "$STAGE/"
+              echo "Code synced via rsync"
+            else
+              tar --exclude='./.git' --exclude='./backend/.env' --exclude='./backend/.venv' \
+                  --exclude='./frontend/node_modules' --exclude='./staging' \
+                  -cf - -C /opt/nuotao . | tar -xf - -C "$STAGE/"
+              echo "Code synced via tar"
+            fi
+
+            echo ""
+            echo "=== 3. Create staging venv and install deps ==="
+            cd "$STAGE/backend"
+            python3 -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip --quiet
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet
+            echo "Python deps installed"
+
+            echo ""
+            echo "=== 4. Create staging database ==="
+            sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='nuotao_staging'" | grep -q 1 || \
+              sudo -u postgres createdb nuotao_staging
+            sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE nuotao_staging TO nuotao"
+            sudo -u postgres psql -c "ALTER DATABASE nuotao_staging OWNER TO nuotao"
+            echo "Database nuotao_staging ready"
+
+            echo ""
+            echo "=== 5. Create staging .env ==="
+            cp /opt/nuotao/backend/.env "$STAGE/backend/.env"
+            # Modify for staging
+            sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://nuotao:'"$(grep '^DB_PASSWORD=' /opt/nuotao/backend/.env | cut -d= -f2)"'@127.0.0.1:5432/nuotao_staging|' "$STAGE/backend/.env"
+            sed -i 's|^APP_ENV=.*|APP_ENV=staging|' "$STAGE/backend/.env"
+            sed -i 's|^PORT=.*|PORT=8001|' "$STAGE/backend/.env"
+            echo "Staging .env created"
+
+            echo ""
+            echo "=== 6. Run alembic migrations ==="
+            cd "$STAGE/backend"
+            source .venv/bin/activate
+            # 只提取DATABASE_URL, 不source整个.env(避免带空格值如APP_NAME导致bash报错)
+            export DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
+            alembic upgrade head
+            echo "Migrations applied"
+
+            echo ""
+            echo "=== 7. Build frontend (staging) ==="
+            cd "$STAGE/frontend"
+            npm install --silent 2>/dev/null || true
+            npm run build 2>&1 | tail -3
+            mkdir -p /var/www/nuotao-staging
+            cp -r dist/* /var/www/nuotao-staging/ 2>/dev/null || cp -r build/* /var/www/nuotao-staging/ 2>/dev/null || true
+            echo "Frontend built and deployed to /var/www/nuotao-staging"
+
+            echo ""
+            echo "=== 8. Install staging systemd service ==="
+            mkdir -p "$STAGE/backend/data" "$STAGE/backend/logs" "$STAGE/backend/app/data" "$STAGE/backend/app/logs"
+            chown -R nuotao:nuotao "$STAGE"
+            cp "$STAGE/infra/systemd/nuotao-backend-staging.service" /etc/systemd/system/nuotao-backend-staging.service
+            systemctl daemon-reload
+            systemctl enable nuotao-backend-staging
+            systemctl restart nuotao-backend-staging
+            sleep 3
+            systemctl status nuotao-backend-staging --no-pager | head -8
+
+            echo ""
+            echo "=== 9. Install staging nginx config ==="
+            cp "$STAGE/infra/nginx/staging-console.conf" /etc/nginx/sites-available/nuotao-staging
+            ln -sf /etc/nginx/sites-available/nuotao-staging /etc/nginx/sites-enabled/nuotao-staging
+            nginx -t 2>&1 | head -3
+            systemctl reload nginx
+            echo "Staging nginx ready on :8082"
+
+            echo ""
+            echo "=== 10. Verify staging health ==="
+            sleep 2
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "000")
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8082/ || echo "000")
+            echo "Staging backend :8001/readyz -> HTTP $BACKEND_CODE"
+            echo "Staging frontend :8082/ -> HTTP $FRONTEND_CODE"
+            echo ""
+            echo "Staging readyz body:"
+            curl -s --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "(no response)"
+
+            echo ""
+            echo "=== STAGING ENVIRONMENT ENABLED ==="
+            echo "Backend:  http://127.0.0.1:8001"
+            echo "Frontend: http://127.0.0.1:8082"
+            echo "Database: nuotao_staging"
+            echo "Service:  nuotao-backend-staging"

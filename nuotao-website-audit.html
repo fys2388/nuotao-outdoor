@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nuotao Outdoor 网站体检报告 — 2026-09-07</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Roboto','PingFang SC','Segoe UI',Arial,sans-serif; background:#F7F7F5; color:#1A1B1C; line-height:1.55; }
+  .wrap { max-width:1100px; margin:0 auto; padding:32px 20px 60px; }
+  h1 { font-size:22px; font-weight:600; }
+  .sub { color:#6B7280; font-size:13px; margin-top:4px; }
+  .meta { display:flex; gap:16px; flex-wrap:wrap; margin-top:18px; font-size:12px; color:#6B7280; }
+  .meta span { background:#fff; border:1px solid #E4E3DD; border-radius:8px; padding:4px 10px; }
+  .score-grid { display:flex; gap:12px; flex-wrap:wrap; margin:24px 0 8px; }
+  .score-card { flex:1 1 150px; min-width:130px; background:#fff; border:1px solid #E4E3DD; border-radius:12px; padding:14px 16px; }
+  .score-card .num { font-size:24px; font-weight:600; }
+  .score-card .label { font-size:12px; color:#6B7280; margin-top:2px; }
+  .score-card .note { font-size:11px; color:#EA6668; margin-top:4px; }
+  .section { margin-top:32px; }
+  .section h2 { font-size:16px; font-weight:600; padding-left:10px; border-left:4px solid #94D8C3; }
+  .section .desc { font-size:12.5px; color:#6B7280; margin:6px 0 14px 14px; }
+  .issue { background:#fff; border:1px solid #E4E3DD; border-radius:12px; padding:16px 18px; margin-bottom:12px; }
+  .issue.sev-P0 { border-left:4px solid #EA6668; }
+  .issue.sev-P1 { border-left:4px solid #FAAD14; }
+  .issue.sev-OK { border-left:4px solid #52C41A; }
+  .issue .head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .tag { font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; }
+  .tag.P0 { background:#FDECEC; color:#C0392B; }
+  .tag.P1 { background:#FEF4E0; color:#B7791F; }
+  .tag.OK { background:#EDF7EA; color:#3D7A2F; }
+  .issue h3 { font-size:14.5px; font-weight:600; flex:1 1 200px; }
+  .issue .evidence { font-size:12.5px; color:#4B5563; margin-top:8px; background:#FAFAF8; border-radius:8px; padding:10px 12px; }
+  .issue .evidence b { color:#1A1B1C; }
+  .issue .fix { font-size:12.5px; margin-top:8px; }
+  .issue .fix b { color:#1A1B1C; }
+  .issue .fix span { color:#3D7A2F; }
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #E4E3DD; font-size:12.5px; }
+  th { background:#F2F2EF; text-align:left; padding:10px 12px; font-weight:600; font-size:12px; }
+  td { padding:10px 12px; border-top:1px solid #E4E3DD; vertical-align:top; }
+  .footer { margin-top:36px; font-size:11.5px; color:#9CA3AF; text-align:center; }
+  @media (max-width:480px){ body{ font-size:14px; } h1{ font-size:19px; } .score-card{ flex:1 1 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nuotao Outdoor 网站体检报告</h1>
+  <div class="sub">nuotaooutdoor.com · 全站逐页人工浏览 + 功能实测 · 2026-09-07</div>
+  <div class="meta">
+    <span>浏览器：Chrome（已登录 WordPress 后台）</span>
+    <span>实测页面：首页 / Shop / 10 个分类 / 产品页 / 购物车 / 结算 / 政策页</span>
+    <span>检查项：内容 · 图片 · 功能 · SEO · 安全 · 性能</span>
+  </div>
+
+  <div class="score-grid">
+    <div class="score-card"><div class="num">15</div><div class="label">在售产品</div><div class="note">10 个分类中 2 个为空</div></div>
+    <div class="score-card"><div class="num">6</div><div class="label">严重问题 P0</div><div class="note">直接影响转化与信任</div></div>
+    <div class="score-card"><div class="num">5</div><div class="label">中等问题 P1</div><div class="note">SEO 与体验优化</div></div>
+    <div class="score-card"><div class="num">11</div><div class="label">WordPress 更新待处理</div><div class="note">安全风险</div></div>
+    <div class="score-card"><div class="num">0</div><div class="label">产品评论</div><div class="note">全部产品 Reviews (0)</div></div>
+  </div>
+
+  <div class="section">
+    <h2>🔴 P0 严重问题 — 必须优先修复</h2>
+    <div class="desc">以下问题直接损害客户信任、违背营销承诺或存在安全/侵权风险，建议 1 周内处理。</div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>满 $150 免运费承诺未生效</h3></div>
+      <div class="evidence">首页横幅与 FAQ 均宣称 <b>"Free Shipping over $150"</b>；实测购物车 <b>$239.96</b>（4 件帐篷）选择美国地址，结算仍收取 <b>$15.99</b> 运费。Shipping 政策页表格列错位：&quot;Rest of World&quot; 行的 Cost 列显示 "Free Shipping"、Delivery 列显示 "Free over $150"；北美 / 英国 / EU 均为固定运费，无免邮门槛。</div>
+      <div class="fix">修复建议：<span>在 WooCommerce 运费设置中为北美/英国/EU 区域补配 "Free shipping" 门槛（$150），并修正政策页表格列错位；上线前用购物车实测 ≥$150 订单运费为 $0。</span></div>
+    </div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>首屏与分类图大量 AI 水印 / 1688 中文图</h3></div>
+      <div class="evidence">已逐张下载核对：<b>首页 hero 帐篷图</b>、<b>Tents &amp; Shelters / Sleeping Gear / Backpacks / Outlet</b> 4 个分类图右下角均带 <b>"图片由AI生成"</b> 水印（其中 Backpacks 图上印着乱码字样 "slocniich"）；<b>Camping Furniture</b> 分类图是 1688 茶具图（内容不是家具，带中文文案"纯钛双层泡茶器"）；<b>Titanium Cookware</b> 分类图暴露供应商名称"揭阳市新熹钛金属制品有限公司"。2 张图直接引用阿里巴巴图床域名（O1CN...cib.jpg），存在防盗链失效与侵权风险。</div>
+      <div class="fix">修复建议：<span>全部替换为无水印产品实拍图/无文字场景图，删除 1688 域名直链；优先处理首屏 hero（所有访客第一眼）与 6 个分类图。</span></div>
+    </div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>页脚残缺：信任/政策页面全部不可达</h3></div>
+      <div class="evidence">页脚仅有 10 个分类链接 + Shop，<b>无 About / Contact / FAQ / Privacy / Terms / Shipping / Returns 任何链接</b>；版权行只写 "All rights reserved"，无年份无公司名；无支付方式图标、无社媒入口、无邮件订阅。而这些政策页面实际都已创建（sitemap 可查），等于"建了但客户找不到"。</div>
+      <div class="fix">修复建议：<span>页脚改为完整结构：Shop 链接 / 帮助区（FAQ、Shipping、Returns、Contact）/ 公司区（About、Terms、Privacy）+ 版权年份 + 支付图标（Stripe、Apple Pay、Google Pay）。</span></div>
+    </div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>空分类与死链入口：2 个分类 0 产品、促销指向空页</h3></div>
+      <div class="evidence">导航栏 <b>Sleeping Gear</b> 与 <b>Outlet</b> 两个分类显示 "No products were found"；首页 <b>"Shop by Category" 的 Titanium Cookware 链接指向旧分类 /titanium-cookware-utensils/（空）</b>，而导航用的是 /cookware-picnic/（有 2 品）——同一类目两个 URL；首页 <b>"Shop the Sale" 促销按钮指向空 Outlet 分类</b>，"Outlet Deals — Limited Stock" 区块无任何商品支撑。</div>
+      <div class="fix">修复建议：<span>要么上架产品填充，要么隐藏空分类；统一首页与导航的类目 URL（重定向旧链接）；促销按钮改指真实在售的折扣商品或移除。</span></div>
+    </div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>结算页条款勾选链接指向结算页自身</h3></div>
+      <div class="evidence">结算页 "I have read and agree to the website terms and conditions" 的链接 href 为 <b>https://nuotaooutdoor.com/checkout/</b>（指向自己），而不是 /terms-conditions/。WooCommerce 后台未正确配置 Terms 页面。</div>
+      <div class="fix">修复建议：<span>WooCommerce → 设置 → 高级 → 隐私/条款，将 Terms &amp; Conditions 页指定为 /terms-conditions/，保存后复查链接。</span></div>
+    </div>
+
+    <div class="issue sev-P0">
+      <div class="head"><span class="tag P0">P0</span><h3>安全维护：11 个更新待处理、版本号泄露</h3></div>
+      <div class="evidence">后台显示 <b>11 updates available</b>（WordPress 核心/插件）；前台源码 <meta name="generator" content="WordPress 7.0.4"> 泄露版本号，便于攻击者定向利用已知漏洞。当前浏览器以前台身份登录（fys2388@gmail.com），WordPress 管理栏在"访客页面"可见。</div>
+      <div class="fix">修复建议：<span>立即更新全部核心/插件/主题并备份；移除 generator meta（或使用 Rank Math 隐藏）；日常用低权限账号/无痕窗口核对前台。</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🟡 P1 中等问题 — 建议本月优化</h2>
+    <div class="desc">SEO 与体验类问题，不阻塞成交但影响增长与转化率。</div>
+
+    <div class="issue sev-P1">
+      <div class="head"><span class="tag P1">P1</span><h3>首页 SEO 标题与 H1 无关键词策略</h3></div>
+      <div class="evidence">首页 title 为 "Home - Nuotao Outdoor"，页面存在两个 H1：无意义的 "Home" + 主标语。核心关键词（camping tent / outdoor gear）未体现在 title/H1。</div>
+      <div class="fix">修复建议：<span>title 改为含品类词的组合（如 "Nuotao Outdoor | Lightweight Camping Tents &amp; Hiking Gear"），删除多余 H1。</span></div>
+    </div>
+
+    <div class="issue sev-P1">
+      <div class="head"><span class="tag P1">P1</span><h3>商品结构薄弱：全站仅 15 品、帐篷类仅 1 品</h3></div>
+      <div class="evidence">Shop 共 15 个产品；帐篷分类只有 1 个产品、Sleeping Gear 为 0；"Best Sellers" 区块 8 款产品但全站 0 评论 0 销量数据支撑。部分产品无 SKU（如帐篷），描述长度参差（帐篷 3 句 vs 背包结构化长文）。</div>
+      <div class="fix">修复建议：<span>优先补齐核心品类（帐篷、睡袋）SKU 与规格参数（Additional Information），统一描述模板，为每个产品补 SKU。</span></div>
+    </div>
+
+    <div class="issue sev-P1">
+      <div class="head"><span class="tag P1">P1</span><h3>支付方式单一：无 PayPal</h3></div>
+      <div class="evidence">结算仅 Stripe Card + Apple/Google Pay。欧美市场 PayPal 使用率高，缺失会流失部分客户。</div>
+      <div class="fix">修复建议：<span>接入 PayPal Checkout（Stripe 或独立插件），与 Stripe 并行展示。</span></div>
+    </div>
+
+    <div class="issue sev-P1">
+      <div class="head"><span class="tag P1">P1</span><h3>品牌信息不一致</h3></div>
+      <div class="evidence">About Us 写 "based in Shenzhen, China"；Contact 页地址却是香港中环；产品页描述称 "Ships from our warehouse" 但未说明仓库所在地。面向欧美客户需统一品牌故事口径。</div>
+      <div class="fix">修复建议：<span>统一为一种表述（建议按实际主体：香港公司 + 深圳运营），避免客户疑虑。</span></div>
+    </div>
+
+    <div class="issue sev-P1">
+      <div class="head"><span class="tag P1">P1</span><h3>控制台 jQuery 迁移警告</h3></div>
+      <div class="evidence">浏览器控制台出现 JQMIGRATE 警告（旧版 jQuery 依赖代码），随主题/插件产生，长期存在兼容与性能隐患。</div>
+      <div class="fix">修复建议：<span>升级主题/插件到兼容版本，消除依赖旧 jQuery API 的代码。</span></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🟢 验证通过项</h2>
+    <div class="desc">本次实测确认正常的部分，无需处理。</div>
+    <div class="issue sev-OK">
+      <div class="head"><span class="tag OK">OK</span><h3>功能与基础设施</h3></div>
+      <div class="evidence"><b>购物车/结算/运费计算</b>（非免邮门槛部分）实测正常，$59.99 产品 + 美国地址 = $15.99 运费计算正确；<b>Stripe 支付</b>已正确注入（Card + 3 种快捷支付）；<b>SSL 证书</b>有效（Google Trust Services，至 2026-12-02）；<b>robots.txt 与 Rank Math sitemap</b> 正常且空分类未被收录；<b>站内搜索</b>正常；<b>移动端</b> viewport meta、汉堡菜单正常、无横向溢出；全站 103 个资源请求无 4xx 错误；产品新图（2026/09，p1–p9）无水印、白底规范。</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>📋 修复优先级建议</h2>
+    <table>
+      <tr><th style="width:60px;">优先级</th><th>动作</th><th style="width:120px;">预估耗时</th></tr>
+      <tr><td>P0-1</td><td>修复免邮门槛（WooCommerce 运费规则 + 政策表）并实测验证</td><td>1–2 小时</td></tr>
+      <tr><td>P0-2</td><td>替换首屏/分类 AI 水印图与 1688 图，移除图床直链</td><td>半天</td></tr>
+      <tr><td>P0-3</td><td>重做页脚（政策链接 + 版权 + 支付图标）</td><td>1–2 小时</td></tr>
+      <tr><td>P0-4</td><td>隐藏/填充空分类，统一首页与导航类目 URL，修复促销指向</td><td>半天</td></tr>
+      <tr><td>P0-5</td><td>配置结算 Terms 页链接 + 执行 11 个更新</td><td>1 小时</td></tr>
+      <tr><td>P1</td><td>SEO 标题/H1、补 SKU 与规格、接入 PayPal、统一品牌口径</td><td>2–3 天</td></tr>
+    </table>
+  </div>
+
+  <div class="footer">本报告由豆包对 nuotaooutdoor.com 全站逐页实测生成 · 检查日期 2026-09-07</div>
+</div>
+</body>
+</html>

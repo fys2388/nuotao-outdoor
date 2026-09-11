@@ -1,0 +1,40 @@
+name: Check Backend Logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend logs for feishu errors
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== 最近50条后端日志（飞书相关）==="
+            journalctl -u nuotao-backend -n 100 --no-pager | grep -i "feishu\|飞书\|message_id\|tenant_access" | tail -30
+            echo ""
+            echo "=== 检查 .env 中的飞书变量 ==="
+            grep -E "FEISHU" /opt/nuotao/.env | sed 's/=.*/=***/'
+            echo ""
+            echo "=== 检查数据库字段 ==="
+            cd /opt/nuotao/backend && source .venv/bin/activate
+            cat > /tmp/check_feishu_col.py << 'PYEOF'
+            import sys, os
+            sys.path.insert(0, '.')
+            os.chdir('.')
+            from sqlalchemy import create_engine, inspect
+            from app.core.config import get_settings
+            settings = get_settings()
+            sync_url = settings.database_url.replace('+asyncpg', '')
+            engine = create_engine(sync_url)
+            insp = inspect(engine)
+            cols = [c['name'] for c in insp.get_columns('agent_suggestions')]
+            print('agent_suggestions 表字段:', cols)
+            print('feishu_message_id 存在:', 'feishu_message_id' in cols)
+            PYEOF
+            python3 /tmp/check_feishu_col.py
+            rm -f /tmp/check_feishu_col.py

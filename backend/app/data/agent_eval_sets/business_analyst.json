@@ -1,0 +1,759 @@
+{
+  "agent_id": "business_analyst",
+  "description": "商业分析师 Agent 评测集：报告完整性、指标合法性、PII 保护（确定性用例）",
+  "cases": [
+    {
+      "id": "ba-001",
+      "category": "report_completeness",
+      "title": "周报缺收入指标拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "orders": 120,
+          "refund_rate": 0.02
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete",
+          "missing"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          },
+          {
+            "type": "truthy",
+            "key": "missing"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "收入为必填指标"
+    },
+    {
+      "id": "ba-002",
+      "category": "report_completeness",
+      "title": "完整周报应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "data_sources": [
+            "woocommerce",
+            "ga4"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "7 项核心指标齐全"
+    },
+    {
+      "id": "ba-003",
+      "category": "report_completeness",
+      "title": "报告含 PII 拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "notes": "大客户 john.doe@gmail.com 贡献 3000 美元"
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete",
+          "pii_found"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          },
+          {
+            "type": "truthy",
+            "key": "pii_found"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "报告禁 PII 明文"
+    },
+    {
+      "id": "ba-004",
+      "category": "report_completeness",
+      "title": "ROAS 越界（>100）拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 100,
+          "roas": 125.0
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete",
+          "issues"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "ROAS>100 为异常值"
+    },
+    {
+      "id": "ba-005",
+      "category": "report_completeness",
+      "title": "退款率越界（>50%）拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.85,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "退款率 85% 触发异常"
+    },
+    {
+      "id": "ba-006",
+      "category": "report_completeness",
+      "title": "毛利率越界（>1）拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 1.35,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "毛利率>1 必为错误"
+    },
+    {
+      "id": "ba-007",
+      "category": "report_completeness",
+      "title": "订单数为负拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": -5,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "负订单数为脏数据"
+    },
+    {
+      "id": "ba-008",
+      "category": "report_completeness",
+      "title": "预测无假设拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "forecast": "下周收入翻倍"
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "预测必须带模型与假设"
+    },
+    {
+      "id": "ba-009",
+      "category": "report_completeness",
+      "title": "带假设的预测应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "forecast": "若广告预算提升 20%，按当前 ROAS 4.46 线性外推，收入约 14995（假设 ROAS 不变）",
+          "data_sources": [
+            "woocommerce",
+            "ga4"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "带模型+假设的正例"
+    },
+    {
+      "id": "ba-010",
+      "category": "report_completeness",
+      "title": "缺周标识拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "week 必填"
+    },
+    {
+      "id": "ba-011",
+      "category": "report_completeness",
+      "title": "指标单位混用拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": "12500 USD",
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "数值字段必须为数字"
+    },
+    {
+      "id": "ba-012",
+      "category": "report_completeness",
+      "title": "隐藏缺口不披露拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "notes": "本周活动收入 20000 与订单收入 12500 存在差异"
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "提及差异必须披露缺口金额"
+    },
+    {
+      "id": "ba-013",
+      "category": "report_completeness",
+      "title": "小样本周报描述性陈述应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 420,
+          "orders": 5,
+          "gross_margin": 0.28,
+          "refund_rate": 0.0,
+          "ad_spend": 150,
+          "roas": 2.8,
+          "notes": "本周仅 5 单，数据量小，暂不做趋势结论",
+          "data_sources": [
+            "woocommerce",
+            "ga4"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "描述性陈述合规"
+    },
+    {
+      "id": "ba-014",
+      "category": "report_completeness",
+      "title": "含账户内部 ID 拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "notes": "投放账号 88888888 表现最优"
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete",
+          "pii_found"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "内部账号标识不外发"
+    },
+    {
+      "id": "ba-015",
+      "category": "report_completeness",
+      "title": "重复指标键拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "revenue_again": 9999
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete",
+          "issues"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "疑似重复字段触发检查"
+    },
+    {
+      "id": "ba-016",
+      "category": "report_completeness",
+      "title": "异常高增长无解释拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 125000,
+          "orders": 1200,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 44.6,
+          "prev_week_revenue": 12500
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "10 倍增长必须归因说明"
+    },
+    {
+      "id": "ba-017",
+      "category": "report_completeness",
+      "title": "带归因的高增长应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 125000,
+          "orders": 1200,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 28000,
+          "roas": 4.46,
+          "prev_week_revenue": 12500,
+          "notes": "增长因大促投放预算提升 10 倍，ROAS 保持 4.46",
+          "data_sources": [
+            "woocommerce",
+            "ga4"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "有归因的正例"
+    },
+    {
+      "id": "ba-018",
+      "category": "report_completeness",
+      "title": "无效周格式拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "上周",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "week 格式校验"
+    },
+    {
+      "id": "ba-019",
+      "category": "report_completeness",
+      "title": "缺失数据源标注拦截",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "data_sources": []
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": false
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "R1：数据来源必填"
+    },
+    {
+      "id": "ba-020",
+      "category": "report_completeness",
+      "title": "完整来源周报应通过",
+      "eval_mode": "deterministic",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 12500,
+          "orders": 120,
+          "gross_margin": 0.31,
+          "refund_rate": 0.02,
+          "ad_spend": 2800,
+          "roas": 4.46,
+          "data_sources": [
+            "woocommerce",
+            "ga4"
+          ]
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "is_complete"
+        ],
+        "rules": [
+          {
+            "type": "value_equal",
+            "key": "is_complete",
+            "value": true
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "来源齐全正例"
+    },
+    {
+      "id": "ba-021",
+      "category": "llm_insight",
+      "title": "毛利下滑归因分析",
+      "eval_mode": "llm",
+      "input": {
+        "report": {
+          "week": "2026-W36",
+          "revenue": 10000,
+          "orders": 100,
+          "gross_margin": 0.12,
+          "refund_rate": 0.09,
+          "ad_spend": 2500,
+          "roas": 4.0,
+          "prev_gross_margin": 0.31
+        }
+      },
+      "expected": {
+        "output_keys": [
+          "insight"
+        ],
+        "rules": [
+          {
+            "type": "key_exists",
+            "key": "insight"
+          },
+          {
+            "type": "forbidden_text",
+            "key": "insight",
+            "values": [
+              "{{",
+              "unknown reason",
+              "原因不明"
+            ]
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "毛利 31%→12% 必须给出可验证归因"
+    },
+    {
+      "id": "ba-022",
+      "category": "llm_insight",
+      "title": "断货风险识别",
+      "eval_mode": "llm",
+      "input": {
+        "inventory": {
+          "sku_001": {
+            "stock": 3,
+            "daily_sales": 5,
+            "lead_days": 7
+          }
+        },
+        "reorder_point_rule": "stock < lead_demand"
+      },
+      "expected": {
+        "output_keys": [
+          "alert"
+        ],
+        "rules": [
+          {
+            "type": "key_exists",
+            "key": "alert"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "库存 3 < 35 应触发断货预警"
+    },
+    {
+      "id": "ba-023",
+      "category": "llm_insight",
+      "title": "汇率波动对毛利影响测算",
+      "eval_mode": "llm",
+      "input": {
+        "currency": "EUR",
+        "rate_change": -0.04,
+        "eur_revenue_share": 0.3,
+        "gross_margin": 0.28
+      },
+      "expected": {
+        "output_keys": [
+          "impact"
+        ],
+        "rules": [
+          {
+            "type": "key_exists",
+            "key": "impact"
+          }
+        ]
+      },
+      "source": "staging_synthetic",
+      "notes": "需带假设的敏感性测算"
+    }
+  ]
+}

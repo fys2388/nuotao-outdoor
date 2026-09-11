@@ -1,0 +1,59 @@
+name: Fix Staging Port
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Fix staging port conflict and restart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix staging port
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. Stop staging service ==="
+            systemctl stop nuotao-backend-staging
+            echo "Service stopped"
+
+            echo ""
+            echo "=== 2. Wait for port release (5s) ==="
+            sleep 5
+
+            echo ""
+            echo "=== 3. Check port 8001 ==="
+            if ss -tlnp | grep -q ':8001'; then
+                echo "Port 8001 still in use, killing process..."
+                PID=$(ss -tlnp | grep ':8001' | grep -oP 'pid=\K[0-9]+' | head -1)
+                if [ -n "$PID" ]; then
+                    echo "Killing PID $PID"
+                    kill -9 "$PID" 2>/dev/null || true
+                    sleep 2
+                fi
+            else
+                echo "Port 8001 is free"
+            fi
+
+            echo ""
+            echo "=== 4. Start staging service ==="
+            systemctl start nuotao-backend-staging
+            echo "Service started, waiting 8s..."
+            sleep 8
+
+            echo ""
+            echo "=== 5. Service status ==="
+            systemctl status nuotao-backend-staging --no-pager | head -12
+
+            echo ""
+            echo "=== 6. Health check ==="
+            BACKEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "000")
+            FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8082/ || echo "000")
+            echo "Backend :8001/readyz -> HTTP $BACKEND_CODE"
+            echo "Frontend :8082/ -> HTTP $FRONTEND_CODE"
+            echo ""
+            echo "Readyz body:"
+            curl -s --max-time 5 http://127.0.0.1:8001/api/v1/readyz || echo "(no response)"

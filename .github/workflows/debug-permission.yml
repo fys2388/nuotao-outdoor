@@ -1,0 +1,67 @@
+name: Debug PermissionError Stacktrace
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug full PermissionError stacktrace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== Full journalctl PermissionError stacktrace ==="
+            journalctl -u nuotao-backend --no-pager -n 200 | grep -A 30 "PermissionError" | head -50
+
+            echo ""
+            echo "=== Recent errors (last 30) ==="
+            journalctl -u nuotao-backend --no-pager -n 100 | grep -iE "error|exception|traceback|permission|denied|read-only" | tail -30
+
+            echo ""
+            echo "=== Test: curl readyz ==="
+            curl -s http://127.0.0.1:8000/api/v1/readyz
+
+            echo ""
+            echo "=== Test: direct DB query via app's get_db ==="
+            cat > /tmp/test_readyz.py << 'PYEOF'
+            import asyncio, os, sys, traceback
+            os.chdir("/opt/nuotao/backend")
+            sys.path.insert(0, "/opt/nuotao/backend")
+            from sqlalchemy import text
+            from app.core.database import engine, get_db
+            from app.core.config import settings
+            print("DATABASE_URL prefix:", str(settings.DATABASE_URL)[:50])
+            async def test():
+                try:
+                    async with engine.connect() as conn:
+                        r = await conn.execute(text("SELECT 1"))
+                        print("Direct engine SELECT 1 OK:", r.scalar())
+                except Exception as e:
+                    print("Direct engine FAILED:", type(e).__name__, e)
+                    traceback.print_exc()
+                try:
+                    async for db in get_db():
+                        r = await db.execute(text("SELECT 1"))
+                        print("get_db SELECT 1 OK:", r.scalar())
+                        break
+                except Exception as e:
+                    print("get_db FAILED:", type(e).__name__, e)
+                    traceback.print_exc()
+            asyncio.run(test())
+            PYEOF
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            set -a; source .env; set +a
+            python3 /tmp/test_readyz.py 2>&1 | head -30
+
+            echo ""
+            echo "=== Test as nuotao user ==="
+            sudo -u nuotao bash -c 'cd /opt/nuotao/backend && source .venv/bin/activate && set -a && source .env && set +a && python3 /tmp/test_readyz.py' 2>&1 | head -30
+
+            rm -f /tmp/test_readyz.py

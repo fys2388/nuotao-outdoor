@@ -1,0 +1,68 @@
+name: Debug Readyz PermissionError
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug readyz database PermissionError
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. journalctl errors (last 20) ==="
+            journalctl -u nuotao-backend --no-pager -n 100 | grep -iE "permission|traceback|error|socket" | tail -20
+
+            echo ""
+            echo "=== 2. DATABASE_URL (masked) ==="
+            grep DATABASE_URL /opt/nuotao/backend/.env | sed 's/:[^:@]*@/:***@/'
+
+            echo ""
+            echo "=== 3. PostgreSQL socket ==="
+            ls -la /var/run/postgresql/ 2>/dev/null || echo "no /var/run/postgresql"
+            ls -la /tmp/.s.PGSQL* 2>/dev/null || echo "no /tmp socket"
+
+            echo ""
+            echo "=== 4. nuotao user ==="
+            id nuotao 2>/dev/null || echo "nuotao user not found"
+
+            echo ""
+            echo "=== 5. Write test script ==="
+            cat > /tmp/test_db.py << 'PYEOF'
+            import asyncio, os
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            url = os.environ.get("DATABASE_URL", "")
+            print("URL prefix:", url[:60])
+            async def test():
+                engine = create_async_engine(url)
+                async with engine.connect() as conn:
+                    r = await conn.execute(text("SELECT 1"))
+                    print("DB SELECT 1 OK:", r.scalar())
+                await engine.dispose()
+            asyncio.run(test())
+            PYEOF
+            echo "script written"
+
+            echo ""
+            echo "=== 6. Test as root ==="
+            cd /opt/nuotao/backend
+            source .venv/bin/activate
+            set -a; source .env; set +a
+            python3 /tmp/test_db.py 2>&1 | head -10
+
+            echo ""
+            echo "=== 7. Test as nuotao user ==="
+            sudo -u nuotao bash -c 'cd /opt/nuotao/backend && source .venv/bin/activate && set -a && source .env && set +a && python3 /tmp/test_db.py' 2>&1 | head -15
+
+            echo ""
+            echo "=== 8. pg_hba.conf ==="
+            grep -v '^#' /etc/postgresql/*/main/pg_hba.conf 2>/dev/null | grep -v '^$' | head -10 || echo "pg_hba not found"
+
+            rm -f /tmp/test_db.py

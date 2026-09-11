@@ -1,0 +1,4 @@
+﻿sku,name,description,category,brand,tags,attributes,source_url,supplier_code
+SKU-0001,Camping Headlamp,USB rechargeable 300lm headlamp,camping,Nuotao,lamp;light,"{""max_lumens"": 300,""waterproof"": true}",https://detail.1688.com/offer/example1.html,SUP-001
+SKU-0002,Camping Stove Set,Portable 2-burner stove set,cooking,Nuotao,stove;pot,"{""burners"": 2}",https://detail.1688.com/offer/example2.html,SUP-001
+SKU-0003,Dry Bag 10L,Waterproof dry bag 10L,storage,,drybag;waterproof,"{""capacity_l"": 10}",https://detail.1688.com/offer/example3.html,

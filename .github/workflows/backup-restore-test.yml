@@ -1,0 +1,32 @@
+name: Backup Restore Verification
+
+on:
+  schedule:
+    # 每月1号 UTC 20:00（北京次日 04:00）执行恢复验证
+    - cron: '0 20 1 * *'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify latest backup can be restored
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Execute backup restore verification on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao
+            echo "=== Step 1: Run fresh backup ==="
+            chmod +x infra/backup_database.sh
+            bash infra/backup_database.sh
+            echo ""
+            echo "=== Step 2: Verify backup can be restored ==="
+            chmod +x infra/verify_backup_restore.sh
+            bash infra/verify_backup_restore.sh

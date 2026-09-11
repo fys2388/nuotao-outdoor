@@ -1,0 +1,19 @@
+# ============================================================
+# Grafana 仪表盘自动配置
+# 自动导入 Nuotao AI OS 监控仪表盘
+# ============================================================
+
+apiVersion: 1
+
+providers:
+  - name: 'Nuotao AI OS'
+    orgId: 1
+    folder: ''
+    folderUid: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: true

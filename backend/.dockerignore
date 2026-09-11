@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Tests (not needed in runtime image)
+tests/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Data / logs
+*.log
+data/
+
+# Env & secrets (injected via docker-compose environment)
+.env
+.env.*
+
+# Temp
+_tmp/

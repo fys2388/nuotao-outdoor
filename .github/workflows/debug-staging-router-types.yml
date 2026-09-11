@@ -1,0 +1,63 @@
+name: Debug Staging Router Types
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    name: Debug staging router types
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug router types
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao/staging/backend
+
+            cat > /tmp/debug_router_types.py << 'PYEOF'
+            import sys
+            sys.path.insert(0, '.')
+
+            import fastapi
+            print(f'FastAPI version: {fastapi.__version__}')
+
+            from app.api.v1.router import api_router
+            print(f'api_router.routes count: {len(api_router.routes)}')
+
+            # Print first 5 routes type and attributes
+            for i, route in enumerate(api_router.routes[:5]):
+                print(f'Route {i}: type={type(route).__name__}')
+                print(f'  dir: {[a for a in dir(route) if not a.startswith("_")][:10]}')
+                if hasattr(route, 'path'):
+                    print(f'  path: {route.path}')
+                if hasattr(route, 'router'):
+                    print(f'  router type: {type(route.router).__name__}')
+                    if hasattr(route.router, 'routes'):
+                        print(f'  router.routes count: {len(route.router.routes)}')
+
+            # Try include_router with different approaches
+            from fastapi import FastAPI
+            test_app = FastAPI()
+            print(f'\nBefore include: {len(test_app.routes)} routes')
+
+            # Approach 1: standard include
+            test_app.include_router(api_router, prefix='/api/v1')
+            print(f'After include (prefix=/api/v1): {len(test_app.routes)} routes')
+
+            # Approach 2: include without prefix
+            test_app2 = FastAPI()
+            test_app2.include_router(api_router)
+            print(f'After include (no prefix): {len(test_app2.routes)} routes')
+
+            # Check if routes have path
+            for r in test_app.routes:
+                if hasattr(r, 'path'):
+                    print(f'  test_app route: {r.path}')
+            PYEOF
+
+            echo "=== Running debug ==="
+            .venv/bin/python /tmp/debug_router_types.py 2>&1

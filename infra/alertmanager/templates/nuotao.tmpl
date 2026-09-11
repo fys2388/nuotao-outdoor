@@ -1,0 +1,90 @@
+{{ define "nuotao.email.subject" }}[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.alertname }}{{ end }}
+
+{{ define "nuotao.email.body" }}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .header { background: {{ if eq .Status "firing" }}#dc3545{{ else }}#28a745{{ end }}; color: white; padding: 20px; border-radius: 5px; }
+        .content { padding: 20px; }
+        .alert-item { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 15px; }
+        .critical { border-left: 5px solid #dc3545; }
+        .warning { border-left: 5px solid #ffc107; }
+        .info { border-left: 5px solid #17a2b8; }
+        .label { display: inline-block; background: #f0f0f0; padding: 2px 8px; border-radius: 3px; margin: 2px; font-size: 12px; }
+        .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>{{ if eq .Status "firing" }}🚨 告警触发{{ else }}✅ 告警恢复{{ end }}</h2>
+        <p>告警名称: {{ .GroupLabels.alertname }}</p>
+        <p>严重程度: {{ .GroupLabels.severity | toUpper }}</p>
+        <p>服务: {{ .GroupLabels.service }}</p>
+    </div>
+
+    <div class="content">
+        <h3>告警详情 ({{ .Alerts | len }} 条)</h3>
+
+        {{ range .Alerts }}
+        <div class="alert-item {{ .Labels.severity }}">
+            <h4>{{ .Annotations.summary }}</h4>
+            <p><strong>描述:</strong> {{ .Annotations.description }}</p>
+            <p><strong>实例:</strong> {{ .Labels.instance }}</p>
+            <p><strong>触发时间:</strong> {{ .StartsAt.Format "2006-01-02 15:04:05" }}</p>
+            {{ if .EndsAt }}
+            <p><strong>恢复时间:</strong> {{ .EndsAt.Format "2006-01-02 15:04:05" }}</p>
+            {{ end }}
+            <div>
+                <strong>标签:</strong><br>
+                {{ range .Labels.SortedPairs }}
+                <span class="label">{{ .Name }}: {{ .Value }}</span>
+                {{ end }}
+            </div>
+        </div>
+        {{ end }}
+
+        <div class="footer">
+            <p>此邮件由 Nuotao AI OS 监控系统自动发送，请勿直接回复。</p>
+            <p>Grafana 仪表盘: https://your-domain.com/grafana</p>
+            <p>Prometheus: https://your-domain.com/prometheus</p>
+        </div>
+    </div>
+</body>
+</html>
+{{ end }}
+
+{{ define "nuotao.dingtalk.text" }}
+{{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} **{{ .GroupLabels.alertname }}**
+
+**状态**: {{ if eq .Status "firing" }}触发{{ else }}恢复{{ end }}
+**严重程度**: {{ .GroupLabels.severity | toUpper }}
+**服务**: {{ .GroupLabels.service }}
+
+{{ range .Alerts }}
+**实例**: {{ .Labels.instance }}
+**描述**: {{ .Annotations.description }}
+**时间**: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+{{ end }}
+
+---
+Nuotao AI OS 监控系统
+{{ end }}
+
+{{ define "nuotao.wechat.text" }}
+{{ if eq .Status "firing" }}🚨{{ else }}✅{{ end }} **{{ .GroupLabels.alertname }}**
+
+> 状态: {{ if eq .Status "firing" }}触发{{ else }}恢复{{ end }}
+> 严重程度: {{ .GroupLabels.severity | toUpper }}
+> 服务: {{ .GroupLabels.service }}
+
+{{ range .Alerts }}
+**实例**: <font color="comment">{{ .Labels.instance }}</font>
+**描述**: {{ .Annotations.description }}
+**时间**: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+{{ end }}
+
+<font color="comment">Nuotao AI OS 监控系统</font>
+{{ end }}
