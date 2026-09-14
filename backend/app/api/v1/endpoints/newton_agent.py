@@ -199,7 +199,7 @@ async def get_task_result(task_id: str) -> StandardResponse:
 
 
 @router.post("/search", summary="自然语言找品")
-async def search_products(request: SearchRequest) -> StandardResponse:
+def search_products(request: SearchRequest) -> StandardResponse:
     """
     牛顿AI智能找品（高层封装）
     用自然语言描述需求，Agent自动在1688找品、比价、筛选

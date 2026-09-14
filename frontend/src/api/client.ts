@@ -1165,6 +1165,7 @@ export const api = {
         min_order_qty: minOrderQty,
         category,
       }),
+      timeoutMs: 300000,
     }),
   newtonBatchInquiry: (productIds: string[], inquiryMessage: string) =>
     request('/newton/inquiry', {

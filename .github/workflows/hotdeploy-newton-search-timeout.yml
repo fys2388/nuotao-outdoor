@@ -1,0 +1,95 @@
+name: Hotdeploy Newton Search Timeout (one-off)
+
+# Fix Newton conversational search being aborted at 30s:
+#  - frontend client.ts: newtonSearch timeoutMs 300000 (5min)
+#  - backend newton_agent.py: /newton/search sync `def` (run in threadpool,
+#    so its blocking poll does not stall the uvicorn event loop)
+# Also prints (read-only) the nginx proxy timeouts to judge the gateway limit.
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-newton-search-timeout.yml'
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package files
+        run: |
+          tar -czf nstimeout.tgz \
+            frontend/src/api/client.ts \
+            backend/app/api/v1/endpoints/newton_agent.py
+          tar -tzf nstimeout.tgz
+
+      - name: Upload package
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: nstimeout.tgz
+          target: /tmp
+
+      - name: Apply backend+frontend, restart, build, deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/newton-timeout-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+            tar -czf "$BK/before.tgz" \
+              frontend/src/api/client.ts \
+              backend/app/api/v1/endpoints/newton_agent.py 2>/dev/null || true
+            tar -xzf /tmp/nstimeout.tgz -C /opt/nuotao
+            rm -f /tmp/nstimeout.tgz
+
+            echo "=== nginx proxy timeout (read-only) ==="
+            for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*; do
+              [ -f "$f" ] || continue
+              echo "--- $f"
+              grep -nE 'proxy_(read|send|connect)_timeout|proxy_pass|location ' "$f" || true
+            done
+            grep -nE 'proxy_(read|send|connect)_timeout' /etc/nginx/nginx.conf || true
+
+            echo "=== backend compile + restart ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -m compileall -q app && echo compile-ok
+            systemctl restart nuotao-backend
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
+            systemctl is-active nuotao-backend
+            [ "$ready" = "200" ] || { echo "ERROR backend not ready"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1; }
+
+            echo "=== frontend build + deploy ==="
+            cd /opt/nuotao/frontend
+            npm install --no-audit --no-fund 2>&1 | tail -4
+            set +e; npm run build > /tmp/fe-ns.log 2>&1; BRC=$?; set -e
+            tail -12 /tmp/fe-ns.log
+            [ "$BRC" -eq 0 ] || { grep -nE "Could not resolve|error TS|Error" /tmp/fe-ns.log | head -40; exit 1; }
+            rm -rf /var/www/nuotao && mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+
+            echo "=== final health ==="
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "backend=$bcode console=$ccode"
+            [ "$bcode" = "200" ] && [ "$ccode" = "200" ] || exit 1
+            echo "DONE; backup=$BK"
