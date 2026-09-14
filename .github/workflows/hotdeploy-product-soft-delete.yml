@@ -46,7 +46,7 @@ jobs:
           port: 22
           command_timeout: 15m
           script: |
-            set -e
+            set -eo pipefail
             STAMP=$(date -u +%Y%m%dT%H%M%SZ)
             BK=/opt/nuotao/backups/softdelete-$STAMP
             mkdir -p "$BK"
@@ -78,12 +78,21 @@ jobs:
             .venv/bin/alembic upgrade head 2>&1 | tail -15
             echo "-- after:"; .venv/bin/alembic current 2>&1 | tail -2
 
-            echo "=== 4. restart backend ==="
+            echo "=== 4. restart backend (wait until ready) ==="
             systemctl restart nuotao-backend
-            sleep 4
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
             systemctl is-active nuotao-backend
-            curl -s -o /dev/null -w 'readyz=%{http_code}\n' http://127.0.0.1:8000/api/v1/readyz
-            echo -n "batch-delete route: "; curl -s http://127.0.0.1:8000/openapi.json | grep -o 'products/batch-delete' | head -1
+            echo -n "batch-delete route: "
+            curl -s http://127.0.0.1:8000/openapi.json | grep -o 'products/batch-delete' | head -1 || true
+            if [ "$ready" != "200" ]; then
+              echo "ERROR: backend not ready after restart"; journalctl -u nuotao-backend -n 30 --no-pager || true; exit 1
+            fi
 
             echo "=== 5. build frontend ==="
             cd /opt/nuotao/frontend
@@ -97,6 +106,8 @@ jobs:
             ls /var/www/nuotao | head
 
             echo "=== 7. final health ==="
-            curl -s -o /dev/null -w 'backend=%{http_code}\n' http://127.0.0.1:8000/api/v1/readyz
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            echo "backend=$bcode"
             curl -s -o /dev/null -w 'console=%{http_code}\n' http://127.0.0.1:8081/ || true
+            [ "$bcode" = "200" ] || { echo "ERROR backend health=$bcode"; journalctl -u nuotao-backend -n 30 --no-pager || true; exit 1; }
             echo "DONE; backup=$BK"
