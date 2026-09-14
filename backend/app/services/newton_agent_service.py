@@ -16,10 +16,12 @@ API能力:
 """
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
+import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -452,18 +454,257 @@ def newton_agent_search(
     if not result.get("success"):
         return result
 
-    # 标准化输出
+    # 标准化输出；牛顿常把商品以 ```product-card 文本块放在 content 里，
+    # 当结构化 products 为空时，回退从文本中解析商品卡片
     products = result.get("products", [])
+    if not products:
+        products = _extract_product_cards(
+            result.get("content") or result.get("summary") or ""
+        )
+    normalized = _normalize_newton_products(products)
+    for idx, item in enumerate(normalized):
+        raw = products[idx] if idx < len(products) else {}
+        if not item.get("score"):
+            # Agent 已按性价比排序，缺失评分时按名次递减补分，便于前端分级
+            item["score"] = max(55, 92 - idx * 5)
+        if not item.get("reason"):
+            bits = [str(raw[k]) for k in ("soldCount", "supplierBadge") if raw.get(k)]
+            item["reason"] = "牛顿AI按性价比排序推荐" + (
+                "（" + "·".join(bits) + "）" if bits else ""
+            )
     return {
         "success": True,
         "source": result.get("source", "newton_api"),
         "query": query,
         "message": message,
-        "total": len(products),
-        "products": _normalize_newton_products(products),
+        "total": len(normalized),
+        "products": normalized,
         "summary": result.get("summary", ""),
         "comparison": result.get("comparison"),
         "task_id": result.get("task_id", ""),
+    }
+
+
+def _extract_json_object(content: str) -> dict[str, Any]:
+    """从 Agent 最终回复中提取 JSON 对象，兼容 Markdown 代码块。"""
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    candidates = [cleaned]
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(cleaned[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("Newton Agent returned no valid JSON object")
+
+
+def _normalize_extracted_product(
+    data: dict[str, Any],
+    *,
+    product_id: str,
+    source_url: str,
+) -> dict[str, Any]:
+    """把牛顿 Agent 的字段统一为开放平台商品详情结构。"""
+    title = (
+        data.get("title")
+        or data.get("product_title")
+        or data.get("商品标题")
+        or ""
+    )
+    if not str(title).strip():
+        raise ValueError("Newton Agent did not return a product title")
+
+    price_min = data.get("price_min", data.get("priceMin"))
+    price_max = data.get("price_max", data.get("priceMax"))
+    if price_min is None and price_max is None:
+        price_range_raw = (
+            data.get("price_range")
+            or data.get("priceRange")
+            or data.get("价格区间")
+            or ""
+        )
+        prices = re.findall(r"\d+(?:\.\d+)?", str(price_range_raw))
+        if prices:
+            price_min = prices[0]
+            price_max = prices[1] if len(prices) > 1 else prices[0]
+
+    if price_min is None:
+        price = str(price_max or "")
+    elif price_max is None or str(price_min) == str(price_max):
+        price = str(price_min)
+    else:
+        price = f"{price_min}-{price_max}"
+
+    images_raw = (
+        data.get("image_urls")
+        or data.get("images")
+        or data.get("商品图片URL")
+        or []
+    )
+    if not isinstance(images_raw, list):
+        images_raw = [images_raw]
+    images = [
+        str(image).strip()
+        for image in images_raw
+        if str(image).strip().startswith(("http://", "https://"))
+    ]
+
+    moq = data.get("moq") or data.get("min_order_quantity") or data.get("起订量") or ""
+    supplier_name = (
+        data.get("supplier_name")
+        or data.get("supplier")
+        or data.get("供应商名称")
+        or ""
+    )
+    description = data.get("description") or data.get("商品描述") or str(title)
+    category = data.get("category") or data.get("category_name") or ""
+
+    return {
+        "product_id": str(data.get("product_id") or product_id),
+        "subject": str(title).strip(),
+        "description": str(description).strip(),
+        "price": price,
+        "price_range": (
+            [{"startQuantity": moq or 1, "price": price_min}]
+            if price_min is not None
+            else []
+        ),
+        "sku_list": [],
+        "attributes": [],
+        "images": images,
+        "supplier_login_id": "",
+        "company_name": str(supplier_name).strip(),
+        "supplier": {"company_name": str(supplier_name).strip()},
+        "main_image": images[0] if images else "",
+        "category_id": "",
+        "category_name": str(category).strip(),
+        "min_order_quantity": moq,
+        "source_url": source_url,
+        "source": "newton_agent",
+    }
+
+
+def extract_1688_product(
+    url_or_id: str,
+    product_id: str,
+    *,
+    max_wait: int = 600,
+    poll_interval: int = POLL_INTERVAL,
+) -> dict[str, Any]:
+    """
+    使用已授权的牛顿 Agent 读取指定 1688 公开商品页。
+
+    该函数只提取页面公开商品字段，不自动询盘、下单或修改任何业务数据。
+    调用方必须在开放平台商品详情接口因 ACL 或铺货关系不可用时再降级到这里。
+    """
+    if not is_configured():
+        return {
+            "success": False,
+            "source": "newton_agent",
+            "error": "牛顿 Agent 未配置，无法读取该 1688 商品",
+        }
+
+    message = f"""请使用你已授权的 1688 供应链能力读取下面这个公开商品页，并严格按以下英文键返回 JSON：
+{{
+  "title": "商品标题",
+  "product_id": "商品ID",
+  "price_min": 最低价格数字或null,
+  "price_max": 最高价格数字或null,
+  "price_range": "页面展示的原始价格区间",
+  "moq": 最小起订量数字或null,
+  "supplier_name": "供应商公司名称",
+  "image_urls": ["主图URL"],
+  "description": "页面公开商品描述或标题",
+  "category": "商品类目"
+}}
+
+要求：
+1. 只输出 JSON 对象，不要 Markdown，不要解释。
+2. 禁止猜测；页面无法读取或字段不存在时使用 null 或空数组。
+3. 不要联系供应商，不要下单，不要修改任何数据。
+
+商品ID：{product_id}
+商品链接：{url_or_id}
+"""
+
+    created = create_agent_task(message, auto=True, model="qwen3.6-plus")
+    if not created.get("success") or not created.get("task_id"):
+        return {
+            "success": False,
+            "source": "newton_agent",
+            "error": created.get("error") or "创建牛顿 Agent 任务失败",
+        }
+
+    task_id = str(created["task_id"])
+    deadline = time.monotonic() + max_wait
+    last_status = "UNKNOWN"
+
+    while time.monotonic() < deadline:
+        status_result = get_task_status(task_id)
+        if not status_result.get("success"):
+            return {
+                "success": False,
+                "source": "newton_agent",
+                "task_id": task_id,
+                "error": status_result.get("error") or "查询牛顿 Agent 任务失败",
+            }
+
+        last_status = str(status_result.get("status") or "UNKNOWN").upper()
+        if last_status in {"END", "COMPLETED", "SUCCESS"}:
+            raw = status_result.get("raw") or {}
+            content = str(raw.get("content") or "")
+            try:
+                parsed = _extract_json_object(content)
+                product = _normalize_extracted_product(
+                    parsed,
+                    product_id=product_id,
+                    source_url=url_or_id,
+                )
+            except ValueError as exc:
+                return {
+                    "success": False,
+                    "source": "newton_agent",
+                    "task_id": task_id,
+                    "error": f"牛顿 Agent 返回结果无法解析: {exc}",
+                }
+            return {
+                "success": True,
+                "source": "newton_agent",
+                "task_id": task_id,
+                "product": product,
+            }
+
+        if last_status in {"FAILED", "ERROR", "KILL", "KILLED"}:
+            return {
+                "success": False,
+                "source": "newton_agent",
+                "task_id": task_id,
+                "error": f"牛顿 Agent 任务失败，状态: {last_status}",
+            }
+
+        time.sleep(max(1, poll_interval))
+
+    logger.warning("Newton product extraction timed out for task %s", task_id)
+    kill_result = kill_task(task_id)
+    return {
+        "success": False,
+        "source": "newton_agent",
+        "task_id": task_id,
+        "kill_requested": kill_result.get("success", False),
+        "error": (
+            f"牛顿 Agent 读取超时（当前状态 {last_status}），"
+            "已请求终止任务，请稍后重试"
+        ),
     }
 
 
@@ -503,6 +744,36 @@ def batch_inquiry(
 # 内部工具函数
 # ============================================
 
+def _extract_product_cards(content: str) -> list[dict[str, Any]]:
+    """从牛顿 Agent 回复文本里的 product-card 代码块解析商品列表。
+
+    牛顿找品常把商品以 ```product-card [{...}]``` 形式嵌在自然语言总结中，
+    而不是独立的 products 字段。这里做容错抽取，返回原始商品 dict 列表。
+    """
+    if not content:
+        return []
+    products: list[dict[str, Any]] = []
+    blocks = re.findall(r"```(?:product-card|json)?\s*([\s\S]*?)```", content)
+    for block in blocks:
+        block = block.strip()
+        if not block or "{" not in block:
+            continue
+        try:
+            parsed = json.loads(block)
+        except ValueError:
+            continue
+        candidates = parsed if isinstance(parsed, list) else [parsed]
+        for item in candidates:
+            if isinstance(item, dict) and (
+                item.get("title")
+                or item.get("subject")
+                or item.get("id")
+                or item.get("product_id")
+            ):
+                products.append(item)
+    return products
+
+
 def _normalize_newton_products(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """标准化牛顿Agent返回的商品列表"""
     normalized = []
@@ -511,8 +782,8 @@ def _normalize_newton_products(products: list[dict[str, Any]]) -> list[dict[str,
             "product_id": str(p.get("productId", p.get("product_id", p.get("id", "")))),
             "subject": p.get("subject", p.get("title", p.get("name", ""))),
             "price": p.get("price", p.get("priceRange", "")),
-            "min_order_qty": p.get("minOrderQty", p.get("moq", p.get("起订量", 1))),
-            "supplier": p.get("supplier", p.get("companyName", p.get("供应商", ""))),
+            "min_order_qty": p.get("minOrderQty", p.get("minOrderQuantity", p.get("moq", p.get("起订量", 1)))),
+            "supplier": p.get("supplier", p.get("supplierName", p.get("companyName", p.get("供应商", "")))),
             "image_url": p.get("imageUrl", p.get("image", p.get("主图", ""))),
             "detail_url": p.get("detailUrl", p.get("url", p.get("链接", ""))),
             "score": p.get("score", p.get("推荐指数", 0)),

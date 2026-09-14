@@ -475,6 +475,25 @@ export default function NewtonSourcingPage() {
                           </div>
                         </Col>
 
+                        {/* 商品主图 */}
+                        <Col flex="88px">
+                          {item.image_url ? (
+                            <img
+                              src={item.image_url}
+                              alt={item.subject}
+                              referrerPolicy="no-referrer"
+                              style={{
+                                width: 76, height: 76, objectFit: 'cover',
+                                borderRadius: 8, border: '1px solid #f0f0f0',
+                                background: '#fafafa', display: 'block',
+                              }}
+                              onError={(e) => {
+                                ;(e.target as HTMLImageElement).style.visibility = 'hidden'
+                              }}
+                            />
+                          ) : null}
+                        </Col>
+
                         {/* 商品信息 */}
                         <Col flex="auto">
                           <Space direction="vertical" size={4} style={{ width: '100%' }}>
