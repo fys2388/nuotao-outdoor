@@ -1171,6 +1171,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ product_ids: productIds, inquiry_message: inquiryMessage }),
     }),
+  importNewtonSourcing: (
+    products: Record<string, unknown>[],
+    sourcingId = '',
+    sourceQuery = '',
+  ) =>
+    request('/newton/sourcing/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        products,
+        sourcing_id: sourcingId,
+        source_query: sourceQuery,
+      }),
+    }),
   getNewtonCostDaily: () => request('/newton/cost/daily'),
   getNewtonCostAlerts: () => request('/newton/cost/alerts'),
   getNewtonCostCredits: () => request('/newton/cost/credits'),

@@ -29,6 +29,7 @@ import {
   ShoppingOutlined,
   SolutionOutlined,
   TeamOutlined,
+  ThunderboltOutlined,
   TrophyOutlined,
   TruckOutlined,
   WalletOutlined,
@@ -64,6 +65,7 @@ export const navigationGroups: NavigationGroup[] = [
     children: [
       { key: 'products', label: '商品主数据', path: '/products', icon: <ShoppingOutlined /> },
       { key: 'product-candidates', label: '候选产品与选品', path: '/products/candidates', icon: <FileSearchOutlined /> },
+      { key: 'product-newton', label: '牛顿 AI 对话选品', path: '/products/newton-sourcing', icon: <ThunderboltOutlined /> },
       { key: 'product-analysis', label: 'AI 产品分析', path: '/products/analysis', icon: <RobotOutlined /> },
       { key: 'product-listing', label: '商品上架', path: '/products/listing', icon: <GlobalOutlined /> },
       { key: 'product-costs', label: '成本与利润', path: '/products/costs', icon: <CalculatorOutlined /> },

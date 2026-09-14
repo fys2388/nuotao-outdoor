@@ -1,0 +1,103 @@
+name: Hotdeploy Newton Sourcing UI (one-off)
+
+# Frontend-only hot-deploy for the Newton AI conversational sourcing feature.
+# Ships ONLY:
+#   frontend/src/pages/NewtonSourcing.tsx (wired up, real candidate import)
+#   frontend/src/pages/ProductPipeline.tsx (route registered, import target)
+#   frontend/src/app/AppRoutes.tsx (two routes)
+#   frontend/src/config/navigation.tsx (nav entry)
+#   frontend/src/api/client.ts (importNewtonSourcing)
+# Backend is untouched: /newton/search and /newton/sourcing/import already live.
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-newton-sourcing.yml'
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package newton-sourcing frontend files
+        run: |
+          tar -czf newtonui.tgz \
+            frontend/src/pages/NewtonSourcing.tsx \
+            frontend/src/pages/ProductPipeline.tsx \
+            frontend/src/app/AppRoutes.tsx \
+            frontend/src/config/navigation.tsx \
+            frontend/src/api/client.ts
+          echo "--- package ---"; tar -tzf newtonui.tgz
+
+      - name: Upload package to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: newtonui.tgz
+          target: /tmp
+
+      - name: Backup, apply, build frontend, deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/newton-ui-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+
+            echo "=== 0. backup existing target files ==="
+            tar -czf "$BK/before.tgz" \
+              frontend/src/app/AppRoutes.tsx \
+              frontend/src/config/navigation.tsx \
+              frontend/src/api/client.ts 2>/dev/null || true
+            ls -la "$BK"
+
+            echo "=== 1. apply new files ==="
+            tar -xzf /tmp/newtonui.tgz -C /opt/nuotao
+            rm -f /tmp/newtonui.tgz
+            ls -l frontend/src/pages/NewtonSourcing.tsx frontend/src/pages/ProductPipeline.tsx
+
+            echo "=== 2. build frontend ==="
+            cd /opt/nuotao/frontend
+            node -v; npm -v
+            npm install --no-audit --no-fund 2>&1 | tail -6
+            set +e
+            npm run build > /tmp/fe-newton.log 2>&1
+            BRC=$?
+            set -e
+            tail -16 /tmp/fe-newton.log
+            if [ "$BRC" -ne 0 ]; then
+              echo "##### FRONTEND BUILD FAILED — key lines: #####"
+              grep -nE "Could not resolve|is not exported|error TS|Error|\.tsx|\.ts" /tmp/fe-newton.log | head -50
+              echo "Backup=$BK (previous frontend left in /var/www untouched)"
+              exit 1
+            fi
+            echo -n "NewtonSourcing chunk: "
+            ls dist/assets/js/ | grep -o 'NewtonSourcing[^ ]*\.js' | head -1 || true
+            echo -n "ProductPipeline chunk: "
+            ls dist/assets/js/ | grep -o 'ProductPipeline[^ ]*\.js' | head -1 || true
+
+            echo "=== 3. deploy frontend static ==="
+            rm -rf /var/www/nuotao
+            mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+            ls /var/www/nuotao | head
+
+            echo "=== 4. final health ==="
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "backend=$bcode console=$ccode"
+            [ "$ccode" = "200" ] || { echo "ERROR console=$ccode"; exit 1; }
+            echo "DONE newton sourcing UI deployed; backup=$BK"

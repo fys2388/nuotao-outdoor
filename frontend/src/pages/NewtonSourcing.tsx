@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Input, Button, Space, Card, Row, Col, Tag, Spin, Alert, Statistic,
-  Typography, List, Badge, Tooltip, Empty, message, Divider, Rate, Checkbox
+  Typography, List, Badge, Empty, message, Checkbox
 } from 'antd'
 import {
   SearchOutlined, RobotOutlined, ThunderboltOutlined,
@@ -23,6 +24,7 @@ interface NewtonProduct {
   detail_url: string
   score: number
   reason: string
+  category?: string
 }
 
 interface SearchResult {
@@ -59,6 +61,9 @@ export default function NewtonSourcingPage() {
   const [status, setStatus] = useState<any>(null)
   const [credits, setCredits] = useState<any>(null)
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set())
+  const [importingCandidates, setImportingCandidates] = useState(false)
+  const [importedKeys, setImportedKeys] = useState<Set<string>>(new Set())
+  const navigate = useNavigate()
 
   // 切换选中状态
   const toggleSelect = (index: number) => {
@@ -82,43 +87,99 @@ export default function NewtonSourcingPage() {
     }
   }
 
-  // 批量导入到工作流
+  const getSelectedProducts = () =>
+    result?.products?.filter((_, i) => selectedItems.has(i)) || []
+
+  // 转成产品工作流可接收的结构（兼容牛顿/1688 多种字段名）
+  const toPipelineProduct = (item: any) => ({
+    name: item.subject || item.title || item.name || '',
+    category: item.category || '',
+    price: item.price ? `¥${item.price}` : '',
+    description: item.description || item.reason || '',
+    core_selling_points: item.selling_points || item.highlights || [],
+    target_audience: item.target_audience || '',
+    usage_scenarios: item.scenarios || [],
+    product_features: item.features || [],
+    source_url: item.detail_url || item.url || '',
+    score: item.score,
+  })
+
+  const goPipeline = (storageKey: string, payload: unknown) => {
+    localStorage.setItem(storageKey, JSON.stringify(payload))
+    navigate('/products/pipeline')
+  }
+
+  // 真实写入系统选品候选库（POST /newton/sourcing/import）
+  const addCandidates = async (products: any[], keys: string[]) => {
+    if (products.length === 0) {
+      message.warning('请先选择要加入候选的商品')
+      return
+    }
+    setImportingCandidates(true)
+    try {
+      const res: any = await api.importNewtonSourcing(
+        products,
+        result?.task_id || '',
+        result?.query || '',
+      )
+      const info = res?.data || {}
+      const imported = Number(info.imported || 0)
+      const skipped = Number(info.skipped || 0)
+      if (imported > 0) {
+        setImportedKeys(prev => {
+          const next = new Set(prev)
+          keys.forEach(k => next.add(k))
+          return next
+        })
+        message.success(`已加入候选库 ${imported} 个${skipped ? `，跳过 ${skipped} 个` : ''}`)
+      } else {
+        message.warning(info.errors?.[0]?.error || '没有可导入的商品（可能已存在）')
+      }
+    } catch (e: any) {
+      message.error(e?.message || '加入候选库失败')
+    } finally {
+      setImportingCandidates(false)
+    }
+  }
+
+  const handleBatchAddCandidates = () => {
+    const selectedProducts = getSelectedProducts()
+    addCandidates(
+      selectedProducts,
+      selectedProducts.map((p: any) => String(p.product_id || p.subject)),
+    )
+  }
+
+  const handleAddCandidate = (item: any, index: number) => {
+    const key = String(item.product_id || item.subject || index)
+    if (importedKeys.has(key)) {
+      message.info('该商品已加入候选库')
+      return
+    }
+    addCandidates([item], [key])
+  }
+
+  // 批量带入产品工作流继续编辑/分析/上架
   const handleBatchImport = () => {
-    if (selectedItems.size === 0) {
+    const selectedProducts = getSelectedProducts()
+    if (selectedProducts.length === 0) {
       message.warning('请先选择要导入的商品')
       return
     }
-
-    const selectedProducts = result?.products?.filter((_, i) => selectedItems.has(i)) || []
     const batchData = {
-      products: selectedProducts.map((item: any) => ({
-        name: item.subject || item.title || item.name || '',
-        category: item.category || '',
-        price: item.price ? `¥${item.price}` : '',
-        description: item.description || item.reason || '',
-        core_selling_points: item.selling_points || item.highlights || [],
-        target_audience: item.target_audience || '',
-        usage_scenarios: item.scenarios || [],
-        product_features: item.features || [],
-        source_url: item.detail_url || item.url || '',
-        score: item.score,
-      })),
+      products: selectedProducts.map(toPipelineProduct),
       source: 'newton_sourcing_batch',
       timestamp: new Date().toISOString(),
     }
-
-    localStorage.setItem('product_pipeline_batch', JSON.stringify(batchData))
-    message.success(`已选择${selectedItems.size}个商品，正在跳转到产品工作流...`)
-    setTimeout(() => {
-      window.location.hash = '#/product-pipeline'
-    }, 500)
+    message.success(`已带 ${selectedProducts.length} 个商品进入产品工作流`)
+    goPipeline('product_pipeline_batch', batchData)
   }
 
   const fetchStatus = async () => {
     try {
       const data: any = await api.getNewtonStatus()
       setStatus(data.data)
-    } catch (e) {
+    } catch {
       // 静默失败
     }
   }
@@ -126,8 +187,9 @@ export default function NewtonSourcingPage() {
   const fetchCredits = async () => {
     try {
       const data: any = await api.getNewtonCostCredits()
-      setCredits(data.data)
-    } catch (e) {
+      const d = data.data || {}
+      setCredits({ available_credits: d.available_credits ?? d.raw?.availableCredits })
+    } catch {
       // 静默失败
     }
   }
@@ -146,20 +208,22 @@ export default function NewtonSourcingPage() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setSelectedItems(new Set())
+    setImportedKeys(new Set())
 
     try {
       const data: any = await api.newtonSearch(
         query.trim(),
         minPrice,
         maxPrice,
-        minOrderQty
+        minOrderQty,
       )
 
       if (data.success && data.data) {
         setResult(data.data)
         message.success(`找到 ${data.data.total || 0} 个商品`)
       } else {
-        setError(data.error || '找品失败')
+        setError(data.error || data.data?.error || '找品失败')
       }
     } catch (e: any) {
       setError(e.message || '网络错误')
@@ -183,8 +247,8 @@ export default function NewtonSourcingPage() {
         <Space align="center">
           <RobotOutlined style={{ fontSize: '32px', color: '#722ed1' }} />
           <div>
-            <Title level={3} style={{ margin: 0 }}>牛顿AI智能选品</Title>
-            <Text type="secondary">基于阿里牛顿云端Agent，自然语言找品、比价、筛选</Text>
+            <Title level={3} style={{ margin: 0 }}>牛顿 AI 对话选品</Title>
+            <Text type="secondary">用关键词或一句话描述需求，阿里牛顿 Agent 自动在 1688 找品、比价、评分，可直接加入候选库或带入产品工作流</Text>
           </div>
         </Space>
       </div>
@@ -230,7 +294,7 @@ export default function NewtonSourcingPage() {
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           <div>
             <Text strong style={{ display: 'block', marginBottom: '8px' }}>
-              <SearchOutlined /> 找品需求
+              <SearchOutlined /> 找品需求（关键词 / 自然语言对话）
             </Text>
             <TextArea
               rows={3}
@@ -342,8 +406,10 @@ export default function NewtonSourcingPage() {
               </Space>
             }
             extra={
-              <Space>
-                <Text type="secondary">任务ID: {result.task_id?.substring(0, 8)}...</Text>
+              <Space wrap>
+                {result.task_id && (
+                  <Text type="secondary">任务ID: {String(result.task_id).substring(0, 8)}…</Text>
+                )}
                 <Checkbox
                   checked={selectedItems.size === result.products?.length && result.products?.length > 0}
                   onChange={toggleSelectAll}
@@ -351,13 +417,22 @@ export default function NewtonSourcingPage() {
                   全选
                 </Checkbox>
                 <Button
+                  size="small"
+                  icon={<StarOutlined />}
+                  loading={importingCandidates}
+                  onClick={handleBatchAddCandidates}
+                  disabled={selectedItems.size === 0}
+                >
+                  加入候选库（{selectedItems.size}）
+                </Button>
+                <Button
                   type="primary"
                   size="small"
                   icon={<RocketOutlined />}
                   onClick={handleBatchImport}
                   disabled={selectedItems.size === 0}
                 >
-                  批量导入工作流（{selectedItems.size}）
+                  带入工作流（{selectedItems.size}）
                 </Button>
               </Space>
             }
@@ -368,6 +443,8 @@ export default function NewtonSourcingPage() {
                 dataSource={result.products}
                 renderItem={(item, index) => {
                   const grade = scoreGrade(item.score)
+                  const itemKey = String(item.product_id || item.subject || index)
+                  const added = importedKeys.has(itemKey)
                   return (
                     <List.Item key={item.product_id || index}>
                       <Row gutter={[16, 16]} align="top">
@@ -440,7 +517,7 @@ export default function NewtonSourcingPage() {
                               />
                             )}
 
-                            <Space style={{ marginTop: '8px' }}>
+                            <Space style={{ marginTop: '8px' }} wrap>
                               {item.detail_url && (
                                 <Button
                                   type="link"
@@ -448,42 +525,31 @@ export default function NewtonSourcingPage() {
                                   target="_blank"
                                   size="small"
                                 >
-                                  查看商品详情
+                                  查看1688详情
                                 </Button>
                               )}
                               <Button
                                 size="small"
                                 icon={<StarOutlined />}
-                                onClick={() => message.success('已加入选品候选库')}
+                                loading={importingCandidates}
+                                onClick={() => handleAddCandidate(item, index)}
                               >
-                                加入候选
+                                {added ? '已加入候选' : '加入候选'}
                               </Button>
                               <Button
                                 size="small"
                                 type="primary"
                                 icon={<RocketOutlined />}
                                 onClick={() => {
-                                  const productData = {
-                                    name: item.title || item.name || '',
-                                    category: item.category || '',
-                                    price: item.price || '',
-                                    description: item.description || item.reason || '',
-                                    core_selling_points: item.selling_points || item.highlights || [],
-                                    target_audience: item.target_audience || '',
-                                    usage_scenarios: item.scenarios || [],
-                                    product_features: item.features || [],
-                                    source_url: item.detail_url || item.url || '',
+                                  goPipeline('product_pipeline_input', {
+                                    ...toPipelineProduct(item),
                                     source: 'newton_sourcing',
                                     timestamp: new Date().toISOString(),
-                                  }
-                                  localStorage.setItem('product_pipeline_input', JSON.stringify(productData))
-                                  message.success('商品信息已发送到产品工作流，正在跳转...')
-                                  setTimeout(() => {
-                                    window.location.hash = '#/product-pipeline'
-                                  }, 500)
+                                  })
+                                  message.success('商品信息已带入产品工作流')
                                 }}
                               >
-                                导入到工作流
+                                带入工作流编辑
                               </Button>
                             </Space>
                           </Space>
@@ -507,12 +573,12 @@ export default function NewtonSourcingPage() {
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
               <div>
-                <Paragraph>输入找品需求，牛顿Agent会自动在1688搜索、比价、筛选</Paragraph>
+                <Paragraph>输入关键词或一句话需求，牛顿 Agent 会自动在 1688 搜索、比价、筛选并评分</Paragraph>
                 <Space wrap>
                   <Tag color="blue">自然语言找品</Tag>
                   <Tag color="green">智能比价</Tag>
                   <Tag color="orange">性价比评分</Tag>
-                  <Tag color="purple">批量筛选</Tag>
+                  <Tag color="purple">直接加入候选/工作流</Tag>
                 </Space>
               </div>
             }
