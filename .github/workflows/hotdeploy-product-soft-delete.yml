@@ -96,7 +96,19 @@ jobs:
 
             echo "=== 5. build frontend ==="
             cd /opt/nuotao/frontend
-            npm run build 2>&1 | tail -10
+            node -e "console.log('antd',require('antd/package.json').version,'icons',require('@ant-design/icons/package.json').version)" || true
+            echo "--- npm install (align deps before build) ---"
+            npm install --no-audit --no-fund 2>&1 | tail -8
+            set +e
+            npm run build > /tmp/fe-build.log 2>&1
+            BRC=$?
+            set -e
+            tail -20 /tmp/fe-build.log
+            if [ "$BRC" -ne 0 ]; then
+              echo "##### BUILD FAILED — key lines: #####"
+              grep -n -E "Could not resolve|is not exported|externalize|Invalid|failed to load|Error|\.tsx|\.ts" /tmp/fe-build.log | head -50
+              exit 1
+            fi
 
             echo "=== 6. deploy frontend static ==="
             rm -rf /var/www/nuotao
