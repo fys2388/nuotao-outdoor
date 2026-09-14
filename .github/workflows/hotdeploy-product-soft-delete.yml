@@ -1,0 +1,102 @@
+name: Hotdeploy Product Soft-Delete (one-off)
+
+# Precise hot-deploy: only ships the files for the product soft-delete feature.
+# Deliberately does NOT run `git reset --hard`, so existing SFTP hotfixes on the
+# server are preserved. Safe to re-run (migration and copy are idempotent).
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package changed files (preserve backend/ frontend tree)
+        run: |
+          tar -czf softdeploy.tgz \
+            backend/app/models/product.py \
+            backend/app/schemas/product.py \
+            backend/app/services/product_service.py \
+            backend/app/api/v1/endpoints/products.py \
+            backend/app/services/woocommerce_sync_service.py \
+            backend/alembic/versions/0047_product_soft_delete.py \
+            frontend/src/api/client.ts \
+            frontend/src/pages/OperationsPages.tsx
+          tar -tzf softdeploy.tgz
+
+      - name: Upload package to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: softdeploy.tgz
+          target: /tmp
+
+      - name: Backup, apply, migrate, restart, rebuild frontend
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -e
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/softdelete-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+
+            echo "=== 0. backup current target files ==="
+            tar -czf "$BK/before.tgz" \
+              backend/app/models/product.py \
+              backend/app/schemas/product.py \
+              backend/app/services/product_service.py \
+              backend/app/api/v1/endpoints/products.py \
+              backend/app/services/woocommerce_sync_service.py \
+              frontend/src/api/client.ts \
+              frontend/src/pages/OperationsPages.tsx 2>/dev/null || true
+            ls -la "$BK"
+
+            echo "=== 1. apply new files ==="
+            tar -xzf /tmp/softdeploy.tgz -C /opt/nuotao
+            rm -f /tmp/softdeploy.tgz
+            echo "applied:"
+            ls -l backend/alembic/versions/0047_product_soft_delete.py
+
+            echo "=== 2. backend syntax check ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -m compileall -q app && echo compile-ok
+
+            echo "=== 3. migration ==="
+            echo "-- before:"; .venv/bin/alembic current 2>&1 | tail -2
+            .venv/bin/alembic upgrade head 2>&1 | tail -15
+            echo "-- after:"; .venv/bin/alembic current 2>&1 | tail -2
+
+            echo "=== 4. restart backend ==="
+            systemctl restart nuotao-backend
+            sleep 4
+            systemctl is-active nuotao-backend
+            curl -s -o /dev/null -w 'readyz=%{http_code}\n' http://127.0.0.1:8000/api/v1/readyz
+            echo -n "batch-delete route: "; curl -s http://127.0.0.1:8000/openapi.json | grep -o 'products/batch-delete' | head -1
+
+            echo "=== 5. build frontend ==="
+            cd /opt/nuotao/frontend
+            npm run build 2>&1 | tail -10
+
+            echo "=== 6. deploy frontend static ==="
+            rm -rf /var/www/nuotao
+            mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+            ls /var/www/nuotao | head
+
+            echo "=== 7. final health ==="
+            curl -s -o /dev/null -w 'backend=%{http_code}\n' http://127.0.0.1:8000/api/v1/readyz
+            curl -s -o /dev/null -w 'console=%{http_code}\n' http://127.0.0.1:8081/ || true
+            echo "DONE; backup=$BK"
