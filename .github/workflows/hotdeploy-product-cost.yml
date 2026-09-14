@@ -1,0 +1,125 @@
+name: Hotdeploy Product Cost & Profit (one-off)
+
+# Precise hot-deploy for the product cost/profit module. Ships ONLY:
+#   backend: product_cost_service (new), product_cost schema (new),
+#            product_intelligence endpoint (3 new routes)
+#   frontend: client methods, AppRoutes swap, ProductCostsPage (new)
+# No DB migration (product_cost / product_cost_snapshots already exist).
+# Deliberately does NOT run `git reset --hard` (server keeps SFTP hotfixes).
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-product-cost.yml'
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package cost-module files
+        run: |
+          tar -czf costdeploy.tgz \
+            backend/app/services/product_cost_service.py \
+            backend/app/schemas/product_cost.py \
+            backend/app/api/v1/endpoints/product_intelligence.py \
+            frontend/src/api/client.ts \
+            frontend/src/app/AppRoutes.tsx \
+            frontend/src/pages/ProductCostsPage.tsx
+          echo "--- package ---"; tar -tzf costdeploy.tgz
+
+      - name: Upload package to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: costdeploy.tgz
+          target: /tmp
+
+      - name: Backup, apply backend, restart, build frontend, deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/product-cost-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+
+            echo "=== 0. backup existing target files ==="
+            tar -czf "$BK/before.tgz" \
+              backend/app/api/v1/endpoints/product_intelligence.py \
+              frontend/src/api/client.ts \
+              frontend/src/app/AppRoutes.tsx 2>/dev/null || true
+            ls -la "$BK"
+
+            echo "=== 1. apply new files ==="
+            tar -xzf /tmp/costdeploy.tgz -C /opt/nuotao
+            rm -f /tmp/costdeploy.tgz
+            ls -l backend/app/services/product_cost_service.py \
+                  backend/app/schemas/product_cost.py \
+                  frontend/src/pages/ProductCostsPage.tsx
+
+            echo "=== 2. backend syntax check ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -m compileall -q app && echo compile-ok
+
+            echo "=== 3. restart backend (poll readyz) ==="
+            systemctl restart nuotao-backend
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
+            systemctl is-active nuotao-backend
+            echo -n "cost-overview route: "
+            curl -s http://127.0.0.1:8000/openapi.json | grep -o 'products/cost-overview' | head -1 || true
+            echo -n "profit-analysis route: "
+            curl -s http://127.0.0.1:8000/openapi.json | grep -o 'profit-analysis' | head -1 || true
+            if [ "$ready" != "200" ]; then
+              echo "ERROR: backend not ready after restart"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1
+            fi
+
+            echo "=== 4. build frontend ==="
+            cd /opt/nuotao/frontend
+            node -v; npm -v
+            npm install --no-audit --no-fund 2>&1 | tail -6
+            set +e
+            npm run build > /tmp/fe-cost.log 2>&1
+            BRC=$?
+            set -e
+            tail -18 /tmp/fe-cost.log
+            if [ "$BRC" -ne 0 ]; then
+              echo "##### FRONTEND BUILD FAILED — key lines: #####"
+              grep -nE "Could not resolve|is not exported|error TS|Error|\.tsx|\.ts" /tmp/fe-cost.log | head -50
+              echo "Backend is already upgraded; frontend left unchanged. Backup=$BK"
+              exit 1
+            fi
+            echo -n "ProductCostsPage chunk: "
+            ls dist/assets/js/ | grep -o 'ProductCostsPage[^ ]*\.js' | head -1 || true
+
+            echo "=== 5. deploy frontend static ==="
+            rm -rf /var/www/nuotao
+            mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+            ls /var/www/nuotao | head
+
+            echo "=== 6. final health ==="
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "backend=$bcode console=$ccode"
+            [ "$bcode" = "200" ] || { echo "ERROR backend=$bcode"; journalctl -u nuotao-backend -n 30 --no-pager || true; exit 1; }
+            [ "$ccode" = "200" ] || { echo "ERROR console=$ccode"; exit 1; }
+            echo "DONE product cost/profit deployed; backup=$BK"

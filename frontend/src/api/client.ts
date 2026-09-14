@@ -362,6 +362,29 @@ export const api = {
     request(`/product-decisions/scores/${scoreId}/evidence`),
   getProductCostSnapshots: (productId: string) =>
     request(`/products/${productId}/cost-snapshots`),
+  getCostOverview: (
+    params: { search?: string; costStatus?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const q = new URLSearchParams()
+    if (params.search) q.set('search', params.search)
+    if (params.costStatus) q.set('cost_status', params.costStatus)
+    q.set('limit', String(params.limit ?? 200))
+    q.set('offset', String(params.offset ?? 0))
+    return request(`/products/cost-overview?${q.toString()}`)
+  },
+  saveProductCost: (productId: string, payload: Record<string, unknown>) =>
+    request(`/products/${productId}/cost-snapshots`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getProfitAnalysis: (productId: string, salePrice?: number | string) => {
+    const q = new URLSearchParams()
+    if (salePrice !== undefined && salePrice !== null && salePrice !== '') {
+      q.set('sale_price', String(salePrice))
+    }
+    const suffix = q.toString()
+    return request(`/products/${productId}/profit-analysis${suffix ? `?${suffix}` : ''}`)
+  },
   getProductSources: (productId: string) =>
     request(`/products/${productId}/sources`),
   generateProductCopy: (productId: string) =>

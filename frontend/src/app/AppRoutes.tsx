@@ -26,6 +26,7 @@ const NotFoundPage = lazy(() => import('../pages/NotFound'))
 
 const ProductAnalysisPage = lazy(() => import('../pages/ProductAnalysis'))
 const ProductCandidatesPage = lazy(() => import('../pages/ProductCandidatesPage'))
+const ProductCostsPage = lazy(() => import('../pages/ProductCostsPage'))
 const AgentSuggestionsPage = lazy(() => import('../pages/AgentSuggestions'))
 const AgentMonitorPage = lazy(() => import('../pages/AgentMonitor'))
 const MemoryReviewPage = lazy(() => import('../pages/MemoryReview'))
@@ -78,32 +79,7 @@ export default function AppRoutes() {
         <Route path="products/candidates" element={page(<ProductCandidatesPage />)} />
         <Route path="products/analysis" element={page(<ProductAnalysisPage />)} />
         <Route path="products/listing" element={page(<ProductsPage />)} />
-        <Route
-          path="products/costs"
-          element={
-            page(
-              <CapabilityPage
-                title="成本与利润"
-                description="按商品、渠道和版本查看采购、头程、尾程、关税、支付、营销和售后成本。"
-                requiredApis={[
-                  'GET /api/v1/products/{id}/cost-snapshots',
-                  'POST /api/v1/products/{id}/cost-snapshots',
-                  'GET /api/v1/products/{id}/profit-analysis',
-                ]}
-                requiredModels={[
-                  'Product Cost Snapshot：成本组成、币种、版本和有效期',
-                  'Channel Price：B2C 零售价与 B2B 阶梯价',
-                  'Profit Analysis：预估利润、已核对利润和差异原因',
-                ]}
-                blockers={[
-                  '现有 product_cost 只有当前版本，缺少不可变历史快照',
-                  'B2B 阶梯价与 B2C 零售价尚未统一进入利润计算',
-                  '缺少成本数据来源和人工复核状态时不得标记为可信',
-                ]}
-              />,
-            )
-          }
-        />
+        <Route path="products/costs" element={page(<ProductCostsPage />)} />
 
         <Route path="b2c/overview" element={page(<B2COverviewPage />)} />
         <Route path="b2c/products" element={page(<ProductsPage />)} />
