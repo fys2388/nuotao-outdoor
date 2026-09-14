@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
+  Alert,
   Card,
   Table,
   Tag,
@@ -29,6 +30,7 @@ const { Option } = Select
 interface AgentSuggestion {
   id: string
   agent_id: string
+  source: string
   suggestion_type: string
   title: string
   description: string
@@ -39,7 +41,9 @@ interface AgentSuggestion {
   execution_params: Record<string, any>
   expected_impact: string
   created_at: string
+  approved_by?: string
   approved_at?: string
+  approval_comment?: string
   executed_at?: string
   execution_result?: Record<string, any>
 }
@@ -79,7 +83,13 @@ const typeLabels: Record<string, string> = {
   customer_operation: '客户运营',
   supply_chain: '供应链优化',
   business_insight: '商业洞察',
+  b2b_sales_follow_up: 'B2B 询盘跟进',
+  b2b_quote_recommendation: 'B2B 报价建议',
+  b2b_collection_action: 'B2B 回款跟进',
 }
+
+// 行动中心排序权重：high=P0、medium=P1、low=P2，未知优先级排最后。
+const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 }
 
 export default function AgentSuggestionsPage() {
   const [suggestions, setSuggestions] = useState<AgentSuggestion[]>([])
@@ -94,6 +104,8 @@ export default function AgentSuggestionsPage() {
   })
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [batchLoading, setBatchLoading] = useState(false)
+  // 行动中心：全部待审批建议，按优先级排序后以行动卡呈现。
+  const [actionItems, setActionItems] = useState<AgentSuggestion[]>([])
 
   const fetchSuggestions = async (status?: string) => {
     setLoading(true)
@@ -109,13 +121,27 @@ export default function AgentSuggestionsPage() {
       // 统计
       const allResponse = await fetch(`${API_BASE}?limit=200`)
       const allData = await allResponse.json()
-      const all = allData.items || allData || []
+      const allItems = allData.items || allData || []
       setStats({
         pending: allItems.filter((s: AgentSuggestion) => s.status === 'pending_approval').length,
         approved: allItems.filter((s: AgentSuggestion) => s.status === 'approved').length,
         completed: allItems.filter((s: AgentSuggestion) => s.status === 'completed').length,
         failed: allItems.filter((s: AgentSuggestion) => s.status === 'failed').length,
       })
+      // 行动中心只信任后端 pending_approval 过滤的结果；不能从「前 N 条全量」里筛待办，
+      // 因为已完成记录可能占满分页，把待办挤到后面导致漏算（与待审批计数不一致同源）。
+      try {
+        const pendingResponse = await fetch(`${API_BASE}?status=pending_approval&limit=200`)
+        const pendingPayload = await pendingResponse.json()
+        const pendingItems = (pendingPayload.items || pendingPayload || []) as AgentSuggestion[]
+        setActionItems(
+          pendingItems.sort(
+            (a, b) => (priorityRank[a.priority] ?? 99) - (priorityRank[b.priority] ?? 99),
+          ),
+        )
+      } catch {
+        setActionItems([])
+      }
     } catch (error) {
       message.error('获取建议列表失败')
       console.error(error)
@@ -336,7 +362,7 @@ export default function AgentSuggestionsPage() {
               icon={<SyncOutlined />}
               onClick={() => handleExecute(record.id)}
             >
-              执行
+              {record.execution_action === 'manual_review' ? '确认处理' : '执行'}
             </Button>
           )}
           <Button size="small" onClick={() => setDetailModal(record)}>
@@ -349,6 +375,89 @@ export default function AgentSuggestionsPage() {
 
   return (
     <div>
+      <Card
+        variant="borderless"
+        className="action-center"
+        title={
+          <Space>
+            <RobotOutlined />
+            <span>今日待办行动</span>
+            <Tag color="orange">{actionItems.length >= 200 ? '200+' : actionItems.length}</Tag>
+          </Space>
+        }
+      >
+        {actionItems.length === 0 ? (
+          <Alert
+            type="success"
+            showIcon
+            icon={<CheckCircleOutlined />}
+            title="当前没有待审批的 AI 行动"
+            description="所有建议均已处理；新建议产生后会按 P0 / P1 / P2 优先级出现在这里。"
+          />
+        ) : (
+          (['high', 'medium', 'low'] as const).map((level) => {
+            const items = actionItems.filter((s) => s.priority === level)
+            if (items.length === 0) return null
+            const groupLabel =
+              level === 'high' ? 'P0 · 立即处理' : level === 'medium' ? 'P1 · 重点关注' : 'P2 · 备查'
+            return (
+              <div key={level}>
+                <div className="ac-group-title">
+                  <Tag color={priorityColors[level] || 'default'}>{groupLabel}</Tag>
+                  <Text type="secondary">{items.length} 项</Text>
+                </div>
+                <div className="ac-list">
+                  {items.map((s) => (
+                    <div key={s.id} className={`ac-card ac-card--${level}`}>
+                      <div className="ac-card-head">
+                        <Tag color="blue">{typeLabels[s.suggestion_type] || s.suggestion_type}</Tag>
+                        <Tag
+                          color={
+                            s.risk_level === 'high'
+                              ? 'red'
+                              : s.risk_level === 'medium'
+                                ? 'orange'
+                                : 'green'
+                          }
+                        >
+                          风险{s.risk_level === 'high' ? '高' : s.risk_level === 'medium' ? '中' : '低'}
+                        </Tag>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {s.agent_id}
+                        </Text>
+                      </div>
+                      <div className="ac-card-title">{s.title}</div>
+                      {s.description && <div className="ac-card-desc">{s.description}</div>}
+                      <div className="ac-card-actions">
+                        <Button size="small" onClick={() => setDetailModal(s)}>
+                          查看计算
+                        </Button>
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<CheckCircleOutlined />}
+                          onClick={() => handleApprove(s.id)}
+                        >
+                          {s.execution_action === 'manual_review' ? '确认处理' : '批准并执行'}
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          icon={<CloseCircleOutlined />}
+                          onClick={() => handleReject(s.id)}
+                        >
+                          拒绝
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })
+        )}
+      </Card>
+
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card>
@@ -469,7 +578,9 @@ export default function AgentSuggestionsPage() {
                   setDetailModal(null)
                 }}
               >
-                批准并执行
+                {detailModal.execution_action === 'manual_review'
+                  ? '批准建议'
+                  : '批准并执行'}
               </Button>
               <Button
                 danger
@@ -516,7 +627,11 @@ export default function AgentSuggestionsPage() {
                 <Space>
                   <RobotOutlined />
                   {detailModal.agent_id}
+                  {detailModal.source === 'b2b_agent' && <Tag color="gold">B2B 人工确认</Tag>}
                 </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="来源">
+                {detailModal.source === 'b2b_agent' ? 'B2B Agent' : detailModal.source}
               </Descriptions.Item>
               <Descriptions.Item label="执行动作">
                 <code>{detailModal.execution_action || '无'}</code>
@@ -537,6 +652,46 @@ export default function AgentSuggestionsPage() {
                 <div style={{ padding: '12px', background: '#e6f7ff', borderRadius: 4 }}>
                   <Text>{detailModal.expected_impact}</Text>
                 </div>
+              </>
+            )}
+
+            {detailModal.approved_at && (
+              <>
+                <Divider>人工审批记录</Divider>
+                <Descriptions bordered column={1} size="small">
+                  <Descriptions.Item label="审批人">
+                    {detailModal.approved_by || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="审批时间">
+                    {new Date(detailModal.approved_at).toLocaleString('zh-CN')}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="审批意见">
+                    {detailModal.approval_comment || '无'}
+                  </Descriptions.Item>
+                </Descriptions>
+              </>
+            )}
+
+            {detailModal.execution_params?.evidence && (
+              <>
+                <Divider>决策证据</Divider>
+                <Alert
+                  type="warning"
+                  showIcon
+                  title="仅作业务建议，不会自动报价、改价、发送催收或核销应收"
+                  style={{ marginBottom: 12 }}
+                />
+                <pre
+                  style={{
+                    background: '#fffbe6',
+                    padding: 12,
+                    borderRadius: 4,
+                    maxHeight: 320,
+                    overflow: 'auto',
+                  }}
+                >
+                  {JSON.stringify(detailModal.execution_params.evidence, null, 2)}
+                </pre>
               </>
             )}
 

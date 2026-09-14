@@ -1,0 +1,109 @@
+name: Hotdeploy Frontend Full (one-off)
+
+# Ships the complete local frontend (new app/ router, auth, config and all pages,
+# including the real ProductCandidatesPage) so the server UI matches local.
+# Backend is untouched. Old src and current static files are backed up, and the
+# deploy auto-rolls-back if build or health check fails.
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-frontend-full.yml'
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package frontend (committed tree only)
+        run: |
+          tar -czf frontend.tgz \
+            --exclude='frontend/node_modules' \
+            --exclude='frontend/dist' \
+            --exclude='frontend/test-results' \
+            --exclude='frontend/e2e' \
+            --exclude='frontend/*.log' \
+            --exclude='frontend/.env*' \
+            --exclude='frontend/*.tsbuildinfo' \
+            frontend
+          echo "--- package contents (top) ---"; tar -tzf frontend.tgz | head -15
+          echo "--- file count ---"; tar -tzf frontend.tgz | wc -l
+
+      - name: Upload package
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: frontend.tgz
+          target: /tmp
+
+      - name: Backup, replace, install, build, deploy (auto-rollback on failure)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/frontend-full-$STAMP
+            FE=/opt/nuotao/frontend
+            mkdir -p "$BK"
+
+            rollback() {
+              echo "!!! ROLLBACK to previous frontend"
+              rm -rf "$FE/src" || true
+              mv "$BK/src_old" "$FE/src" || true
+              rm -rf /var/www/nuotao || true
+              mkdir -p /var/www/nuotao
+              [ -f "$BK/www_old.tgz" ] && tar -xzf "$BK/www_old.tgz" -C /var/www || true
+              chown -R www-data:www-data /var/www/nuotao || true
+            }
+
+            echo "=== 0. backup current src + static + config ==="
+            mv "$FE/src" "$BK/src_old"
+            [ -d /var/www/nuotao ] && tar -czf "$BK/www_old.tgz" -C /var/www nuotao || true
+            (cd "$FE" && tar -czf "$BK/cfg_old.tgz" index.html package.json package-lock.json vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json 2>/dev/null || true)
+            ls -la "$BK"
+
+            echo "=== 1. unpack new frontend tree ==="
+            if ! tar -xzf /tmp/frontend.tgz -C /opt/nuotao; then rollback; exit 1; fi
+            rm -f /tmp/frontend.tgz
+            test -f "$FE/src/main.tsx" && echo "new src in place"
+            test -f "$FE/src/pages/ProductCandidatesPage.tsx" && echo "candidates page present"
+
+            echo "=== 2. align dependencies ==="
+            cd "$FE"
+            node -v; npm -v
+            npm install --no-audit --no-fund 2>&1 | tail -6
+
+            echo "=== 3. build ==="
+            set +e
+            npm run build > /tmp/fe.log 2>&1
+            BRC=$?
+            set -e
+            tail -15 /tmp/fe.log
+            if [ "$BRC" -ne 0 ]; then
+              echo "##### BUILD FAILED #####"
+              grep -nE "Could not resolve|is not exported|error TS|Error|\.tsx|\.ts" /tmp/fe.log | head -50
+              rollback; exit 1
+            fi
+
+            echo "=== 4. deploy static ==="
+            rm -rf /var/www/nuotao
+            mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+            ls /var/www/nuotao | head
+
+            echo "=== 5. health ==="
+            b=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true); echo "backend=$b"
+            c=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true); echo "console=$c"
+            if [ "$c" != "200" ]; then echo "ERROR console=$c"; rollback; exit 1; fi
+            echo "DONE frontend deployed; backup=$BK"
