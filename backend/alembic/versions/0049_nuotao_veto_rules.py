@@ -3,7 +3,9 @@
 The rules table is the auditable control plane; the deterministic evaluation
 lives in app/services/nuotao_veto.py. These rows make the veto catalogue
 visible/manageable in the Rules UI and align with docs/nuotao_product_score_v3.0
-section 3. Inserts are idempotent (ON CONFLICT DO NOTHING).
+section 3. Inserts are idempotent (ON CONFLICT DO NOTHING). SQL is built with
+inline, escaped literals (same proven pattern as migration 0002 demo rules) to
+avoid any Alembic op.execute parameter-binding differences.
 """
 
 import json
@@ -46,37 +48,35 @@ RULES: list[tuple[str, str, str, str, dict, dict]] = [
      {"field": "return_rate", "op": "gt", "value": 0.15}, {"stage": "commercial"}),
 ]
 
-_INSERT = sa.text(
-    """
-    INSERT INTO rules (
-        id, workspace_id, rule_id, name, category, rule_type, version, status,
-        when_conditions, then_result, params, approval_level
-    ) VALUES (
-        :id, :ws, :rule_id, :name, 'PROD-VETO', 'hard', 'v1', 'active',
-        CAST(:when_conditions AS jsonb), CAST(:then_result AS jsonb),
-        CAST(:params AS jsonb), 'L0'
-    )
-    ON CONFLICT ON CONSTRAINT uq_rules_workspace_rule_version DO NOTHING
-    """
-)
+
+def _quote(value) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _jsonb(value: dict) -> str:
+    return _quote(json.dumps(value, ensure_ascii=False)) + "::jsonb"
 
 
 def upgrade() -> None:
     for index, (rule_id, name, group, check_type, when, extra) in enumerate(RULES, start=1):
-        op.execute(
-            _INSERT,
-            {
-                "id": f"00000000-0049-0000-0000-{index:012d}",
-                "ws": WORKSPACE_ID,
-                "rule_id": rule_id,
-                "name": name,
-                "when_conditions": json.dumps(when),
-                "then_result": json.dumps(
-                    {"action": "reject", "failed_message": f"{rule_id} {name}，一票否决"}
-                ),
-                "params": json.dumps({"group": group, "check_type": check_type, **extra}),
-            },
-        )
+        rule_id_sql = f"00000000-0049-0000-0000-{index:012d}"
+        then_result = {
+            "action": "reject",
+            "failed_message": f"{rule_id} {name}，一票否决",
+        }
+        params = {"group": group, "check_type": check_type, **extra}
+        statement = f"""
+            INSERT INTO rules (
+                id, workspace_id, rule_id, name, category, rule_type, version, status,
+                when_conditions, then_result, params, approval_level
+            ) VALUES (
+                {_quote(rule_id_sql)}, {_quote(WORKSPACE_ID)}, {_quote(rule_id)},
+                {_quote(name)}, 'PROD-VETO', 'hard', 'v1', 'active',
+                {_jsonb(when)}, {_jsonb(then_result)}, {_jsonb(params)}, 'L0'
+            )
+            ON CONFLICT ON CONSTRAINT uq_rules_workspace_rule_version DO NOTHING
+        """
+        op.execute(sa.text(statement))
 
 
 def downgrade() -> None:
