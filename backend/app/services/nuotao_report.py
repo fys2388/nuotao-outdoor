@@ -22,6 +22,7 @@ from app.services.nuotao_score_v3 import (
     COMPLIANCE_VETOES,
     BRAND_VETOES,
     COMMERCIAL_VETOES,
+    CORE_MIN,
 )
 from app.services.operational_score_v2 import V2_DIMENSIONS
 
@@ -228,4 +229,46 @@ def build_selection_report(data: ReportData) -> dict[str, Any]:
             "model_version": nuotao.get("model_version"),
             "rule_version": nuotao.get("rule_version"),
         },
+    }
+
+
+# Only Core (>=75) and Hero may carry a public-facing brand badge.
+PUBLIC_BADGE_MIN = CORE_MIN
+_PUBLIC_DIMENSION_KEYS = DIMENSION_KEYS
+
+
+def build_public_badge(
+    *,
+    sku: str | None,
+    total: Any,
+    grade: str | None,
+    dimensions: dict[str, Any] | None,
+    scored_at: str | None,
+    model_version: str | None,
+) -> dict[str, Any]:
+    """Whitelisted, customer-facing Nuotao badge.
+
+    Returns ``display=False`` for anything below the Core threshold (or with no
+    score). Internal-only fields — veto details, costs, supplier, AI reasoning —
+    are never emitted, so this payload is safe to hand to the B2C storefront.
+    """
+    if total is None:
+        return {"display": False, "reason": "no_score"}
+    value = float(total)
+    if Decimal(str(value)) < PUBLIC_BADGE_MIN:
+        return {"display": False, "reason": "below_core"}
+    dims = dimensions or {}
+    return {
+        "display": True,
+        "sku": sku,
+        "grade": grade,
+        "grade_label": GRADE_LABELS.get(grade, grade),
+        "nuotao_total": round(value, 1),
+        "dimensions": {
+            key: round(float(dims[key]), 1)
+            for key in _PUBLIC_DIMENSION_KEYS
+            if dims.get(key) is not None
+        },
+        "scored_at": scored_at,
+        "model_version": model_version,
     }

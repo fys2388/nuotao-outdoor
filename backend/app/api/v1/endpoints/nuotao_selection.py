@@ -10,7 +10,7 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,12 @@ from app.services.nuotao_selection_service import (
     build_product_report,
     evaluate_product,
     evaluate_products,
+    get_public_badge,
+)
+from app.services.nuotao_test_loop import (
+    promote_to_hero,
+    record_test_result,
+    start_market_test,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +47,24 @@ class BatchEvaluateRequest(BaseModel):
 
 class LatestBatchRequest(BaseModel):
     product_ids: list[str] = Field(..., min_length=1, max_length=500)
+
+
+class StartTestRequest(BaseModel):
+    actor: str = Field(..., min_length=1, max_length=64)
+    plan: dict | None = None
+
+
+class TestResultRequest(BaseModel):
+    actor: str = Field(..., min_length=1, max_length=64)
+    actual: dict = Field(default_factory=dict)
+    success: bool | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class PromoteHeroRequest(BaseModel):
+    actor: str = Field(..., min_length=1, max_length=64)
+    comment: str | None = Field(default=None, max_length=1000)
+    force: bool = False
 
 
 def _serialize_score(record: ProductNuotaoScore) -> dict:
@@ -99,6 +123,20 @@ async def run_evaluate_batch(request: BatchEvaluateRequest, db: DbSession):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+
+
+@router.get("/public-badge", summary="B2C 前台 Nuotao 徽章（仅 Core/Hero，字段白名单）")
+async def get_public_badge_endpoint(
+    db: DbSession,
+    product_id: UUID | None = Query(default=None),
+    sku: str | None = Query(default=None, max_length=128),
+):
+    if product_id is None and not sku:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="product_id or sku is required",
+        )
+    return await get_public_badge(db, product_id=product_id, sku=sku)
 
 
 @router.get("/{product_id}/latest", summary="读取产品最新 V3.0 评分与漏斗阶段")
@@ -161,6 +199,72 @@ async def get_product_report(product_id: UUID, db: DbSession):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Nuotao V3 report failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+
+@router.post("/{product_id}/test/start", summary="人工批准并启动小批量测试（8→3）")
+async def post_start_test(product_id: UUID, request: StartTestRequest, db: DbSession):
+    try:
+        result = await start_market_test(
+            db, product_id, actor=request.actor, plan=request.plan
+        )
+        await db.commit()
+        return {"success": True, **result}
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.exception("start market test failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+
+@router.post("/{product_id}/test/result", summary="回填小批量测试 KPI 结果（3→1-2）")
+async def post_test_result(product_id: UUID, request: TestResultRequest, db: DbSession):
+    try:
+        result = await record_test_result(
+            db,
+            product_id,
+            actor=request.actor,
+            actual=request.actual,
+            success=request.success,
+            note=request.note,
+        )
+        await db.commit()
+        return {"success": True, **result}
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.exception("record test result failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+
+@router.post("/{product_id}/promote-hero", summary="人工终审提名 Hero（最终 1-2）")
+async def post_promote_hero(product_id: UUID, request: PromoteHeroRequest, db: DbSession):
+    try:
+        result = await promote_to_hero(
+            db,
+            product_id,
+            actor=request.actor,
+            comment=request.comment,
+            force=request.force,
+        )
+        await db.commit()
+        return {"success": True, **result}
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        logger.exception("promote to hero failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc

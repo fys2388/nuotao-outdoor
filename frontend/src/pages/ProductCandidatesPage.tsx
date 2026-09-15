@@ -336,6 +336,7 @@ export default function ProductCandidatesPage() {
   const [v3BatchLoading, setV3BatchLoading] = useState(false)
   const [v3Report, setV3Report] = useState<V3SelectionReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  const [testKpi, setTestKpi] = useState({ conversion: '', roas: '', returnRate: '' })
 
   const loadCandidates = useCallback(async () => {
     setLoading(true)
@@ -629,6 +630,76 @@ export default function ProductCandidatesPage() {
       setV3Report(null)
     } finally {
       setReportLoading(false)
+    }
+  }
+
+  const parseTestKpi = (): Record<string, number> => {
+    const actual: Record<string, number> = {}
+    const conversion = Number(testKpi.conversion)
+    if (testKpi.conversion && !Number.isNaN(conversion)) actual.conversion_rate = conversion
+    const roas = Number(testKpi.roas)
+    if (testKpi.roas && !Number.isNaN(roas)) actual.roas = roas
+    const returnRate = Number(testKpi.returnRate)
+    if (testKpi.returnRate && !Number.isNaN(returnRate)) actual.return_rate = returnRate
+    return actual
+  }
+
+  const startMarketTest = async (candidate: Candidate) => {
+    setActionLoading('test:start')
+    try {
+      const res = (await api.startNuotaoMarketTest(
+        candidate.id,
+        user?.username || 'admin',
+      )) as { funnel_stage: string }
+      message.success(`已启动小批量测试，漏斗推进到「${res.funnel_stage}」`)
+      await loadCandidates()
+      if (detailOpen) await refreshDetail(candidate.id)
+    } catch (actionError) {
+      message.error(`启动测试失败：${apiErrorMessage(actionError)}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const recordTestResult = async (candidate: Candidate, success: boolean) => {
+    setActionLoading(success ? 'test:pass' : 'test:fail')
+    try {
+      const res = (await api.recordNuotaoTestResult(candidate.id, {
+        actor: user?.username || 'admin',
+        actual: parseTestKpi(),
+        success,
+      })) as { experiment_status: string; actions: string[] }
+      message.success(
+        success
+          ? `测试结果已回填（${res.experiment_status}）${
+              res.actions.includes('hero_nomination_created') ? '，已生成 Hero 提名待终审' : ''
+            }`
+          : `已记录未达标（${res.experiment_status}），淘汰建议待人工确认`,
+      )
+      setTestKpi({ conversion: '', roas: '', returnRate: '' })
+      await loadCandidates()
+      if (detailOpen) await refreshDetail(candidate.id)
+    } catch (actionError) {
+      message.error(`回填失败：${apiErrorMessage(actionError)}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const promoteHero = async (candidate: Candidate) => {
+    setActionLoading('test:hero')
+    try {
+      const res = (await api.promoteNuotaoHero(
+        candidate.id,
+        user?.username || 'admin',
+      )) as { funnel_stage: string }
+      message.success(`终审通过，产品已晋级为「${res.funnel_stage}」`)
+      await loadCandidates()
+      if (detailOpen) await refreshDetail(candidate.id)
+    } catch (actionError) {
+      message.error(`晋级失败：${apiErrorMessage(actionError)}`)
+    } finally {
+      setActionLoading(null)
     }
   }
 
@@ -1626,6 +1697,100 @@ export default function ProductCandidatesPage() {
                 </Space>
               )}
             </Card>
+
+            {detailNuotao &&
+              ['test_candidate', 'testing', 'hero'].includes(detailNuotao.funnel_stage || '') && (
+                <Card
+                  variant="borderless"
+                  title="漏斗推进 · 小批量测试（人审闭环）"
+                  style={{ marginTop: 12 }}
+                >
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Text>当前阶段</Text>
+                      {detailNuotao.funnel_stage && FUNNEL_META[detailNuotao.funnel_stage] && (
+                        <Tag color={FUNNEL_META[detailNuotao.funnel_stage].color}>
+                          {FUNNEL_META[detailNuotao.funnel_stage].label}
+                        </Tag>
+                      )}
+                      {detailNuotao.grade && <Tag>{detailNuotao.grade}</Tag>}
+                    </Space>
+
+                    {detailNuotao.funnel_stage === 'test_candidate' && detailCandidate && (
+                      <Button
+                        type="primary"
+                        icon={<ExperimentOutlined />}
+                        loading={actionLoading === 'test:start'}
+                        onClick={() => void startMarketTest(detailCandidate)}
+                      >
+                        人工批准并启动小批量测试（8→3）
+                      </Button>
+                    )}
+
+                    {detailNuotao.funnel_stage === 'testing' && detailCandidate && (
+                      <>
+                        <Space wrap align="center">
+                          <Text type="secondary">转化率</Text>
+                          <InputNumber
+                            size="small"
+                            style={{ width: 96 }}
+                            value={testKpi.conversion || ''}
+                            onChange={(v) =>
+                              setTestKpi((s) => ({ ...s, conversion: String(v ?? '') }))
+                            }
+                          />
+                          <Text type="secondary">ROAS</Text>
+                          <InputNumber
+                            size="small"
+                            style={{ width: 96 }}
+                            value={testKpi.roas || ''}
+                            onChange={(v) => setTestKpi((s) => ({ ...s, roas: String(v ?? '') }))}
+                          />
+                          <Text type="secondary">退货率</Text>
+                          <InputNumber
+                            size="small"
+                            style={{ width: 96 }}
+                            value={testKpi.returnRate || ''}
+                            onChange={(v) =>
+                              setTestKpi((s) => ({ ...s, returnRate: String(v ?? '') }))
+                            }
+                          />
+                        </Space>
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            loading={actionLoading === 'test:pass'}
+                            onClick={() => void recordTestResult(detailCandidate, true)}
+                          >
+                            回填：测试通过
+                          </Button>
+                          <Button
+                            danger
+                            loading={actionLoading === 'test:fail'}
+                            onClick={() => void recordTestResult(detailCandidate, false)}
+                          >
+                            回填：未达标
+                          </Button>
+                          <Button
+                            loading={actionLoading === 'test:hero'}
+                            onClick={() => void promoteHero(detailCandidate)}
+                          >
+                            终审设为 Hero
+                          </Button>
+                        </Space>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          通过且为 Hero 分将自动生成 Hero 提名；未达标生成淘汰建议。二者均进入审批中心人工确认，
+                          系统不会自动改价、上架或删除。
+                        </Text>
+                      </>
+                    )}
+
+                    {detailNuotao.funnel_stage === 'hero' && (
+                      <Tag color="gold">已是 Hero 产品（1-2）</Tag>
+                    )}
+                  </Space>
+                </Card>
+              )}
 
             <Card variant="borderless" title="六维评分与证据">
               {detailScore ? (

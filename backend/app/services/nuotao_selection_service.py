@@ -38,7 +38,12 @@ from app.services.nuotao_score_mapper import (
     ScoreFacts,
     map_dimensions,
 )
-from app.services.nuotao_report import ReportData, build_selection_report
+from app.services.nuotao_report import (
+    ReportData,
+    build_public_badge,
+    build_selection_report,
+)
+from app.services.nuotao_handoff import propose_selection_handoff
 from app.services.nuotao_score_v3 import (
     MODEL_VERSION,
     RULE_VERSION,
@@ -317,10 +322,23 @@ async def evaluate_product(
     ]
     await session.flush()
 
+    handoff = await propose_selection_handoff(
+        session,
+        workspace_id=workspace_id,
+        product_id=product_id,
+        product_name=product.name,
+        nuotao_total=float(total),
+        grade=grade,
+        funnel_stage=stage,
+        vetoed=veto["vetoed"],
+        trace_id=record.trace_id,
+    )
+
     return {
         "product_id": str(product_id),
         "score_id": str(record.id),
         "funnel_stage": stage,
+        "handoff": handoff,
         "grade": grade,
         "nuotao_total": float(total),
         "operational_total": float(operational_total) if operational_total is not None else None,
@@ -393,6 +411,48 @@ async def _latest_nuotao_score(
         )
         .scalars()
         .first()
+    )
+
+
+async def get_public_badge(
+    session: AsyncSession,
+    *,
+    product_id: UUID | None = None,
+    sku: str | None = None,
+) -> dict[str, Any]:
+    """Customer-facing Nuotao badge (>= Core only, whitelisted fields)."""
+    if product_id is None and not sku:
+        raise ValueError("product_id or sku is required")
+    query = select(Product).where(Product.deleted_at.is_(None))
+    if product_id is not None:
+        query = query.where(Product.id == product_id)
+    else:
+        query = query.where(Product.sku == sku)
+    product = (await session.execute(query.limit(1))).scalars().first()
+    if product is None:
+        return {"display": False, "reason": "not_found"}
+
+    score = await _latest_nuotao_score(session, product.id)
+    if score is None:
+        return build_public_badge(
+            sku=product.sku, total=None, grade=None, dimensions=None,
+            scored_at=None, model_version=None,
+        )
+    dimensions = {
+        "value": score.value_score,
+        "utility": score.utility_score,
+        "weight_packability": score.weight_packability_score,
+        "durability": score.durability_score,
+        "brand_fit": score.brand_fit_score,
+        "differentiation": score.differentiation_score,
+    }
+    return build_public_badge(
+        sku=product.sku,
+        total=score.total,
+        grade=score.grade,
+        dimensions=dimensions,
+        scored_at=score.scored_at.isoformat() if score.scored_at else None,
+        model_version=score.model_version,
     )
 
 

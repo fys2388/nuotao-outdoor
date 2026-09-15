@@ -366,6 +366,30 @@ export const api = {
     }),
   getNuotaoV3Report: (productId: string) =>
     request(`/selection/nuotao/${productId}/report`),
+  startNuotaoMarketTest: (productId: string, actor: string, plan?: Record<string, unknown>) =>
+    request(`/selection/nuotao/${productId}/test/start`, {
+      method: 'POST',
+      body: JSON.stringify({ actor, plan: plan ?? null }),
+    }),
+  recordNuotaoTestResult: (
+    productId: string,
+    payload: { actor: string; actual: Record<string, unknown>; success: boolean | null; note?: string },
+  ) =>
+    request(`/selection/nuotao/${productId}/test/result`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  promoteNuotaoHero: (productId: string, actor: string, comment?: string, force = false) =>
+    request(`/selection/nuotao/${productId}/promote-hero`, {
+      method: 'POST',
+      body: JSON.stringify({ actor, comment: comment ?? null, force }),
+    }),
+  getNuotaoPublicBadge: (params: { productId?: string; sku?: string }) => {
+    const q = new URLSearchParams()
+    if (params.productId) q.set('product_id', params.productId)
+    if (params.sku) q.set('sku', params.sku)
+    return request(`/selection/nuotao/public-badge?${q.toString()}`)
+  },
   intakeProduct: (data: Record<string, unknown>) =>
     request('/products/intake', {
       method: 'POST',
