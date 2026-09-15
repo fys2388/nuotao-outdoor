@@ -529,11 +529,15 @@ export default function ProductCandidatesPage() {
     try {
       const result = (await api.evaluateNuotaoV3Batch(ids)) as {
         count: number
+        skipped?: Array<{ product_id: string; reason: string }>
         errors: Array<{ product_id: string; error: string }>
       }
       const failed = result.errors?.length || 0
+      const skippedCount = result.skipped?.length || 0
       message.success(
-        `V3.0 批量评估完成 ${result.count} 条${failed ? `，${failed} 条失败` : ''}`,
+        `V3.0 批量评估完成 ${result.count} 条` +
+          (skippedCount ? `，跳过 ${skippedCount} 条（已删/缺失）` : '') +
+          (failed ? `，${failed} 条失败` : ''),
       )
       setSelectedRowKeys([])
       await loadCandidates()

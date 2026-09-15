@@ -264,10 +264,18 @@ async def evaluate_products(
     workspace_id: UUID | None = None,
     trace_id: str | None = None,
 ) -> dict[str, Any]:
-    """Batch evaluate; a single product failure never aborts the whole batch."""
+    """Batch evaluate; soft-deleted/missing rows are skipped, one failure never
+    aborts the whole batch."""
     evaluated: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
     for product_id in product_ids:
+        existing = await session.get(Product, product_id)
+        if existing is None or existing.deleted_at is not None:
+            skipped.append(
+                {"product_id": str(product_id), "reason": "missing_or_soft_deleted"}
+            )
+            continue
         try:
             evaluated.append(
                 await evaluate_product(
@@ -276,4 +284,9 @@ async def evaluate_products(
             )
         except Exception as exc:  # noqa: BLE001 - batch isolation by design
             errors.append({"product_id": str(product_id), "error": str(exc)})
-    return {"evaluated": evaluated, "errors": errors, "count": len(evaluated)}
+    return {
+        "evaluated": evaluated,
+        "skipped": skipped,
+        "errors": errors,
+        "count": len(evaluated),
+    }

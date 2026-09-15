@@ -14,7 +14,7 @@ from app.models.product_intelligence import (
     SourcingCandidate,
 )
 from app.models.supplier import Supplier
-from app.services.nuotao_selection_service import evaluate_product
+from app.services.nuotao_selection_service import evaluate_product, evaluate_products
 
 pytestmark = pytest.mark.asyncio
 
@@ -145,3 +145,18 @@ async def test_evaluation_is_append_only(db_session):
     await evaluate_product(db_session, product.id)
     rows = (await db_session.execute(select(ProductNuotaoScore))).scalars().all()
     assert len(rows) == 2
+
+
+async def test_batch_skips_soft_deleted_and_missing(db_session):
+    from datetime import UTC, datetime
+
+    live = await _product(db_session, sku="NTO-LIVE")
+    gone = await _product(db_session, sku="NTO-GONE")
+    gone.deleted_at = datetime.now(UTC)
+    await db_session.flush()
+
+    result = await evaluate_products(db_session, [live.id, gone.id, uuid4()])
+
+    assert result["count"] == 1
+    assert len(result["skipped"]) == 2
+    assert result["errors"] == []
