@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Card, Form, Input, Button, Space, Typography, Steps, Tag, Alert,
   Row, Col, Spin, message, Tabs, Divider, Select, Descriptions, Collapse,
-  Statistic, Progress, Empty, Tooltip, Modal, List, Badge
+  Statistic, Progress, Empty, Tooltip, Modal, List, Badge, Switch
 } from 'antd'
 import {
   ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -12,7 +12,6 @@ import {
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
-const { Step } = Steps
 
 // 工作流步骤配置
 const PIPELINE_STEPS = [
@@ -554,21 +553,27 @@ export default function ProductPipeline() {
 
                   <Progress percent={pipelineResult.data.progress} status={pipelineResult.data.status === 'completed' ? 'success' : pipelineResult.data.status === 'failed' ? 'exception' : 'active'} />
 
-                  <Steps direction="vertical" size="small" style={{ marginTop: '24px' }} current={pipelineResult.data.completed_steps}>
-                    {PIPELINE_STEPS.map((step, index) => {
+                  <Steps
+                    direction="vertical"
+                    size="small"
+                    style={{ marginTop: '24px' }}
+                    current={pipelineResult.data.completed_steps}
+                    items={PIPELINE_STEPS.map((step) => {
                       const StepIcon = step.icon
-                      const status = getStepStatus(step.id)
                       const stepData = pipelineResult.data.steps?.[step.id]
-                      return (
-                        <Step
-                          key={step.id}
-                          title={<Space><StepIcon /> {step.title} <Tag color={getStepColor(step.id)}>{stepData?.status || 'wait'}</Tag></Space>}
-                          description={step.description}
-                          status={status}
-                        />
-                      )
+                      return {
+                        key: step.id,
+                        title: (
+                          <Space>
+                            <StepIcon /> {step.title}{' '}
+                            <Tag color={getStepColor(step.id)}>{stepData?.status || 'wait'}</Tag>
+                          </Space>
+                        ),
+                        description: step.description,
+                        status: getStepStatus(step.id),
+                      }
                     })}
-                  </Steps>
+                  />
 
                   {pipelineResult.data.errors?.length > 0 && (
                     <Alert
