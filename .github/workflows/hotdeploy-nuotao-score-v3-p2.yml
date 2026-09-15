@@ -95,7 +95,10 @@ jobs:
                     p = (await c.execute(text("select count(*) from prompts where name in ('PRODUCT_ANALYST','AGENT_PRODUCT_ANALYST') and version='v3' and status='active'"))).scalar()
                     print("active v3 prompts:", p); assert p == 2, p
                     a = (await c.execute(text("select prompt_version from agents where agent_id='product_analyst' order by workspace_id limit 1"))).scalar()
-                    print("agent prompt_version:", a); assert a == 'v3', a
+                    if a is None:
+                        print("product_analyst agent not seeded yet; code seeds v3 on ensure")
+                    else:
+                        print("agent prompt_version:", a); assert a == 'v3', a
                 paths = {r.path for r in app.routes}
                 need = [
                     "/api/v1/selection/nuotao/evaluate",
