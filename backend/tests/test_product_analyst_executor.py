@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.agents.product_analyst_prompt import PROMPT_VERSION_V3
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.agent import AiAgentRun
 from app.models.agent_runtime import AgentExecution, AgentRegistry, AgentTask
@@ -314,7 +315,7 @@ async def test_worker_happy_path_full_audit_chain(db_engine) -> None:
         llm_runs = [run for run in runs if run.provider == "openai"]
         assert len(llm_runs) == 1
         assert llm_runs[0].status == "completed"
-        assert llm_runs[0].prompt_version == "v1"
+        assert llm_runs[0].prompt_version == PROMPT_VERSION_V3
         assert llm_runs[0].trace_id == "trace-m52-happy"
         assert llm_runs[0].input_snapshot  # full product context recorded
 
@@ -843,7 +844,7 @@ async def test_seed_helper_idempotent(db_session) -> None:
         .all()
     )
     assert len(prompts) == 1
-    assert prompts[0].version == "v1"
+    assert prompts[0].version == PROMPT_VERSION_V3
     assert prompts[0].status == "active"
 
     agents = (
