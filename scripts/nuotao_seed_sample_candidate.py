@@ -150,15 +150,15 @@ async def seed(session: AsyncSession, product_id) -> dict:
         await session.flush()
         score_created = True
 
-    # 3) USD landed cost snapshot (append-only)
-    international, landed, _ = landed_breakdown(**COST)
+    # 3) USD landed cost snapshot (append-only). COST already carries
+    # international_shipping, so it is not passed again explicitly.
+    _, landed, _ = landed_breakdown(**COST)
     total_cost = landed + sum(PERIOD.values(), Decimal("0"))
     cost = ProductCostSnapshot(
         workspace_id=DEFAULT_WORKSPACE_ID,
         product_id=product_id,
         currency="USD",
         **COST,
-        international_shipping=international,
         total_landed_cost=landed,
         total_cost=total_cost,
         version="v1",
