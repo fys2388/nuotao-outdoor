@@ -22,12 +22,11 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.agent import AiAgentRun
@@ -37,6 +36,9 @@ from app.models.agent_runtime_hardening import AgentTaskAttempt
 from app.models.event import EventLog
 from app.models.product_intelligence import ProductDecision
 from app.services import agent_workers, event_service, task_queue
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 TERMINAL_STATUSES = ("completed", "failed", "rejected")
 
@@ -735,6 +737,7 @@ async def propose_dlq_replay(
         workspace_id=workspace_id,
         approval_type="DLQ_REPLAY",
         status="pending",
+        business_scope=task.business_scope,
         entity_type="agent_task",
         entity_id=str(task.id),
         target_task_id=task.id,
@@ -761,6 +764,7 @@ async def propose_dlq_replay(
         payload={
             "approval_type": "DLQ_REPLAY",
             "entity_id": str(task.id),
+            "business_scope": task.business_scope,
             "reason": reason,
         },
         trace_id=trace_id,

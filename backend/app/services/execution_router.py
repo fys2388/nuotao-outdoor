@@ -443,6 +443,21 @@ async def _handle_business_insight(
 # 具体执行动作处理器（注册到 _execution_handlers）
 # --------------------------------------------------------------------------- #
 
+@register_handler("manual_review")
+async def handle_manual_review(session: AsyncSession, params: dict) -> dict:
+    """Acknowledge an advisory suggestion without performing a business write."""
+    del session, params
+    return {
+        "success": True,
+        "action": "manual_review",
+        "result": {
+            "status": "acknowledged",
+            "business_write_performed": False,
+            "next_step": "由业务人员按建议在对应 B2B 流程中人工处理",
+        },
+    }
+
+
 @register_handler("start_product_sourcing")
 async def handle_start_product_sourcing(session: AsyncSession, params: dict) -> dict:
     """开始选品：创建选品任务，记录候选产品。"""

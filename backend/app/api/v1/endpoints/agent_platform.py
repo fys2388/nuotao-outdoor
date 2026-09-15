@@ -21,13 +21,13 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
-from app.core.workspace import get_workspace_id
 from app.schemas.agent_platform import (
     ApprovalRoleCreate,
     ApprovalRoleOut,
@@ -48,10 +48,13 @@ from app.services import (
     task_queue,
 )
 
-router = APIRouter(tags=["agent-platform"])
+router = APIRouter(
+    tags=["agent-platform"],
+    dependencies=[Depends(get_current_user)],
+)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
-WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+WorkspaceId = Annotated[UUID, Depends(get_current_workspace_id)]
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +75,7 @@ def _version_out(version: agent_lifecycle.AgentVersion) -> VersionOut:
         workspace_id=version.workspace_id,
         agent_id=version.agent_id,
         version=version.version,
+        business_scope=version.business_scope,
         prompt_name=version.prompt_name,
         prompt_version=version.prompt_version,
         config_snapshot=version.config_snapshot,
@@ -165,6 +169,7 @@ async def publish_version(
             version=body.version,
             prompt_name=body.prompt_name,
             prompt_version=body.prompt_version,
+            business_scope=body.business_scope,
             config_snapshot=body.config_snapshot,
             model_config=body.model_settings,
             execution_policy_version=body.execution_policy_version,
@@ -313,6 +318,7 @@ async def create_role(
         role_name=body.role_name,
         permissions=body.permissions,
         actors=body.actors,
+        business_scope=body.business_scope,
         enabled=body.enabled,
         trace_id=get_trace_id(),
     )
@@ -324,9 +330,19 @@ async def create_role(
     response_model=list[ApprovalRoleOut],
     summary="List the approval roles of the workspace",
 )
-async def list_roles(db: DbSession, workspace_id: WorkspaceId) -> list[ApprovalRoleOut]:
+async def list_roles(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
+) -> list[ApprovalRoleOut]:
     """Return the configured roles (used by the console RBAC panel)."""
-    rows = await approval_rbac.list_roles(db, workspace_id=workspace_id)
+    rows = await approval_rbac.list_roles(
+        db,
+        workspace_id=workspace_id,
+        business_scope=business_scope,
+    )
     return [ApprovalRoleOut.model_validate(row) for row in rows]
 
 

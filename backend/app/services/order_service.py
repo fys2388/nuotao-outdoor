@@ -2,7 +2,7 @@
 
 The pipeline is deliberately sequential and auditable:
 
-1. Idempotency guard on ``(workspace_id, external_order_id)`` (unique
+1. Idempotency guard on ``(workspace_id, source, external_order_id)`` (unique
    constraint backs this up for concurrent deliveries).
 2. Contribution margin snapshot via the profit engine (all Decimal).
 3. Rule engine ``check()`` for the PRICE / PROFIT / FULFILLMENT domains
@@ -28,7 +28,7 @@ from app.core.config import get_settings
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.schemas.order import WebhookOrderPayload, WebhookResponse
-from app.services import event_service, rule_engine
+from app.services import consolidation_service, customer_identity_service, event_service, rule_engine
 from app.services.profit_engine import (
     ProfitInput,
     assess_cost_confidence,
@@ -45,6 +45,31 @@ ORDER_RULE_GROUPS: tuple[str, ...] = ("PRICE", "PROFIT", "FULFILLMENT")
 
 class OrderIngestError(Exception):
     """Raised when an order cannot be ingested (caller returns 5xx)."""
+
+
+async def _try_auto_assign_attribution(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    order_id: UUID,
+    trace_id: str,
+) -> None:
+    """Best-effort attribution; order ingestion must not fail without masters."""
+    try:
+        await consolidation_service.ensure_attribution(
+            session,
+            workspace_id=workspace_id,
+            entity_type="b2c_order",
+            entity_id=order_id,
+            actor="system:order-ingest",
+            trace_id=trace_id,
+        )
+    except Exception:
+        logger.warning(
+            "automatic consolidation attribution failed for order %s",
+            order_id,
+            exc_info=True,
+        )
 
 
 def _discount_ratio(payload: WebhookOrderPayload) -> Decimal:
@@ -163,12 +188,14 @@ async def _find_order(
     *,
     workspace_id: UUID,
     external_order_id: str,
+    source: str = "woocommerce",
 ) -> Order | None:
-    """Return an existing order for the external id, if any."""
+    """Return an existing order for the workspace, source and external id."""
     return (
         await session.execute(
             select(Order).where(
                 Order.workspace_id == workspace_id,
+                Order.source == source,
                 Order.external_order_id == external_order_id,
             )
         )
@@ -191,9 +218,18 @@ async def ingest_order(
     external_order_id = str(payload.id)
 
     existing = await _find_order(
-        session, workspace_id=workspace_id, external_order_id=external_order_id
+        session,
+        workspace_id=workspace_id,
+        external_order_id=external_order_id,
+        source="woocommerce",
     )
     if existing is not None:
+        await _try_auto_assign_attribution(
+            session,
+            workspace_id=workspace_id,
+            order_id=existing.id,
+            trace_id=trace_id,
+        )
         logger.info("order %s already ingested; duplicate delivery", external_order_id)
         return WebhookResponse(
             status="duplicate",
@@ -228,6 +264,54 @@ async def ingest_order(
         session, workspace_id=workspace_id, context=context, trace_id=trace_id
     )
 
+    customer_account_id = None
+    if payload.billing_email:
+        try:
+            account = await customer_identity_service.ensure_account_for_identity(
+                session,
+                workspace_id=workspace_id,
+                identity_type="email",
+                identity_value=payload.billing_email,
+                channel="b2c_store",
+                external_system="woocommerce",
+                customer_type="CONSUMER",
+                business_model="B2C",
+                country=payload.country,
+                default_currency=payload.currency,
+                source="woocommerce_order",
+                trace_id=trace_id,
+            )
+            customer_account_id = account.id
+        except customer_identity_service.CustomerIdentityConflictError:
+            logger.warning(
+                "customer identity conflict while ingesting order %s; manual review required",
+                external_order_id,
+            )
+
+    if payload.billing_phone:
+        try:
+            account = await customer_identity_service.ensure_account_for_identity(
+                session,
+                workspace_id=workspace_id,
+                identity_type="phone",
+                identity_value=payload.billing_phone,
+                channel="b2c_store",
+                external_system="woocommerce",
+                customer_type="CONSUMER",
+                business_model="B2C",
+                country=payload.country,
+                default_currency=payload.currency,
+                source="woocommerce_order",
+                trace_id=trace_id,
+                existing_account_id=customer_account_id,
+            )
+            customer_account_id = account.id
+        except customer_identity_service.CustomerIdentityConflictError:
+            logger.warning(
+                "customer phone conflict while ingesting order %s; manual review required",
+                external_order_id,
+            )
+
     profit_snapshot = profit.as_snapshot()
     profit_snapshot["product_cost"] = str(product_cost)
     profit_snapshot["cost_details"] = cost_details
@@ -248,6 +332,8 @@ async def ingest_order(
         country=payload.country,
         payment_method=payload.payment_method,
         source="woocommerce",
+        business_model="B2C",
+        customer_account_id=customer_account_id,
         subtotal=payload.subtotal,
         shipping_total=payload.shipping_total,
         discount_total=payload.discount_total,
@@ -278,9 +364,18 @@ async def ingest_order(
         # Concurrent duplicate delivery raced past the pre-check.
         await session.rollback()
         existing = await _find_order(
-            session, workspace_id=workspace_id, external_order_id=external_order_id
+            session,
+            workspace_id=workspace_id,
+            external_order_id=external_order_id,
+            source="woocommerce",
         )
         if existing is not None:
+            await _try_auto_assign_attribution(
+                session,
+                workspace_id=workspace_id,
+                order_id=existing.id,
+                trace_id=trace_id,
+            )
             logger.info("order %s ingested concurrently; duplicate delivery", external_order_id)
             return WebhookResponse(
                 status="duplicate",
@@ -307,6 +402,12 @@ async def ingest_order(
         trace_id=trace_id,
     )
     logger.info("order %s ingested (event=%s) trace=%s", external_order_id, event.id, trace_id)
+    await _try_auto_assign_attribution(
+        session,
+        workspace_id=workspace_id,
+        order_id=order.id,
+        trace_id=trace_id,
+    )
 
     return WebhookResponse(
         status="created",
@@ -342,6 +443,8 @@ async def list_orders(
     workspace_id: UUID,
     status_filter: str | None = None,
     external_order_id: str | None = None,
+    source: str | None = None,
+    business_model: str | None = None,
     sku: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -360,6 +463,10 @@ async def list_orders(
         filters.append(Order.status == status_filter)
     if external_order_id:
         filters.append(Order.external_order_id == external_order_id)
+    if source:
+        filters.append(Order.source == source)
+    if business_model:
+        filters.append(Order.business_model == business_model)
     if sku:
         filters.append(Order.id.in_(select(OrderItem.order_id).where(OrderItem.sku == sku)))
     if date_from:

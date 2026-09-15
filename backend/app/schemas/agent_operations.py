@@ -85,6 +85,7 @@ class ApprovalOut(BaseModel):
     workspace_id: UUID
     approval_type: str
     status: str
+    business_scope: str
     entity_type: str
     entity_id: str
     target_task_id: UUID | None = None

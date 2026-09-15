@@ -20,28 +20,26 @@ Step 6: 上架WooCommerce（可选，人工确认后执行）
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 import time
 import uuid
 from datetime import datetime
 from typing import Any
 
+from app.services.main_image_service import (
+    run_complete_workflow as run_main_image_workflow,
+)
 from app.services.product_analysis_service import (
     analyze_and_generate_report,
-    generate_product_report,
-)
-from app.services.prompt_generator_service import generate_full_prompt
-from app.services.main_image_service import (
-    generate_three_directions,
-    generate_all_selling_point_copies,
-    generate_variants,
-    run_complete_workflow as run_main_image_workflow,
 )
 from app.services.product_listing_service import (
     is_restricted,
     list_to_woocommerce,
 )
+from app.services.product_content_service import normalize_image_urls
+from app.services.prompt_generator_service import generate_full_prompt
+from app.services.llm_gateway import LLMRequest, complete as llm_complete
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +183,8 @@ def _generate_listing_data(
     for scenario in usage_scenarios[:2]:
         tags.append({"name": scenario[:10]})
 
-    # 图片（待生图后填充）
-    images = []
+    # 上架优先使用已导入的 1688 原图；AI 生图结果需审核后写回商品媒体字段。
+    images = [{"src": url} for url in normalize_image_urls(product_info.get("images"))]
 
     return {
         "name": product_name,
@@ -207,6 +205,79 @@ def _generate_listing_data(
             {"key": "pipeline_id", "value": str(uuid.uuid4())},
         ],
     }
+
+
+
+
+# 目标市场默认美国——上架 WooCommerce 的商品文案必须为英文。
+# 该函数把 Step 5 生成的中文/中英混排 listing 交给 LLM 做一次英文本地化，
+# 失败时降级保留原文并在 warnings 里标注，不阻塞主流程。
+def _has_cjk(text: str) -> bool:
+    """粗判文本是否含中文字符。"""
+    if not text:
+        return False
+    return any('\u4e00' <= ch <= '\u9fff' for ch in text)
+
+
+async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[str, Any]:
+    """把上架数据中的 name / short_description / description / tags 本地化到英文。"""
+    try:
+        name = listing_data.get("name", "") or ""
+        short_desc = listing_data.get("short_description", "") or ""
+        long_desc = listing_data.get("description", "") or ""
+        tags = [t.get("name", "") for t in listing_data.get("tags", []) if isinstance(t, dict)]
+
+        # 不需要本地化就跳过
+        if not (_has_cjk(name) or _has_cjk(short_desc) or _has_cjk(long_desc)
+                 or any(_has_cjk(t) for t in tags)):
+            listing_data.setdefault("_localization", {"status": "skipped", "reason": "no CJK content"})
+            return listing_data
+
+        prompt = (
+            "You are an e-commerce localization expert for a US outdoor gear DTC brand. "
+            "Translate and adapt the following Chinese product listing into natural, SEO-friendly "
+            "American English. Keep brand names and model names as-is. Do NOT add marketing fluff "
+            "not supported by the source. Return ONLY a JSON object with keys: "
+            "name (max 80 chars), short_description (max 300 chars plain text), "
+            "description (HTML allowed, 200-600 words), tags (array of 5-8 short English keywords).\n\n"
+            f"SOURCE_NAME: {name}\n"
+            f"SOURCE_SHORT: {short_desc}\n"
+            f"SOURCE_LONG: {long_desc}\n"
+            f"SOURCE_TAGS: {', '.join(tags)}\n"
+        )
+
+        resp = await llm_complete(
+            LLMRequest(
+                messages=[{"role": "user", "content": prompt}],
+                task_type="listing_localization",
+                temperature=0.3,
+                max_tokens=1500,
+                response_format="json_object",
+            ),
+        )
+        import json as _json
+        localized = _json.loads(resp.content)
+
+        if isinstance(localized, dict):
+            if localized.get("name"):
+                listing_data["name"] = str(localized["name"])[:120]
+            if localized.get("short_description"):
+                listing_data["short_description"] = str(localized["short_description"])[:500]
+            if localized.get("description"):
+                listing_data["description"] = str(localized["description"])
+            if isinstance(localized.get("tags"), list) and localized["tags"]:
+                listing_data["tags"] = [{"name": str(t)[:80]} for t in localized["tags"][:10]]
+            listing_data.setdefault("_localization", {
+                "status": "localized",
+                "provider": resp.provider,
+                "model": resp.model,
+            })
+        else:
+            listing_data.setdefault("_localization", {"status": "degraded", "reason": "LLM returned non-object"})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("English localization failed, keeping source text: %s", e)
+        listing_data.setdefault("_localization", {"status": "failed", "reason": str(e)[:300]})
+    return listing_data
 
 
 async def run_pipeline(
@@ -307,16 +378,18 @@ async def run_pipeline(
             steps_result["prompt"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 4 (prompt) failed: %s", pipeline_id, str(e))
 
-        # Step 5: 上架数据生成
+        # Step 5: 上架数据生成（含英文本地化，目标市场默认 US）
         try:
             main_image_data = steps_result.get("main_image", {}).get("data", {})
             listing_data = _generate_listing_data(product_info, product_report, main_image_data)
+            listing_data = await _english_localize_listing_data(listing_data)
             steps_result["listing_data"] = {
                 "status": "completed",
                 "data": listing_data,
                 "timestamp": datetime.now().isoformat(),
             }
-            logger.info("Pipeline %s Step 5 (listing_data) completed", pipeline_id)
+            logger.info("Pipeline %s Step 5 (listing_data) completed; localization=%s",
+                        pipeline_id, listing_data.get("_localization", {}).get("status", "n/a"))
         except Exception as e:
             errors.append(f"Listing data generation failed: {str(e)}")
             steps_result["listing_data"] = {"status": "failed", "error": str(e)}
@@ -495,12 +568,17 @@ def convert_1688_to_pipeline_input(
     # 提取商品名称
     name = product.get("subject", product.get("title", "未命名商品"))
 
-    # 提取价格
-    price_info = product.get("priceRange", [])
-    if price_info and isinstance(price_info, list):
-        price = str(price_info[0].get("price", ""))
-    else:
-        price = str(product.get("price", ""))
+    # 提取价格（优先保留完整价格区间）
+    price = str(product.get("price", "")).strip()
+    if not price:
+        price_info = product.get("price_range") or product.get("priceRange") or []
+        if isinstance(price_info, list) and price_info:
+            first_price = price_info[0]
+            price = (
+                str(first_price.get("price", ""))
+                if isinstance(first_price, dict)
+                else str(first_price)
+            )
 
     # 提取描述
     description = product.get("description", "")
@@ -513,7 +591,7 @@ def convert_1688_to_pipeline_input(
     if isinstance(attributes, list):
         for attr in attributes[:5]:
             if isinstance(attr, dict):
-                attr_name = attr.get("name", "")
+                attr_name = attr.get("name") or attr.get("attributeName") or ""
                 attr_value = attr.get("value", "")
                 if attr_name and attr_value:
                     core_selling_points.append(f"{attr_name}: {attr_value}")
@@ -522,7 +600,9 @@ def convert_1688_to_pipeline_input(
     materials = []
     for attr in attributes if isinstance(attributes, list) else []:
         if isinstance(attr, dict):
-            attr_name = attr.get("name", "").lower()
+            attr_name = (
+                attr.get("name") or attr.get("attributeName") or ""
+            ).lower()
             if "材质" in attr_name or "material" in attr_name:
                 materials.append(attr.get("value", ""))
 
@@ -530,7 +610,9 @@ def convert_1688_to_pipeline_input(
     dimensions = ""
     for attr in attributes if isinstance(attributes, list) else []:
         if isinstance(attr, dict):
-            attr_name = attr.get("name", "").lower()
+            attr_name = (
+                attr.get("name") or attr.get("attributeName") or ""
+            ).lower()
             if "尺寸" in attr_name or "dimension" in attr_name or "规格" in attr_name:
                 dimensions = attr.get("value", "")
                 break
@@ -539,7 +621,9 @@ def convert_1688_to_pipeline_input(
     weight = ""
     for attr in attributes if isinstance(attributes, list) else []:
         if isinstance(attr, dict):
-            attr_name = attr.get("name", "").lower()
+            attr_name = (
+                attr.get("name") or attr.get("attributeName") or ""
+            ).lower()
             if "重量" in attr_name or "weight" in attr_name:
                 weight = attr.get("value", "")
                 break
@@ -549,15 +633,31 @@ def convert_1688_to_pipeline_input(
     if not images:
         images = product.get("imageUrls", [])
     if isinstance(images, list):
-        image_urls = [img.get("url", "") if isinstance(img, dict) else str(img) for img in images if img]
+        image_urls = [
+            (
+                img.get("url")
+                or img.get("imageUrl")
+                or img.get("urls")
+                or ""
+            )
+            if isinstance(img, dict)
+            else str(img)
+            for img in images
+            if img
+        ]
     else:
         image_urls = []
 
     # 提取类目
-    category = product.get("categoryName", product.get("category", ""))
+    category = (
+        product.get("category_name")
+        or product.get("categoryName")
+        or product.get("category")
+        or ""
+    )
 
     # 提取SKU信息
-    sku_info = product.get("skuInfos", [])
+    sku_info = product.get("sku_list") or product.get("skuInfos") or []
     if isinstance(sku_info, list) and sku_info:
         first_sku = sku_info[0] if isinstance(sku_info[0], dict) else {}
         sku = first_sku.get("skuCode", first_sku.get("skuId", ""))
@@ -584,7 +684,10 @@ def convert_1688_to_pipeline_input(
         "source_id": source_id,
         "sku": sku,
         "images": image_urls[:10],  # 最多10张图片
-        "supplier": product.get("supplier", {}),
+        "supplier": product.get("supplier") or {
+            "company_name": product.get("company_name", ""),
+            "login_id": product.get("supplier_login_id", ""),
+        },
     }
 
 
@@ -599,7 +702,7 @@ def import_from_1688(
 
     流程：
     1. 解析URL提取商品ID
-    2. 调用1688 API获取商品详情
+    2. 优先调用1688开放平台，未授权或无铺货关系时降级到牛顿 Agent
     3. 转换为产品工作流输入格式
     4. 可选：自动运行工作流
     5. 可选：自动上架WooCommerce
@@ -623,12 +726,39 @@ def import_from_1688(
         product_id = parse_1688_url(url_or_id)
         logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
 
-        # Step 2: 调用1688 API获取商品详情
+        # Step 2: 优先调用开放平台，失败后使用已授权的牛顿 Agent
         from app.services.sourcing_1688_service import get_product_detail
         product_detail = get_product_detail(product_id)
+        open_api_error = product_detail.get("error")
+        data_source = product_detail.get("source")
 
-        if not product_detail.get("success"):
-            error_msg = product_detail.get("error", "获取1688商品详情失败")
+        if (
+            not product_detail.get("success")
+            or product_detail.get("source") == "mock"
+        ):
+            from app.services.newton_agent_service import (
+                extract_1688_product,
+                is_configured as newton_is_configured,
+            )
+
+            if newton_is_configured():
+                logger.info(
+                    "1688 import %s: open API unavailable, fallback to Newton Agent",
+                    import_id,
+                )
+                product_detail = extract_1688_product(url_or_id, product_id)
+                data_source = product_detail.get("source")
+
+        if (
+            not product_detail.get("success")
+            or product_detail.get("source") == "mock"
+        ):
+            error_msg = (
+                product_detail.get("error")
+                or "未获得真实 1688 商品数据，已拒绝使用示例数据"
+            )
+            if open_api_error:
+                error_msg = f"{error_msg}（开放平台：{open_api_error}）"
             logger.error("1688 import %s: get product detail failed: %s", import_id, error_msg)
             return {
                 "success": False,
@@ -637,6 +767,7 @@ def import_from_1688(
                     "import_id": import_id,
                     "product_id": product_id,
                     "source_url": url_or_id,
+                    "data_source": data_source,
                 },
             }
 
@@ -657,6 +788,7 @@ def import_from_1688(
                 "import_id": import_id,
                 "product_id": product_id,
                 "source_url": url_or_id,
+                "data_source": data_source or "unknown",
                 "product_info": product_info,
                 "elapsed_time_seconds": round(time.time() - start_time, 2),
             },
@@ -693,3 +825,64 @@ def import_from_1688(
             "error": str(e),
             "data": {"import_id": import_id, "source_url": url_or_id},
         }
+
+
+async def import_and_analyze_from_1688(
+    url_or_id: str,
+    *,
+    temperature: float = 0.3,
+    max_tokens: int = 2000,
+) -> dict[str, Any]:
+    """
+    导入单个 1688 商品并立即执行 AI 分析与产品报告。
+
+    该函数用于管理端批量导入的逐条工作单元。1688 API 调用为同步实现，
+    因此切换到线程执行，避免阻塞 FastAPI 事件循环。
+    """
+    import_result = await asyncio.to_thread(
+        import_from_1688,
+        url_or_id,
+        auto_run_pipeline=False,
+        auto_list=False,
+    )
+    if not import_result.get("success"):
+        return import_result
+
+    product_info = import_result.get("data", {}).get("product_info", {})
+    supplier = product_info.get("supplier")
+    if isinstance(supplier, dict) and not product_info.get("supplier_name"):
+        product_info["supplier_name"] = (
+            supplier.get("company_name")
+            or supplier.get("name")
+            or supplier.get("member_id")
+            or ""
+        )
+
+    try:
+        analysis_result = await analyze_and_generate_report(
+            product_info,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as e:
+        logger.error("1688 import analysis failed for %s: %s", url_or_id, str(e))
+        return {
+            "success": False,
+            "error": f"商品已导入，但 AI 分析失败: {e!s}",
+            "data": {
+                **import_result.get("data", {}),
+                "product_info": product_info,
+            },
+        }
+
+    return {
+        "success": True,
+        "data": {
+            **import_result.get("data", {}),
+            "product_info": product_info,
+            "ai_recognition": analysis_result["data"]["ai_recognition"],
+            "product_report": analysis_result["data"]["product_report"],
+            "analysis_metadata": analysis_result["data"].get("metadata", {}),
+        },
+        "error": None,
+    }

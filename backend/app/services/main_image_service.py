@@ -658,6 +658,18 @@ def run_complete_workflow(
         "success": True,
         "data": {
             "product_name": _safe_get(product_info, "name", "产品"),
+            # 顶层扁平化字段，供 pipeline 前端直接读取（前端历史上直接访问 data.variants / data.directions）
+            "directions": [
+                    {
+                        **d,
+                        "prompt": (d.get("description", "") + " | 主体: " + str(d.get("prompt", {}).get("subject", ""))
+                                 + " | 背景: " + str(d.get("prompt", {}).get("background", "")))
+                    }
+                    for d in step02["data"]["directions"].values()
+                ],
+            "variants": step04["data"]["variants"],
+            "variant_count": step04["data"]["variant_count"],
+            "recommended_direction": recommended_direction,
             "workflow": {
                 "step01_product_info": step01,
                 "step02_three_directions": step02["data"],

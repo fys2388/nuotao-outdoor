@@ -92,6 +92,7 @@ class SuggestionResponse(BaseModel):
     id: int
     agent_id: str
     agent_run_id: int | None = None
+    source: str
     suggestion_type: str
     title: str
     description: str

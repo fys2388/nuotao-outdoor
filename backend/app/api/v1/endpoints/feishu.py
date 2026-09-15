@@ -208,7 +208,7 @@ async def feishu_card_callback(
                     "card": updated_card,
                 }
             result = await agent_suggestion_service.reject_suggestion(
-                db, int(suggestion_id), rejected_by=operator, reason="飞书卡片拒绝"
+                db, int(suggestion_id), rejected_by=operator, comment="飞书卡片拒绝"
             )
             logger.info("建议 %s 已通过飞书拒绝", suggestion_id)
 

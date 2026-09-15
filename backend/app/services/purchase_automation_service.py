@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
-from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.models.supply_chain import OPEN_PO_STATUSES, PurchaseOrder, PurchaseOrderItem
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,44 @@ async def auto_generate_purchase_order(
 
     # 创建采购单（使用时间戳+随机数避免冲突）
     import random
+    # 幂等：该商品若已有未结采购单则不重复创建，避免自动采购被重复触发时堆积空单。
+    existing_item = (
+        await session.execute(
+            select(PurchaseOrderItem)
+            .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderItem.purchase_order_id)
+            .where(
+                PurchaseOrderItem.product_id == product_id,
+                PurchaseOrder.workspace_id == workspace_id,
+                PurchaseOrder.status.in_(OPEN_PO_STATUSES),
+            )
+            .order_by(PurchaseOrder.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_item is not None:
+        existing_po = await session.get(PurchaseOrder, existing_item.purchase_order_id)
+        logger.info(
+            "Open purchase order already exists for product %s: %s, skip duplicate",
+            product_id,
+            existing_po.po_number if existing_po else existing_item.purchase_order_id,
+        )
+        return {
+            "success": True,
+            "blocked": False,
+            "deduplicated": True,
+            "purchase_order": {
+                "id": str(existing_item.purchase_order_id),
+                "po_number": existing_po.po_number if existing_po else None,
+                "status": existing_po.status if existing_po else None,
+                "total_amount": float(existing_po.total) if existing_po else None,
+            },
+            "product": {"id": str(product.id), "name": product.name, "sku": product.sku},
+            "quantity": quantity,
+            "unit_cost": float(unit_cost),
+            "anomalies": anomalies,
+            "message": "该商品已存在未结采购单，跳过重复创建",
+        }
+
     po_number = f"PO-AUTO-{int(time.time())}-{random.randint(1000, 9999)}"
     purchase_order = PurchaseOrder(
         workspace_id=workspace_id,

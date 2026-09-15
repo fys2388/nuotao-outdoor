@@ -14,15 +14,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents import b2b_agent_seed
+from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
-from app.core.workspace import get_workspace_id
 from app.schemas.agent_runtime import (
     AgentEvaluationCreate,
     AgentEvaluationOut,
     AgentOut,
     AgentRegisterRequest,
+    B2BAgentBootstrapRequest,
     ExecutionApproveRequest,
     ExecutionCompleteRequest,
     ExecutionFailRequest,
@@ -40,10 +42,13 @@ from app.schemas.agent_runtime import (
 )
 from app.services import agent_runtime, event_service, task_queue
 
-router = APIRouter(tags=["agent-runtime"])
+router = APIRouter(
+    tags=["agent-runtime"],
+    dependencies=[Depends(get_current_user)],
+)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
-WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+WorkspaceId = Annotated[UUID, Depends(get_current_workspace_id)]
 
 
 def _http_error(exc: agent_runtime.AgentRuntimeError) -> HTTPException:
@@ -97,6 +102,9 @@ async def list_agents(
     db: DbSession,
     workspace_id: WorkspaceId,
     domain: Annotated[str | None, Query()] = None,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
     agent_status: Annotated[str | None, Query(alias="status")] = None,
     limit: int = 50,
     offset: int = 0,
@@ -106,9 +114,46 @@ async def list_agents(
         db,
         workspace_id=workspace_id,
         domain=domain,
+        business_scope=business_scope,
         status=agent_status,
         limit=min(limit, 200),
         offset=max(offset, 0),
+    )
+    return [AgentOut.model_validate(agent) for agent in agents]
+
+
+@router.post(
+    "/agent-registry/b2b/bootstrap",
+    response_model=list[AgentOut],
+    summary="Bootstrap the built-in B2B advisory agents",
+)
+async def bootstrap_b2b_agents(
+    body: B2BAgentBootstrapRequest,
+    request: Request,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> list[AgentOut]:
+    """Create missing B2B agents and prompts; existing registrations are preserved."""
+    actor = resolve_actor(request, body.actor)
+    try:
+        agents = await b2b_agent_seed.ensure_b2b_agents(
+            db,
+            workspace_id=workspace_id,
+            trace_id=get_trace_id(),
+        )
+    except agent_runtime.AgentRuntimeError as exc:
+        raise _http_error(exc) from exc
+    await event_service.create_event(
+        db,
+        workspace_id=workspace_id,
+        event_type="agent.b2b_bootstrap.completed",
+        entity_type="workspace",
+        entity_id=str(workspace_id),
+        payload={
+            "actor": actor,
+            "agent_ids": [agent.agent_id for agent in agents],
+        },
+        trace_id=get_trace_id(),
     )
     return [AgentOut.model_validate(agent) for agent in agents]
 
@@ -237,6 +282,9 @@ async def list_tasks(
     workspace_id: WorkspaceId,
     task_status: Annotated[str | None, Query(alias="status")] = None,
     agent_id: Annotated[UUID | None, Query()] = None,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[TaskOut]:
@@ -246,6 +294,7 @@ async def list_tasks(
         workspace_id=workspace_id,
         status=task_status,
         agent_id=agent_id,
+        business_scope=business_scope,
         limit=min(limit, 200),
         offset=max(offset, 0),
     )
@@ -331,6 +380,9 @@ async def list_executions(
     task_id: Annotated[UUID | None, Query()] = None,
     agent_id: Annotated[UUID | None, Query()] = None,
     execution_status: Annotated[str | None, Query(alias="status")] = None,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[ExecutionOut]:
@@ -341,6 +393,7 @@ async def list_executions(
         task_id=task_id,
         agent_id=agent_id,
         status=execution_status,
+        business_scope=business_scope,
         limit=min(limit, 200),
         offset=max(offset, 0),
     )
@@ -506,6 +559,7 @@ async def register_tool(
             tool_name=body.tool_name,
             description=body.description,
             permission_level=body.permission_level,
+            business_scope=body.business_scope,
             enabled=body.enabled,
             category=body.category,
             handler_name=body.handler_name,
@@ -526,10 +580,17 @@ async def list_tools(
     db: DbSession,
     workspace_id: WorkspaceId,
     enabled: Annotated[bool | None, Query()] = None,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
 ) -> list[ToolOut]:
     """Return the whitelist, optionally filtered by enabled state."""
     tools = await agent_runtime.list_tools(
-        db, workspace_id=workspace_id, enabled=enabled, limit=200
+        db,
+        workspace_id=workspace_id,
+        enabled=enabled,
+        business_scope=business_scope,
+        limit=200,
     )
     return [ToolOut.model_validate(tool) for tool in tools]
 
@@ -553,6 +614,7 @@ async def update_tool(
             tool_name=tool_name,
             enabled=body.enabled,
             description=body.description,
+            business_scope=body.business_scope,
             handler_name=body.handler_name,
             args_schema=body.args_schema,
             trace_id=get_trace_id(),

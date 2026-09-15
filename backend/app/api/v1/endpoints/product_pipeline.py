@@ -11,17 +11,22 @@ Routes:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 
+from app.api.v1.deps import get_current_user
+from app.core.redis import get_redis
+from app.services import product_import_job_service
 from app.services.product_pipeline_service import (
-    get_pipeline_status,
-    run_pipeline,
-    confirm_and_list,
-    import_from_1688,
     PIPELINE_STEPS,
+    confirm_and_list,
+    get_pipeline_status,
+    import_and_analyze_from_1688,
+    import_from_1688,
+    run_pipeline,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +74,13 @@ class ImportFrom1688Request(BaseModel):
     url_or_id: str = Field(..., description="1688商品URL或商品ID", min_length=1)
     auto_run_pipeline: bool = Field(False, description="是否自动运行完整工作流")
     auto_list: bool = Field(False, description="是否自动上架WooCommerce（仅在auto_run_pipeline=True时生效）")
+
+
+class ImportAndAnalyzeFrom1688Request(BaseModel):
+    """从1688导入并执行 AI 产品分析请求"""
+    url_or_id: str = Field(..., description="1688商品URL或商品ID", min_length=1)
+    temperature: float = Field(0.3, ge=0, le=1, description="LLM温度")
+    max_tokens: int = Field(2000, ge=500, le=8000, description="最大token数")
 
 
 # ============================================
@@ -191,3 +203,91 @@ async def import_product_from_1688(
             "data": None,
             "error": str(e),
         }
+
+
+@router.post(
+    "/import-and-analyze-1688",
+    summary="从1688导入并立即完成 AI 产品分析",
+    dependencies=[Depends(get_current_user)],
+)
+async def import_and_analyze_product_from_1688(
+    request: ImportAndAnalyzeFrom1688Request,
+) -> dict[str, Any]:
+    """
+    导入单个 1688 商品并立即生成 10 字段 AI 识别和 17 字段产品报告。
+
+    管理端批量导入由前端逐条调用本接口，保证单条失败隔离和进度反馈。
+    """
+    try:
+        return await import_and_analyze_from_1688(
+            url_or_id=request.url_or_id,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+    except Exception as e:
+        logger.error("Import and analyze from 1688 error: %s", str(e))
+        return {
+            "success": False,
+            "data": None,
+            "error": str(e),
+        }
+
+
+@router.post(
+    "/import-and-analyze-1688/jobs",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="提交1688导入与AI分析后台任务",
+    dependencies=[Depends(get_current_user)],
+)
+async def create_import_and_analyze_job(
+    request: ImportAndAnalyzeFrom1688Request,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """立即返回任务 ID，前端通过状态接口轮询结果，避免网关长连接超时。"""
+    try:
+        job = await product_import_job_service.create_job(
+            redis,
+            url_or_id=request.url_or_id,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        return {
+            "success": True,
+            "data": {
+                "job_id": job["job_id"],
+                "status": job["status"],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        logger.error("Create 1688 import job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法创建后台导入任务，请检查 Redis 服务",
+        ) from e
+
+
+@router.get(
+    "/import-and-analyze-1688/jobs/{job_id}",
+    summary="查询1688导入与AI分析后台任务",
+    dependencies=[Depends(get_current_user)],
+)
+async def get_import_and_analyze_job(
+    job_id: str,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """查询后台任务状态和最终商品分析结果。"""
+    try:
+        job = await product_import_job_service.get_job(redis, job_id)
+    except Exception as e:
+        logger.error("Get 1688 import job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法读取后台导入任务状态",
+        ) from e
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="导入任务不存在或已过期",
+        )
+    return {"success": True, "data": job, "error": None}

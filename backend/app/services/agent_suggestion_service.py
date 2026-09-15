@@ -49,6 +49,9 @@ async def create_suggestion(
     risk_level: str = "medium",
     agent_run_id: int | None = None,
     workspace_id: UUID | None = None,
+    source: str = "auto",
+    auto_approve: bool = True,
+    commit: bool = True,
 ) -> AgentSuggestion:
     """创建一条 Agent 建议，状态为 pending_approval。
 
@@ -63,6 +66,7 @@ async def create_suggestion(
         workspace_id=workspace_id or DEFAULT_WORKSPACE_ID,
         agent_id=agent_id,
         agent_run_id=agent_run_id,
+        source=source,
         suggestion_type=suggestion_type,
         title=title,
         description=description,
@@ -81,9 +85,22 @@ async def create_suggestion(
         suggestion.id, agent_id, suggestion_type, risk_level,
     )
 
+    if not commit:
+        return suggestion
+
     # 先提交建议创建，确保后续自动审批失败时建议已落库
     await session.commit()
     await session.refresh(suggestion)
+
+    # B2B 商业建议必须由业务人员确认，禁止进入 LLM 自动审批和执行。
+    if not auto_approve or source == "b2b_agent":
+        logger.info(
+            "Agent建议等待人工审批: id=%s agent=%s source=%s",
+            suggestion.id,
+            agent_id,
+            source,
+        )
+        return suggestion
 
     # Agent 自动审批（替代飞书人工审批）
     # 流程：根据建议类型分发给对应审核 Agent（生成 Agent ≠ 审核 Agent），

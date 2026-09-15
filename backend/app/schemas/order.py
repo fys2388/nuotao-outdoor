@@ -41,7 +41,20 @@ class WebhookOrderPayload(BaseModel):
     discount_total: Decimal = Decimal("0")
     tax_total: Decimal = Decimal("0")
     shipping: dict[str, Any] = Field(default_factory=dict)
+    # Identity fields are accepted in memory only so the order can be linked to
+    # a unified account. They are never persisted, logged or copied to events.
+    billing: dict[str, Any] = Field(default_factory=dict)
     line_items: list[WebhookLineItem] = Field(default_factory=list)
+
+    @property
+    def billing_email(self) -> str | None:
+        value = self.billing.get("email")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    @property
+    def billing_phone(self) -> str | None:
+        value = self.billing.get("phone")
+        return value.strip() if isinstance(value, str) and value.strip() else None
 
     @property
     def country(self) -> str | None:
@@ -115,6 +128,7 @@ class OrderOut(BaseModel):
     country: str | None
     payment_method: str | None
     source: str
+    business_model: str
     total: Decimal
     profit_snapshot: dict[str, Any]
     rule_results: dict[str, Any]

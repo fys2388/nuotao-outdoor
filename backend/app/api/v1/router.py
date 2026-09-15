@@ -5,7 +5,6 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     activity_planner,
     agent_analysis,
-    ai_capability,
     agent_operations,
     agent_platform,
     agent_runtime,
@@ -13,19 +12,28 @@ from app.api.v1.endpoints import (
     agent_suggestions,
     agents,
     agents_generic,
+    ai_capability,
     alerts,
+    analytics,
     auth,
     b2b_admin,
+    b2b_agreements,
+    b2b_credit,
+    b2b_finance,
+    b2b_fulfillment,
     b2b_portal,
+    b2b_pricing,
+    b2b_sales,
     cache,
     calibration,
     connectors,
-    growth_memory,
-    settlements,
+    consolidation,
     content_generation,
     content_marketing,
     cost_model,
+    currency,
     customer,
+    customer_data,
     customer_learning,
     customer_service,
     dashboard,
@@ -34,8 +42,9 @@ from app.api.v1.endpoints import (
     edm_automation,
     emails,
     events,
-    fulfillment,
     feishu,
+    fulfillment,
+    growth_memory,
     health,
     i18n_tax,
     identity,
@@ -45,31 +54,33 @@ from app.api.v1.endpoints import (
     knowledge,
     llm_gateway,
     logistics,
-    main_image,
-    m6_extras,
     m5_m6,
+    m6_extras,
+    main_image,
     marketing,
     marketing_learning,
-    notifications,
-    nuotao_selection,
     newton_agent,
+    notifications,
     operation_logs,
     orders,
+    notifications,
+    nuotao_selection,
     overseas_warehouse,
     p3,
+    procurement_workbench,
+    product_analysis,
     product_intelligence,
     product_listing,
-    products,
-    product_analysis,
     product_pipeline,
+    products,
     prompts,
-    procurement_workbench,
     purchase_automation,
     refunds,
     rules,
     scraping,
     selection,
     seo,
+    settlements,
     sourcing,
     sourcing_enhanced,
     supply_chain,
@@ -116,12 +127,16 @@ api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(agents_generic.router)
 api_router.include_router(alerts.router)
+api_router.include_router(analytics.router)
+api_router.include_router(consolidation.router)
+api_router.include_router(currency.router)
 api_router.include_router(prompts.router)
 api_router.include_router(calibration.router)
 api_router.include_router(cache.router)
 api_router.include_router(content_generation.router)
 api_router.include_router(content_marketing.router)
 api_router.include_router(customer.router)
+api_router.include_router(customer_data.router)
 api_router.include_router(customer_learning.router)
 api_router.include_router(customer_service.router)
 api_router.include_router(dashboard.router)
@@ -160,4 +175,10 @@ api_router.include_router(settlements.router)
 api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
 api_router.include_router(b2b_portal.router)
+api_router.include_router(b2b_pricing.router)
+api_router.include_router(b2b_sales.router)
+api_router.include_router(b2b_finance.router)
+api_router.include_router(b2b_fulfillment.router)
 api_router.include_router(b2b_admin.router)
+api_router.include_router(b2b_agreements.router)
+api_router.include_router(b2b_credit.router)

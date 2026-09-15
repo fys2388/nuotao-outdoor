@@ -66,6 +66,9 @@ async def register_settlement(
             due_date=date.fromisoformat(request.due_date) if request.due_date else None,
             note=request.note,
         )
+        # 显式提交：get_db 只负责 close，事务边界由调用方决定；
+        # 缺少 commit 会导致登记在请求结束回滚、接口却返回成功。
+        await db.commit()
         return {"success": True, "settlement": entry}
     except settlement_service.SettlementError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -120,6 +123,8 @@ async def record_receipt(
             fees=request.fees,
             note=request.note,
         )
+        # 显式提交，否则实收登记在请求结束回滚，状态机永远停在 expected。
+        await db.commit()
         return {"success": True, "settlement": entry}
     except settlement_service.SettlementError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -136,6 +141,8 @@ async def mark_disputed(
         entry = await settlement_service.mark_disputed(
             db, settlement_id=settlement_id, note=note
         )
+        # 显式提交，否则争议标记在请求结束回滚。
+        await db.commit()
         return {"success": True, "settlement": entry}
     except settlement_service.SettlementError as e:
         raise HTTPException(status_code=400, detail=str(e))

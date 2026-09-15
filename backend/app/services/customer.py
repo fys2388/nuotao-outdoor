@@ -37,6 +37,7 @@ from app.schemas.customer import (
     ReviewUpdate,
 )
 from app.services import event_service
+from app.services.customer_account_service import get_or_create_b2c_account
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,16 @@ async def create_profile(
     trace_id: str | None = None,
 ) -> CustomerProfile:
     """Create a non-PII customer profile (reference id unique per workspace)."""
+    account = await get_or_create_b2c_account(
+        session,
+        workspace_id=workspace_id,
+        customer_reference_id=data.customer_reference_id,
+        country=data.country,
+        trace_id=trace_id,
+    )
     profile = CustomerProfile(
         workspace_id=workspace_id,
+        customer_account_id=account.id,
         customer_reference_id=data.customer_reference_id,
         country=data.country,
         language=data.language,
@@ -144,6 +153,7 @@ async def create_profile(
         entity_id=str(profile.id),
         payload={
             "customer_reference_id": data.customer_reference_id,
+            "customer_account_id": str(account.id),
             "segment": data.segment,
             "country": data.country,
         },

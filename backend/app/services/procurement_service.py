@@ -21,9 +21,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductScore
-from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.models.supply_chain import OPEN_PO_STATUSES, PurchaseOrder, PurchaseOrderItem
 
 logger = logging.getLogger(__name__)
+
+
+def _as_uuid(value: Any) -> UUID | None:
+    """Best-effort 转 UUID；无法识别时返回 None，由调用方决定降级行为。"""
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 @dataclass
@@ -229,7 +239,7 @@ async def create_purchase_order(
 
     # 查询产品信息
     product_result = await session.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).where(Product.id == (_as_uuid(product_id) or product_id))
     )
     product = product_result.scalar_one_or_none()
     if not product:
@@ -242,6 +252,60 @@ async def create_purchase_order(
     product_name = product.name or "Unknown Product"
 
     # 生成唯一采购单号
+    # 幂等：补货建议会被调度器/Agent 反复触发，同一工作空间下该商品只要还存在未结采购单，
+    # 就不再重复建单（ordered 之后的在途/历史单不在此列），避免对同一 SKU 堆积多张 approved 空单。
+    product_uuid = _as_uuid(product_id)
+    workspace_uuid = _as_uuid(workspace_id)
+
+    existing_item = None
+    if product_uuid is not None:
+        query = (
+            select(PurchaseOrderItem)
+            .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderItem.purchase_order_id)
+            .where(
+                PurchaseOrderItem.product_id == product_uuid,
+                PurchaseOrder.status.in_(OPEN_PO_STATUSES),
+            )
+            .order_by(PurchaseOrder.created_at.asc())
+            .limit(1)
+        )
+        if workspace_uuid is not None:
+            query = query.where(PurchaseOrder.workspace_id == workspace_uuid)
+        existing_item = (await session.execute(query)).scalar_one_or_none()
+
+    if existing_item is not None:
+        existing_po = await session.get(PurchaseOrder, existing_item.purchase_order_id)
+        # 历史未结单若是缺成本的僵尸单（unit_cost=0）而本次带了有效成本，则就地补齐使其可执行。
+        cost_patched = False
+        if existing_po is not None and unit_cost > 0 and float(existing_item.unit_cost or 0) <= 0:
+            line_total = unit_cost * int(existing_item.quantity)
+            existing_item.unit_cost = unit_cost
+            existing_item.line_total = line_total
+            existing_po.subtotal = line_total
+            existing_po.total = line_total + float(existing_po.shipping_cost or 0)
+            cost_patched = True
+            await session.flush()
+        logger.info(
+            "未结采购单已存在，跳过重复创建: product=%s existing=%s cost_patched=%s",
+            product_id,
+            existing_po.po_number if existing_po else existing_item.purchase_order_id,
+            cost_patched,
+        )
+        return {
+            "success": True,
+            "deduplicated": True,
+            "cost_patched": cost_patched,
+            "po_number": existing_po.po_number if existing_po else None,
+            "purchase_order_id": str(existing_item.purchase_order_id),
+            "product_id": product_id,
+            "product_name": product_name,
+            "sku": sku,
+            "quantity": quantity,
+            "unit_cost": str(unit_cost),
+            "status": existing_po.status if existing_po else None,
+            "message": "已存在未结采购单，跳过重复创建" + ("，并补齐了缺失成本" if cost_patched else ""),
+        }
+
     po_number = f"PO-AGENT-{int(datetime.now(timezone.utc).timestamp())}-{uuid.uuid4().hex[:6].upper()}"
 
     # 计算金额
@@ -250,11 +314,14 @@ async def create_purchase_order(
     total = subtotal + shipping_cost
 
     # 创建采购单
-    po_id = str(uuid.uuid4())
+    po_id = uuid.uuid4()
+    workspace_pk = workspace_uuid or product.workspace_id
+    product_pk = product_uuid or product.id
+    supplier_pk = _as_uuid(supplier_id)
     po = PurchaseOrder(
         id=po_id,
         po_number=po_number,
-        supplier_id=supplier_id,
+        supplier_id=supplier_pk,
         status="approved",
         currency=params.get("currency", "USD"),
         subtotal=subtotal,
@@ -263,21 +330,21 @@ async def create_purchase_order(
         expected_delivery_at=datetime.now(timezone.utc) + timedelta(days=15),
         notes=params.get("notes", f"Agent 自动创建: {product_name} 补货 {quantity} 件"),
         trace_id=params.get("trace_id"),
-        workspace_id=workspace_id,
+        workspace_id=workspace_pk,
     )
     session.add(po)
 
     # 创建采购单明细
     item = PurchaseOrderItem(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         purchase_order_id=po_id,
-        product_id=product_id,
+        product_id=product_pk,
         sku=sku,
         name=product_name,
         quantity=quantity,
         unit_cost=unit_cost,
         line_total=subtotal,
-        workspace_id=workspace_id,
+        workspace_id=workspace_pk,
     )
     session.add(item)
 
@@ -288,7 +355,7 @@ async def create_purchase_order(
     return {
         "success": True,
         "po_number": po_number,
-        "purchase_order_id": po_id,
+        "purchase_order_id": str(po_id),
         "product_id": product_id,
         "product_name": product_name,
         "sku": sku,

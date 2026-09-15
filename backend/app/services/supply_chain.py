@@ -10,6 +10,7 @@ write emits an event with trace_id.
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -654,8 +655,13 @@ async def list_purchase_orders(
 ) -> list[PurchaseOrder]:
     """List purchase orders, newest first."""
     stmt = select(PurchaseOrder).where(PurchaseOrder.workspace_id == workspace_id)
-    if status:
+    if status == "all":
+        pass  # 显式要求返回全部（含已取消）
+    elif status:
         stmt = stmt.where(PurchaseOrder.status == status)
+    else:
+        # 默认列表排除已作废单，避免取消的采购单污染待办与计数；需要时传 status=cancelled/all。
+        stmt = stmt.where(PurchaseOrder.status != "cancelled")
     if supplier_id is not None:
         stmt = stmt.where(PurchaseOrder.supplier_id == supplier_id)
     stmt = stmt.order_by(PurchaseOrder.created_at.desc()).limit(limit).offset(offset)

@@ -14,6 +14,7 @@ failures (WooCommerce retries with exponential backoff). The idempotency
 guard makes retries safe.
 """
 
+import base64
 import hashlib
 import hmac
 import json
@@ -53,16 +54,20 @@ def _is_gateway_payload(payload: dict) -> bool:
 
 
 def _compute_signature(body: bytes, secret: str) -> str:
-    """Compute the WooCommerce HMAC-SHA256 webhook signature (hex)."""
-    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    """Compute the WooCommerce HMAC-SHA256 webhook signature (Base64)."""
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("utf-8")
 
 
 def _verify_signature(body: bytes, header_value: str | None, secret: str) -> bool:
-    """Constant-time comparison of the expected and received signature."""
+    """Compare Base64 or legacy hex signatures in constant time."""
     if not header_value:
         return False
-    expected = _compute_signature(body, secret)
-    return hmac.compare_digest(header_value, expected)
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    expected_base64 = base64.b64encode(digest).decode("utf-8")
+    return hmac.compare_digest(header_value, expected_base64) or hmac.compare_digest(
+        header_value, digest.hex()
+    )
 
 
 @router.post(
@@ -157,7 +162,7 @@ async def receive_woocommerce_product(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty request body")
 
     try:
-        raw = json.loads(body)
+        json.loads(body)
     except json.JSONDecodeError as exc:
         logger.warning("product webhook rejected: invalid JSON trace=%s", trace_id)
         raise HTTPException(

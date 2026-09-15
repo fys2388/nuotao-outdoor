@@ -11,11 +11,12 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
 from app.models.product_intelligence import (
+    ProductCostSnapshot,
     ProductScore,
     ProductSource,
 )
@@ -388,10 +389,13 @@ async def get_product_candidates(
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
 
-    query = select(Product).where(Product.workspace_id == workspace_id)
+    query = select(Product).where(
+        Product.workspace_id == workspace_id,
+        Product.candidate_status.isnot(None),
+    )
 
-    if status:
-        query = query.where(Product.status == status)
+    if status and status != "all":
+        query = query.where(Product.candidate_status == status)
 
     query = query.order_by(Product.created_at.desc()).limit(limit).offset(offset)
 
@@ -399,11 +403,55 @@ async def get_product_candidates(
     products = result.scalars().all()
 
     # 统计总数
-    count_query = select(Product).where(Product.workspace_id == workspace_id)
-    if status:
-        count_query = count_query.where(Product.status == status)
-    count_result = await session.execute(count_query)
-    total = len(count_result.scalars().all())
+    count_query = select(func.count(Product.id)).where(
+        Product.workspace_id == workspace_id,
+        Product.candidate_status.isnot(None),
+    )
+    if status and status != "all":
+        count_query = count_query.where(Product.candidate_status == status)
+    total = int((await session.execute(count_query)).scalar_one())
+
+    product_ids = [product.id for product in products]
+    latest_scores: dict[UUID, ProductScore] = {}
+    latest_costs: dict[UUID, ProductCostSnapshot] = {}
+
+    if product_ids:
+        score_rows = (
+            (
+                await session.execute(
+                    select(ProductScore)
+                    .where(
+                        ProductScore.workspace_id == workspace_id,
+                        ProductScore.product_id.in_(product_ids),
+                    )
+                    .order_by(ProductScore.product_id, ProductScore.scored_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for score in score_rows:
+            latest_scores.setdefault(score.product_id, score)
+
+        cost_rows = (
+            (
+                await session.execute(
+                    select(ProductCostSnapshot)
+                    .where(
+                        ProductCostSnapshot.workspace_id == workspace_id,
+                        ProductCostSnapshot.product_id.in_(product_ids),
+                    )
+                    .order_by(
+                        ProductCostSnapshot.product_id,
+                        ProductCostSnapshot.valid_from.desc(),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for cost in cost_rows:
+            latest_costs.setdefault(cost.product_id, cost)
 
     return {
         "products": [
@@ -415,9 +463,45 @@ async def get_product_candidates(
                 "candidate_status": p.candidate_status,
                 "category": p.category,
                 "source": p.source,
+                "source_url": p.source_url,
+                "description": p.description,
+                "attributes": p.attributes or {},
+                "dimensions": p.dimensions,
+                "meta": p.meta or {},
                 "weight_kg": str(p.weight_kg) if p.weight_kg else None,
                 "target_market": p.target_market,
+                "latest_score": (
+                    {
+                        "id": str(latest_scores[p.id].id),
+                        "total": str(latest_scores[p.id].total),
+                        "profit": str(latest_scores[p.id].profit),
+                        "logistics": str(latest_scores[p.id].logistics),
+                        "demand": str(latest_scores[p.id].demand),
+                        "competition": str(latest_scores[p.id].competition),
+                        "differentiation": str(latest_scores[p.id].differentiation),
+                        "compliance": str(latest_scores[p.id].compliance),
+                        "model_version": latest_scores[p.id].model_version,
+                        "rule_version": latest_scores[p.id].rule_version,
+                        "scored_at": latest_scores[p.id].scored_at.isoformat(),
+                    }
+                    if p.id in latest_scores
+                    else None
+                ),
+                "latest_cost": (
+                    {
+                        "id": str(latest_costs[p.id].id),
+                        "currency": latest_costs[p.id].currency,
+                        "purchase_cost": str(latest_costs[p.id].purchase_cost),
+                        "total_landed_cost": str(latest_costs[p.id].total_landed_cost),
+                        "total_cost": str(latest_costs[p.id].total_cost),
+                        "version": latest_costs[p.id].version,
+                        "valid_from": latest_costs[p.id].valid_from.isoformat(),
+                    }
+                    if p.id in latest_costs
+                    else None
+                ),
                 "created_at": p.created_at.isoformat() if p.created_at else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
             }
             for p in products
         ],

@@ -34,6 +34,12 @@ class ProductIntakeRequest(BaseModel):
     handling: Decimal = Field(default=Decimal("0"), ge=0)
     weight_kg: Decimal | None = Field(default=None, gt=0)
     dimensions: dict[str, Any] | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    images: list[str] = Field(default_factory=list, max_length=30)
+    supplier_name: str | None = Field(default=None, max_length=255)
+    source_id: str | None = Field(default=None, max_length=64)
+    ai_recognition: dict[str, Any] = Field(default_factory=dict)
+    product_report: dict[str, Any] = Field(default_factory=dict)
     target_market: str = Field(default="US", max_length=16)
     currency: str = Field(default="USD", max_length=8)
 
@@ -59,6 +65,24 @@ class ProductIntakeRequest(BaseModel):
                 raise ValueError(f"dimensions.{key} must be positive")
             value[key] = number
         return value
+
+    @field_validator("images")
+    @classmethod
+    def _validate_images(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            url = str(raw or "").strip()
+            if not url:
+                continue
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("images must contain http(s) URLs")
+            if len(url) > 2048:
+                raise ValueError("image URL exceeds 2048 characters")
+            if url not in seen:
+                seen.add(url)
+                normalized.append(url)
+        return normalized
 
 
 class ProductIntakeResult(BaseModel):
@@ -207,6 +231,14 @@ class ProductIntelligenceOut(BaseModel):
     score: ProductScoreOut | None = None
     analysis: ProductAnalysisRunOut | None = None
     decision: ProductDecisionOut | None = None
+
+
+class ApprovedImageAttachRequest(BaseModel):
+    """Attach one approved AI image to a product media slot."""
+
+    task_id: UUID
+    placement: Literal["main", "detail"] = "main"
+    actor: str | None = Field(default=None, max_length=64)
 
 
 class DecisionApproveRequest(BaseModel):

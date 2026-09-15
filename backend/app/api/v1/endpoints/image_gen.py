@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.workspace import get_workspace_id
 from app.integrations import image_gen as image_gen_gateway
 from app.services.image_generation_service import (
     ImageGenServiceError,
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/image-gen", tags=["image_generation"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 
 # ============================================
@@ -95,6 +97,7 @@ async def list_models() -> dict[str, Any]:
 async def generate_image(
     request: GenerateImageRequest,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Generate an image immediately. Creates a task and executes it.
 
@@ -105,6 +108,7 @@ async def generate_image(
         product_id = UUID(request.product_id) if request.product_id else None
         task = await generate_image_and_save(
             db,
+            workspace_id=workspace_id,
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
             product_id=product_id,
@@ -115,7 +119,7 @@ async def generate_image(
         )
         await db.commit()
 
-        result = await get_task(db, task_id=task.id)
+        result = await get_task(db, task_id=task.id, workspace_id=workspace_id)
         return {"success": True, "task": result}
     except ImageGenServiceError as e:
         await db.rollback()
@@ -130,12 +134,14 @@ async def generate_image(
 async def create_task(
     request: CreateTaskRequest,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Create a pending task without executing it. Use /tasks/{id}/execute to run."""
     try:
         product_id = UUID(request.product_id) if request.product_id else None
         task = await create_generation_task(
             db,
+            workspace_id=workspace_id,
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
             product_id=product_id,
@@ -159,12 +165,17 @@ async def create_task(
 async def execute_task(
     task_id: str,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Execute a pending task. Calls the image generation API and persists the result."""
     try:
-        task = await execute_generation_task(db, task_id=UUID(task_id))
+        task = await execute_generation_task(
+            db,
+            task_id=UUID(task_id),
+            workspace_id=workspace_id,
+        )
         await db.commit()
-        result = await get_task(db, task_id=task.id)
+        result = await get_task(db, task_id=task.id, workspace_id=workspace_id)
         return {"success": True, "task": result}
     except ImageGenServiceError as e:
         await db.rollback()
@@ -178,6 +189,7 @@ async def execute_task(
 @router.get("/tasks", summary="List image generation tasks")
 async def list_image_tasks(
     db: DbSession,
+    workspace_id: WorkspaceId,
     status_filter: str | None = None,
     use_case: str | None = None,
     product_id: str | None = None,
@@ -189,6 +201,7 @@ async def list_image_tasks(
         pid = UUID(product_id) if product_id else None
         return await list_tasks(
             db,
+            workspace_id=workspace_id,
             status=status_filter,
             use_case=use_case,
             product_id=pid,
@@ -204,9 +217,10 @@ async def list_image_tasks(
 async def get_task_detail(
     task_id: str,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Get a single task by ID."""
-    result = await get_task(db, task_id=UUID(task_id))
+    result = await get_task(db, task_id=UUID(task_id), workspace_id=workspace_id)
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found") from None
     return result
@@ -217,12 +231,18 @@ async def approve_generated_image(
     task_id: str,
     request: ApprovalRequest,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Approve a generated image (human-in-the-loop gate)."""
     try:
-        task = await approve_image(db, task_id=UUID(task_id), approved_by=request.approved_by)
+        task = await approve_image(
+            db,
+            task_id=UUID(task_id),
+            approved_by=request.approved_by,
+            workspace_id=workspace_id,
+        )
         await db.commit()
-        result = await get_task(db, task_id=task.id)
+        result = await get_task(db, task_id=task.id, workspace_id=workspace_id)
         return {"success": True, "task": result}
     except ImageGenServiceError as e:
         await db.rollback()
@@ -237,12 +257,13 @@ async def approve_generated_image(
 async def reject_generated_image(
     task_id: str,
     db: DbSession,
+    workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
     """Reject a generated image."""
     try:
-        task = await reject_image(db, task_id=UUID(task_id))
+        task = await reject_image(db, task_id=UUID(task_id), workspace_id=workspace_id)
         await db.commit()
-        result = await get_task(db, task_id=task.id)
+        result = await get_task(db, task_id=task.id, workspace_id=workspace_id)
         return {"success": True, "task": result}
     except ImageGenServiceError as e:
         await db.rollback()
