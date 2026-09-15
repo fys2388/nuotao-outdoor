@@ -13,6 +13,10 @@ venv/
 .env.*
 !.env.example
 
+# Frontend build artifacts that must not shadow vite.config.ts
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
 # Node
 node_modules/
 frontend/dist/
@@ -131,3 +135,44 @@ website-check-images/
 
 # Sensitive infra scripts
 infra/verify_b2b_cloudflare.py
+
+# ============================================================
+# 2026-09-15 仓库治理：排除一次性运维产物与业务数据快照
+# 依据 AGENTS.md 4.1/4.2：备份与导出数据含 L2 经营数据与 L4 PII，禁止入库
+# 注：.gitignore 不影响已跟踪文件，以下规则仅拦截新增临时产物
+# ============================================================
+
+# 根目录一次性 SQL 检查/修数/建表脚本（结论应沉淀到 docs/ 或 migrations/）
+/*.sql
+
+# 根目录一次性 Python 运维脚本
+/add_grafana_proxy.py
+/fix_nginx.py
+/inventory_sync_service.py
+/modify_*.py
+/product_mapping_model.py
+/product_mapping_service.py
+/scripts_prod_*.py
+/search_1688.py
+/test_newton_*.py
+
+# 数据导出与导入模板
+/*.csv
+
+# 一次性评审/结论 HTML 快照
+/admin-frontend-completion-review.html
+/admin-frontend-flow-fit.html
+/nuotao_2_0_architecture_verdict.html
+
+# 外部告警附件导出
+/sentry_attachment.txt
+
+# 数据库备份与业务数据快照（含 PII，禁止入库）
+backend/backups/
+
+# 前端测试运行产物
+frontend/test-results/
+frontend/playwright-report/
+
+# 临时附件目录
+.tmp_attach/
