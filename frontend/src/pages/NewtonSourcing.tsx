@@ -199,6 +199,32 @@ export default function NewtonSourcingPage() {
     fetchCredits()
   }, [])
 
+  // 牛顿 Agent 是异步任务：首次 /newton/search 可能立即返回 task_id 但 products 为空
+  // （Agent 仍在 1688 搜索、比价、生成推荐）。此时不能误判"未找到"，
+  // 必须轮询 /newton/tasks/{task_id}/result 直到拿到商品或超时。
+  const pollTaskResult = async (taskId: string, deadlineMs: number) => {
+    const intervalMs = 5000
+    while (Date.now() < deadlineMs) {
+      await new Promise(r => setTimeout(r, intervalMs))
+      try {
+        const resp: any = await api.get(`/newton/tasks/${taskId}/result`)
+        const d = resp?.data || resp
+        const rawProducts = d?.products || d?.raw?.products || d?.items || []
+        if (rawProducts.length > 0) {
+          return d
+        }
+        // 如果任务已经 END/KILL/FAILED 且仍无商品，停止轮询
+        const status = (d?.status || d?.raw?.status || '').toUpperCase()
+        if (['END', 'KILL', 'FAILED', 'ERROR'].includes(status)) {
+          return d
+        }
+      } catch (e) {
+        // 单次轮询失败继续等下一轮
+      }
+    }
+    return null
+  }
+
   const handleSearch = async () => {
     if (!query.trim()) {
       message.warning('请输入找品需求')
@@ -220,8 +246,36 @@ export default function NewtonSourcingPage() {
       )
 
       if (data.success && data.data) {
-        setResult(data.data)
-        message.success(`找到 ${data.data.total || 0} 个商品`)
+        let finalResult = data.data
+        // 首次返回 0 个商品但有 task_id：进入轮询模式
+        if ((!finalResult.products || finalResult.products.length === 0) && finalResult.task_id) {
+          message.loading({ content: '牛顿 Agent 正在 1688 搜索、比价，结果生成中…', duration: 0, key: 'newton_poll' })
+          const polled = await pollTaskResult(finalResult.task_id, Date.now() + 90000)
+          if (polled) {
+            // 复用 newton_agent_search 的标准化逻辑：从 content 里提取 product-card
+            const rawProducts = polled.products || []
+            const cards = (polled.content || polled.summary || '')
+            // 简单合并：如果 polled 没有结构化 products 但有 content，保留原 summary
+            finalResult = {
+              ...finalResult,
+              products: rawProducts,
+              total: rawProducts.length,
+              summary: polled.summary || polled.content || finalResult.summary,
+            }
+          } else {
+            // 轮询超时
+            finalResult = {
+              ...finalResult,
+              summary: finalResult.summary || '牛顿 Agent 处理超时，请稍后重试或调整关键词',
+            }
+          }
+        }
+        setResult(finalResult)
+        if ((finalResult.products || []).length > 0) {
+          message.success({ content: `找到 ${finalResult.total || 0} 个商品`, key: 'newton_poll' })
+        } else {
+          message.warning({ content: '未找到符合条件的商品，请调整关键词或价格区间', key: 'newton_poll' })
+        }
       } else {
         setError(data.error || data.data?.error || '找品失败')
       }

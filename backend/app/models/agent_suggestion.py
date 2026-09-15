@@ -36,6 +36,9 @@ SUGGESTION_TYPES = (
     "listing_optimization",    # 上架优化（标题/关键词/图片）
     "supply_chain",            # 供应链优化（采购/物流/供应商）
     "business_insight",        # 商业洞察（报表/趋势/建议）
+    "b2b_sales_follow_up",     # B2B 询盘跟进
+    "b2b_quote_recommendation",# B2B 报价建议
+    "b2b_collection_action",   # B2B 回款跟进
     "other",                   # 其他
 )
 

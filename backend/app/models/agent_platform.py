@@ -25,6 +25,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -69,6 +70,7 @@ class AgentVersion(Base, TimestampMixin, WorkspaceMixin):
         Uuid, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
     )
     version: Mapped[str] = mapped_column(String(16), nullable=False)
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     prompt_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     prompt_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     config_snapshot: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
@@ -83,6 +85,10 @@ class AgentVersion(Base, TimestampMixin, WorkspaceMixin):
     __table_args__ = (
         UniqueConstraint(
             "workspace_id", "agent_id", "version", name="uq_agent_versions_ws_agent_version"
+        ),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_versions_business_scope",
         ),
         # At most ONE active version per agent.
         Index(
@@ -104,6 +110,7 @@ class AgentApprovalRole(Base, TimestampMixin, WorkspaceMixin):
 
     id: Mapped[Any] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
     role_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     permissions: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     actors: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -111,7 +118,16 @@ class AgentApprovalRole(Base, TimestampMixin, WorkspaceMixin):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "role_name", name="uq_agent_approval_roles_ws_name"),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_approval_roles_business_scope",
+        ),
         Index("ix_agent_approval_roles_ws_enabled", "workspace_id", "enabled"),
+        Index(
+            "ix_agent_approval_roles_ws_business_scope",
+            "workspace_id",
+            "business_scope",
+        ),
     )
 
 

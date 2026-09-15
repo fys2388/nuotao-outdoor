@@ -343,11 +343,12 @@ export default function ProductCostsPage() {
       ),
     },
     {
-      title: '期间成本',
+      title: (
+        <Tooltip title="支付手续费 + 营销摊销 + 售后损失">期间成本</Tooltip>
+      ),
       dataIndex: 'period_cost',
       width: 104,
       align: 'right',
-      tooltip: '支付手续费 + 营销摊销 + 售后损失',
       render: (value, row) => (row.has_cost ? money(value, row.currency ?? 'USD') : '—'),
     },
     {
@@ -526,7 +527,7 @@ export default function ProductCostsPage() {
           <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
             <Input maxLength={8} style={{ width: 120 }} />
           </Form.Item>
-          <Divider orientation="left" plain>
+          <Divider titlePlacement="left" plain>
             落地成本
           </Divider>
           <Row gutter={12}>
@@ -535,14 +536,14 @@ export default function ProductCostsPage() {
                 <Form.Item
                   name={field.name}
                   label={field.label}
-                  rules={field.required ? [{ required: true, message: '请输入采购成本' }] : undefined}
+                  rules={'required' in field && field.required ? [{ required: true, message: '请输入采购成本' }] : undefined}
                 >
                   <InputNumber min={0} step={0.01} precision={2} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
             ))}
           </Row>
-          <Divider orientation="left" plain>
+          <Divider titlePlacement="left" plain>
             期间成本（按单摊销）
           </Divider>
           <Row gutter={12}>

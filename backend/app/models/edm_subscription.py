@@ -61,6 +61,7 @@ SEND_STATUSES: tuple[str, ...] = (
 SKIP_REASONS: tuple[str, ...] = (
     "send_disabled",
     "no_consent",
+    "consent_withdrawn",
     "unsubscribed",
     "campaign_not_approved",
     "content_not_approved",
@@ -80,6 +81,12 @@ class EmailSubscription(Base, TimestampMixin, WorkspaceMixin):
     __tablename__ = "email_subscriptions"
 
     id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    customer_account_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("customer_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     email_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     email_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subscription_status: Mapped[str] = mapped_column(

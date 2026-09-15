@@ -57,6 +57,16 @@ PO_STATUSES: tuple[str, ...] = (
     "cancelled",
 )
 
+# 尚未真正下单给供应商的“未结”状态：自动补货在这些状态下必须幂等，
+# 不得对同一商品重复建单（ordered 之后属于在途/历史，不再拦截）。
+# pending_approval 为采购自动化历史写入值，一并纳入识别以兜住存量。
+OPEN_PO_STATUSES: tuple[str, ...] = (
+    "draft",
+    "pending_cost_confirmation",
+    "pending_approval",
+    "approved",
+)
+
 # Warehouse locations (M4.1): cn China, us United States, eu Europe.
 WAREHOUSE_LOCATIONS: tuple[str, ...] = ("cn", "us", "eu")
 
@@ -214,7 +224,11 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
 
 
 class ShipmentRecord(Base, TimestampMixin, WorkspaceMixin):
-    """One shipment with carrier/tracking and delivery outcome (M4.1)."""
+    """One shipment with carrier/tracking and delivery outcome (M4.1).
+
+    ``purchase_order_id`` covers inbound supplier shipments;
+    ``b2b_order_id`` covers outbound B2B customer shipments.
+    """
 
     __tablename__ = "shipment_records"
 
@@ -222,6 +236,12 @@ class ShipmentRecord(Base, TimestampMixin, WorkspaceMixin):
     purchase_order_id: Mapped[Uuid | None] = mapped_column(
         Uuid,
         ForeignKey("purchase_orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    b2b_order_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("b2b_orders.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -38,7 +39,9 @@ from app.models.base import AI_JSON, Base, CreatedAtMixin, TimestampMixin, Works
 AGENT_DOMAINS: tuple[str, ...] = (
     "product",
     "marketing",
+    "sales",
     "customer",
+    "finance",
     "supply_chain",
     "operations",
 )
@@ -98,6 +101,7 @@ class AgentRegistry(Base, TimestampMixin, WorkspaceMixin):
     model_name: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
     prompt_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     permission_level: Mapped[str] = mapped_column(String(8), nullable=False, default="L1")
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # M5.5: the currently active configuration version (agent_versions.version).
     current_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -105,7 +109,12 @@ class AgentRegistry(Base, TimestampMixin, WorkspaceMixin):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "agent_id", name="uq_agents_workspace_agent_id"),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agents_business_scope",
+        ),
         Index("ix_agents_workspace_domain", "workspace_id", "domain"),
+        Index("ix_agents_workspace_business_scope", "workspace_id", "business_scope"),
     )
 
 
@@ -121,6 +130,7 @@ class AgentTask(Base, TimestampMixin, WorkspaceMixin):
     input: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -131,8 +141,13 @@ class AgentTask(Base, TimestampMixin, WorkspaceMixin):
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_tasks_business_scope",
+        ),
         Index("ix_agent_tasks_workspace_status", "workspace_id", "status"),
         Index("ix_agent_tasks_workspace_agent", "workspace_id", "agent_id"),
+        Index("ix_agent_tasks_workspace_business_scope", "workspace_id", "business_scope"),
     )
 
 
@@ -148,6 +163,7 @@ class AgentExecution(Base, TimestampMixin, WorkspaceMixin):
     task_id: Mapped[Uuid | None] = mapped_column(
         Uuid, ForeignKey("agent_tasks.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     context_snapshot: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     input: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     output: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
@@ -171,8 +187,17 @@ class AgentExecution(Base, TimestampMixin, WorkspaceMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_executions_business_scope",
+        ),
         Index("ix_agent_executions_workspace_status", "workspace_id", "status"),
         Index("ix_agent_executions_workspace_agent", "workspace_id", "agent_id"),
+        Index(
+            "ix_agent_executions_workspace_business_scope",
+            "workspace_id",
+            "business_scope",
+        ),
     )
 
 
@@ -185,6 +210,7 @@ class AgentTool(Base, TimestampMixin, WorkspaceMixin):
     tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     permission_level: Mapped[str] = mapped_column(String(8), nullable=False, default="L1")
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -193,7 +219,12 @@ class AgentTool(Base, TimestampMixin, WorkspaceMixin):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "tool_name", name="uq_agent_tools_workspace_name"),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_tools_business_scope",
+        ),
         Index("ix_agent_tools_workspace_level", "workspace_id", "permission_level"),
+        Index("ix_agent_tools_workspace_business_scope", "workspace_id", "business_scope"),
     )
 
 
