@@ -43,6 +43,12 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     # WooCommerce-synced), not a candidate. Decoupled from `status` which
     # stays the commerce/execution status.
     candidate_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # V3.0 selection funnel (docs/nuotao_product_score_v3.0.md §4); independent
+    # of candidate_status. NULL means the row is not in a V3 selection funnel.
+    funnel_stage: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    # Latest V1-V12 veto snapshot (list of rule ids / notes); history in
+    # product_nuotao_scores. Defaults to an empty list for new rows.
+    reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)

@@ -1,0 +1,117 @@
+name: Hotdeploy Nuotao Score V3.0 P0 Foundation (one-off)
+
+# P0 of the V3.0 selection alignment (docs/nuotao_product_score_v3.0.md):
+#  - migration 0048: product_nuotao_scores + products.funnel_stage/reject_reasons
+#  - ORM models + pure scoring spec (app/services/nuotao_score_v3.py) + unit tests
+#  - frontend: rename Newton recall score so it is not confused with Nuotao Score
+# Applies the DB migration, verifies schema, restarts backend, rebuilds frontend.
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-nuotao-score-v3-p0.yml'
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package files
+        run: |
+          tar -czf v3p0.tgz \
+            backend/alembic/versions/0048_nuotao_score_v3.py \
+            backend/app/models/product_intelligence.py \
+            backend/app/models/product.py \
+            backend/app/services/nuotao_score_v3.py \
+            backend/tests/test_nuotao_score_v3.py \
+            frontend/src/pages/NewtonSourcing.tsx
+          tar -tzf v3p0.tgz
+
+      - name: Upload package
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: v3p0.tgz
+          target: /tmp
+
+      - name: Apply, migrate, restart, build
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/v3p0-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+            tar -czf "$BK/before.tgz" \
+              backend/app/models/product_intelligence.py \
+              backend/app/models/product.py \
+              frontend/src/pages/NewtonSourcing.tsx 2>/dev/null || true
+            tar -xzf /tmp/v3p0.tgz -C /opt/nuotao
+            rm -f /tmp/v3p0.tgz
+
+            echo "=== backend compile + unit tests ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -m compileall -q app alembic/versions/0048_nuotao_score_v3.py && echo compile-ok
+            .venv/bin/python -m pytest tests/test_nuotao_score_v3.py -p no:warnings -q 2>&1 | tail -6
+
+            echo "=== migration: before ==="
+            .venv/bin/alembic current || true
+            echo "=== migration: upgrade head ==="
+            .venv/bin/alembic upgrade head
+            echo "=== migration: after ==="
+            .venv/bin/alembic current
+
+            echo "=== verify schema via project engine ==="
+            .venv/bin/python - <<'PY'
+            import asyncio
+            from sqlalchemy import text
+            from app.core.database import _engine
+            async def main():
+                async with _engine.connect() as c:
+                    t = (await c.execute(text("select to_regclass('public.product_nuotao_scores')"))).scalar()
+                    rows = (await c.execute(text("select column_name from information_schema.columns where table_name='products' and column_name in ('funnel_stage','reject_reasons') order by 1"))).fetchall()
+                    cols = [r[0] for r in rows]
+                    print("nuotao table:", t, "| products new cols:", cols)
+                    assert t == 'product_nuotao_scores', 'score table missing'
+                    assert cols == ['funnel_stage', 'reject_reasons'], cols
+            asyncio.run(main())
+            PY
+
+            echo "=== restart backend ==="
+            systemctl restart nuotao-backend
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
+            systemctl is-active nuotao-backend
+            [ "$ready" = "200" ] || { journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1; }
+
+            echo "=== frontend build + deploy ==="
+            cd /opt/nuotao/frontend
+            npm install --no-audit --no-fund 2>&1 | tail -3
+            set +e; npm run build > /tmp/fe-v3p0.log 2>&1; BRC=$?; set -e
+            tail -8 /tmp/fe-v3p0.log
+            [ "$BRC" -eq 0 ] || { grep -nE "Could not resolve|error TS|Error" /tmp/fe-v3p0.log | head -40; exit 1; }
+            rm -rf /var/www/nuotao && mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "backend=$bcode console=$ccode backup=$BK"
+            [ "$bcode" = "200" ] && [ "$ccode" = "200" ] || exit 1
+            echo DONE

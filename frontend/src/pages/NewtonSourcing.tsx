@@ -248,7 +248,7 @@ export default function NewtonSourcingPage() {
           <RobotOutlined style={{ fontSize: '32px', color: '#722ed1' }} />
           <div>
             <Title level={3} style={{ margin: 0 }}>牛顿 AI 对话选品</Title>
-            <Text type="secondary">用关键词或一句话描述需求，阿里牛顿 Agent 自动在 1688 找品、比价、评分，可直接加入候选库或带入产品工作流</Text>
+            <Text type="secondary">用关键词或一句话描述需求，阿里牛顿 Agent 自动在 1688 找品、比价、匹配排序，可直接加入候选库或带入产品工作流</Text>
           </div>
         </Space>
       </div>
@@ -371,7 +371,7 @@ export default function NewtonSourcingPage() {
         <div style={{ textAlign: 'center', padding: '60px 0' }}>
           <Spin size="large" tip="牛顿Agent正在1688找品、比价、筛选..." />
           <Paragraph type="secondary" style={{ marginTop: '16px' }}>
-            通常需要30-60秒，Agent会自动搜索商品、计算性价比、生成推荐
+            通常需要30-60秒，Agent会自动搜索商品、比价排序、生成匹配推荐
           </Paragraph>
         </div>
       )}
@@ -502,10 +502,10 @@ export default function NewtonSourcingPage() {
                                 {item.subject || '未知商品'}
                               </Text>
                               <Tag color={grade.color} style={{ fontSize: '13px', padding: '2px 10px' }}>
-                                {grade.label}级
+                                匹配{grade.label}
                               </Tag>
                               <Badge
-                                count={`${item.score}分`}
+                                count={`召回分 ${item.score}`}
                                 style={{ backgroundColor: scoreColor(item.score), fontSize: '12px' }}
                               />
                             </Space>
@@ -592,11 +592,14 @@ export default function NewtonSourcingPage() {
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
               <div>
-                <Paragraph>输入关键词或一句话需求，牛顿 Agent 会自动在 1688 搜索、比价、筛选并评分</Paragraph>
+                <Paragraph>输入关键词或一句话需求，牛顿 Agent 会自动在 1688 搜索、比价、筛选并按匹配度排序</Paragraph>
+                <Paragraph type="secondary" style={{ fontSize: 12 }}>
+                  召回分仅代表与找品需求的匹配/推荐排序，非正式选品评分；正式选品以候选库 V3.0 Nuotao Score 与一票否决结果为准
+                </Paragraph>
                 <Space wrap>
                   <Tag color="blue">自然语言找品</Tag>
                   <Tag color="green">智能比价</Tag>
-                  <Tag color="orange">性价比评分</Tag>
+                  <Tag color="orange">AI 召回匹配分</Tag>
                   <Tag color="purple">直接加入候选/工作流</Tag>
                 </Space>
               </div>
