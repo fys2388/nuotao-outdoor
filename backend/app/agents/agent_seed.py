@@ -89,6 +89,7 @@ async def ensure_product_analyst_agent(
             model_name="gpt-4o-mini",
             prompt_version=PROMPT_VERSION,
             permission_level="L2",
+            business_scope="SHARED",
             description="AI product analyst: analysis + decision proposals only (M5.2)",
         ),
         trace_id=trace_id,

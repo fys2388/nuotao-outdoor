@@ -233,6 +233,14 @@ class Settings(BaseSettings):
     # EDM 邮件服务提供商（smtp/sendgrid/mailgun/resend，未配置时不发送）
     edm_provider: str = ""
 
+    # --- Customer identity / privacy data governance -------------------------
+    # Raw email, phone, tax id and external customer ids are never persisted.
+    # Links only contain a workspace-scoped HMAC-SHA256 fingerprint. Production
+    # must provide a dedicated secret and rotate it through the version field.
+    customer_identity_hmac_key: str = ""
+    customer_identity_key_version: str = "v1"
+    data_subject_request_due_days: int = 30
+
     # --- M6 Image Generation (pluggable gateway, cost-guarded) --------------
     # Default model: doubao-seedream-4-0-250828 (Volcengine Ark, 200 free images quota, ¥0.20/img).
     image_gen_default_model: str = "doubao-seedream-4-0-250828"

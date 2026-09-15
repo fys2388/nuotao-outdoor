@@ -10,6 +10,7 @@ Production behavior (M5.5):
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -17,8 +18,8 @@ import socket
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
-from app.worker.agent_worker import register_executor, run_worker
-from app.worker.product_analyst_executor import product_analyst_executor
+from app.worker.agent_worker import run_worker
+from app.worker.bootstrap import register_builtin_executors
 
 
 def _resolve_worker_id() -> str:
@@ -31,9 +32,9 @@ def _resolve_worker_id() -> str:
 
 def main() -> None:
     """Run the worker until interrupted (graceful on SIGTERM/SIGINT)."""
-    # M5.2: bind the Product Analyst agent to its executor; other agents fall
-    # back to the generic LLM executor.
-    register_executor("product_analyst", product_analyst_executor)
+    # Bind every built-in agent to its production executor. Unknown agents
+    # still fall back to the generic LLM executor.
+    register_builtin_executors()
     setup_logging()
     logger = logging.getLogger(__name__)
     worker_id = _resolve_worker_id()
@@ -47,12 +48,10 @@ def main() -> None:
     async def _run() -> None:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
+            with contextlib.suppress(NotImplementedError, RuntimeError):
                 loop.add_signal_handler(sig, stop_event.set)
-            except (NotImplementedError, RuntimeError):
                 # Windows: SIGTERM is unavailable; KeyboardInterrupt still
                 # propagates and asyncio.run cancels the worker task.
-                pass
         await run_worker(worker_id=worker_id, stop_event=stop_event)
         logger.info("agent worker %s stopped gracefully", worker_id)
 

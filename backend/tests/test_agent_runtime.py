@@ -11,7 +11,9 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 
+from app.api.v1.endpoints.auth import get_current_workspace_id
 from app.core.workspace import DEFAULT_WORKSPACE_ID
+from app.main import app
 from app.models.agent_runtime import AgentExecution, AgentTask
 from app.models.event import EventLog
 from app.models.product_intelligence import ProductKnowledgeEntry
@@ -471,14 +473,27 @@ async def test_workspace_isolation(db_session, api_client) -> None:
     await _seed_prompt(db_session)
     await _seed_prompt(db_session, workspace=OTHER_WORKSPACE)
     await _seed_agent(api_client, db_session, agent_id="ISO-1")
-    await _seed_agent(api_client, db_session, agent_id="ISO-2", workspace=OTHER_WORKSPACE)
+    previous_workspace_override = app.dependency_overrides.get(get_current_workspace_id)
+    app.dependency_overrides[get_current_workspace_id] = lambda: OTHER_WORKSPACE
+    try:
+        await _seed_agent(
+            api_client,
+            db_session,
+            agent_id="ISO-2",
+            workspace=OTHER_WORKSPACE,
+        )
+    finally:
+        if previous_workspace_override is None:
+            app.dependency_overrides[get_current_workspace_id] = lambda: DEFAULT_WORKSPACE_ID
+        else:
+            app.dependency_overrides[get_current_workspace_id] = previous_workspace_override
 
     visible = api_client.get("/api/v1/agent-registry")
     assert len(visible.json()) == 1
 
-    other = api_client.get("/api/v1/agent-registry", headers=_headers(OTHER_WORKSPACE))
-    assert len(other.json()) == 1
-    assert other.json()[0]["agent_id"] == "ISO-2"
+    spoofed = api_client.get("/api/v1/agent-registry", headers=_headers(OTHER_WORKSPACE))
+    assert len(spoofed.json()) == 1
+    assert spoofed.json()[0]["agent_id"] == "ISO-1"
 
 
 # --------------------------------------------------------------------------- #

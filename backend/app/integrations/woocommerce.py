@@ -97,6 +97,7 @@ class WooCommerceConnector(Connector):
         if order_id is None:
             raise ConnectorError("order record requires 'id'")
         shipping = record.get("shipping") if isinstance(record.get("shipping"), dict) else {}
+        billing = record.get("billing") if isinstance(record.get("billing"), dict) else {}
         line_items = record.get("line_items") if isinstance(record.get("line_items"), list) else []
         return {
             "kind": "orders",
@@ -111,6 +112,11 @@ class WooCommerceConnector(Connector):
             "discount_total": _as_decimal(record.get("discount_total")),
             "tax_total": _as_decimal(record.get("tax_total")),
             "shipping": {"country": _as_str(shipping.get("country")) or None},
+            # Parsed in memory for identity resolution; never persisted or logged.
+            "billing": {
+                "email": _as_str(billing.get("email")) or None,
+                "phone": _as_str(billing.get("phone")) or None,
+            },
             "line_items": [
                 {
                     "id": item.get("id"),

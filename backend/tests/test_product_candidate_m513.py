@@ -14,8 +14,9 @@ import pytest
 from sqlalchemy import select
 
 from app.core.workspace import DEFAULT_WORKSPACE_ID
+from app.models.image_gen import ImageGenerationTask
 from app.models.product import Product
-from app.models.product_intelligence import ProductSource, WooCommerceDraft
+from app.models.product_intelligence import ProductCostSnapshot, ProductScore, ProductSource, WooCommerceDraft
 from app.schemas.rule import RuleCreate
 from app.services import rule_engine
 
@@ -27,6 +28,7 @@ CSV_URL = "/api/v1/products/intake/csv"
 STATUS_URL = "/api/v1/product-candidates/{pid}/status"
 PROMOTE_URL = "/api/v1/product-candidates/{pid}/promote"
 DRAFTS_URL = "/api/v1/product-candidates/{pid}/drafts"
+CANDIDATES_URL = "/api/v1/sourcing/candidates"
 
 
 def _intake_payload(**overrides) -> dict:
@@ -120,6 +122,190 @@ async def test_manual_intake_creates_candidate(db_session, api_client) -> None:
     )
     assert result["product"]["candidate_status"] == "candidate"
     assert result["product"]["source_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_intake_persists_description_attributes_and_media(
+    db_session, api_client
+) -> None:
+    """Imported 1688 content must survive into the shared product master."""
+    await _seed_product_rules(db_session)
+    result = await _intake(
+        api_client,
+        sku="NTO-CONTENT-001",
+        description="Source product description",
+        attributes={"Material": "ABS", "Waterproof": "IPX4"},
+        images=[
+            "https://cbu01.alicdn.com/main.jpg",
+            "https://cbu01.alicdn.com/detail.jpg",
+        ],
+        supplier_name="Example Supplier",
+        source_id="1075485124628",
+        ai_recognition={"product_category": "Camping Lantern"},
+        product_report={"product_name": "Solar Camping Lantern"},
+    )
+    product_id = result["product"]["id"]
+    product = (
+        await db_session.execute(select(Product).where(Product.id == UUID(product_id)))
+    ).scalar_one()
+
+    assert product.description == "Source product description"
+    assert product.attributes == {"Material": "ABS", "Waterproof": "IPX4"}
+    assert product.meta["media"]["images"] == [
+        "https://cbu01.alicdn.com/main.jpg",
+        "https://cbu01.alicdn.com/detail.jpg",
+    ]
+    assert product.meta["supplier"]["name"] == "Example Supplier"
+    assert product.meta["analysis"]["ai_recognition"]["product_category"] == "Camping Lantern"
+    assert product.meta["analysis"]["product_report"]["product_name"] == "Solar Camping Lantern"
+
+
+@pytest.mark.asyncio
+async def test_product_copy_is_persisted_and_requires_approval(
+    db_session, api_client, monkeypatch
+) -> None:
+    """AI copy must survive the request and stay non-approved until human review."""
+    from app.services import product_copy_service
+
+    await _seed_product_rules(db_session)
+    result = await _intake(api_client, sku="NTO-COPY-001")
+    product_id = result["product"]["id"]
+
+    async def fake_generate(**_kwargs) -> dict:
+        return {
+            "title": "Camping Headlamp Pro",
+            "description": "Rechargeable headlamp for camping.",
+            "short_description": "Reliable outdoor headlamp.",
+            "bullet_points": ["USB rechargeable", "Water resistant"],
+            "seo_keywords": ["camping headlamp"],
+            "_meta": {"provider": "test", "model": "test-model"},
+        }
+
+    monkeypatch.setattr(product_copy_service, "generate_product_copy", fake_generate)
+
+    generated = api_client.post(f"/api/v1/products/{product_id}/generate-copy")
+    assert generated.status_code == 200, generated.text
+    intelligence = api_client.get(f"/api/v1/products/{product_id}/intelligence").json()
+    localization = intelligence["product"]["meta"]["localizations"]["en"]
+    assert localization["status"] == "generated"
+    assert localization["title"] == "Camping Headlamp Pro"
+
+    approved = api_client.post(
+        f"/api/v1/products/{product_id}/localizations/en/approve",
+        json={"actor": "ops-a"},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["localization"]["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_approved_image_can_be_attached_to_product_media(
+    db_session, api_client
+) -> None:
+    """A reviewed AI image must become visible in the product media contract."""
+    await _seed_product_rules(db_session)
+    result = await _intake(api_client, sku="NTO-IMAGE-001")
+    product_id = UUID(result["product"]["id"])
+    task = ImageGenerationTask(
+        workspace_id=WORKSPACE,
+        product_id=product_id,
+        prompt="Outdoor lantern main image",
+        use_case="main_image",
+        status="approved",
+        image_url="https://cdn.example.com/products/nto-image-001.png",
+        approved_by="reviewer-a",
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    response = api_client.post(
+        f"/api/v1/products/{product_id}/media/approved-image",
+        json={
+            "task_id": str(task.id),
+            "placement": "main",
+            "actor": "ops-a",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["main_image"] == "https://cdn.example.com/products/nto-image-001.png"
+
+    product = (
+        await db_session.execute(select(Product).where(Product.id == product_id))
+    ).scalar_one()
+    assert product.meta["media"]["images"] == [
+        "https://cdn.example.com/products/nto-image-001.png"
+    ]
+    assert product.meta["media"]["approved_images"][0]["task_id"] == str(task.id)
+
+
+@pytest.mark.asyncio
+async def test_candidate_list_uses_candidate_status_and_returns_latest_intelligence(
+    db_session, api_client
+) -> None:
+    """The candidate pool excludes commerce products and includes latest score/cost."""
+    await _seed_product_rules(db_session)
+    result = await _intake(api_client, sku="NTO-LIST-001")
+    product_id = result["product"]["id"]
+
+    commerce_product = Product(
+        workspace_id=WORKSPACE,
+        sku="NTO-COMMERCE-001",
+        name="Commerce Product",
+        status="active",
+        source="woocommerce",
+    )
+    db_session.add(commerce_product)
+    await db_session.flush()
+
+    analyzed = api_client.post(f"/api/v1/products/{product_id}/analyze")
+    assert analyzed.status_code == 200, analyzed.text
+    latest_score_id = analyzed.json()["id"]
+
+    response = api_client.get(f"{CANDIDATES_URL}?status=all&limit=50&offset=0")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["products"]) == 1
+
+    candidate = body["products"][0]
+    assert candidate["id"] == product_id
+    assert candidate["candidate_status"] == "candidate"
+    assert candidate["latest_score"]["id"] == latest_score_id
+    assert candidate["latest_cost"]["purchase_cost"] == "10.00"
+    assert candidate["latest_cost"]["total_landed_cost"] == "16.00"
+
+    scores = (await db_session.execute(select(ProductScore))).scalars().all()
+    costs = (await db_session.execute(select(ProductCostSnapshot))).scalars().all()
+    assert len(scores) == 2
+    assert len(costs) == 1
+
+
+@pytest.mark.asyncio
+async def test_candidate_list_exposes_content_media_and_attributes(
+    db_session, api_client
+) -> None:
+    """Candidate list responses must carry the fields shown in product detail."""
+    await _seed_product_rules(db_session)
+    result = await _intake(
+        api_client,
+        sku="NTO-CANDIDATE-DETAIL-001",
+        attributes={"Material": "ABS", "Waterproof": "IPX4"},
+        images=["https://cbu01.alicdn.com/main.jpg"],
+        dimensions={"length": 12, "width": 8, "height": 6},
+    )
+    product_id = result["product"]["id"]
+
+    response = api_client.get(f"{CANDIDATES_URL}?status=all&limit=50&offset=0")
+    assert response.status_code == 200, response.text
+    candidate = next(
+        item for item in response.json()["products"] if item["id"] == product_id
+    )
+    assert candidate["attributes"] == {"Material": "ABS", "Waterproof": "IPX4"}
+    assert candidate["dimensions"] == {"length": 12, "width": 8, "height": 6}
+    assert candidate["meta"]["media"]["images"] == [
+        "https://cbu01.alicdn.com/main.jpg"
+    ]
 
 
 @pytest.mark.asyncio
@@ -411,6 +597,58 @@ async def test_draft_payload_generated_after_human_approval(
 
     # Phase 1 boundary: the WooCommerce connector was never invoked.
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_promotion_blocks_untranslated_chinese_product(db_session) -> None:
+    """A Chinese candidate cannot become a listing draft without approved English copy."""
+    from app.services.product_intelligence import ProductIntelligenceError, finalize_promote
+
+    await _seed_product_rules(db_session)
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="NTO-CN-GATE-1",
+        name="太阳能充电露营灯",
+        description="超亮长续航防水露营灯",
+        status="candidate",
+        candidate_status="winner",
+        source="intake",
+        meta={},
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    with pytest.raises(ProductIntelligenceError, match="approved en localization"):
+        await finalize_promote(
+            db_session,
+            workspace_id=WORKSPACE,
+            product_id=product.id,
+            actor="ops-a",
+            trace_id="trace-cn-gate",
+        )
+
+    product.meta = {
+        "media": {"images": ["https://cbu01.alicdn.com/main.jpg"]},
+        "localizations": {
+            "en": {
+                "status": "approved",
+                "title": "Solar Rechargeable Camping Lantern",
+                "description": "Bright, long-lasting and waterproof.",
+                "short_description": "Reliable outdoor lantern.",
+                "bullet_points": ["Solar charging", "IPX4 waterproof"],
+            }
+        },
+    }
+    draft = await finalize_promote(
+        db_session,
+        workspace_id=WORKSPACE,
+        product_id=product.id,
+        actor="ops-a",
+        trace_id="trace-cn-gate-approved",
+    )
+    assert draft.payload["name"] == "Solar Rechargeable Camping Lantern"
+    assert draft.payload["images"] == ["https://cbu01.alicdn.com/main.jpg"]
+    assert draft.payload["metadata"]["target_language"] == "en"
 
 
 @pytest.mark.asyncio

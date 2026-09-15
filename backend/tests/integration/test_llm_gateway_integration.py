@@ -59,6 +59,14 @@ def _fake_keys() -> None:
     settings.llm_fallback_provider = "deepseek"
 
 
+@pytest.fixture(autouse=True)
+def _reset_llm_circuit() -> None:
+    """Keep provider failures from leaking across integration cases."""
+    llm_gateway._circuit_state.clear()
+    yield
+    llm_gateway._circuit_state.clear()
+
+
 def _openai_500(request: httpx.Request) -> httpx.Response:
     if "openai.com" in str(request.url):
         return httpx.Response(500, json={"error": "upstream boom"})
