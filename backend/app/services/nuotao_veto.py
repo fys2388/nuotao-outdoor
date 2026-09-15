@@ -45,18 +45,54 @@ def _category_hit(category: str | None, configured: tuple[str, ...]) -> bool:
     return any(item.strip().lower() == cat for item in configured)
 
 
+def _ai_finding(
+    rule_id: str,
+    ai_signals: "NormalizedAiSignals | None",
+    *,
+    risk_label: str,
+    pending_detail: str,
+) -> VetoFinding:
+    """Resolve an AI-owned rule (V1/V2/V3/V5).
+
+    Deterministic evidence is handled by the caller and always wins; here only
+    an explicit AI pass/fail closes the rule, uncertain/missing stays pending.
+    """
+    ai = ai_signals.verdict_of(rule_id) if ai_signals is not None else None
+    if ai is None:
+        return VetoFinding(rule_id, PENDING, pending_detail)
+    if ai.verdict == FAIL:
+        detail = f"AI 判定{risk_label}：{ai.reason}" if ai.reason else f"AI 判定触发（{risk_label}）"
+        return VetoFinding(rule_id, FAIL, detail)
+    if ai.verdict == PASS:
+        return VetoFinding(
+            rule_id, PASS, f"AI 判定通过{('：' + ai.reason) if ai.reason else ''}"
+        )
+    return VetoFinding(rule_id, PENDING, "AI 无法判定，待人工/证据补全")
+
+
 def evaluate_vetoes(
-    facts: ScoreFacts, dimensions: dict[str, Decimal]
+    facts: ScoreFacts,
+    dimensions: dict[str, Decimal],
+    ai_signals: "NormalizedAiSignals | None" = None,
 ) -> dict[str, Any]:
-    """Evaluate every V1-V12 rule from structured facts and mapped dimensions."""
+    """Evaluate every V1-V12 rule from structured facts and mapped dimensions.
+
+    ``ai_signals`` (from the Product Analyst) may close the AI-owned rules
+    V1/V2/V3/V5; deterministic evidence in ``facts`` always takes precedence.
+    """
     findings: dict[str, VetoFinding] = {}
 
-    # --- V1-V3 compliance/safety: AI-assisted, explicit flags until P2 ------
+    # --- V1-V3 compliance/safety: deterministic flag wins, else AI closes ----
     for rule_id in ("V1", "V2", "V3"):
         if rule_id in facts.compliance_failures:
-            findings[rule_id] = VetoFinding(rule_id, FAIL, "AI/合规判定触发")
+            findings[rule_id] = VetoFinding(rule_id, FAIL, "合规判定触发")
         else:
-            findings[rule_id] = VetoFinding(rule_id, PENDING, "待 AI 合规/安全判定（P2）")
+            findings[rule_id] = _ai_finding(
+                rule_id,
+                ai_signals,
+                risk_label="存在合规/安全风险",
+                pending_detail="待 AI 合规/安全判定",
+            )
 
     # V4 banned import/sale category.
     if _category_hit(facts.category, facts.banned_categories):
@@ -72,7 +108,12 @@ def evaluate_vetoes(
     elif facts.off_brand_categories:
         findings["V5"] = VetoFinding("V5", PASS, "未命中偏离品类")
     else:
-        findings["V5"] = VetoFinding("V5", PENDING, "品牌品类红线未配置/待AI判定")
+        findings["V5"] = _ai_finding(
+            "V5",
+            ai_signals,
+            risk_label="偏离品牌品类聚焦",
+            pending_detail="品牌品类红线未配置/待 AI 判定",
+        )
 
     # V6 low-price impulse feel.
     if facts.reference_price_usd is None:

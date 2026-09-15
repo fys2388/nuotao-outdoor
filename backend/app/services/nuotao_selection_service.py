@@ -13,6 +13,7 @@ funnel is an independent axis (docs/nuotao_product_score_v3.0.md §4).
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -22,18 +23,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
+    ProductAnalysisRun,
     ProductNuotaoScore,
     ProductScore,
     SourcingCandidate,
 )
 from app.models.supplier import Supplier
-from app.services.nuotao_score_mapper import ScoreFacts, map_dimensions
+from app.services.nuotao_ai_signals import (
+    NormalizedAiSignals,
+    normalize_ai_assessment,
+)
+from app.services.nuotao_score_mapper import (
+    SUPPLIER_RATING_SCORE,
+    ScoreFacts,
+    map_dimensions,
+)
+from app.services.nuotao_report import ReportData, build_selection_report
 from app.services.nuotao_score_v3 import (
     MODEL_VERSION,
     RULE_VERSION,
     compute_nuotao_score,
 )
 from app.services.nuotao_veto import decide_funnel_stage, evaluate_vetoes
+from app.services.operational_score_v2 import coverage_report
 from app.services.product_cost_service import (
     latest_cost_for_product,
     sale_price_from_meta,
@@ -107,6 +119,46 @@ async def _existing_hero_categories(
     return tuple(row[0] for row in rows if row[0])
 
 
+async def _latest_ai_assessment(
+    session: AsyncSession, workspace_id: UUID, product_id: UUID
+) -> dict[str, Any] | None:
+    """Return the nuotao_assessment block from the most recent completed
+    Product Analyst run that carries one (closes V1/V2/V3/V5 + Brand Fit)."""
+    rows = (
+        (
+            await session.execute(
+                select(ProductAnalysisRun)
+                .where(
+                    ProductAnalysisRun.workspace_id == workspace_id,
+                    ProductAnalysisRun.product_id == product_id,
+                    ProductAnalysisRun.status == "completed",
+                )
+                .order_by(ProductAnalysisRun.created_at.desc())
+                .limit(5)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        output = row.output if isinstance(row.output, dict) else None
+        block = (output or {}).get("nuotao_assessment")
+        if isinstance(block, dict) and block:
+            return block
+    return None
+
+
+def _resolve_signals(
+    ai_assessment: dict[str, Any] | NormalizedAiSignals | None,
+    auto_block: dict[str, Any] | None,
+) -> NormalizedAiSignals:
+    if isinstance(ai_assessment, NormalizedAiSignals):
+        return ai_assessment
+    return normalize_ai_assessment(
+        ai_assessment if ai_assessment is not None else auto_block
+    )
+
+
 def _cost_facts(
     product: Product, cost: ProductCost | None
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
@@ -137,8 +189,14 @@ async def evaluate_product(
     *,
     workspace_id: UUID | None = None,
     trace_id: str | None = None,
+    ai_assessment: dict[str, Any] | NormalizedAiSignals | None = None,
 ) -> dict[str, Any]:
-    """Run the full V3.0 evaluation for one product and persist the result."""
+    """Run the full V3.0 evaluation for one product and persist the result.
+
+    ``ai_assessment`` supplies the Product Analyst's V3 block; when ``None`` the
+    most recent completed analyst run is used automatically. It closes the
+    AI-owned veto rules V1/V2/V3/V5 and supplies Brand Fit.
+    """
     product = await session.get(Product, product_id)
     if product is None or product.deleted_at is not None:
         raise ValueError(f"product not found: {product_id}")
@@ -159,6 +217,9 @@ async def evaluate_product(
     reference_price_usd = (
         reference_price if cost is not None and cost.currency.upper() == "USD" else None
     )
+
+    auto_block = await _latest_ai_assessment(session, workspace_id, product_id)
+    ai_signals = _resolve_signals(ai_assessment, auto_block)
 
     operational: dict[str, Any] = {}
     operational_total: Decimal | None = None
@@ -181,6 +242,7 @@ async def evaluate_product(
         supplier_rating=supplier_rating,
         category=product.category,
         reference_price_usd=reference_price_usd,
+        brand_fit_override=ai_signals.brand_fit,
         existing_hero_categories=hero_categories,
     )
 
@@ -188,7 +250,7 @@ async def evaluate_product(
     score_result = compute_nuotao_score(dimensions)
     total = score_result["total"]
     grade = score_result["grade"]
-    veto = evaluate_vetoes(facts, dimensions)
+    veto = evaluate_vetoes(facts, dimensions, ai_signals)
     stage = decide_funnel_stage(
         vetoed=veto["vetoed"],
         grade=grade,
@@ -208,6 +270,22 @@ async def evaluate_product(
         "supplier_rating": supplier_rating,
         "reference_price": float(reference_price) if reference_price is not None else None,
         "cost_currency": cost.currency if cost is not None else None,
+        "ai_vetos_closed": sorted(ai_signals.veto_signals.keys()),
+        "ai_brand_fit": (
+            float(ai_signals.brand_fit) if ai_signals.brand_fit is not None else None
+        ),
+        "ai_assessment_source": (
+            "inline"
+            if ai_assessment is not None
+            else ("latest_analyst_run" if auto_block else None)
+        ),
+        "operational_v2_coverage": {
+            key: (float(value) if isinstance(value, Decimal) else value)
+            for key, value in coverage_report(
+                set(operational.keys()),
+                supplier_present=supplier_rating is not None,
+            ).items()
+        },
         **evidence,
     }
 
@@ -290,3 +368,164 @@ async def evaluate_products(
         "errors": errors,
         "count": len(evaluated),
     }
+
+
+def _num(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _latest_nuotao_score(
+    session: AsyncSession, product_id: UUID
+) -> ProductNuotaoScore | None:
+    return (
+        (
+            await session.execute(
+                select(ProductNuotaoScore)
+                .where(ProductNuotaoScore.product_id == product_id)
+                .order_by(ProductNuotaoScore.scored_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+async def _latest_completed_analysis(
+    session: AsyncSession, workspace_id: UUID, product_id: UUID
+) -> ProductAnalysisRun | None:
+    return (
+        (
+            await session.execute(
+                select(ProductAnalysisRun)
+                .where(
+                    ProductAnalysisRun.workspace_id == workspace_id,
+                    ProductAnalysisRun.product_id == product_id,
+                    ProductAnalysisRun.status == "completed",
+                )
+                .order_by(ProductAnalysisRun.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+async def build_product_report(
+    session: AsyncSession,
+    product_id: UUID,
+    *,
+    workspace_id: UUID | None = None,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """Collect every input for one product and assemble the V3.0 report.
+
+    Read-only; missing pieces are surfaced in data_completeness, never faked.
+    """
+    product = await session.get(Product, product_id)
+    if product is None or product.deleted_at is not None:
+        raise ValueError(f"product not found: {product_id}")
+    workspace_id = workspace_id or product.workspace_id
+
+    nuotao_row = await _latest_nuotao_score(session, product_id)
+    op_row = await _latest_operational_score(session, workspace_id, product_id)
+    cost = await latest_cost_for_product(
+        session, workspace_id=workspace_id, product_id=product_id
+    )
+    rating = await _best_supplier_rating(session, workspace_id, product_id)
+    analysis = await _latest_completed_analysis(session, workspace_id, product_id)
+    sale_price, margin_rate, shipping_ratio = _cost_facts(product, cost)
+
+    nuotao_data: dict[str, Any] | None = None
+    if nuotao_row is not None:
+        nuotao_data = {
+            "value_score": _num(nuotao_row.value_score),
+            "utility_score": _num(nuotao_row.utility_score),
+            "weight_packability_score": _num(nuotao_row.weight_packability_score),
+            "durability_score": _num(nuotao_row.durability_score),
+            "brand_fit_score": _num(nuotao_row.brand_fit_score),
+            "differentiation_score": _num(nuotao_row.differentiation_score),
+            "total": _num(nuotao_row.total),
+            "grade": nuotao_row.grade,
+            "reject_reasons": nuotao_row.reject_reasons,
+            "dimension_evidence": nuotao_row.dimension_evidence,
+            "model_version": nuotao_row.model_version,
+            "rule_version": nuotao_row.rule_version,
+            "funnel_stage": product.funnel_stage,
+        }
+
+    operational_data: dict[str, Any] | None = None
+    if op_row is not None:
+        operational_data = {
+            "profit": _num(op_row.profit),
+            "logistics": _num(op_row.logistics),
+            "demand": _num(op_row.demand),
+            "competition": _num(op_row.competition),
+            "differentiation": _num(op_row.differentiation),
+            "compliance": _num(op_row.compliance),
+            "total": _num(op_row.total),
+        }
+
+    cost_data: dict[str, Any] | None = None
+    if cost is not None:
+        cost_data = {
+            "currency": cost.currency,
+            "sale_price": _num(sale_price),
+            "purchase_cost": _num(cost.purchase_cost),
+            "domestic_shipping": _num(cost.domestic_shipping),
+            "first_leg_shipping": _num(cost.first_leg_shipping),
+            "last_leg_shipping": _num(cost.last_leg_shipping),
+            "international_shipping": _num(cost.international_shipping),
+            "packaging": _num(cost.packaging),
+            "tax_estimate": _num(cost.tax_estimate),
+            "handling": _num(cost.handling),
+            "payment_fee": _num(cost.payment_fee),
+            "marketing_amortization": _num(cost.marketing_amortization),
+            "after_sales_loss": _num(cost.after_sales_loss),
+            "total_landed_cost": _num(cost.total_landed_cost),
+            "margin_rate": _num(margin_rate),
+            "shipping_ratio": _num(shipping_ratio),
+        }
+
+    supplier_data = None
+    if rating is not None:
+        supplier_data = {
+            "rating": rating,
+            "score": _num(SUPPLIER_RATING_SCORE.get(rating.upper())),
+        }
+
+    present_m21 = (
+        {"profit", "logistics", "demand", "competition", "differentiation", "compliance"}
+        if operational_data is not None
+        else set()
+    )
+    coverage = {
+        key: (_num(value) if isinstance(value, Decimal) else value)
+        for key, value in coverage_report(
+            present_m21, supplier_present=rating is not None
+        ).items()
+    }
+
+    report_data = ReportData(
+        product={
+            "sku": product.sku,
+            "name": product.name,
+            "category": product.category,
+            "funnel_stage": product.funnel_stage,
+            "source_url": (product.meta or {}).get("source_url"),
+        },
+        nuotao=nuotao_data,
+        operational=operational_data,
+        cost=cost_data,
+        supplier=supplier_data,
+        analyst=analysis.output if analysis is not None else None,
+        coverage=coverage,
+        generated_at=datetime.now(UTC).isoformat(),
+    )
+    return build_selection_report(report_data)

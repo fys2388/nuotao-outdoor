@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.product_intelligence import ProductNuotaoScore
-from app.services.nuotao_selection_service import evaluate_product, evaluate_products
+from app.services.nuotao_selection_service import (
+    build_product_report,
+    evaluate_product,
+    evaluate_products,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,3 +150,17 @@ async def get_latest_batch(request: LatestBatchRequest, db: DbSession):
             "funnel_stage": stage_map.get(key),
         }
     return {"success": True, "items": latest}
+
+
+@router.get("/{product_id}/report", summary="生成产品 V3.0 选品报告（结构化）")
+async def get_product_report(product_id: UUID, db: DbSession):
+    try:
+        report = await build_product_report(db, product_id)
+        return {"success": True, "report": report}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Nuotao V3 report failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc

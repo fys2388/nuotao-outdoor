@@ -364,6 +364,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ product_ids: productIds }),
     }),
+  getNuotaoV3Report: (productId: string) =>
+    request(`/selection/nuotao/${productId}/report`),
   intakeProduct: (data: Record<string, unknown>) =>
     request('/products/intake', {
       method: 'POST',

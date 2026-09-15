@@ -174,11 +174,77 @@ interface NuotaoV3Evaluation {
   scored_at?: string | null
 }
 
+interface V3ReportFinding {
+  id: string
+  name: string
+  status: string
+  detail: string
+}
+
+interface V3ReportDim {
+  key: string
+  label: string
+  weight: number | null
+  score: number | null
+  weighted?: number | null
+  source?: string
+}
+
+interface V3SelectionReport {
+  header?: Record<string, unknown>
+  summary?: {
+    nuotao_total?: number | null
+    grade?: string | null
+    grade_label?: string
+    operational_total?: number | null
+    vetoed?: boolean
+    failed?: string[]
+    recommendation?: string
+    confidence?: number | null
+    one_liner?: string
+    why_recommend?: string[]
+  }
+  vetoes?: Record<string, V3ReportFinding[]>
+  nuotao_dimensions?: V3ReportDim[]
+  operational_v2?: {
+    coverage?: {
+      total_dimensions?: number
+      covered?: string[]
+      missing?: string[]
+      coverage_ratio?: number
+    }
+    dimensions?: V3ReportDim[]
+  }
+  costing?: Record<string, number | string | null> | null
+  market_and_ai?: {
+    market_reasoning?: string | null
+    risks?: unknown[]
+    differentiation_note?: string | null
+    brand_fit?: number | null
+  }
+  pricing?: Record<string, unknown> | null
+  test_plan?: Record<string, unknown> | null
+  human_review?: { status?: string; note?: string }
+  data_completeness?: { missing?: string[]; model_version?: string; rule_version?: string }
+}
+
 const NUOTAO_GRADE_META: Record<string, { label: string; color: string }> = {
   hero: { label: 'Hero', color: 'green' },
   core: { label: 'Core', color: 'blue' },
   long_tail: { label: 'Long-tail', color: 'gold' },
   reject: { label: 'Reject', color: 'red' },
+}
+
+const REPORT_REC_META: Record<string, { label: string; color: string }> = {
+  test: { label: '建议小批量测试', color: 'green' },
+  hold: { label: '持有观察', color: 'gold' },
+  reject: { label: '建议拒绝', color: 'red' },
+}
+
+const VETO_GROUP_LABELS: Record<string, string> = {
+  compliance: '合规与安全 V1–V4',
+  brand: '品牌契合 V5–V8',
+  commercial: '商业可行 V9–V12',
 }
 
 const FUNNEL_META: Record<string, { label: string; color: string }> = {
@@ -268,6 +334,8 @@ export default function ProductCandidatesPage() {
   const [nuotaoMap, setNuotaoMap] = useState<Record<string, NuotaoV3Evaluation>>({})
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const [v3BatchLoading, setV3BatchLoading] = useState(false)
+  const [v3Report, setV3Report] = useState<V3SelectionReport | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
 
   const loadCandidates = useCallback(async () => {
     setLoading(true)
@@ -339,6 +407,7 @@ export default function ProductCandidatesPage() {
     setDetailOpen(true)
     setDetailLoading(true)
     setDetail(null)
+    setV3Report(null)
     setDetailCost(candidate.latest_cost)
     try {
       const [intelligence, costs, sources, imageTasks] = await Promise.all([
@@ -545,6 +614,21 @@ export default function ProductCandidatesPage() {
       message.error(`批量评估失败：${apiErrorMessage(actionError)}`)
     } finally {
       setV3BatchLoading(false)
+    }
+  }
+
+  const loadV3Report = async (productId: string) => {
+    setReportLoading(true)
+    try {
+      const result = (await api.getNuotaoV3Report(productId)) as {
+        report: V3SelectionReport
+      }
+      setV3Report(result.report)
+    } catch (actionError) {
+      message.error(`选品报告生成失败：${apiErrorMessage(actionError)}`)
+      setV3Report(null)
+    } finally {
+      setReportLoading(false)
     }
   }
 
@@ -1372,6 +1456,174 @@ export default function ProductCandidatesPage() {
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description="尚未执行 V3.0 评估，点击右上角“重新评估”生成品牌双轨评分与否决结论"
                 />
+              )}
+            </Card>
+
+            <Card
+              variant="borderless"
+              title={
+                <Space>
+                  <ExperimentOutlined />
+                  <span>V3.0 选品报告（AI 初稿 · 人工复核）</span>
+                </Space>
+              }
+              extra={
+                detailCandidate ? (
+                  <Button
+                    size="small"
+                    loading={reportLoading}
+                    onClick={() => void loadV3Report(detailCandidate.id)}
+                  >
+                    {v3Report ? '刷新报告' : '生成报告'}
+                  </Button>
+                ) : null
+              }
+            >
+              {!v3Report ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="点击“生成报告”汇总双轨评分、一票否决、11 维运营覆盖、成本与 AI 市场分析"
+                />
+              ) : (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space size={12} wrap align="center">
+                    <Text strong style={{ fontSize: 20 }}>
+                      {v3Report.summary?.nuotao_total != null
+                        ? Number(v3Report.summary.nuotao_total).toFixed(1)
+                        : '—'}
+                    </Text>
+                    <Text type="secondary">{v3Report.summary?.grade_label || '未评估'}</Text>
+                    {v3Report.summary?.recommendation && (
+                      <Tag
+                        color={
+                          REPORT_REC_META[v3Report.summary.recommendation]?.color || 'default'
+                        }
+                      >
+                        {REPORT_REC_META[v3Report.summary.recommendation]?.label ||
+                          v3Report.summary.recommendation}
+                      </Tag>
+                    )}
+                    <Text type="secondary">
+                      11 维运营分{' '}
+                      {v3Report.summary?.operational_total != null
+                        ? Number(v3Report.summary.operational_total).toFixed(1)
+                        : '—'}
+                    </Text>
+                    {v3Report.summary?.confidence != null && (
+                      <Text type="secondary">
+                        AI 置信度 {Number(v3Report.summary.confidence).toFixed(2)}
+                      </Text>
+                    )}
+                  </Space>
+                  {v3Report.summary?.one_liner && <Text>{v3Report.summary.one_liner}</Text>}
+                  {(v3Report.summary?.why_recommend ?? []).length > 0 && (
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {(v3Report.summary?.why_recommend ?? []).map((why, idx) => (
+                        <li key={idx}>{why}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {(v3Report.data_completeness?.missing ?? []).length > 0 && (
+                    <div
+                      style={{
+                        background: '#fffbe6',
+                        border: '1px solid #ffe58f',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                      }}
+                    >
+                      <Text strong>数据待补：</Text>
+                      <Text type="secondary">
+                        {(v3Report.data_completeness?.missing ?? []).join('；')}
+                      </Text>
+                    </div>
+                  )}
+                  <div>
+                    <Text strong>
+                      11 维运营覆盖
+                      {v3Report.operational_v2?.coverage?.coverage_ratio != null
+                        ? `（已覆盖权重 ${Math.round(
+                            Number(v3Report.operational_v2.coverage.coverage_ratio) * 100,
+                          )}%）`
+                        : ''}
+                    </Text>
+                    <Row gutter={[8, 8]} style={{ marginTop: 6 }}>
+                      {(v3Report.operational_v2?.dimensions || []).map((dim) => (
+                        <Col span={12} key={dim.key}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {dim.label} · {Math.round(Number(dim.weight || 0) * 100)}%
+                          </Text>
+                          <div>
+                            {dim.score != null ? (
+                              <Text strong>{Number(dim.score).toFixed(1)}</Text>
+                            ) : (
+                              <Tag style={{ fontSize: 11 }}>待补</Tag>
+                            )}
+                          </div>
+                        </Col>
+                      ))}
+                    </Row>
+                  </div>
+                  {(['compliance', 'brand', 'commercial'] as const).map((group) => (
+                    <div key={group}>
+                      <Text strong>{VETO_GROUP_LABELS[group]}</Text>
+                      <div style={{ marginTop: 4 }}>
+                        <Space size={[6, 6]} wrap>
+                          {(v3Report.vetoes?.[group] || []).map((f) => (
+                            <Tooltip key={f.id} title={f.detail}>
+                              <Tag
+                                color={
+                                  f.status === 'fail'
+                                    ? 'red'
+                                    : f.status === 'pending'
+                                      ? 'orange'
+                                      : 'green'
+                                }
+                              >
+                                {f.id}{' '}
+                                {f.status === 'fail'
+                                  ? '否决'
+                                  : f.status === 'pending'
+                                    ? '待定'
+                                    : '通过'}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                        </Space>
+                      </div>
+                    </div>
+                  ))}
+                  {v3Report.costing && (
+                    <Text type="secondary">
+                      售价 {v3Report.costing.sale_price ?? '—'} · 落地成本{' '}
+                      {v3Report.costing.total_landed_cost ?? '—'} · 利润率{' '}
+                      {v3Report.costing.margin_rate != null
+                        ? `${Math.round(Number(v3Report.costing.margin_rate) * 100)}%`
+                        : '—'}{' '}
+                      · 运费占比{' '}
+                      {v3Report.costing.shipping_ratio != null
+                        ? `${Math.round(Number(v3Report.costing.shipping_ratio) * 100)}%`
+                        : '—'}
+                    </Text>
+                  )}
+                  {v3Report.market_and_ai?.market_reasoning && (
+                    <div>
+                      <Text strong>市场与竞争：</Text>
+                      <Text>{v3Report.market_and_ai.market_reasoning}</Text>
+                    </div>
+                  )}
+                  {v3Report.market_and_ai?.differentiation_note && (
+                    <div>
+                      <Text strong>差异化：</Text>
+                      <Text>{v3Report.market_and_ai.differentiation_note}</Text>
+                    </div>
+                  )}
+                  {v3Report.human_review?.note && (
+                    <Text type="secondary" italic>
+                      {v3Report.human_review.note}
+                    </Text>
+                  )}
+                </Space>
               )}
             </Card>
 

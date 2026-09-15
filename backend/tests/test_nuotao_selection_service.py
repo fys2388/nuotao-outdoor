@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import (
+    ProductAnalysisRun,
     ProductNuotaoScore,
     ProductScore,
     SourcingCandidate,
@@ -160,3 +161,48 @@ async def test_batch_skips_soft_deleted_and_missing(db_session):
     assert result["count"] == 1
     assert len(result["skipped"]) == 2
     assert result["errors"] == []
+
+
+async def test_ai_assessment_from_latest_run_closes_and_can_veto(db_session):
+    product = await _product(db_session, sku="NTO-AI", meta={"sale_price": "30"})
+    await _operational_score(db_session, product)
+    await _supplier(db_session, product, "B")
+    db_session.add(
+        ProductAnalysisRun(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            product_id=product.id,
+            provider="newton",
+            model="test",
+            prompt_version="v3",
+            input_snapshot={},
+            output={
+                "nuotao_assessment": {
+                    "brand_fit": 8,
+                    "veto_signals": {
+                        "V1": {"verdict": "fail", "reason": "外观专利近似"},
+                        "V2": "pass",
+                        "V3": "pass",
+                        "V5": "pass",
+                    },
+                }
+            },
+            token_usage={},
+            estimated_cost=Decimal("0"),
+            latency_ms=1,
+            status="completed",
+        )
+    )
+    await db_session.flush()
+
+    result = await evaluate_product(db_session, product.id)
+
+    # AI fail on V1 hard-vetoes an otherwise healthy product.
+    assert "V1" in result["veto"]["failed"]
+    assert result["veto"]["vetoed"] is True
+    assert result["funnel_stage"] == "rejected"
+    # AI pass closes the other AI-owned rules.
+    assert not set(result["veto"]["pending"]) & {"V2", "V3", "V5"}
+    # Brand Fit override and provenance recorded.
+    assert result["dimensions"]["brand_fit"] == 8.0
+    assert result["evidence"]["ai_assessment_source"] == "latest_analyst_run"
+    assert result["evidence"]["ai_vetos_closed"] == ["V1", "V2", "V3", "V5"]
