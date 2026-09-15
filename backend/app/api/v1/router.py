@@ -51,6 +51,7 @@ from app.api.v1.endpoints import (
     marketing,
     marketing_learning,
     notifications,
+    nuotao_selection,
     newton_agent,
     operation_logs,
     orders,
@@ -107,6 +108,7 @@ api_router.include_router(product_intelligence.candidate_router)
 api_router.include_router(product_listing.router)
 api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
+api_router.include_router(nuotao_selection.router)
 api_router.include_router(seo.router)
 api_router.include_router(sourcing.router)
 api_router.include_router(sourcing_enhanced.router)

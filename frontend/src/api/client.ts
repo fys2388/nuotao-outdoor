@@ -349,6 +349,21 @@ export const api = {
     })
     return request(`/sourcing/candidates?${params.toString()}`)
   },
+  evaluateNuotaoV3: (productId: string) =>
+    request('/selection/nuotao/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ product_id: productId }),
+    }),
+  evaluateNuotaoV3Batch: (productIds: string[]) =>
+    request('/selection/nuotao/evaluate-batch', {
+      method: 'POST',
+      body: JSON.stringify({ product_ids: productIds }),
+    }),
+  getNuotaoV3LatestBatch: (productIds: string[]) =>
+    request('/selection/nuotao/latest-batch', {
+      method: 'POST',
+      body: JSON.stringify({ product_ids: productIds }),
+    }),
   intakeProduct: (data: Record<string, unknown>) =>
     request('/products/intake', {
       method: 'POST',

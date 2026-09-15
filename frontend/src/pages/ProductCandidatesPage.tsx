@@ -156,6 +156,50 @@ interface ProductIntelligenceResponse {
   } | null
 }
 
+interface NuotaoV3Finding {
+  rule_id: string
+  status: 'pass' | 'fail' | 'pending'
+  detail: string
+}
+
+interface NuotaoV3Evaluation {
+  score_id: string
+  product_id: string
+  nuotao_total: number
+  grade: string | null
+  dimensions: Record<string, number>
+  reject_reasons: NuotaoV3Finding[]
+  dimension_evidence?: Record<string, unknown>
+  funnel_stage?: string | null
+  scored_at?: string | null
+}
+
+const NUOTAO_GRADE_META: Record<string, { label: string; color: string }> = {
+  hero: { label: 'Hero', color: 'green' },
+  core: { label: 'Core', color: 'blue' },
+  long_tail: { label: 'Long-tail', color: 'gold' },
+  reject: { label: 'Reject', color: 'red' },
+}
+
+const FUNNEL_META: Record<string, { label: string; color: string }> = {
+  recalled: { label: '召回', color: 'default' },
+  screened: { label: '初筛', color: 'default' },
+  deep_candidate: { label: '深评', color: 'cyan' },
+  test_candidate: { label: '测试候选', color: 'blue' },
+  testing: { label: '测试中', color: 'orange' },
+  hero: { label: 'Hero', color: 'green' },
+  rejected: { label: '已否决', color: 'red' },
+}
+
+const NUOTAO_DIM_LABELS: Array<[string, string]> = [
+  ['value', 'Value 价值'],
+  ['utility', 'Utility 效用'],
+  ['weight_packability', 'Weight 易运'],
+  ['durability', 'Durability 耐用'],
+  ['brand_fit', 'Brand Fit 品牌'],
+  ['differentiation', 'Differentiation 差异'],
+]
+
 interface IntakeFormValues {
   title: string
   sku?: string
@@ -221,6 +265,9 @@ export default function ProductCandidatesPage() {
   const [intakeOpen, setIntakeOpen] = useState(false)
   const [intakeSubmitting, setIntakeSubmitting] = useState(false)
   const [form] = Form.useForm<IntakeFormValues>()
+  const [nuotaoMap, setNuotaoMap] = useState<Record<string, NuotaoV3Evaluation>>({})
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [v3BatchLoading, setV3BatchLoading] = useState(false)
 
   const loadCandidates = useCallback(async () => {
     setLoading(true)
@@ -231,7 +278,21 @@ export default function ProductCandidatesPage() {
         200,
         0,
       )) as CandidateListResponse
-      setCandidates(response.products || [])
+      const products = response.products || []
+      setCandidates(products)
+      const ids = products.map((product) => product.id)
+      if (ids.length === 0) {
+        setNuotaoMap({})
+      } else {
+        try {
+          const v3 = (await api.getNuotaoV3LatestBatch(ids)) as {
+            items: Record<string, NuotaoV3Evaluation>
+          }
+          setNuotaoMap(v3.items || {})
+        } catch {
+          setNuotaoMap({})
+        }
+      }
     } catch (loadError) {
       setCandidates([])
       setError(apiErrorMessage(loadError))
@@ -434,6 +495,55 @@ export default function ProductCandidatesPage() {
     }
   }
 
+  const evaluateV3 = async (candidate: Candidate) => {
+    setActionLoading(`v3:${candidate.id}`)
+    try {
+      const result = (await api.evaluateNuotaoV3(candidate.id)) as {
+        evaluation: NuotaoV3Evaluation & {
+          funnel_stage: string
+          veto: { failed: string[]; pending: string[]; vetoed: boolean }
+        }
+      }
+      const evaluation = result.evaluation
+      message.success(
+        `V3.0 评估完成：${evaluation.grade || '—'} ${numeric(
+          evaluation.nuotao_total,
+        ).toFixed(1)} 分（${evaluation.funnel_stage}）`,
+      )
+      await loadCandidates()
+      if (detailOpen) await refreshDetail(candidate.id)
+    } catch (actionError) {
+      message.error(`V3.0 评估失败：${apiErrorMessage(actionError)}`)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const evaluateV3Batch = async () => {
+    const ids = selectedRowKeys
+    if (!ids.length) {
+      message.info('请先勾选要评估的候选商品')
+      return
+    }
+    setV3BatchLoading(true)
+    try {
+      const result = (await api.evaluateNuotaoV3Batch(ids)) as {
+        count: number
+        errors: Array<{ product_id: string; error: string }>
+      }
+      const failed = result.errors?.length || 0
+      message.success(
+        `V3.0 批量评估完成 ${result.count} 条${failed ? `，${failed} 条失败` : ''}`,
+      )
+      setSelectedRowKeys([])
+      await loadCandidates()
+    } catch (actionError) {
+      message.error(`批量评估失败：${apiErrorMessage(actionError)}`)
+    } finally {
+      setV3BatchLoading(false)
+    }
+  }
+
   const moveCandidate = (candidate: Candidate, status: CandidateStatus) => {
     const nextLabel = STATUS_META[status].label
     Modal.confirm({
@@ -531,7 +641,7 @@ export default function ProductCandidatesPage() {
         ),
     },
     {
-      title: 'AI 评分',
+      title: '运营分(内部)',
       dataIndex: 'latest_score',
       width: 130,
       render: (score: CandidateScore | null) =>
@@ -549,6 +659,38 @@ export default function ProductCandidatesPage() {
         ) : (
           <Text type="secondary">未评分</Text>
         ),
+    },
+    {
+      title: 'Nuotao 分 / 漏斗',
+      key: 'nuotao_v3',
+      width: 158,
+      render: (_, record) => {
+        const v3 = nuotaoMap[record.id]
+        if (!v3) return <Text type="secondary">未评估</Text>
+        const grade =
+          NUOTAO_GRADE_META[v3.grade || ''] || {
+            label: v3.grade || '—',
+            color: 'default',
+          }
+        const funnel = v3.funnel_stage ? FUNNEL_META[v3.funnel_stage] : null
+        const hardFailed = (v3.reject_reasons || []).filter(
+          (finding) => finding.status === 'fail',
+        ).length
+        return (
+          <div className="primary-cell">
+            <Space size={4} wrap>
+              <Tag color={grade.color}>{grade.label}</Tag>
+              <strong>{numeric(v3.nuotao_total).toFixed(1)}</strong>
+              {hardFailed > 0 && <Tag color="red">否决×{hardFailed}</Tag>}
+            </Space>
+            {funnel && (
+              <Tag color={funnel.color} style={{ marginTop: 2 }}>
+                {funnel.label}
+              </Tag>
+            )}
+          </div>
+        )
+      },
     },
     {
       title: '落地成本',
@@ -579,7 +721,7 @@ export default function ProductCandidatesPage() {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 190,
+      width: 260,
       render: (_, record) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => void openDetail(record)}>
@@ -593,6 +735,15 @@ export default function ProductCandidatesPage() {
             onClick={() => void analyzeCandidate(record)}
           >
             评分
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<ExperimentOutlined />}
+            loading={actionLoading === `v3:${record.id}`}
+            onClick={() => void evaluateV3(record)}
+          >
+            V3评估
           </Button>
           {record.candidate_status === 'candidate' && (
             <Button
@@ -628,6 +779,7 @@ export default function ProductCandidatesPage() {
 
   const detailCandidate = detail?.product
   const detailScore = detail?.score || detailCandidate?.latest_score || null
+  const detailNuotao = detailCandidate ? nuotaoMap[detailCandidate.id] || null : null
   const englishLocalization = detailCandidate?.meta?.localizations?.en
   const englishGenerated = Boolean(englishLocalization?.title)
   const englishApproved = englishLocalization?.status === 'approved'
@@ -663,6 +815,14 @@ export default function ProductCandidatesPage() {
           </Paragraph>
         </div>
         <Space wrap>
+          <Button
+            icon={<ExperimentOutlined />}
+            loading={v3BatchLoading}
+            disabled={selectedRowKeys.length === 0}
+            onClick={() => void evaluateV3Batch()}
+          >
+            V3批量评估{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
+          </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void loadCandidates()} loading={loading}>
             刷新
           </Button>
@@ -748,10 +908,14 @@ export default function ProductCandidatesPage() {
 
         <Table
           rowKey="id"
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys as string[]),
+          }}
           loading={loading}
           columns={columns}
           dataSource={filteredCandidates}
-          scroll={{ x: 1150 }}
+          scroll={{ x: 1320 }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
@@ -1108,6 +1272,102 @@ export default function ProductCandidatesPage() {
                 />
               ) : (
                 <Text type="secondary">暂无来源快照</Text>
+              )}
+            </Card>
+
+            <Card
+              variant="borderless"
+              title={
+                <Space>
+                  <ExperimentOutlined />
+                  <span>Nuotao Score V3.0（品牌双轨评分）</span>
+                  {detailNuotao?.funnel_stage && FUNNEL_META[detailNuotao.funnel_stage] && (
+                    <Tag color={FUNNEL_META[detailNuotao.funnel_stage].color}>
+                      {FUNNEL_META[detailNuotao.funnel_stage].label}
+                    </Tag>
+                  )}
+                </Space>
+              }
+              extra={
+                detailCandidate ? (
+                  <Button
+                    size="small"
+                    icon={<ExperimentOutlined />}
+                    loading={actionLoading === `v3:${detailCandidate.id}`}
+                    onClick={() => void evaluateV3(detailCandidate)}
+                  >
+                    重新评估
+                  </Button>
+                ) : null
+              }
+            >
+              {detailNuotao ? (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space size={16} wrap align="center">
+                    <Tag
+                      color={
+                        (NUOTAO_GRADE_META[detailNuotao.grade || ''] || {}).color || 'default'
+                      }
+                    >
+                      {(NUOTAO_GRADE_META[detailNuotao.grade || ''] || {}).label ||
+                        detailNuotao.grade}
+                    </Tag>
+                    <Text strong style={{ fontSize: 22 }}>
+                      {numeric(detailNuotao.nuotao_total).toFixed(1)}
+                    </Text>
+                    <Text type="secondary">
+                      满分 100 · Value25 / Utility20 / Weight15 / Durability15 / Brand15 / Diff10
+                    </Text>
+                  </Space>
+                  <Row gutter={[12, 10]}>
+                    {NUOTAO_DIM_LABELS.map(([key, label]) => (
+                      <Col span={12} key={key}>
+                        <Text type="secondary">{label}</Text>
+                        <Progress
+                          percent={Math.round(
+                            numeric(detailNuotao.dimensions?.[key]) * 10,
+                          )}
+                          size="small"
+                          strokeColor={scoreColor(
+                            numeric(detailNuotao.dimensions?.[key]) * 10,
+                          )}
+                        />
+                      </Col>
+                    ))}
+                  </Row>
+                  <div>
+                    <Text strong>一票否决 V1–V12（通过 / 待定 / 否决）</Text>
+                    <div style={{ marginTop: 8 }}>
+                      <Space size={[6, 6]} wrap>
+                        {(detailNuotao.reject_reasons || []).map((finding) => (
+                          <Tooltip key={finding.rule_id} title={finding.detail}>
+                            <Tag
+                              color={
+                                finding.status === 'fail'
+                                  ? 'red'
+                                  : finding.status === 'pending'
+                                    ? 'orange'
+                                    : 'green'
+                              }
+                            >
+                              {finding.rule_id} ·{' '}
+                              {finding.status === 'fail'
+                                ? '否决'
+                                : finding.status === 'pending'
+                                  ? '待定'
+                                  : '通过'}
+                            </Tag>
+                          </Tooltip>
+                        ))}
+                      </Space>
+                    </div>
+                  </div>
+                </Space>
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="尚未执行 V3.0 评估，点击右上角“重新评估”生成品牌双轨评分与否决结论"
+                />
               )}
             </Card>
 
