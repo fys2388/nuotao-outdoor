@@ -1,14 +1,17 @@
-name: Check Prod FastAPI Version
+name: Deploy frontend static bundle
 
 on:
   workflow_dispatch:
 
 jobs:
-  check:
-    name: Check production FastAPI version
+  deploy-frontend:
+    name: Deploy tested frontend bundle
     runs-on: ubuntu-latest
     steps:
-      - name: Check FastAPI version
+      - name: Checkout tested bundle
+        uses: actions/checkout@v5
+
+      - name: Back up current frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -16,20 +19,60 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-            echo "=== Production FastAPI version ==="
-            /opt/nuotao/backend/.venv/bin/python -c "import fastapi; print(f'Production FastAPI: {fastapi.__version__}')" 2>&1
+            set -e
+            STAMP=$(date +%Y%m%d%H%M%S)
+            BACKUP_DIR="/root/nuotao-frontend-backups/$STAMP"
+            mkdir -p "$BACKUP_DIR"
+            if [ -d /opt/nuotao/frontend/dist ]; then
+              tar -czf "$BACKUP_DIR/opt-nuotao-frontend-dist.tar.gz" -C /opt/nuotao/frontend dist
+            fi
+            if [ -d /var/www/nuotao ]; then
+              tar -czf "$BACKUP_DIR/var-www-nuotao.tar.gz" -C /var/www nuotao
+            fi
+            echo "$BACKUP_DIR" > /tmp/nuotao_frontend_backup
+            echo "Backup: $BACKUP_DIR"
 
-            echo ""
-            echo "=== Staging FastAPI version ==="
-            /opt/nuotao/staging/backend/.venv/bin/python -c "import fastapi; print(f'Staging FastAPI: {fastapi.__version__}')" 2>&1
+      - name: Upload bundle to admin origin
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: "frontend/dist/**"
+          target: "/opt/nuotao/frontend"
+          strip_components: 1
+          overwrite: true
+          timeout: 120s
 
-            echo ""
-            echo "=== Production app routes count ==="
-            /opt/nuotao/backend/.venv/bin/python -c "
-            import sys; sys.path.insert(0, '/opt/nuotao/backend')
-            from app.main import app
-            routes = [r.path for r in app.routes if hasattr(r, 'path')]
-            print(f'Production routes: {len(routes)}')
-            health = [r for r in routes if 'health' in r or 'ready' in r]
-            print(f'Health routes: {health}')
-            " 2>&1 | tail -5
+      - name: Upload bundle to console static root
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: "frontend/dist/**"
+          target: "/var/www/nuotao"
+          strip_components: 2
+          overwrite: true
+          timeout: 120s
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            chown -R www-data:www-data /opt/nuotao/frontend/dist /var/www/nuotao
+            test -f /opt/nuotao/frontend/dist/index.html
+            test -f /var/www/nuotao/index.html
+            curl -fsS http://127.0.0.1:8081/ >/dev/null
+            echo "Admin bundle:"
+            grep -o 'assets/js/index-[^"]*' /opt/nuotao/frontend/dist/index.html | head -1
+            echo "Console bundle:"
+            grep -o 'assets/js/index-[^"]*' /var/www/nuotao/index.html | head -1
+            echo "Frontend deployment verified"
