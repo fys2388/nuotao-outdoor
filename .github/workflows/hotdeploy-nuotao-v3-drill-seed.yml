@@ -28,7 +28,7 @@ jobs:
 
       - name: Package seed script
         run: |
-          tar -czf v3drill.tgz backend/scripts/nuotao_seed_sample_candidate.py
+          tar -czf v3drill.tgz scripts/nuotao_seed_sample_candidate.py
           tar -tzf v3drill.tgz
 
       - name: Upload
@@ -58,8 +58,8 @@ jobs:
             tar -xzf /tmp/v3drill.tgz -C /opt/nuotao
             rm -f /tmp/v3drill.tgz
             cd /opt/nuotao/backend
-            .venv/bin/python -m py_compile scripts/nuotao_seed_sample_candidate.py && echo compile-ok
-            TARGET_PRODUCT_ID="$TARGET" MODE="$MODE" .venv/bin/python scripts/nuotao_seed_sample_candidate.py
+            .venv/bin/python -m py_compile /opt/nuotao/scripts/nuotao_seed_sample_candidate.py && echo compile-ok
+            TARGET_PRODUCT_ID="$TARGET" MODE="$MODE" PYTHONPATH=/opt/nuotao/backend .venv/bin/python /opt/nuotao/scripts/nuotao_seed_sample_candidate.py
             echo "=== backend health ==="
             curl -s -o /dev/null -w 'readyz=%{http_code}\n' http://127.0.0.1:8000/api/v1/readyz
             echo DONE
