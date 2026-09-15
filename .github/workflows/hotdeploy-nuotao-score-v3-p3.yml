@@ -1,0 +1,128 @@
+name: Hotdeploy Nuotao Score V3.0 P3 Closed Loop (one-off)
+
+# P3 of the V3.0 selection alignment (docs/nuotao_product_score_v3.0.md):
+#  - idempotent post-evaluation handoff: proposed market-test experiment +
+#    human-approval suggestion; Hero nomination; never stacks duplicates
+#  - test loop: start market test (8->3), record KPI result, promote to Hero
+#    (final human gate); thresholds are not hard-coded, every step auditable
+#  - customer-facing public badge: only Core>=75 / Hero, whitelisted fields
+# No new migration (production is already at 0050 head).
+# NOTE: explicit runtime allow-list; tests and local WIP files are NOT shipped.
+on:
+  workflow_dispatch:
+  push:
+    branches: [hotfix/product-soft-delete]
+    paths:
+      - '.github/workflows/hotdeploy-nuotao-score-v3-p3.yml'
+
+jobs:
+  hotdeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package files
+        run: |
+          tar -czf v3p3.tgz \
+            backend/app/services/nuotao_handoff.py \
+            backend/app/services/nuotao_test_loop.py \
+            backend/app/services/nuotao_selection_service.py \
+            backend/app/services/nuotao_report.py \
+            backend/app/api/v1/endpoints/nuotao_selection.py \
+            frontend/src/api/client.ts \
+            frontend/src/pages/ProductCandidatesPage.tsx
+          tar -tzf v3p3.tgz
+
+      - name: Upload package
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: v3p3.tgz
+          target: /tmp
+
+      - name: Apply, verify, restart, build
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            set -eo pipefail
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/v3p3-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+            tar -czf "$BK/before.tgz" \
+              backend/app/services/nuotao_selection_service.py \
+              backend/app/services/nuotao_report.py \
+              backend/app/api/v1/endpoints/nuotao_selection.py \
+              frontend/src/api/client.ts \
+              frontend/src/pages/ProductCandidatesPage.tsx 2>/dev/null || true
+            tar -xzf /tmp/v3p3.tgz -C /opt/nuotao
+            rm -f /tmp/v3p3.tgz
+
+            echo "=== backend compile ==="
+            cd /opt/nuotao/backend
+            .venv/bin/python -m compileall -q app && echo compile-ok
+
+            echo "=== migration current (expect 0050; no new migration) ==="
+            .venv/bin/alembic current
+
+            echo "=== verify new modules + 9 routes ==="
+            .venv/bin/python - <<'PY'
+            from app.main import app
+            import app.services.nuotao_handoff as h
+            import app.services.nuotao_test_loop as t
+            assert hasattr(h, "propose_selection_handoff")
+            assert hasattr(t, "start_market_test")
+            assert hasattr(t, "record_test_result")
+            assert hasattr(t, "promote_to_hero")
+            paths = {r.path for r in app.routes}
+            need = [
+                "/api/v1/selection/nuotao/evaluate",
+                "/api/v1/selection/nuotao/evaluate-batch",
+                "/api/v1/selection/nuotao/{product_id}/latest",
+                "/api/v1/selection/nuotao/latest-batch",
+                "/api/v1/selection/nuotao/{product_id}/report",
+                "/api/v1/selection/nuotao/{product_id}/test/start",
+                "/api/v1/selection/nuotao/{product_id}/test/result",
+                "/api/v1/selection/nuotao/{product_id}/promote-hero",
+                "/api/v1/selection/nuotao/public-badge",
+            ]
+            missing = [x for x in need if x not in paths]
+            assert not missing, f"missing routes {missing}"
+            print("nuotao routes ok:", len(need))
+            PY
+
+            echo "=== restart backend ==="
+            systemctl restart nuotao-backend
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
+            systemctl is-active nuotao-backend
+            [ "$ready" = "200" ] || { journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1; }
+
+            echo "=== frontend build + deploy ==="
+            cd /opt/nuotao/frontend
+            npm install --no-audit --no-fund 2>&1 | tail -3
+            set +e; npm run build > /tmp/fe-v3p3.log 2>&1; BRC=$?; set -e
+            tail -8 /tmp/fe-v3p3.log
+            [ "$BRC" -eq 0 ] || { grep -nE "Could not resolve|error TS|Error" /tmp/fe-v3p3.log | head -40; exit 1; }
+            rm -rf /var/www/nuotao && mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "backend=$bcode console=$ccode backup=$BK"
+            [ "$bcode" = "200" ] && [ "$ccode" = "200" ] || exit 1
+            echo DONE
