@@ -137,3 +137,26 @@ git push --force --tags
 | 2026-09-15 | 恢复 209 项未提交改动期间，扫描发现已跟踪密码脚本 |
 | 同日 | 验证仓库公开、确认 8 文件 + 备份在 origin/main、3 个密码指纹 |
 | 同日 | 解除 9 个路径跟踪、补 `.gitignore`，本地副本核验保留（`0483d10`）|
+| 同日 19:33 | 经用户授权，浏览器登录 Hetzner Console 完成 **root 密码轮换**（Reset root password），旧 3 个泄露值全部失效 |
+| 同日 19:40–19:55 | 三轮只读入侵排查完成，结论见 §8 |
+
+## 8. 入侵排查结论（2026-09-15，三轮只读取证）
+
+**总体判定：未发现入侵成功迹象。**
+
+### 正面证据
+1. **authorized_keys 干净**：仅 2 条公钥，均可溯源——
+   - `hdKNGr…` = 服务器本机 `/root/.ssh/id_ed25519_deploy` 私钥对应公钥（自匹配验证通过），来源 IP 为深圳电信（用户办公网络）；
+   - `VSJR…` = 注释 `github-actions-deploy`，即 GitHub Actions 部署密钥，来源 IP 全部落在微软 Azure 网段（GitHub Runner 托管方），且每次登录后端服务随即滚动重启，行为模式与 hotdeploy 工作流完全吻合。
+2. **无第三方密码登录**：泄露窗口（09-11～09-15）内 `Accepted password` 仅来自两个中国家庭/办公 IP（27.38.x / 183.17.x，均为用户本人设备）；爆破尝试全部失败并被 fail2ban 处置（累计封禁 366 个 IP，当前在封 62 个）。
+3. **系统完整性良好**：`dpkg -V openssh-server` 零输出（sshd 未被篡改）；UID0 仅 root；可登录账号无新增；监听端口与已知服务栈一一对应（nginx/uvicorn/postgres@localhost/redis@localhost/grafana/prometheus 等）；cron 任务全部为项目自动化脚本；`/tmp` 无恶意可执行体（仅 redis_exporter 安装包与若干 API 测试小脚本）。
+4. 主机密钥指纹 `SHA256:USqETxahaI7sm79Vx567wnqvPUDRJX6gdDoWb+FUDP8` 已在取证全程强制校验，排除中间人。
+
+### 遗留风险（待处置）
+| 风险 | 建议 |
+|---|---|
+| `PermitRootLogin yes` + `PasswordAuthentication yes` | 改为 `prohibit-password`，全面转密钥登录（新密码虽强，配置面仍是攻击面） |
+| ufw 处于 inactive | 依赖 fail2ban 单防线；建议启用 ufw 白名单 22/80/443，收紧 3000(grafana)/9090/9093/9094/8001/8002/8060 等直露端口 |
+| 旧密码仍躺在 git 历史 | 按 §6.3 执行 filter-repo（改密已完成，此项现在是纯清理） |
+| Hetzner 账号本身 | 确认已开启 2FA |
+| 运维脚本模式 | 根目录密码类脚本已忽略拦截；今后统一走 CI Secrets |
