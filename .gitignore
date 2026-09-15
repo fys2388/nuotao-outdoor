@@ -176,3 +176,25 @@ frontend/playwright-report/
 
 # 临时附件目录
 .tmp_attach/
+
+# ============================================================
+# 2026-09-15 安全事件：含明文 SSH 凭据的运维脚本禁止入库
+# 背景：8 个根目录脚本硬编码生产 IP + root 密码（共 3 个不同取值），
+#       曾提交到公开仓库 origin/main，现已解除跟踪。
+# 依据 AGENTS.md 4.2：密钥用 Secrets 管理，禁止硬编码与提交仓库。
+# 正确做法：用 infra/generate-secrets.sh 生成 + 环境变量/Secrets 注入；
+#           远程操作走 CI 的 secrets.SSH_PRIVATE_KEY，不用密码登录。
+# 注：既有规则 /test-*.py 用连字符，拦不住下划线命名的 test_*.py，
+#     这是这些脚本当初漏网的原因，故此处显式列出。
+# ============================================================
+/*password*.py
+/enable_password_auth.py
+/fix_root_password.py
+/fix_sha512_password.py
+/reset_admin_password*.py
+/test_password_*.py
+/test_simple_password.py
+
+# 远程登录与凭据探测类脚本（paramiko + 硬编码 host/user/password）
+/ssh_*.py
+/paramiko_*.py
