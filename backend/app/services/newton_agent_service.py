@@ -20,6 +20,7 @@ import hmac
 import hashlib
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -102,6 +103,16 @@ def _deep_find(node: Any, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _redact_secret(text: str) -> str:
+    """脱敏 URL 中的敏感 query 参数（access_token / _aop_signature / secret）。
+
+    1688 网关错误会带完整 URL，直接记日志等于把生产密钥落盘（AGENTS.md 4.2）。
+    """
+    redacted = re.sub(r"([?&]access_token=)[^&]+", r"\1[REDACTED]", text)
+    redacted = re.sub(r"([?&]_aop_signature=)[^&]+", r"\1[REDACTED]", redacted)
+    return redacted
+
+
 def _call_newton_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
     """
     调用牛顿云API（底层网关调用）
@@ -148,7 +159,14 @@ def _call_newton_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
 
     # GET请求，参数通过URL query传递（1688网关标准方式）
     resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT, proxies=proxies)
-    resp.raise_for_status()
+
+    if not resp.ok:
+        # 网关错误信息含完整URL（access_token/_aop_signature 明文），
+        # 直接 raise_for_status 会把密钥写进日志，这里统一脱敏后再抛
+        raise RuntimeError(
+            f"Newton gateway HTTP {resp.status_code} for {method}: "
+            f"{_redact_secret(resp.url)}"
+        )
     return resp.json()
 
 
