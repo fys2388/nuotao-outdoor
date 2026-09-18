@@ -79,6 +79,29 @@ def has_credentials() -> bool:
     return bool(NEWTON_APP_KEY and NEWTON_APP_SECRET)
 
 
+def _deep_find(node: Any, keys: tuple[str, ...]) -> str:
+    """递归在嵌套 dict/list 中查找第一个命中的键值，找不到返回空串。
+
+    牛顿网关响应结构不固定（result/data/content 多层嵌套），
+    直接 .get() 容易漏掉真实 taskId 导致误判为 mock 模式。
+    """
+    if isinstance(node, dict):
+        for key in keys:
+            value = node.get(key)
+            if value not in (None, ""):
+                return str(value)
+        for value in node.values():
+            found = _deep_find(value, keys)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _deep_find(item, keys)
+            if found:
+                return found
+    return ""
+
+
 def _call_newton_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
     """
     调用牛顿云API（底层网关调用）
@@ -166,10 +189,12 @@ def create_agent_task(
 
         data = _call_newton_api("com.alibaba.agent.newtoncloud.task.create", biz_params)
         result = data.get("result", data)
+        # 牛顿网关响应可能嵌套多层（result/data/content），递归找 taskId
+        task_id = _deep_find(result, ("taskId", "task_id"))
         return {
             "success": True,
             "source": "newton_api",
-            "task_id": result.get("taskId", result.get("task_id", "")),
+            "task_id": task_id,
             "status": result.get("status", "created"),
             "message": message,
             "raw": result,
@@ -365,8 +390,23 @@ def await_result(
 
     task_id = create_resp["task_id"]
     if not task_id:
-        # mock模式直接返回结果
-        return fetch_task_result("mock_task")
+        if not is_configured():
+            # 未配置凭证的降级模式：直接返回mock结果，不走网络
+            return _mock_fetch_result(task_id)
+        # 已配置凭证但创建任务未返回task_id：明确报错，
+        # 严禁拿占位taskId去调真实网关（会触发 400 Bad Request）
+        logger.error(
+            "Newton create task succeeded but returned no task_id, raw: %s",
+            create_resp.get("raw"),
+        )
+        return {
+            "success": False,
+            "source": "newton_api",
+            "task_id": "",
+            "status": "FAILED",
+            "error": "牛顿 Agent 创建任务成功但未返回 task_id，请检查 API 响应结构或网关权限",
+            "raw": create_resp.get("raw"),
+        }
 
     # 轮询状态（牛顿API状态为大写：INIT/RUNNING/WAIT_SKILL/WAIT_USER/END/KILL）
     elapsed = 0
