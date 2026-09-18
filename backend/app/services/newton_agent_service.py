@@ -207,8 +207,25 @@ def create_agent_task(
 
         data = _call_newton_api("com.alibaba.agent.newtoncloud.task.create", biz_params)
         result = data.get("result", data)
-        # 牛顿网关响应可能嵌套多层（result/data/content），递归找 taskId
+
+        # 网关业务失败：HTTP 200 但 success=False（如积分不足），此时无 taskId。
+        # 必须在源头捕获并把网关原始错误透出，否则会被误判为 mock 模式。
+        gw_error = (
+            result.get("error")
+            or result.get("errorMsg")
+            or result.get("message")
+        )
         task_id = _deep_find(result, ("taskId", "task_id"))
+        if not task_id and (result.get("success") is False or gw_error):
+            detail = str(gw_error) if gw_error else "网关未返回 taskId"
+            return {
+                "success": False,
+                "source": "newton_api",
+                "task_id": "",
+                "error": f"牛顿网关返回失败：{detail}",
+                "raw": result,
+            }
+
         return {
             "success": True,
             "source": "newton_api",
