@@ -13,6 +13,9 @@ env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
   SERVER_USER: ${{ secrets.SERVER_USER }}
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  # Must be exported into the runner job env for appleboy/ssh-action `envs:`
+  # to forward it into the remote script (secrets are not auto-exported).
+  VOLCENGINE_API_KEY: ${{ secrets.VOLCENGINE_API_KEY }}
 
 jobs:
   ensure-image-gen-env:
