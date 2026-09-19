@@ -24,8 +24,7 @@ jobs:
             echo "=== file meta ==="
             ls -l "$F"; wc -c "$F"; sha256sum "$F"
             echo "=====0052_B64_BEGIN====="
-            base64 -w0 "$F"
-            echo ""
+            base64 "$F"
             echo "=====0052_B64_END====="
             echo "=== heads ==="
             cd /opt/nuotao/backend
