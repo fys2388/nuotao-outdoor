@@ -152,5 +152,9 @@ jobs:
             echo "backend=$bcode"
             ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
             echo "console=$ccode"
-            [ "$bcode" = "200" ] || { echo "ERROR backend health=$bcode"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1 }
+            if [ "$bcode" != "200" ]; then
+              echo "ERROR backend health=$bcode"
+              journalctl -u nuotao-backend -n 40 --no-pager || true
+              exit 1
+            fi
             echo "DONE seedream5-i2i deployed; backup=$BK"
