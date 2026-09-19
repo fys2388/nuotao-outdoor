@@ -1,8 +1,20 @@
 name: Hotdeploy Seedream5 I2I Listing Images (one-off)
 
-# TEMPORARY diagnostic variant: retrieve the authoritative server-side 0052
-# migration as base64 (the DB was migrated with it; it is not in git) and show
-# alembic heads/current. Does NOT deploy anything.
+# Precise hot-deploy for the Seedream 5.0 pro + image-to-image listing-image
+# feature. Ships ONLY the files changed on feat/seedream5-i2i, backs up the
+# current targets first, applies migrations (0052 already live on the server,
+# 0053 adds image_generation_tasks.reference_image), restarts the backend
+# (waits for readyz), then rebuilds/deploys the frontend.
+#
+# Does NOT `git reset --hard`, so unrelated SFTP hotfixes on the server are
+# preserved. Idempotent. The server briefly had an aborted 0051 migration file
+# from an earlier attempt; this run removes it so the Alembic graph has a
+# single head (0053).
+#
+# Run order (manual):
+#   1) ops-image-gen-env.yml          (upsert VOLCENGINE_API_KEY + model/timeout)
+#   2) hotdeploy-seedream5-i2i.yml    (this file)
+# Dispatch both with --ref feat/seedream5-i2i.
 on:
   workflow_dispatch:
 
@@ -10,24 +22,135 @@ jobs:
   hotdeploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch server 0052 migration (base64)
+      - uses: actions/checkout@v4
+
+      - name: Package changed files (preserve backend/ frontend tree)
+        run: |
+          tar -czf seedream5.tgz \
+            backend/app/integrations/image_gen.py \
+            backend/app/models/image_gen.py \
+            backend/app/core/config.py \
+            backend/app/services/image_generation_service.py \
+            backend/app/api/v1/endpoints/image_gen.py \
+            backend/alembic/versions/0052_agent_suggestion_dispatch.py \
+            backend/alembic/versions/0053_image_gen_reference.py \
+            frontend/src/api/client.ts \
+            frontend/src/pages/ProductPipeline.tsx \
+            frontend/src/pages/moduleConfigs.ts
+          echo "--- package ---"; tar -tzf seedream5.tgz
+
+      - name: Upload package to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: seedream5.tgz
+          target: /tmp
+
+      - name: Backup, verify env, apply, migrate, restart, rebuild frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          command_timeout: 3m
+          command_timeout: 20m
           script: |
             set -eo pipefail
-            F=/opt/nuotao/backend/alembic/versions/0052_agent_suggestion_dispatch.py
-            echo "=== file meta ==="
-            ls -l "$F"; wc -c "$F"; sha256sum "$F"
-            echo "=====0052_B64_BEGIN====="
-            base64 "$F"
-            echo "=====0052_B64_END====="
-            echo "=== heads ==="
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            BK=/opt/nuotao/backups/seedream5-$STAMP
+            mkdir -p "$BK"
+            cd /opt/nuotao
+
+            echo "=== 0. preflight: image-gen env must already be upserted ==="
+            ENV_FILE=/opt/nuotao/backend/.env
+            for K in VOLCENGINE_API_KEY IMAGE_GEN_DEFAULT_MODEL IMAGE_GEN_TIMEOUT_SECONDS; do
+              if grep -q "^${K}=" "$ENV_FILE"; then
+                if [ "$K" = "VOLCENGINE_API_KEY" ]; then
+                  V=$(grep "^${K}=" "$ENV_FILE" | head -1 | sed -E "s/^${K}=//; s/'//g")
+                  echo "  $K present, prefix=${V:0:4}***, length=${#V}"
+                else
+                  grep "^${K}=" "$ENV_FILE" | head -1 | sed 's/^/  /'
+                fi
+              else
+                echo "ERROR: $K missing in $ENV_FILE — run ops-image-gen-env.yml first"; exit 1
+              fi
+            done
+
+            echo "=== 1. backup current target files ==="
+            tar -czf "$BK/before.tgz" \
+              backend/app/integrations/image_gen.py \
+              backend/app/models/image_gen.py \
+              backend/app/core/config.py \
+              backend/app/services/image_generation_service.py \
+              backend/app/api/v1/endpoints/image_gen.py \
+              backend/alembic/versions/0052_agent_suggestion_dispatch.py \
+              backend/alembic/versions/0053_image_gen_reference.py \
+              frontend/src/api/client.ts \
+              frontend/src/pages/ProductPipeline.tsx \
+              frontend/src/pages/moduleConfigs.ts 2>/dev/null || true
+            ls -la "$BK"
+
+            echo "=== 2. remove aborted 0051, apply new files ==="
+            rm -f backend/alembic/versions/0051_image_gen_reference.py
+            tar -xzf /tmp/seedream5.tgz -C /opt/nuotao
+            rm -f /tmp/seedream5.tgz
+            ls -l backend/alembic/versions/0052_agent_suggestion_dispatch.py backend/alembic/versions/0053_image_gen_reference.py
+            test ! -e backend/alembic/versions/0051_image_gen_reference.py && echo "0051 removed"
+
+            echo "=== 3. backend syntax check ==="
             cd /opt/nuotao/backend
-            .venv/bin/alembic heads 2>&1 | tail -5 || true
-            echo "=== current ==="
-            .venv/bin/alembic current 2>&1 | tail -3 || true
+            .venv/bin/python -m compileall -q app && echo compile-ok
+
+            echo "=== 4. migration ==="
+            echo "-- heads (must be single 0053):"; .venv/bin/alembic heads 2>&1 | tail -5
+            echo "-- before:"; .venv/bin/alembic current 2>&1 | tail -2
+            .venv/bin/alembic upgrade head 2>&1 | tail -15
+            echo "-- after:"; .venv/bin/alembic current 2>&1 | tail -2
+
+            echo "=== 5. restart backend (wait until ready) ==="
+            systemctl restart nuotao-backend
+            ready=000
+            for i in $(seq 1 25); do
+              ready=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+              echo "attempt $i readyz=$ready"
+              [ "$ready" = "200" ] && break
+              sleep 3
+            done
+            systemctl is-active nuotao-backend
+            echo -n "batch-generate route: "
+            curl -s http://127.0.0.1:8000/openapi.json | grep -o 'image-gen/batch-generate' | head -1 || true
+            if [ "$ready" != "200" ]; then
+              echo "ERROR: backend not ready after restart"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1
+            fi
+
+            echo "=== 6. build frontend ==="
+            cd /opt/nuotao/frontend
+            npm install --no-audit --no-fund 2>&1 | tail -8
+            set +e
+            npm run build > /tmp/fe-seedream5.log 2>&1
+            BRC=$?
+            set -e
+            tail -20 /tmp/fe-seedream5.log
+            if [ "$BRC" -ne 0 ]; then
+              echo "##### FRONTEND BUILD FAILED — backend is already live on the new code; old static assets remain in /var/www/nuotao #####"
+              grep -n -E "Could not resolve|is not exported|externalize|Invalid|failed to load|Error|\.tsx|\.ts" /tmp/fe-seedream5.log | head -50
+              exit 2
+            fi
+
+            echo "=== 7. deploy frontend static ==="
+            rm -rf /var/www/nuotao
+            mkdir -p /var/www/nuotao
+            cp -a dist/. /var/www/nuotao/
+            chown -R www-data:www-data /var/www/nuotao
+            ls /var/www/nuotao | head
+
+            echo "=== 8. final health ==="
+            bcode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
+            echo "backend=$bcode"
+            ccode=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
+            echo "console=$ccode"
+            [ "$bcode" = "200" ] || { echo "ERROR backend health=$bcode"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1 }
+            echo "DONE seedream5-i2i deployed; backup=$BK"

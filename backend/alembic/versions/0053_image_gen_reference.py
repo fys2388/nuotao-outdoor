@@ -1,7 +1,7 @@
 """Add reference_image to image_generation_tasks for I2I generation.
 
-Revision ID: 0051
-Revises: 0050
+Revision ID: 0053
+Revises: 0052
 Create Date: 2026-09-19
 
 Adds the optional source-image URL used by Seedream image-to-image calls so
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0051"
-down_revision = "0050"
+revision = "0053"
+down_revision = "0052"
 branch_labels = None
 depends_on = None
 
