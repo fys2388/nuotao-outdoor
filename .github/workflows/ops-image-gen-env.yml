@@ -1,0 +1,84 @@
+name: Ops - Ensure Image Gen Env (one-off, idempotent)
+
+# One-off operations workflow (manual dispatch): ensures the production
+# backend .env contains the Seedream 5.0 pro image-generation configuration.
+# The local machine is not on the server's SSH allow-list, so this runs
+# through the GitHub Actions runner which is. Safe to run repeatedly:
+# it backs up .env, then upserts keys without printing secret values,
+# and does NOT restart the backend (the normal deploy does that).
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  # Must be exported into the runner job env for appleboy/ssh-action `envs:`
+  # to forward it into the remote script (secrets are not auto-exported).
+  VOLCENGINE_API_KEY: ${{ secrets.VOLCENGINE_API_KEY }}
+
+jobs:
+  ensure-image-gen-env:
+    name: Upsert image-gen vars in production .env
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure env on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          envs: VOLCENGINE_API_KEY
+          script: |
+            set -e
+            ENV_FILE=/opt/nuotao/backend/.env
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "ERROR: $ENV_FILE not found"
+              exit 1
+            fi
+
+            echo "=== backup ==="
+            cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+            ls -1t ${ENV_FILE}.bak.* | head -3
+
+            # upsert KEY VALUE: replace an existing line (single-quoted value)
+            # or append it. Values here contain no single quotes; the secret is
+            # referenced via the runner environment, never echoed.
+            upsert() {
+              KEY="$1"
+              VAL="$2"
+              if grep -q "^${KEY}=" "$ENV_FILE"; then
+                sed -i "s|^${KEY}=.*|${KEY}='${VAL}'|" "$ENV_FILE"
+                echo "  updated $KEY"
+              else
+                printf "%s='%s'\n" "$KEY" "$VAL" >> "$ENV_FILE"
+                echo "  appended $KEY"
+              fi
+            }
+
+            echo "=== upsert image-gen config ==="
+            if [ -z "$VOLCENGINE_API_KEY" ]; then
+              echo "ERROR: VOLCENGINE_API_KEY secret is empty"
+              exit 1
+            fi
+            upsert VOLCENGINE_API_KEY "$VOLCENGINE_API_KEY"
+            upsert IMAGE_GEN_DEFAULT_MODEL "doubao-seedream-5-0-pro-260628"
+            upsert IMAGE_GEN_TIMEOUT_SECONDS "120"
+
+            echo "=== verify (names + masked presence only) ==="
+            for K in VOLCENGINE_API_KEY IMAGE_GEN_DEFAULT_MODEL IMAGE_GEN_TIMEOUT_SECONDS; do
+              if grep -q "^${K}=" "$ENV_FILE"; then
+                if [ "$K" = "VOLCENGINE_API_KEY" ]; then
+                  # show only the fixed prefix and length, never the token
+                  PREVIEW=$(grep "^${K}=" "$ENV_FILE" | head -1 | sed -E "s/^${K}=//; s/'//g")
+                  echo "  $K present, prefix=${PREVIEW:0:4}***, length=${#PREVIEW}"
+                else
+                  grep "^${K}=" "$ENV_FILE" | head -1 | sed 's/^/  /'
+                fi
+              else
+                echo "  $K MISSING"
+                exit 1
+              fi
+            done
+            echo "=== ENV ENSURE DONE (backend restart deferred to normal deploy) ==="
