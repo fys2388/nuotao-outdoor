@@ -5,10 +5,16 @@ backends via a simple adapter pattern; the service layer never talks to a
 specific provider directly.
 
 Backends (Phase 1):
-- ``wan2.7-image`` (default): Alibaba Cloud DashScope / Bailian, ¥0.08/img
-- ``qwen-image-3.0``: Alibaba Cloud, ¥0.18/img (high quality)
-- ``seedream-4.0``: Volcengine Ark, ¥0.22/img
+- ``doubao-seedream-5-0-pro-260628`` (default): Volcengine Ark Seedream 5.0 pro,
+  text-to-image AND image-to-image (reference image via ``image`` field),
+  output ¥0.30/img (≤2.61M px), input image ¥0.02 (first one free per account).
+- ``qwen-image-3.0``: Alibaba Cloud, text-to-image fallback (free quota 10)
 - ``mock``: returns a placeholder for development / tests (no API call)
+
+The Volcengine adapter always sets ``response_format="url"`` and
+``watermark=false`` (listing images must ship without provider watermark) and
+accepts an optional ``reference_image`` URL for I2I product-faithful generation
+(required by the Nuotao listing standard: I2I must reproduce the 1688 original).
 
 Costs are recorded in CNY for budget tracking. The gateway enforces timeout,
 retry (idempotent generation), and fallback to a cheaper model on failure.
@@ -48,32 +54,49 @@ class ImageGenResult:
 # Note: qwen-image models currently have free quota (100/10 images) — cost
 # shown is the normal paid rate after free quota is exhausted.
 BACKEND_PRICING: dict[str, dict[str, Any]] = {
-    # --- Volcengine Seedream (default, free quota available) ---
-    "doubao-seedream-4-0-250828": {
-        "cost_cny": 0.20,
-        "provider": "volcengine",
-        "quality": "high",
-        "default": True,
-        "free_quota": "200 images (new user)",
-        "api_style": "openai_images",
-    },
+    # --- Volcengine Seedream 5.0 pro (default; verified open on the account,
+    # supports text-to-image and image-to-image with a reference image) ---
     "doubao-seedream-5-0-pro-260628": {
         "cost_cny": 0.30,
+        "input_image_cost_cny": 0.02,
         "provider": "volcengine",
         "quality": "very_high",
-        "default": False,
-        "free_quota": "input image first free",
+        "default": True,
+        "supports_i2i": True,
+        "free_quota": "first input image free, then ¥0.02/input; ¥0.30/output",
         "api_style": "openai_images",
     },
+    "doubao-seedream-5-0-lite": {
+        "cost_cny": 0.22,
+        "provider": "volcengine",
+        "quality": "high",
+        "default": False,
+        "supports_i2i": True,
+        "free_quota": "50 images (new user)",
+        "api_style": "openai_images",
+    },
+    # Older Seedream snapshots retained for reference but NOT open on this
+    # account — calls return ModelNotOpen, so they are excluded from the
+    # fallback chain. Open them in the Ark console before re-enabling.
     "doubao-seedream-4-5-251128": {
         "cost_cny": 0.25,
         "provider": "volcengine",
         "quality": "very_high",
         "default": False,
-        "free_quota": "200 images (new user)",
+        "supports_i2i": True,
+        "enabled": False,
         "api_style": "openai_images",
     },
-    # --- Alibaba qwen-image (free quota, but account may be arreared) ---
+    "doubao-seedream-4-0-250828": {
+        "cost_cny": 0.20,
+        "provider": "volcengine",
+        "quality": "high",
+        "default": False,
+        "supports_i2i": True,
+        "enabled": False,
+        "api_style": "openai_images",
+    },
+    # --- Alibaba qwen-image (secondary fallback; free quota, may be arreared) ---
     "qwen-image-2.0-pro-2026-06-22": {
         "cost_cny": 0.5,
         "provider": "alibaba",
@@ -105,12 +128,6 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
         "default": False,
         "api_style": "async_text2image",
     },
-    "seedream-4.0": {
-        "cost_cny": 0.22,
-        "provider": "volcengine",
-        "quality": "high",
-        "default": False,
-    },
     "mock": {
         "cost_cny": 0.0,
         "provider": "mock",
@@ -119,16 +136,20 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
     },
 }
 
-# Fallback chain: Seedream 4.0 (default, 200 free) -> 4.5 (200 free) -> 5.0 pro -> qwen-image -> mock.
+# Default model and fallback chain. Only models actually open on the account
+# belong here: Seedream 5.0 pro (I2I capable) -> qwen-image 3.0 -> mock.
+# Disabled/non-open snapshots must not appear (they burn retries on ModelNotOpen).
+DEFAULT_MODEL = "doubao-seedream-5-0-pro-260628"
 FALLBACK_CHAIN: list[str] = [
-    "doubao-seedream-4-0-250828",
-    "doubao-seedream-4-5-251128",
     "doubao-seedream-5-0-pro-260628",
     "qwen-image-3.0",
     "mock",
 ]
 
-DEFAULT_TIMEOUT_SECONDS = 60.0
+# Timeout / retry defaults. Seedream 5.0 pro I2I at 1536x2048 can take
+# 60-90s on a cold request, so the per-attempt ceiling is 120s (the service
+# layer may override via Settings.image_gen_timeout_seconds).
+DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_RETRIES = 2
 
 
@@ -141,6 +162,8 @@ def list_available_models() -> list[dict[str, Any]]:
             "provider": info["provider"],
             "quality": info["quality"],
             "is_default": info.get("default", False),
+            "enabled": info.get("enabled", True),
+            "supports_i2i": info.get("supports_i2i", False),
         }
         for name, info in BACKEND_PRICING.items()
     ]
@@ -155,10 +178,11 @@ def get_model_cost(model: str) -> float:
 async def generate_image(
     *,
     prompt: str,
-    model: str = "doubao-seedream-4-0-250828",
+    model: str = DEFAULT_MODEL,
     width: int = 1024,
     height: int = 1024,
     negative_prompt: str | None = None,
+    reference_image: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> ImageGenResult:
@@ -170,6 +194,9 @@ async def generate_image(
         width: image width in pixels
         height: image height in pixels
         negative_prompt: optional negative prompt
+        reference_image: optional source image URL for image-to-image
+            (Nuotao standard: pass the 1688 original to keep the product
+            faithful). Backends without I2I support ignore it.
         timeout_seconds: per-request timeout
         max_retries: retry count per backend before fallback
 
@@ -180,20 +207,39 @@ async def generate_image(
         ImageGenError: if all backends in the fallback chain fail.
     """
     # Build the attempt list: requested model first, then fallback chain
-    # (deduped, excluding the requested model if already first).
+    # (deduped, excluding the requested model if already first). Models
+    # flagged enabled=False (not open on the account) are skipped entirely.
     attempt_models = [model]
     for fb in FALLBACK_CHAIN:
         if fb not in attempt_models:
             attempt_models.append(fb)
+    attempt_models = [
+        m
+        for m in attempt_models
+        if m == "mock" or BACKEND_PRICING.get(m, {}).get("enabled", True)
+    ]
 
     last_error: str | None = None
 
     for attempt_model in attempt_models:
+        # I2I cannot silently degrade to a text-only or placeholder backend:
+        # the listing standard requires product-faithful output, and a mock
+        # placeholder is not a product image. If a backend lacks I2I support
+        # (including mock), skip it; when every real backend fails the call
+        # raises so the batch records a real failure instead of backfilling
+        # an unrelated placeholder.
+        if reference_image and not BACKEND_PRICING.get(attempt_model, {}).get("supports_i2i", False):
+            logger.info(
+                "[image_gen] skipping backend=%s for I2I (no reference image support)",
+                attempt_model,
+            )
+            continue
         for retry in range(max_retries + 1):
             try:
                 logger.info(
-                    "[image_gen] generating model=%s attempt=%d/%d width=%d height=%d",
+                    "[image_gen] generating model=%s attempt=%d/%d width=%d height=%d i2i=%s",
                     attempt_model, retry + 1, max_retries + 1, width, height,
+                    bool(reference_image),
                 )
                 result = await _dispatch_to_backend(
                     model=attempt_model,
@@ -201,6 +247,7 @@ async def generate_image(
                     width=width,
                     height=height,
                     negative_prompt=negative_prompt,
+                    reference_image=reference_image,
                     timeout_seconds=timeout_seconds,
                 )
                 logger.info(
@@ -230,6 +277,7 @@ async def _dispatch_to_backend(
     width: int,
     height: int,
     negative_prompt: str | None,
+    reference_image: str | None,
     timeout_seconds: float,
 ) -> ImageGenResult:
     """Dispatch to the appropriate backend adapter."""
@@ -255,6 +303,7 @@ async def _dispatch_to_backend(
             width=width,
             height=height,
             negative_prompt=negative_prompt,
+            reference_image=reference_image,
             timeout_seconds=timeout_seconds,
         )
 
@@ -502,13 +551,21 @@ async def _generate_volcengine(
     width: int,
     height: int,
     negative_prompt: str | None,
+    reference_image: str | None,
     timeout_seconds: float,
 ) -> ImageGenResult:
     """Volcengine Ark image generation adapter (Seedream models).
 
-    Supports two calling modes:
-    1. Direct model name (e.g. doubao-seedream-4.0) — no endpoint setup needed.
-    2. Inference endpoint ID (VOLCENGINE_ARK_ENDPOINT) — for custom deployments.
+    Uses the OpenAI-compatible ``/api/v3/images/generations`` endpoint.
+    Supports:
+    1. Direct model name (e.g. doubao-seedream-5-0-pro-260628) — verified.
+    2. Inference endpoint ID (VOLCENGINE_ARK_ENDPOINT) — custom deployments.
+
+    I2I: when ``reference_image`` is provided it is passed as the ``image``
+    field so the output reproduces the source product (1688 original).
+
+    Listing-safe defaults: ``response_format="url"`` and ``watermark=false``;
+    provider watermarks must never appear on e-commerce images.
 
     Requires ``VOLCENGINE_API_KEY`` env var (via Settings).
     """
@@ -521,18 +578,31 @@ async def _generate_volcengine(
     # Use endpoint ID if configured, otherwise use the model name directly
     model_param = endpoint if endpoint else model
 
+    # Seedream accepts tier tokens ("1K"/"2K"/"4K") and explicit WxH sizes
+    # (verified: 1536x2048 returns exactly 1536x2048). Map the standard
+    # 2048x2048 main-image case to "2K"; pass every other size through.
+    size = f"{width}x{height}"
+    if width == 2048 and height == 2048:
+        size = "2K"
+
+    payload: dict[str, Any] = {
+        "model": model_param,
+        "prompt": prompt,
+        "size": size,
+        "response_format": "url",
+        "watermark": False,
+        "stream": False,
+        "n": 1,
+    }
+    if reference_image:
+        payload["image"] = reference_image
+    if negative_prompt:
+        payload["negative_prompt"] = negative_prompt
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload: dict[str, Any] = {
-        "model": model_param,
-        "prompt": prompt,
-        "size": f"{width}x{height}",
-        "n": 1,
-    }
-    if negative_prompt:
-        payload["negative_prompt"] = negative_prompt
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -546,6 +616,9 @@ async def _generate_volcengine(
             data = resp.json()
             images = data.get("data", [])
             if images and (images[0].get("url") or images[0].get("b64_json")):
+                # Cost = output image; the first input image per account is
+                # free, then ¥0.02/input. We bill output only to stay
+                # conservative for budget guard purposes.
                 return ImageGenResult(
                     image_url=images[0].get("url"),
                     image_b64=images[0].get("b64_json"),

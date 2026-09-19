@@ -242,12 +242,12 @@ class Settings(BaseSettings):
     data_subject_request_due_days: int = 30
 
     # --- M6 Image Generation (pluggable gateway, cost-guarded) --------------
-    # Default model: doubao-seedream-4-0-250828 (Volcengine Ark, 200 free images quota, ¥0.20/img).
-    image_gen_default_model: str = "doubao-seedream-4-0-250828"
+    # Default model: doubao-seedream-5-0-pro-260628 (Volcengine Ark; T2I + I2I, ¥0.30/img, no watermark).
+    image_gen_default_model: str = "doubao-seedream-5-0-pro-260628"
     image_gen_monthly_budget_cny: Decimal = Decimal("100.00")
     image_gen_high_cost_threshold_cny: Decimal = Decimal("0.15")
     image_gen_storage_dir: str = "data/generated_images"
-    image_gen_timeout_seconds: float = 60.0
+    image_gen_timeout_seconds: float = 120.0
     image_gen_max_retries: int = 2
 
     # Image generation API keys (read from .env; never hardcode).

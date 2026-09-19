@@ -444,6 +444,10 @@ export const api = {
     productId: string
     prompt: string
     useCase?: string
+    referenceImage?: string
+    width?: number
+    height?: number
+    model?: string
   }) =>
     request('/image-gen/generate', {
       method: 'POST',
@@ -451,9 +455,10 @@ export const api = {
         product_id: data.productId,
         prompt: data.prompt,
         use_case: data.useCase || 'main_image',
-        model: 'wan2.7-image',
-        width: 1024,
-        height: 1024,
+        model: data.model || 'doubao-seedream-5-0-pro-260628',
+        width: data.width || 2048,
+        height: data.height || 2048,
+        ...(data.referenceImage ? { reference_image: data.referenceImage } : {}),
       }),
       timeoutMs: 300000,
     }),

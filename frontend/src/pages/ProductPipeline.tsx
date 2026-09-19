@@ -33,6 +33,31 @@ const CATEGORY_OPTIONS = [
   { value: '其他', label: '其他' },
 ]
 
+// ---- 生图硬标准（Nuotao 上架规范，禁止擅自降级）----
+// 主图 5 张 1:1 2048x2048、详情图 6 张 3:4 1536x2048；I2I 还原 1688 原图；
+// 全英文 prompt、视觉方向多样化、无水印、无文字。
+const IMAGE_GEN_MODEL = 'doubao-seedream-5-0-pro-260628'
+const IMAGE_GEN_CONCURRENCY = 3
+const MAIN_IMAGE_W = 2048
+const MAIN_IMAGE_H = 2048
+const DETAIL_IMAGE_W = 1536
+const DETAIL_IMAGE_H = 2048
+const MAIN_IMAGE_VARIANTS = [
+  'professional e-commerce main image, pure white background (#FFFFFF), product centered and fully visible, soft studio lighting, ultra sharp photorealistic, no text, no logo, no watermark',
+  'hero catalog image, light gray seamless studio background, slight three-quarter angle, realistic shadow, premium outdoor product photography, no text, no logo, no watermark',
+  'bright clean outdoor campsite lifestyle scene, the product clearly featured as the subject, natural daylight, photorealistic, no text, no logo, no watermark',
+  'front view product image on white with a soft platform shadow, close-up showing material texture and build detail, studio quality, no text, no logo, no watermark',
+  'promotional marketplace main image, clean neutral gradient background, generous negative space around the centered product, high-end photorealistic render, no text, no logo, no watermark',
+]
+const DETAIL_IMAGE_VARIANTS = [
+  'detail page macro close-up of the key material, fabric weave and stitching texture, sharp focus, neutral studio background, vertical composition, no text, no watermark',
+  'detail page close-up of functional hardware, joints, zipper or buckle build quality, macro photography, clean background, vertical 3:4, no text, no watermark',
+  'lifestyle usage scene in a realistic mountain campsite with a person using the product, natural environment, vertical composition, no text, no watermark',
+  'full product hero shot on a soft neutral gradient background for the detail page, vertical 3:4, even studio lighting, photorealistic, no text, no watermark',
+  'size and scale reference scene outdoors among common camping gear, photorealistic, informative product photography, vertical 3:4, no text, no watermark',
+  'feature highlight close-up of a signature functional part in use, clean bright background, professional commercial product shot, vertical 3:4, no text, no watermark',
+]
+
 interface PipelineResult {
   success: boolean
   data: {
@@ -59,62 +84,135 @@ export default function ProductPipeline() {
   const [history, setHistory] = useState<PipelineResult[]>([])
   const [generatingImage, setGeneratingImage] = useState(false)
   const [generatedImages, setGeneratedImages] = useState<string[]>([])
+  const [detailImages, setDetailImages] = useState<string[]>([])
+  const [sourceImages, setSourceImages] = useState<string[]>([])
+  const [genProgress, setGenProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const [batchQueue, setBatchQueue] = useState<any[]>([])
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0)
   const [importUrl, setImportUrl] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [autoRunPipeline, setAutoRunPipeline] = useState(false)
 
-  // 生成主图
+  // 取 1688 原图作为 I2I 参考图（上架标准：生成图必须还原原图产品）
+  const getReferenceImage = (): string => {
+    const pick = (arr: any): string => {
+      if (!Array.isArray(arr)) return ''
+      const found = arr
+        .map((x: any) => (typeof x === 'string' ? x : x?.src))
+        .find((u: any) => typeof u === 'string' && u.startsWith('http'))
+      return found || ''
+    }
+    return (
+      pick(pipelineResult?.data?.steps?.input?.data?.images) ||
+      pick(pipelineResult?.data?.steps?.listing_data?.data?.images) ||
+      sourceImages.find((u) => u.startsWith('http')) ||
+      ''
+    )
+  }
+
+  // 单张生成：独立请求避免批量长连接被代理超时切断；I2I 失败直接计失败，绝不降级 mock
+  const generateOneImage = async (
+    prompt: string, useCase: string, width: number, height: number, reference: string,
+  ): Promise<string> => {
+    const resp = await fetch('/api/v1/image-gen/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        use_case: useCase,
+        model: IMAGE_GEN_MODEL,
+        width,
+        height,
+        ...(reference ? { reference_image: reference } : {}),
+      }),
+    })
+    const data = await resp.json()
+    if (!resp.ok || !data.success) {
+      throw new Error(data?.detail || data?.error || data?.task?.error_message || 'image generation failed')
+    }
+    if (data.mock) throw new Error('后端仅返回 mock 占位图（未配置真实生图模型），已中止')
+    const url = data?.task?.image_url
+    if (!url || typeof url !== 'string') throw new Error(data?.task?.error_message || '图片 URL 为空')
+    return url
+  }
+
+  // 有界并发跑一组变体，结果按索引归位；单张失败不影响其他
+  const runImageBatch = async (
+    basePrompt: string, variants: string[], useCase: string,
+    width: number, height: number, reference: string,
+    setUrls: (updater: (prev: string[]) => string[]) => void,
+  ): Promise<(string | null)[]> => {
+    const results: (string | null)[] = new Array(variants.length).fill(null)
+    let cursor = 0
+    const worker = async () => {
+      for (;;) {
+        const i = cursor
+        cursor += 1
+        if (i >= variants.length) return
+        const prompt = `${basePrompt} ${variants[i]}`.trim()
+        try {
+          const url = await generateOneImage(prompt, useCase, width, height, reference)
+          results[i] = url
+          setUrls((prev) => { const next = [...prev]; next[i] = url; return next })
+        } catch (e: any) {
+          results[i] = null
+          console.error('image variant', i, 'failed:', e?.message)
+        } finally {
+          setGenProgress((prev) => ({ done: prev.done + 1, total: prev.total }))
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(IMAGE_GEN_CONCURRENCY, variants.length) }, worker))
+    return results
+  }
+
+  // 一键生成：主图 5 张 2048x2048 + 详情图 6 张 1536x2048，全部 I2I 还原 1688 原图
   const handleGenerateImage = async () => {
-    if (!pipelineResult?.data?.steps?.prompt?.data?.main_image_prompt) {
+    const promptData = pipelineResult?.data?.steps?.prompt?.data
+    const mainPrompt = promptData?.main_image_prompt
+    const detailPrompt = promptData?.detail_image_prompt
+    if (!mainPrompt) {
       message.error('请先运行工作流生成生图Prompt')
       return
     }
-
+    const reference = getReferenceImage()
+    if (!reference) {
+      message.warning('未找到 1688 原图，将退化为纯文生图；上架标准要求 I2I 还原原图，建议先从 1688 导入')
+    }
     try {
       setGeneratingImage(true)
-      const prompt = pipelineResult.data.steps.prompt.data.main_image_prompt
+      setGeneratedImages(new Array(MAIN_IMAGE_VARIANTS.length).fill(''))
+      setDetailImages(new Array(DETAIL_IMAGE_VARIANTS.length).fill(''))
+      setGenProgress({ done: 0, total: MAIN_IMAGE_VARIANTS.length + DETAIL_IMAGE_VARIANTS.length })
 
-      const resp = await fetch('/api/v1/image-gen/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: prompt,
-          use_case: 'main_image',
-          model: 'wan2.7-image',
-          width: 1024,
-          height: 1024,
-        }),
-      })
-      const data = await resp.json()
+      const mainUrls = await runImageBatch(
+        mainPrompt, MAIN_IMAGE_VARIANTS, 'main_image', MAIN_IMAGE_W, MAIN_IMAGE_H, reference, setGeneratedImages,
+      )
+      const detailUrls = await runImageBatch(
+        detailPrompt || mainPrompt, DETAIL_IMAGE_VARIANTS, 'detail_image', DETAIL_IMAGE_W, DETAIL_IMAGE_H, reference, setDetailImages,
+      )
 
-      if (data.task || data.id) {
-        const task = data.task || data
-        const imageUrl = task.image_url || task.local_path || ''
-        if (imageUrl) {
-          setGeneratedImages(prev => [...prev, imageUrl])
-          // 自动回填到上架数据
-          if (pipelineResult?.data?.steps?.listing_data?.data) {
-            const updatedResult = { ...pipelineResult }
-            if (!updatedResult.data.steps.listing_data.data.images) {
-              updatedResult.data.steps.listing_data.data.images = []
-            }
-            updatedResult.data.steps.listing_data.data.images.push({
-              src: imageUrl,
-              name: `main_image_${Date.now()}`,
-            })
-            setPipelineResult(updatedResult)
-          }
-          message.success('主图生成成功，已自动回填到上架数据')
-        } else {
-          message.warning('图片生成成功，但URL不可用')
-        }
+      const mainOk = mainUrls.filter(Boolean).length
+      const detailOk = detailUrls.filter(Boolean).length
+
+      if (mainOk + detailOk > 0 && pipelineResult?.data?.steps?.listing_data?.data) {
+        const images: any[] = []
+        mainUrls.forEach((u, i) => u && images.push({ src: u, name: `main_image_${i + 1}`, type: 'main' }))
+        detailUrls.forEach((u, i) => u && images.push({ src: u, name: `detail_image_${i + 1}`, type: 'detail' }))
+        const updated = { ...pipelineResult }
+        updated.data.steps.listing_data.data.images = images
+        setPipelineResult(updated)
+      }
+
+      if (mainOk === 0 && detailOk === 0) {
+        message.error('所有图片生成失败，请检查生图模型配置或参考图后重试')
+      } else if (mainOk < MAIN_IMAGE_VARIANTS.length || detailOk < DETAIL_IMAGE_VARIANTS.length) {
+        message.warning(`部分成功：主图 ${mainOk}/${MAIN_IMAGE_VARIANTS.length}，详情图 ${detailOk}/${DETAIL_IMAGE_VARIANTS.length}，可重新生成补齐`)
       } else {
-        message.error(data.error || '图片生成失败')
+        message.success(`图片生成完成：主图 ${mainOk} 张 + 详情图 ${detailOk} 张，已回填上架数据`)
       }
     } catch (e: any) {
-      message.error(e.message || '图片生成失败')
+      message.error(e?.message || '图片生成失败')
     } finally {
       setGeneratingImage(false)
     }
@@ -227,6 +325,9 @@ export default function ProductPipeline() {
         })
 
         message.success(`已从1688导入商品：${productInfo.name || '未知商品'}（SKU: ${productInfo.sku || '未生成'}，图片: ${productInfo.images?.length || 0}张）`)
+        if (Array.isArray(productInfo.images)) {
+          setSourceImages(productInfo.images.filter((u: any) => typeof u === 'string' && u.startsWith('http')))
+        }
 
         // 如果自动运行工作流
         if (autoRunPipeline && result.data?.pipeline_result) {
@@ -675,7 +776,7 @@ export default function ProductPipeline() {
                       <Card size="small" title="生图Prompt" extra={
                         <Space>
                           <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={handleGenerateImage} loading={generatingImage} disabled={!pipelineResult.data.steps?.prompt?.data}>
-                            一键生图
+                            一键生图(5主图+6详情)
                           </Button>
                           <Button size="small" icon={<PictureOutlined />} onClick={() => {
                             const promptData = {
@@ -721,23 +822,28 @@ export default function ProductPipeline() {
                                 },
                               ]}
                             />
-                            {/* 生成的图片预览 */}
-                            {generatedImages.length > 0 && (
+                            {/* 生成的图片预览：主图(5, 1:1 2048) + 详情图(6, 3:4 1536x2048) */}
+                            {(generatedImages.some(Boolean) || detailImages.some(Boolean)) && (
                               <>
                                 <Divider style={{ margin: '16px 0' }} />
                                 <div>
-                                  <Text strong>已生成图片（{generatedImages.length}张，已自动回填到上架数据）：</Text>
+                                  <Text strong>主图（{generatedImages.filter(Boolean).length}/5，2048x2048，已回填上架数据）：</Text>
                                   <Row gutter={[16, 16]} style={{ marginTop: '12px' }}>
-                                    {generatedImages.map((url, i) => (
-                                      <Col span={8} key={i}>
-                                        <img
-                                          src={url}
-                                          alt={`Generated ${i + 1}`}
-                                          style={{ width: '100%', height: '150px', objectFit: 'cover', borderRadius: '8px', cursor: 'pointer' }}
-                                          onClick={() => window.open(url, '_blank')}
-                                        />
+                                    {generatedImages.map((url, i) => url ? (
+                                      <Col span={8} key={`m${i}`}>
+                                        <img src={url} alt={`Main ${i + 1}`} style={{ width: '100%', aspectRatio: '1/1', objectFit: 'cover', borderRadius: '8px', cursor: 'pointer' }} onClick={() => window.open(url, '_blank')} />
                                       </Col>
-                                    ))}
+                                    ) : null)}
+                                  </Row>
+                                </div>
+                                <div style={{ marginTop: '16px' }}>
+                                  <Text strong>详情图（{detailImages.filter(Boolean).length}/6，1536x2048）：</Text>
+                                  <Row gutter={[16, 16]} style={{ marginTop: '12px' }}>
+                                    {detailImages.map((url, i) => url ? (
+                                      <Col span={8} key={`d${i}`}>
+                                        <img src={url} alt={`Detail ${i + 1}`} style={{ width: '100%', aspectRatio: '3/4', objectFit: 'cover', borderRadius: '8px', cursor: 'pointer' }} onClick={() => window.open(url, '_blank')} />
+                                      </Col>
+                                    ) : null)}
                                   </Row>
                                 </div>
                               </>
@@ -745,7 +851,10 @@ export default function ProductPipeline() {
                             {generatingImage && (
                               <div style={{ textAlign: 'center', padding: '20px' }}>
                                 <Spin size="large" />
-                                <Paragraph type="secondary" style={{ marginTop: '8px' }}>AI正在生成主图，请稍候...</Paragraph>
+                                <Paragraph type="secondary" style={{ marginTop: '8px' }}>
+                                  AI 正在以 I2I 批量生成主图(5)+详情图(6)，已完成 {genProgress.done}/{genProgress.total}，约需数分钟...
+                                </Paragraph>
+                                <Progress percent={genProgress.total ? Math.round((genProgress.done / genProgress.total) * 100) : 0} size="small" style={{ maxWidth: 320, margin: '8px auto 0' }} />
                               </div>
                             )}
                           </>
