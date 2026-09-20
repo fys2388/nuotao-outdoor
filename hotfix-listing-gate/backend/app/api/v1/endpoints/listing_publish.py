@@ -145,7 +145,8 @@ async def push_product_to_woocommerce_gated(
             raise HTTPException(
                 status_code=502,
                 detail={
-                    "gate": "passed" if force else gate["status"],
+                    "gate": gate["status"],
+                    "forced": bool(force),
                     "action": action,
                     "sku": product.sku,
                     "message": "推送到 WooCommerce 失败",
@@ -191,7 +192,8 @@ async def push_product_to_woocommerce_gated(
         return {
             "success": True,
             "action": action,
-            "gate": "passed" if force else "passed",
+            "gate": gate["status"],
+            "gate_reasons": gate["reasons"],
             "forced": bool(force),
             "product_id": str(product.id),
             "sku": product.sku,
