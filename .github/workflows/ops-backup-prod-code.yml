@@ -30,6 +30,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           command_timeout: 15m
+          env: |
+            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           script: |
             set -eo pipefail
             STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -70,7 +72,7 @@ jobs:
             git add -A
             git commit -q -m "prod live code backup $STAMP"
             git branch -M backup/prod-code
-            git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/fys2388/nuotao-outdoor.git"
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/fys2388/nuotao-outdoor.git"
             git push --force --quiet origin backup/prod-code
             echo "PUSHED -> backup/prod-code (stamp=$STAMP)"
 
