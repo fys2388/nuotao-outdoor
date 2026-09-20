@@ -144,3 +144,4 @@ releases/
 *.bak-*.ts
 *.tgz
 *.xlsx
+*.bak-*
