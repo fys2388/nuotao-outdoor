@@ -300,7 +300,14 @@ class AgentScheduler:
         await self._restore_state()
         logger.info("Agent调度器启动，检查间隔: %ds，已注册任务: %d", self.check_interval, len(SCHEDULED_TASKS))
         for name, task in SCHEDULED_TASKS.items():
-            logger.info("  - %s @ %02d:%02d: %s", name, task["hour"], task["minute"], task["description"])
+            # Interval tasks have hour=None, so %02d would raise TypeError
+            # inside the logging formatter (a per-startup traceback that
+            # buries real errors).
+            if task["hour"] is not None:
+                schedule = f"{task['hour']:02d}:{task['minute']:02d}"
+            else:
+                schedule = f"每{task['interval_minutes']}分钟"
+            logger.info("  - %s @ %s: %s", name, schedule, task["description"])
 
         try:
             while self._running:
