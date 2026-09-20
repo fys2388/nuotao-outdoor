@@ -236,19 +236,27 @@ class AgentScheduler:
         restored = 0
         try:
             r = create_redis_client()
-            for name, task in SCHEDULED_TASKS.items():
-                raw = r.get(self._state_key(name))
-                if raw is None:
-                    continue
-                try:
-                    payload = json.loads(raw)
-                    last_run = payload.get("last_run")
-                    if last_run:
-                        task["last_run"] = datetime.fromisoformat(last_run)
-                        task["run_count"] = int(payload.get("run_count", 0))
-                        restored += 1
-                except (ValueError, TypeError):
-                    logger.warning("调度状态解析失败，忽略: %s", name)
+            try:
+                for name, task in SCHEDULED_TASKS.items():
+                    # create_redis_client() returns a redis.asyncio client, so
+                    # .get()/.set() are coroutines. Without await, `raw` is the
+                    # coroutine object itself (never None), json.loads() raises
+                    # TypeError, and every task logged "调度状态解析失败" while
+                    # restoring 0/6 - the state never reached Redis.
+                    raw = await r.get(self._state_key(name))
+                    if raw is None:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                        last_run = payload.get("last_run")
+                        if last_run:
+                            task["last_run"] = datetime.fromisoformat(last_run)
+                            task["run_count"] = int(payload.get("run_count", 0))
+                            restored += 1
+                    except (ValueError, TypeError):
+                        logger.warning("调度状态解析失败，忽略: %s", name)
+            finally:
+                await r.aclose()
         except Exception:
             logger.exception("调度状态恢复失败，降级为无状态启动")
         logger.info("调度状态恢复完成: %d/%d 个任务", restored, len(SCHEDULED_TASKS))
@@ -258,13 +266,16 @@ class AgentScheduler:
         """把 last_run 持久化到 Redis（best-effort，失败不阻塞任务）。"""
         try:
             r = create_redis_client()
-            r.set(
-                self._state_key(name),
-                json.dumps(
-                    {"last_run": task["last_run"].isoformat(), "run_count": task.get("run_count", 0)}
-                ),
-                ex=60 * 60 * 24 * 7,  # 7 天，足以跨越任何发布窗口
-            )
+            try:
+                await r.set(
+                    self._state_key(name),
+                    json.dumps(
+                        {"last_run": task["last_run"].isoformat(), "run_count": task.get("run_count", 0)}
+                    ),
+                    ex=60 * 60 * 24 * 7,  # 7 天，足以跨越任何发布窗口
+                )
+            finally:
+                await r.aclose()
         except Exception:
             logger.exception("调度状态持久化失败: %s", name)
 
