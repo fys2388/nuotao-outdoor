@@ -32,6 +32,11 @@ on:
   push:
     branches: [hotfix/listing-gate]
 
+# A later push supersedes an earlier run of this one-off hotfix.
+concurrency:
+  group: listing-gate-hotfix
+  cancel-in-progress: true
+
 jobs:
   hotfix:
     name: Patch gate on production
@@ -64,17 +69,24 @@ jobs:
           port: 22
           command_timeout: 25m
           script: |
-            set -eo pipefail
+            # NOTE: no `set -o pipefail` - dash 0.5.11 (Ubuntu 22.04) rejects it
+            # with "Illegal option" and the whole script dies on line 1.
+            set -eu
             export PYTHONIOENCODING=utf-8
             export LANG=C.UTF-8
             BACKEND=/opt/nuotao/backend
             FRONTEND=/opt/nuotao/frontend
             PY="$BACKEND/.venv/bin/python"
             TMPLOG=/tmp/deploy-listing-gate.log
-            LOG=/var/www/nuotao/deploy-listing-gate.log
+            # /assets/ is the one nginx location that serves real files; every
+            # other path falls through to the SPA index.html.
+            LOG=/var/www/nuotao/assets/deploy-listing-gate.log
             : > "$TMPLOG"
             exec > "$TMPLOG" 2>&1
-            mirror() { cp -f "$TMPLOG" "$LOG" 2>/dev/null || true; chown www-data:www-data "$LOG" 2>/dev/null || true; }
+            mirror() {
+              cp -f "$TMPLOG" "$LOG" 2>/dev/null || true
+              chown www-data:www-data "$LOG" 2>/dev/null || true
+            }
 
             echo "########## listing-gate hotfix started $(date -u +%FT%TZ) ##########"
             cd /opt/nuotao
