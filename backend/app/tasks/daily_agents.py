@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -38,6 +39,19 @@ logger = logging.getLogger(__name__)
 # 该值应 >= 调度任务的最小间隔，否则会误伤窗口内的合法建议。
 DEDUP_WINDOW_MINUTES = 30
 
+# 各 Agent 分析的产品状态范围。两个 Agent 处于业务流水线的不同阶段，
+# 所以状态集不同，不能共用一个常量。
+#
+# 产品分析师在「选品评分」阶段工作：候选池是 draft + candidate —— 产品还没
+# 上架才需要分析师判断要不要做。active 产品已过决策点，不属于选品范围。
+# 供应链经理在「补货预警」阶段工作：只关心已决定要做的产品（candidate 正在
+# 筹备、active 正在销售），draft 尚未立项，不需要备货建议。
+#
+# 此前两者都硬编码 status == "active"。prod 实际数据为 38 个产品
+# (draft=37, candidate=1, active=0)，两个 Agent 每次都拿到空集、产出 0 条建议。
+ANALYST_PRODUCT_STATUSES = ("draft", "candidate")
+SUPPLY_CHAIN_PRODUCT_STATUSES = ("candidate", "active")
+
 
 class _DedupSuggestionService:
     """调度路径的建议创建适配器：自动附加幂等键。
@@ -48,15 +62,31 @@ class _DedupSuggestionService:
     结果就是重复建议被批量灌入 ``pending_approval`` 审批队列。
 
     本适配器不改任何调用点，只在中间层把
-    ``{agent_id}:{suggestion_type}:{epoch_slot}`` 作为 ``dedup_key`` 透传给
-    服务层；服务层命中唯一约束时返回既有行。窗口外的新建议照常创建。
+    ``{agent_id}:{suggestion_type}:{entity}:{epoch_slot}`` 作为 ``dedup_key``
+    透传给服务层；服务层命中唯一约束时返回既有行。窗口外的新建议照常创建。
+
+    ``entity`` 是被建议作用的业务对象标识（product_id / campaign_id / title
+    的 sha256 前 12 位）。必须包含它，否则同一窗口内针对不同产品的建议会被
+    折叠成一行：一次调度生成 3 条「库存预警」时，第 2、3 条会命中第 1 条的
+    dedup_key 并返回同一行，后两个产品的补货建议静默丢失，而上层仍报
+    ``suggestions_created=3``。取哈希前缀是为了让 key 长度恒定于
+    ``dedup_key`` 列的 ``varchar(191)`` 约束之内。
     """
 
     window_minutes: int = DEDUP_WINDOW_MINUTES
 
     async def create_suggestion(self, session: AsyncSession, *, workspace_id=None, **kwargs: Any):
+        params = kwargs.get("execution_params") or {}
+        entity = (
+            params.get("product_id")
+            or params.get("campaign_id")
+            or kwargs.get("title")
+            or ""
+        )
+        entity_hash = hashlib.sha256(str(entity).encode("utf-8")).hexdigest()[:12]
         dedup_key = (
             f"{kwargs.get('agent_id')}:{kwargs.get('suggestion_type')}:"
+            f"{entity_hash}:"
             f"{int(datetime.now(UTC).timestamp()) // (self.window_minutes * 60)}"
         )
         return await _suggestion_svc.create_suggestion(
@@ -639,12 +669,12 @@ async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
     
     workspace_id = DEFAULT_WORKSPACE_ID
     
-    # 1. 获取所有active产品
+    # 1. 获取选品候选池（draft + candidate）
     product_rows = (
         await session.execute(
             select(Product).where(
                 Product.workspace_id == workspace_id,
-                Product.status == "active",
+                Product.status.in_(ANALYST_PRODUCT_STATUSES),
             )
         )
     ).scalars().all()
@@ -776,12 +806,12 @@ async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
 
     workspace_id = DEFAULT_WORKSPACE_ID
     
-    # 1. 获取所有active产品
+    # 1. 获取已立项产品（candidate + active）
     product_rows = (
         await session.execute(
             select(Product).where(
                 Product.workspace_id == workspace_id,
-                Product.status == "active",
+                Product.status.in_(SUPPLY_CHAIN_PRODUCT_STATUSES),
             )
         )
     ).scalars().all()
