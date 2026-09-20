@@ -42,7 +42,8 @@ services:
   scheduler:
     build:
       context: ./backend
-    command: ["python", "-m", "app.scheduler"]
+    # v1.1 修正：`python -m app.scheduler` 被 `app/scheduler/` 包遮蔽（实际跑 AlertScheduler）
+    command: ["python", "-m", "app.services.agent_scheduler"]
     volumes:
       - ./backend/app:/app/app
     environment: *dev-env

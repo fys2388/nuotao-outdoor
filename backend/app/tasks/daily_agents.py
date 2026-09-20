@@ -18,14 +18,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from decimal import Decimal
-from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.customer import CustomerProfile
 from app.models.marketing import Campaign
-from app.services import agent_suggestion_service
+from app.services import agent_suggestion_service as _suggestion_svc
 from app.services.report_truthfulness import (
     CampaignMetric,
     SegmentMetric,
@@ -34,8 +34,40 @@ from app.services.report_truthfulness import (
 
 logger = logging.getLogger(__name__)
 
-# 默认工作区（与 agent_suggestion_service 保持一致）
-DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
+# 幂等窗口（分钟）：同一窗口内重复生成的建议只落库一次。
+# 该值应 >= 调度任务的最小间隔，否则会误伤窗口内的合法建议。
+DEDUP_WINDOW_MINUTES = 30
+
+
+class _DedupSuggestionService:
+    """调度路径的建议创建适配器：自动附加幂等键。
+
+    ``app.services.agent_scheduler`` 由 systemd 以 ``Restart=always`` 托管，
+    其 ``last_run`` 状态此前只存在进程内存里。任何重启（发布、OOM、维护）
+    都会让所有间隔任务在首轮全部触发；而本模块的建议生成原本没有幂等键，
+    结果就是重复建议被批量灌入 ``pending_approval`` 审批队列。
+
+    本适配器不改任何调用点，只在中间层把
+    ``{agent_id}:{suggestion_type}:{epoch_slot}`` 作为 ``dedup_key`` 透传给
+    服务层；服务层命中唯一约束时返回既有行。窗口外的新建议照常创建。
+    """
+
+    window_minutes: int = DEDUP_WINDOW_MINUTES
+
+    async def create_suggestion(self, session: AsyncSession, *, workspace_id=None, **kwargs: Any):
+        dedup_key = (
+            f"{kwargs.get('agent_id')}:{kwargs.get('suggestion_type')}:"
+            f"{int(datetime.now(UTC).timestamp()) // (self.window_minutes * 60)}"
+        )
+        return await _suggestion_svc.create_suggestion(
+            session, dedup_key=dedup_key, workspace_id=workspace_id, **kwargs
+        )
+
+
+# 模块内所有 `agent_suggestion_service.create_suggestion(...)` 调用点经由
+# 上面的适配器自动获得幂等键；API/人工路径不受影响（仍直连服务层）。
+agent_suggestion_service = _DedupSuggestionService()
+
 # 营销活动默认 ROAS 目标（低于该值视为低绩效，生成优化建议）
 DEFAULT_TARGET_ROAS = Decimal("3.0")
 

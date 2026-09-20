@@ -18,16 +18,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
 from typing import Any, Callable, Coroutine
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
+from app.core.redis import create_redis_client
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.services import agent_suggestion_service, execution_router, feedback_loop
 
 logger = logging.getLogger(__name__)
@@ -179,7 +181,6 @@ async def feedback_learning_task(session: AsyncSession) -> dict[str, Any]:
 async def business_alerts_task(session: AsyncSession) -> dict[str, Any]:
     """业务预警自动评估。"""
     from app.services import business_alert_service
-    DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
     alerts = await business_alert_service.evaluate_business_alerts(
         session,
@@ -218,10 +219,59 @@ class AgentScheduler:
         self.check_interval = check_interval
         self._running = False
         self._task: asyncio.Task | None = None
+        self._state_key_prefix = "nuotao:scheduler:task:"
+
+    def _state_key(self, name: str) -> str:
+        """任务状态在 Redis 中的键（进程重启后 last_run 不丢失）。"""
+        return f"{self._state_key_prefix}{name}"
+
+    async def _restore_state(self) -> int:
+        """从 Redis 恢复各任务的 last_run，消除重启后的首轮全量重跑。
+
+        调度器由 systemd 以 ``Restart=always`` 托管，此前 ``last_run`` 只存在
+        进程内存里；任何重启（发布、OOM、维护）都会让所有间隔任务在首轮全部
+        触发，把重复建议灌入审批队列。恢复失败不影响调度本身，只降级为
+        无状态启动（等价于原先行为）。
+        """
+        restored = 0
+        try:
+            r = create_redis_client()
+            for name, task in SCHEDULED_TASKS.items():
+                raw = r.get(self._state_key(name))
+                if raw is None:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                    last_run = payload.get("last_run")
+                    if last_run:
+                        task["last_run"] = datetime.fromisoformat(last_run)
+                        task["run_count"] = int(payload.get("run_count", 0))
+                        restored += 1
+                except (ValueError, TypeError):
+                    logger.warning("调度状态解析失败，忽略: %s", name)
+        except Exception:
+            logger.exception("调度状态恢复失败，降级为无状态启动")
+        logger.info("调度状态恢复完成: %d/%d 个任务", restored, len(SCHEDULED_TASKS))
+        return restored
+
+    async def _save_last_run(self, name: str, task: dict[str, Any]) -> None:
+        """把 last_run 持久化到 Redis（best-effort，失败不阻塞任务）。"""
+        try:
+            r = create_redis_client()
+            r.set(
+                self._state_key(name),
+                json.dumps(
+                    {"last_run": task["last_run"].isoformat(), "run_count": task.get("run_count", 0)}
+                ),
+                ex=60 * 60 * 24 * 7,  # 7 天，足以跨越任何发布窗口
+            )
+        except Exception:
+            logger.exception("调度状态持久化失败: %s", name)
 
     async def start(self):
         """启动调度器（阻塞）。"""
         self._running = True
+        await self._restore_state()
         logger.info("Agent调度器启动，检查间隔: %ds，已注册任务: %d", self.check_interval, len(SCHEDULED_TASKS))
         for name, task in SCHEDULED_TASKS.items():
             logger.info("  - %s @ %02d:%02d: %s", name, task["hour"], task["minute"], task["description"])
@@ -284,6 +334,7 @@ class AgentScheduler:
         """执行单个定时任务。"""
         task["last_run"] = datetime.now(UTC)
         task["run_count"] = task.get("run_count", 0) + 1
+        await self._save_last_run(name, task)
 
         try:
             async with async_session_factory() as session:
@@ -326,6 +377,7 @@ class AgentScheduler:
                         result = await target_task["func"](session)
                     target_task["last_run"] = datetime.now(UTC)
                     target_task["run_count"] = target_task.get("run_count", 0) + 1
+                    await self._save_last_run(target_name, target_task)
                     target_task["last_result"] = result
                     target_task["last_error"] = None
                     logger.info("🤝 协作任务完成: %s, 结果: %s", target_name, _summarize_result(result))

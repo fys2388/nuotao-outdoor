@@ -75,15 +75,23 @@ AGENT_CONFIGS = {
         ),
     },
     "customer-service-manager": {
-        "agent_id": "customer_service_manager",
-        "agent_name": "Customer Service Manager",
-        "prompt_name": "AGENT_CUSTOMER_SERVICE_MANAGER",
-        "task_type": "customer_service_agent",
+        # URL key is kept as `customer-service-manager` so existing clients do
+        # not break, but the internal identity is the canonical `customer_manager`.
+        # The former `customer_service_manager` was a forked 11th identity whose
+        # prompt row was never created, so this endpoint failed with
+        # PromptNotFoundError on every call. See
+        # docs/agent_team_workflow_refactor.md §1.1.
+        "agent_id": "customer_manager",
+        "agent_name": "Customer Manager",
+        "prompt_name": "AGENT_CUSTOMER_MANAGER",
+        "task_type": "customer_agent",
         "trigger": "api:customer-service-manager:analyze",
         "system_instruction": (
-            "You are the Nuotao Outdoor Customer Service Manager. Analyze the provided customer "
+            "You are the Nuotao Outdoor Customer Manager. Analyze the provided customer "
             "service context and respond with ONLY a JSON object containing response suggestions, "
-            "satisfaction improvement ideas, escalation recommendations, and trend analysis."
+            "satisfaction improvement ideas, escalation recommendations, and trend analysis. "
+            "Outbound copy must pass forbidden-word / sensitive-word / brand-voice checks; "
+            "escalate to a human instead of guessing."
         ),
     },
     "business-analyst": {

@@ -42,11 +42,14 @@ jobs:
             cd /opt/nuotao/backend
             source .venv/bin/activate
 
-            echo "=== 1. Generating Alembic migration ==="
-            alembic revision --autogenerate -m "add agent_suggestions and growth_memories tables" 2>&1 || echo "Migration file may already exist, continuing..."
-
-            echo "=== 2. Running alembic upgrade head ==="
+            echo "=== 1. Running alembic upgrade head ==="
+            # 注意：不在生产环境执行 `alembic revision --autogenerate`。
+            # 迁移文件在仓库内版本化（backend/alembic/versions/），生产只消费。
+            # 本地开发仍可用 autogenerate 生成新迁移后提交 PR。
             alembic upgrade head 2>&1
+
+            echo "=== 2. Seeding agent config (idempotent) ==="
+            python3 /opt/nuotao/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] seed failed (non-blocking)"
 
             echo "=== 3. Verifying new tables ==="
             DB_URL=$(grep '^DATABASE_URL=' .env | cut -d'=' -f2-)
@@ -106,7 +109,26 @@ jobs:
             systemctl restart nuotao-agent-scheduler
             sleep 3
 
-            echo "=== 4. Verifying scheduler is running ==="
+            echo "=== 4. Installing AI Agent Worker (previously had no systemd unit) ==="
+            WORKER_SERVICE=/etc/systemd/system/nuotao-agent-worker.service
+            WORKER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-worker.service
+            if [ -f "$WORKER_TEMPLATE" ]; then
+              cp "$WORKER_TEMPLATE" "$WORKER_SERVICE"
+              chmod 644 "$WORKER_SERVICE"
+              echo "[worker] installed versioned template"
+            elif [ ! -f "$WORKER_SERVICE" ]; then
+              echo "❌ 模板与既有服务均不存在，无法安装 Worker"
+              exit 1
+            else
+              echo "[worker] template missing, keeping existing service"
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker|' "$WORKER_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-agent-worker 2>/dev/null || true
+            systemctl restart nuotao-agent-worker
+            sleep 3
+
+            echo "=== 5. Verifying scheduler + worker are running ==="
             if systemctl is-active --quiet nuotao-agent-scheduler; then
               echo "✅ Scheduler is running (systemd)"
               systemctl status nuotao-agent-scheduler --no-pager | head -6
@@ -116,11 +138,22 @@ jobs:
               exit 1
             fi
 
-            echo "=== 5. Single-process check (no cron double-run) ==="
-            PROC_COUNT=$(pgrep -fc "app.services.agent_scheduler" || true)
-            echo "agent_scheduler processes: $PROC_COUNT (期望 1)"
+            if systemctl is-active --quiet nuotao-agent-worker; then
+              echo "✅ Worker is running (systemd)"
+              systemctl status nuotao-agent-worker --no-pager | head -6
+            else
+              echo "❌ Worker is NOT running"
+              journalctl -u nuotao-agent-worker -n 30 --no-pager || true
+              exit 1
+            fi
 
-            echo "=== Scheduler setup completed ==="
+            echo "=== 6. Single-process check (no cron double-run) ==="
+            echo "agent_scheduler processes: $(pgrep -fc 'app.services.agent_scheduler' || true) (期望 1)"
+            echo "agent_worker processes:    $(pgrep -fc 'app.worker' || true) (期望 1)"
+            echo "worker heartbeat keys:"
+            redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "  (redis not available)"
+
+            echo "=== Scheduler + Worker setup completed ==="
 
       - name: Verify deployment
         if: ${{ github.event.inputs.verify_deployment == 'true' }}
@@ -149,19 +182,30 @@ jobs:
             FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/ || true)
             echo "Frontend: HTTP $FRONTEND_CODE"
 
-            echo "=== 4. Scheduler status ==="
+            echo "=== 4. Scheduler + Worker status ==="
             if ps aux | grep -v grep | grep "agent_scheduler" > /dev/null; then
                 echo "✅ Agent scheduler: running"
             else
                 echo "⚠️ Agent scheduler: not running"
             fi
+            if ps aux | grep -v grep | grep -w "app.worker" > /dev/null; then
+                echo "✅ Agent worker: running"
+            else
+                echo "⚠️ Agent worker: not running"
+            fi
 
             echo "=== 5. System services ==="
             systemctl is-active nuotao-backend 2>/dev/null && echo "✅ nuotao-backend: active" || echo "❌ nuotao-backend: inactive"
+            systemctl is-active nuotao-agent-scheduler 2>/dev/null && echo "✅ nuotao-agent-scheduler: active" || echo "❌ nuotao-agent-scheduler: inactive"
+            systemctl is-active nuotao-agent-worker 2>/dev/null && echo "✅ nuotao-agent-worker: active" || echo "❌ nuotao-agent-worker: inactive"
             systemctl is-active postgresql 2>/dev/null && echo "✅ postgresql: active" || echo "❌ postgresql: inactive"
             systemctl is-active nginx 2>/dev/null && echo "✅ nginx: active" || echo "❌ nginx: inactive"
 
-            echo "=== 6. Crontab ==="
+            echo "=== 6. Agent identity + worker registry ==="
+            redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "(redis not available)"
+            redis-cli --raw KEYS 'nuotao:scheduler:*' 2>/dev/null | head -5 || echo "(no scheduler state keys yet)"
+
+            echo "=== 7. Crontab ==="
             crontab -l 2>/dev/null || echo "(empty)"
 
             echo ""

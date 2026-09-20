@@ -94,6 +94,14 @@ class AgentSuggestion(Base, TimestampMixin, WorkspaceMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending_approval", index=True, comment="建议状态"
     )
+    # 幂等键：调度任务按 {agent_id}:{suggestion_type}:{时间窗} 生成，
+    # 保证 systemd Restart=always 后首轮重跑不会重复灌建议。
+    # NULL 表示非调度路径（API/人工）产生，不参与唯一约束。
+    dedup_key: Mapped[str | None] = mapped_column(
+        String(191),
+        nullable=True,
+        comment="幂等键 {agent_id}:{suggestion_type}:{window}；NULL 表示非调度路径产生",
+    )
     approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="审批人")
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approval_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="审批意见")
@@ -139,6 +147,13 @@ class AgentSuggestion(Base, TimestampMixin, WorkspaceMixin):
         __import__("sqlalchemy").Index(
             "ix_agent_suggestions_type_status",
             "workspace_id", "suggestion_type", "status",
+        ),
+        # 部分唯一索引：仅约束 dedup_key 非空的调度路径建议，历史行不受影响
+        __import__("sqlalchemy").Index(
+            "uq_agent_suggestions_dedup",
+            "workspace_id", "dedup_key",
+            unique=True,
+            postgresql_where=__import__("sqlalchemy").text("dedup_key IS NOT NULL"),
         ),
     )
 

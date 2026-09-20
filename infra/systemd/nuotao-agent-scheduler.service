@@ -5,7 +5,10 @@ Wants=postgresql.service redis.service
 
 [Service]
 Type=simple
-User=root
+# v1.1: 由 root 改为 nuotao，与 backend/worker 权限模型一致
+# （AGENTS.md §4.3 最小权限；调度器无需写系统区）
+User=nuotao
+Group=nuotao
 WorkingDirectory=/opt/nuotao/backend
 Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/opt/nuotao/backend/.env
@@ -15,6 +18,13 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nuotao-agent-scheduler
+
+# 安全限制（与 nuotao-backend.service 对齐）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
 
 [Install]
 WantedBy=multi-user.target

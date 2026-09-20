@@ -1,0 +1,31 @@
+[Unit]
+Description=Nuotao AI Agent Worker (Redis Streams consumer: claim/policy/budget/concurrency/retry)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=nuotao
+Group=nuotao
+WorkingDirectory=/opt/nuotao/backend
+Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/nuotao/backend/.env
+# AGENT_WORKER_ID must be unique per process when scaling; empty => auto
+# worker-{hostname}-{pid}. See docs/agent_team_workflow_refactor.md.
+Environment="AGENT_WORKER_CONCURRENCY=4"
+ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nuotao-agent-worker
+
+# 安全限制（与 nuotao-backend.service 对齐）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
+
+[Install]
+WantedBy=multi-user.target

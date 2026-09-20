@@ -99,7 +99,10 @@ services:
   scheduler:
     build:
       context: ./backend
-    command: ["python", "-m", "app.scheduler"]
+    # v1.1 修正：`python -m app.scheduler` 被 `app/scheduler/` 包遮蔽，
+    # 实际运行的是 app/scheduler/__main__.py 的 AlertScheduler，而非 Agent 调度器。
+    # 详见 docs/agent_team_workflow_refactor.md
+    command: ["python", "-m", "app.services.agent_scheduler"]
     environment: *backend-env
     depends_on:
       postgres:
