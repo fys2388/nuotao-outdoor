@@ -221,3 +221,205 @@
 ## 步骤记录
 
 （测试过程中追加）
+
+### 第 2 轮：推送链路加固（2026-09-20 07:4x–08:1x UTC）
+
+**最终闭环结果：后端链路全通，前端 UI 拿到真实 200，DB 与 WC 双向一致。**
+
+| 时间 (UTC) | 事件 |
+|---|---|
+| 08:09:15 | 闸门 `needs_review` → HTTP 409（UI 弹「未通过 V3.0 选品闸门，需要人工复核」） |
+| 08:09:15 | 点击「我已人工复核，强制放行」→ `POST .../push-woocommerce?force=true` |
+| 08:10:01 | 后端写入 `listing_published_at` |
+| 08:10:02 | nginx `200 550`；前端 toast「已推送：商品」 |
+
+总耗时 47s（含 Cloudflare 抖动重试），前端 120s 超时内，不再出现假超时。
+
+**最终一致状态（权威读回）**
+
+| 项 | DB | WooCommerce 2106 |
+|---|---|---|
+| `woocommerce_id` | `2106` ✅（此前始终为 `None`） | — |
+| `listing_published_by` | `listing_publish_gate` ✅ | — |
+| `listing_published_price` | `15.8` ✅ | `regular_price: '15.8'` ✅ |
+| `listing_published_at` | `2026-09-20T08:10:01Z` ✅ | — |
+| 分类 | — | `Camping (id 223)` ✅（此前为 `Lighting`） |
+| SKU | `NT-YUEYE-OUTDOO-09200123` | 同；`x-wp-total = 1`（**无重复**，幂等成立） |
+| 长/短描述 | — | 1000 / 114 字符 ✅ |
+| 标签 | — | 12 个 ✅ |
+| 库存 | — | `instock` + `manage_stock` + 100 ✅ |
+
+#### 本轮新增 bug 与修复
+
+| 编号 | 问题 | 影响 | 修复 |
+|---|---|---|---|
+| BUG-05 | 前端「零售价」列对全部 27 行显示「缺失」，即使 `meta.sale_price` 存在 | 展示层误导，运营无法核对价格 | **未修**。取值链为 `meta.localizations.en.price` → `meta.price`，而真实价格在 `meta.sale_price`（字符串 `"15.80"`）。后端 `resolve_prices` 已正确读到，故不影响闸门与推送 |
+| BUG-06 | Cloudflare 在 TLS 握手中途断开（`SSLEOFError(8, UNEXPECTED_EOF_WHILE_READING)`），单次窗口内 4/8 失败 | 推送随机假失败 | `_wc_call` 对 `ConnectionError`/`Timeout`/5xx 重试；4xx 立即抛出 |
+| BUG-07 | 重试**非幂等**：WC 已提交后连接被撕断，重试撞 400 `product_invalid_sku` → 假失败，且 `woocommerce_id` 从未落库 | 重试反而造成长期假未同步 | `_find_wc_id_by_sku` 按 SKU 认领既有产品，把 create 降级为 update |
+| BUG-08 | `categories: [{"name": "Camping"}]` 被 WC **静默忽略**，产品留在 `Uncategorized` | 分类 10 分全丢 | `_ensure_wc_category`：GET 列表解析 term id，不存在则 POST 创建，推送 `[{"id": N}]` |
+| BUG-09 | `_TITLE_CATEGORY_RULES` 用子串匹配，`Lightweight` 含 `light` → Moon Chair 被分到 `Lighting` | 分类 10 分且语义错误 | 词边界正则 `\b(...)\b` + `light(?!weight\|\s+weight)` 负向前瞻（11/11 用例通过） |
+| BUG-10 | 502 响应丢弃 WC 错误体，前端只看到"请求失败" | 无法定位根因 | `_wc_error_detail` 提取 `(status, body[:1000])`，502 detail 附 `woocommerce_status` / `woocommerce_error` / `attempts` / `submitted_payload` |
+| BUG-11 | 前端 axios 默认 30s 超时 < 后端最坏 75s，后端已 200 但 UI 报「请求超时，请检查网络或后端服务状态」 | 用户看到假失败 | `ProductPublish.tsx` 推送调用显式 `{ method: 'POST', timeoutMs: 120000 }` |
+| **BUG-12** | **`product.meta = meta` 对 JSON 列完全无效**：`flush()` 一条 UPDATE 都不发，`woocommerce_id` 每次推送都被静默丢弃 | **最严重**。整条推送链路看似成功、实则从不上报 WC id | 见下 |
+
+#### BUG-12 根因（实测定位，非推断）
+
+`Product.meta` 映射为 `mapped_column(AI_JSON)`，而 `app/models/` 全目录**没有任何 `MutableDict` / `MutableList`**。
+
+逐步排除，全部用真实产品行 + 可回滚测试键验证：
+
+1. `source_url`（普通字符串列）ORM 写入 → **正常持久化** → 排除"数据库只读/副本"假设；
+2. `p.meta = meta`（同对象）→ 不写入；`p.meta = dict(meta)`（新对象）→ 不写入；原地改 dict 不重赋值 → 不写入；
+3. 挂 `before_cursor_execute` 事件监听：`await s.flush()` **只发出初始 SELECT，零 UPDATE** → 不是"发了但被回滚"，是 ORM 根本认为无变更；
+4. `flag_modified(p, "meta")` → **写入成功**；bulk `update(Product).values(meta=...)` → **写入成功**。
+
+结论：必须显式 `flag_modified(product, "meta")`。这是 SQLAlchemy 对非可追踪 JSON 列的官方用法。
+
+> 附带发现（待查）：同样的 `product.meta = meta` 写法出现在
+> `woocommerce_sync_service.py` 第 949 / 1152 / 1193 行。若同一行为在 legacy 同步链路也成立，
+> 则**整个旧同步路径也从未持久化过 `woocommerce_id`**。本轮未逐一验证，登记为待查项，不据此改动生产代码。
+
+#### 本轮部署
+
+- 备份：`/opt/nuotao/backups/listing-gate-<stamp>/`（每次部署前逐个 `cp -a`）
+- 新增/替换：`listing_gate.py`、`listing_publish.py`、`ProductPublish.tsx`（1 处，锚点唯一才替换）
+- 校验：`compileall` → `systemctl restart nuotao-backend` → `/api/v1/readyz = 200`
+  → 前端 `npm run build` → 部署 `/var/www/nuotao` → grep 确认三处改动均在线上
+- 注：`/readyz` 在 404，正确健康端点是 `/api/v1/readyz`（首轮部署脚本误用，已修正认知）
+
+## 诚实评分：65 / 100（B+），**未达到 A++**
+
+```
+[+] 10  标题
+[+] 20  长描述        1000 字符
+[+] 10  短描述
+[ ] 15  主图          payload images=None
+[+] 10  价格          '15.8'
+[+] 10  分类          Camping (id 223)
+[ ]  5  品牌          DB 无 brand 来源
+[+]  5  SEO 标签      12 个
+[ ] 10  可购买性      weight=None dimensions=None（管道实际下发值）
+[ ]  5  属性          build_wc_payload 完全不产出 attributes
+                   65 / 100
+```
+
+> **纠正上一轮的 75 分**：那 10 分可购买性来自我在诊断期对 WC 2106 手工 PUT 的
+> `weight=0.900` / `dimensions`，**管道本身从未产出这些值**。分类当时还是错的 `Lighting`。
+
+### A++ 缺口无法诚实补齐 —— 数据源头缺失，不是代码 bug
+
+目标产品（`product_pipeline` 来源）在库内：
+
+```
+product.weight_kg = None      product.dimensions = None
+product.tags      = []        product.attributes = {}
+meta.images       = None      meta.brand = None
+meta.source_id    = None      meta.source_url = None
+```
+
+`meta.source = "product_pipeline"`，但 `source_id` / `source_url` 均为 `None`，
+即**没有 1688 源头链接可回抓**。`woocommerce_draft_payloads`、`creative_assets` 表 0 行。
+WC 侧 `wp/v2/media` 用 WC key 认证返回 `invalid_username`，只能走 `images: [{"src": url}]`。
+
+按 AGENTS.md「禁止凭感觉」，主图（15）、品牌（5）、可购性（10）、属性（5）
+共 **35 分缺口不能靠编造数据补上**。这是数据管道上游断点，需产品侧决策。
+
+### 遗留问题（需决策，不自行处置）
+
+1. **WC 2106 携带诊断残留数据**：`weight='0.900'`、`dimensions={60×40×115}`、`stock_quantity=100`
+   来自我诊断期的手工 PUT。管道 payload 实际下发 `weight=None / dimensions=None`，
+   WC 因此保留旧值。这属于线上商品数据污染，需确认是清除还是保留。
+2. **`product.status = draft`** → payload `status='draft'` → WC 产品为 `draft`，
+   **前台商店不可见**。若要"上架"需将产品状态推进为 `active`（涉及 M5.13 状态机与审批，未擅自改动）。
+3. **BUG-05**（前端零售价列全显示「缺失」）未修，属展示层。
+4. **legacy `woocommerce_sync_service.py` 三处 `product.meta = meta`** 未验证、未改动。
+5. **INFO 级日志在线上不可见**：服务日志级别为 WARNING，本轮"Adopting existing product" /
+   "Linked WooCommerce product" 等关键动作 INFO 行全部被过滤，直接导致 BUG-07/BUG-12 排查多绕数轮。
+   建议线上后端日志级别调到 INFO（配置项，非代码）。
+
+## 第 3 轮：上游数据管道断点定位（2026-09-20 08:4x UTC）
+
+> 决策：①先修上游管道 ②清除 WC 残留 ③保持 draft。
+
+### BUG-13：管道算出的媒体/分类数据从不落库（已修复并上线）
+
+`product_pipeline_service.py` 内部链路：
+
+| 函数 | 产出 |
+|---|---|
+| `_fetch_1688_product` | `name / category / price / weight / dimensions / images[:10] / source_url / source_id` |
+| `_generate_listing_data` | `images`（1688 原图 + AI 生图）、`main_images`、`tags`、`categories` |
+| `run_v3_gate` | **只取了 `sku / name / description / weight_kg`，其余全部丢弃** |
+
+`listing_data` 仅作为 `steps_result["listing_data"]` 返回给调用方，**从未写入产品行**。
+`build_wc_payload` 对 `images / attributes / brand / weight / dimensions` 的条件式映射其实早已写对，
+只是上游永远给不出数据。
+
+**全量普查（28 行）**：`have images=0 / tags=0 / attributes=0 / brand=0 / weight_kg=0 / dimensions=0`。
+**A++ 缺口是系统性的，不是单个产品的问题。**
+
+**修复（已部署，备份 `listing-gate-20260920T084121Z`）**
+
+1. `listing_gate.py` 新增 4 个纯函数：`normalise_listing_images` / `normalise_listing_tags`
+   / `parse_dimensions` / `collect_attributes`，全部返回空而非编造；
+   `parse_dimensions` 对 `60*40*115`、`60 x 40 x 115`、`60,40,115 cm`、`尺寸 60*40*115` 均正确解析，
+   不足 3 个数值一律返回 `None`。
+2. `run_v3_gate` 锚点补丁（落在 626–666 行）：把 `listing_data.main_images`、`listing_data.tags`、
+   `collect_attributes(product_info)`、`parse_dimensions(product_info.dimensions)` 写入产品行，
+   并对每个 JSON 列调用 `flag_modified`（沿用第 2 轮已在线上验证的模式）。
+3. `build_wc_payload` 属性映射放开单值属性：原 `len(value) > 1` 会丢弃全部非变体属性，
+   即使命中属性也是 0。现 `1 <= len(options) <= 10`，属性总数封顶 8，图片封顶 10。
+
+**验证**：readyz 200、模块导入通过、`chair → Camping`、`lantern → Lighting`（第 2 轮修复未回退）；
+单值属性与图片进入 payload 均为 `True`。
+
+### BUG-12 结论修正
+
+第 2 轮判定"`product.meta = meta` 静默丢写、必须 `flag_modified`"。第 3 轮用同一产品行复测：
+在标准 `async with async_session_factory()` 会话中，`tags / attributes / dimensions / meta`
+**四种写法（原地改 / 新对象 / `flag_modified` / bulk update）全部持久化成功**。
+真正失效的是我测试脚本里 `s = async_session_factory()` + 手动 `s.close()` 的会话生命周期。
+
+结论：`flag_modified` 不是通用必需项，但在第 2 轮的端点路径上确实是让 `woocommerce_id` 落库的那一步，
+且防御性无害。**线上代码保持 `flag_modified` 不动。**
+
+### BUG-14：A++ 缺口的真正根因 —— 1688 开放平台凭据 ACL 失效（需人工处理）
+
+对一条带 `source_url` 的产品跑**生产环境的真实抓取**（无 LLM 调用、不写任何产品行）：
+
+```
+success : False
+error   : 'gw.APIACLDecline: AppKey is not allowed(acl)
+           （开放平台：gw.APIACLDecline: AppKey is not allowed(acl)）'
+data_source : 1688_open_api
+stderr:  1688 product detail failed: gw.APIACLDecline: AppKey is not allowed(acl)
+```
+
+**1688 Open API 的 AppKey 已失去 ACL 授权**，抓取返回 `success=False`、无 `product_info`。
+这就是全部 28 个产品都没有图片/属性/重量/品牌的根本原因，**不是代码 bug，无法从代码侧修复**，
+需在 1688 开放平台后台为当前 AppKey 重新申请/开通商品详情接口 ACL 权限。
+
+同时发现：**18 条"有 source_url"的产品全部指向同一个 1688 offer `771641344658`**
+（`NT-QINGYE-OUTDOO-09181748`、`NT-HIGH-MOON-09181750`、`NT-HIGH-MOON-09181827`、
+`NT-WILDFU-MOON-09191408` 等），属重复建档，需另开清理任务。
+
+### 未解决：WC 残留无法用合法路径清除
+
+`weight='0.900'`、`dimensions={60×40×115}` 两次尝试清除均失败：
+
+| 尝试 | 结果 |
+|---|---|
+| 顶层 `{"weight":"","length":"","width":"","height":""}` | 200，但值未变（且嵌套结构写错） |
+| 嵌套空串 `{"dimensions":{"length":"","width":"","height":""}}` | 200，值未变 |
+| 嵌套 null | **400** `rest_invalid_type: dimensions[length] is not of type string` |
+
+WooCommerce REST v3 中空字符串语义是「不修改」，null 被类型校验拒绝——
+**无法通过 PUT 清空 `weight` / `dimensions`**。而 AGENTS.md §1.4 明令「禁止直接改其数据库」。
+残留只能保留（已在评分中剔除，不计入 10 分可购性），或删除后重建产品（会丢 permalink 与 term 关联，未获授权）。
+
+### 当前诚实状态
+
+- 同步链路闭环：**完成**。DB ↔ WC ↔ UI 三环一致（前端「WC 已同步」0 → 1，目标行「已同步 #2106」「已推送」）。
+- A++：**65 / 100（B+），未达到**。缺口 35 分（主图 15 + 可购性 10 + 品牌 5 + 属性 5）。
+- 阻塞项：BUG-14（1688 AppKey ACL）——外部凭据问题，需人工到 1688 开放平台处理。
+- BUG-13 修复已上线，**一旦 1688 权限恢复并重跑管道，图片/属性/重量将自动落库**，无需再改代码。

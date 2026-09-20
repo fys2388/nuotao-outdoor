@@ -202,6 +202,177 @@ def _map_category(category: str | None) -> str | None:
     return None
 
 
+# When the sourcing pipeline did not persist a category, WooCommerce would file
+# the product under "Uncategorized" - a 10-point completeness loss. These rules are
+# matched against the already-approved English title, so the assignment is derived
+# from reviewed copy rather than from the raw Chinese product name.
+# Each entry is a list of regex fragments matched with word boundaries against the
+# approved English title. "light" carries a negative lookahead: both the token
+# "lightweight" and the prose "light weight" describe product weight, not lighting.
+_TITLE_CATEGORY_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("lamp", r"light(?!weight|\s+weight)", "lantern", "torch", "headlamp"), "Lighting"),
+    (("tent", r"sleeping\s+bag", "pillow", "mattress", "hammock", "cot"), "Sleep"),
+    (("cook", "pot", "pan", "stove", "kettle", "bottle", "cup"), "Cookware"),
+    (("backpack", "raincoat", "bag"), "Bags"),
+    (("knife", "multitool", "axe", "tool"), "Tools"),
+    (("jacket", "shirt", "pants", "sock", "hat"), "Apparel"),
+    (("shoe", "boot", "sandal"), "Footwear"),
+)
+# Storefront default for this outdoor DTC store when no rule applies.
+_DEFAULT_CATEGORY = "Camping"
+
+
+def category_for_product(product: Any, title: str) -> str | None:
+    """Resolve a WooCommerce category name for ``product``.
+
+    Prefers the source category, then an approved-title match, then the store
+    default. Never returns ``None`` for a product with a title, because a product
+    without a category lands in "Uncategorized".
+    """
+    mapped = _map_category(getattr(product, "category", None))
+    if mapped:
+        return mapped
+    haystack = str(title or "").lower()
+    if not haystack:
+        return None
+    # Word boundaries are mandatory: "Lightweight" contains "light" but is not a
+    # lighting product, and a naive substring test sends every moon chair to the
+    # Lighting category.
+    for keywords, category in _TITLE_CATEGORY_RULES:
+        pattern = r"\b(" + "|".join(keywords) + r")\b"
+        if re.search(pattern, haystack):
+            return category
+    return _DEFAULT_CATEGORY
+
+
+# WooCommerce attribute limits kept small on purpose: attributes are a
+# completeness signal, not a data dump.
+_MAX_ATTRIBUTES = 8
+_MAX_ATTRIBUTE_OPTIONS = 10
+_MAX_IMAGES = 10
+
+
+def normalise_listing_images(raw: Any) -> list[dict[str, str]]:
+    """Normalise pipeline image shapes into WooCommerce ``[{"src": url}]``.
+
+    Accepts strings, ``{"src": ...}``, ``{"url": ...}`` and ``{"image_url": ...}``.
+    Returns an empty list rather than guessing: an unparsable image entry is
+    dropped instead of being replaced with a placeholder.
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    images: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(
+                item.get("src") or item.get("url") or item.get("image_url") or ""
+            ).strip()
+        else:
+            continue
+        if text:
+            images.append({"src": text})
+    return images
+
+
+def normalise_listing_tags(raw: Any) -> list[str]:
+    """Normalise pipeline tags (``[{"name": ...}]`` or ``["..."]``) to strings."""
+    if not isinstance(raw, list):
+        return []
+    tags: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            text = str(item.get("name") or item.get("slug") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text and text not in tags:
+            tags.append(text)
+    return tags
+
+
+def parse_dimensions(raw: Any) -> dict[str, float] | None:
+    """Turn a 1688 dimension string such as ``60*40*115`` into WC mm values.
+
+    Returns ``None`` when the input has fewer than three numeric parts. Numbers
+    are never invented: a dimension that cannot be parsed is omitted rather than
+    guessed, because a wrong dimension ships a wrong freight estimate.
+    """
+    if isinstance(raw, dict):
+        parsed: dict[str, float] = {}
+        for key in ("length", "width", "height"):
+            value = _num(raw.get(key))
+            if value:
+                parsed[key] = value
+        return parsed or None
+    if raw is None:
+        return None
+    parts = re.split(r"[*/x×,，\s]+", str(raw).strip())
+    numbers: list[float] = []
+    for part in parts:
+        cleaned = re.sub(r"[^0-9.]", "", part)
+        if not cleaned:
+            continue
+        try:
+            numbers.append(float(cleaned))
+        except ValueError:
+            continue
+    if len(numbers) >= 3:
+        return {"length": numbers[0], "width": numbers[1], "height": numbers[2]}
+    return None
+
+
+def collect_attributes(product_info: dict[str, Any]) -> dict[str, list[str]]:
+    """Collect real attribute pairs from pipeline ``product_info``.
+
+    Reads the raw 1688 ``attributes`` list and the fields the pipeline already
+    derived from it (materials / dimensions / weight). Returns ``{}`` when the
+    source had none - never synthesised.
+    """
+    collected: dict[str, list[str]] = {}
+
+    def _add(label: Any, value: Any) -> None:
+        text = str(label or "").strip()
+        if not text:
+            return
+        bucket = collected.setdefault(text, [])
+        if value not in bucket:
+            bucket.append(value)
+
+    raw_attributes = product_info.get("attributes")
+    has_raw = isinstance(raw_attributes, list) and bool(raw_attributes)
+    if has_raw:
+        for attr in raw_attributes:
+            if not isinstance(attr, dict):
+                continue
+            key = str(attr.get("name") or attr.get("attributeName") or "").strip()
+            value = str(attr.get("value") or "").strip()
+            if key and value:
+                _add(key, value)
+
+    # Fall back to the fields the pipeline derived from those same attributes.
+    # Only used when the raw list is absent, so a real attribute is never
+    # shadowed by its own derived restatement.
+    if not has_raw:
+        materials = product_info.get("materials")
+        if isinstance(materials, list):
+            for item in materials:
+                _add("Material", str(item).strip())
+        elif isinstance(materials, str) and materials.strip():
+            _add("Material", materials.strip())
+
+        dimensions = product_info.get("dimensions")
+        if isinstance(dimensions, str) and dimensions.strip():
+            _add("Dimensions", dimensions.strip())
+        weight = product_info.get("weight")
+        if isinstance(weight, str) and weight.strip():
+            _add("Weight", weight.strip())
+
+    return {k: v for k, v in collected.items() if v}
+
+
 def build_wc_payload(product: Any, prices: dict, en_copy: dict) -> dict:
     """Build a WooCommerce product payload from the approved English copy.
 
@@ -243,7 +414,7 @@ def build_wc_payload(product: Any, prices: dict, en_copy: dict) -> dict:
     if prices.get("sale_price"):
         payload["sale_price"] = str(round(prices["sale_price"], 2))
 
-    wc_category = _map_category(getattr(product, "category", None))
+    wc_category = category_for_product(product, title)
     if wc_category:
         payload["categories"] = [{"name": wc_category}]
 
@@ -251,20 +422,11 @@ def build_wc_payload(product: Any, prices: dict, en_copy: dict) -> dict:
     if brand and not _CJK_RE.search(brand):
         payload["brand"] = brand
 
-    raw_images = meta.get("images")
-    if isinstance(raw_images, str):
-        raw_images = [raw_images]
-    if isinstance(raw_images, list):
-        images: list[dict[str, str]] = []
-        for item in raw_images:
-            if isinstance(item, str) and item.strip():
-                images.append({"src": item.strip()})
-            elif isinstance(item, dict):
-                source = item.get("src") or item.get("url") or item.get("image_url")
-                if source:
-                    images.append({"src": str(source)})
-        if images:
-            payload["images"] = images
+    # ``main_images`` is the pipeline's curated first five; ``images`` is the
+    # flat backwards-compatible array. Prefer the curated set when both exist.
+    images = normalise_listing_images(meta.get("main_images") or meta.get("images"))
+    if images:
+        payload["images"] = images[:_MAX_IMAGES]
 
     weight_kg = getattr(product, "weight_kg", None)
     if weight_kg is not None:
@@ -298,23 +460,30 @@ def build_wc_payload(product: Any, prices: dict, en_copy: dict) -> dict:
     if isinstance(raw_attributes, dict):
         attributes: list[dict[str, Any]] = []
         for key, value in raw_attributes.items():
-            if isinstance(value, list) and len(value) > 1:
+            name = str(key).strip()
+            if not name:
+                continue
+            if isinstance(value, list):
                 options = [str(v).strip() for v in value if str(v).strip()]
-                if len(options) > 1:
-                    attributes.append({
-                        "name": str(key).strip(),
-                        "options": options,
-                        "visible": True,
-                        "variation": False,
-                    })
+            else:
+                options = [str(value).strip()] if str(value or "").strip() else []
+            # Single-value attributes are valid WooCommerce global attributes.
+            # The previous ``len(value) > 1`` test dropped every non-variant
+            # attribute, costing the 5 attribute completeness points on all
+            # products even when the source data existed.
+            if 1 <= len(options) <= _MAX_ATTRIBUTE_OPTIONS:
+                attributes.append({
+                    "name": name,
+                    "options": options,
+                    "visible": True,
+                    "variation": False,
+                })
         if attributes:
-            payload["attributes"] = attributes
+            payload["attributes"] = attributes[:_MAX_ATTRIBUTES]
 
     tags = [str(k).strip() for k in keywords if str(k).strip()]
     if not tags:
-        product_tags = getattr(product, "tags", None)
-        if isinstance(product_tags, list):
-            tags = [str(t).strip() for t in product_tags if str(t).strip()]
+        tags = normalise_listing_tags(getattr(product, "tags", None))
     if tags:
         payload["tags"] = [{"name": t} for t in tags[:12]]
 
