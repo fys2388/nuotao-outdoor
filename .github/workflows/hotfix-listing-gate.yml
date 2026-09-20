@@ -14,12 +14,16 @@ name: Hotfix - Listing Publish Gate (V3.0)
 #                        exist; any draft product with no price could be pushed.
 #   4. wrong copy      - the payload used the raw Chinese source text instead of
 #                        the approved English localization.
-#   5. field mismatch  - the frontend read `copy.bullets` while the backend stores
-#                        `bullet_points`, so approved selling points never rendered.
+#   5. field mismatch  - the frontend read copy.bullets while the backend stores
+#                        bullet_points, so approved selling points never rendered.
 #
 # Strategy: ADD modules (listing_gate.py, listing_publish.py), then anchor-assert
 # two surgical edits (router registration, frontend field name). Everything is
 # backed up to /opt/nuotao/backups/ first. Nothing is rsync'd with --delete.
+#
+# Diagnostics: full output is also tee'd to
+# /var/www/nuotao/deploy-listing-gate.log, readable from the browser at
+# https://admin.nuotaooutdoor.com/deploy-listing-gate.log
 #
 # Trigger: push to branch hotfix/listing-gate
 
@@ -34,8 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Package patch
         run: |
@@ -51,7 +53,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           source: listing-gate.tgz
-          target: /tmp/listing-gate-patch.tgz
+          target: /tmp
 
       - name: Apply patch, restart backend, rebuild frontend
         uses: appleboy/ssh-action@v1.0.3
@@ -62,32 +64,52 @@ jobs:
           port: 22
           command_timeout: 25m
           script: |
-            set -euo pipefail
+            set -eo pipefail
             export PYTHONIOENCODING=utf-8
             export LANG=C.UTF-8
             BACKEND=/opt/nuotao/backend
             FRONTEND=/opt/nuotao/frontend
             PY="$BACKEND/.venv/bin/python"
+            LOG=/tmp/deploy-listing-gate.log
+            : > "$LOG"
+            exec > >(tee -a "$LOG") 2>&1
+
+            echo "########## listing-gate hotfix started $(date -u +%FT%TZ) ##########"
             cd /opt/nuotao
 
             echo "===== 0. unpack patch package ====="
             rm -rf /tmp/listing-gate-patch && mkdir -p /tmp/listing-gate-patch
-            tar -xzf /tmp/listing-gate-patch.tgz -C /tmp/listing-gate-patch
+            tar -xzf /tmp/listing-gate.tgz -C /tmp/listing-gate-patch
             find /tmp/listing-gate-patch -type f | sort
-            test -x "$PY" || test -f "$PY" || { echo "ERROR: $PY missing"; exit 1; }
+            test -f "$PY" || { echo "ERROR: $PY missing"; exit 1; }
+            echo "python: $($PY --version 2>&1)"
+
+            PATCHDIR=/tmp/listing-gate-patch/hotfix-listing-gate
+            APPLY="$PATCHDIR/scripts/apply_patch.py"
+            test -f "$APPLY" || { echo "ERROR: apply script missing: $APPLY"; exit 1; }
 
             echo "===== 1. DRY RUN (preflight + anchor assertions) ====="
-            "$PY" /tmp/listing-gate-patch/hotfix-listing-gate/scripts/apply_patch.py \
-              --patch-dir /tmp/listing-gate-patch/hotfix-listing-gate \
-              --backend "$BACKEND" --frontend "$FRONTEND" --dry-run
+            if "$PY" "$APPLY" --patch-dir "$PATCHDIR" \
+                 --backend "$BACKEND" --frontend "$FRONTEND" --dry-run; then
+              echo "DRY RUN OK"
+            else
+              echo "ERROR: dry run failed - nothing was changed"
+              exit 1
+            fi
 
             echo "===== 2. APPLY ====="
-            "$PY" /tmp/listing-gate-patch/hotfix-listing-gate/scripts/apply_patch.py \
-              --patch-dir /tmp/listing-gate-patch/hotfix-listing-gate \
-              --backend "$BACKEND" --frontend "$FRONTEND"
+            if "$PY" "$APPLY" --patch-dir "$PATCHDIR" \
+                 --backend "$BACKEND" --frontend "$FRONTEND"; then
+              echo "APPLY OK"
+            else
+              echo "ERROR: apply failed - restore from the backup dir printed above"
+              exit 1
+            fi
 
             echo "===== 3. confirm router registration ====="
             grep -n "listing_publish\|listing-gate hotfix" "$BACKEND/app/api/v1/router.py" | head -8
+            test -f "$BACKEND/app/services/listing_gate.py" && echo "listing_gate.py present"
+            test -f "$BACKEND/app/api/v1/endpoints/listing_publish.py" && echo "listing_publish.py present"
 
             echo "===== 4. restart backend and wait for ready ====="
             systemctl restart nuotao-backend
@@ -98,24 +120,27 @@ jobs:
               [ "$ready" = "200" ] && break
               sleep 3
             done
-            systemctl is-active nuotao-backend
+            systemctl is-active nuotao-backend || true
             if [ "$ready" != "200" ]; then
               echo "ERROR: backend not ready after restart"
               journalctl -u nuotao-backend -n 60 --no-pager || true
               exit 1
             fi
 
-            echo "===== 5. gate self-check (must NOT return 200 for an unpriced draft) ====="
-            echo "-- openapi route present:"
-            curl -s http://127.0.0.1:8000/openapi.json 2>/dev/null \
-              | grep -o 'push-woocommerce' | sort | uniq -c || echo "(openapi.json not served - ok)"
+            echo "===== 5. gate self-check ====="
             ID=$(curl -s "http://127.0.0.1:8000/api/v1/products?limit=200&offset=0" \
-                 | "$PY" -c "import json,sys; d=json.load(sys.stdin); print(d[0]['id'] if isinstance(d,list) and d else '')")
+                 | "$PY" -c "import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d[0]['id'] if isinstance(d,list) and d else '')
+except Exception as e:
+    print('')")
             echo "probe product id=$ID"
             if [ -n "$ID" ]; then
-              CODE=$(curl -s -o /tmp/probe.json -w '%{http_code}' -X POST "http://127.0.0.1:8000/api/v1/products/$ID/push-woocommerce" || true)
-              echo "probe status=$CODE"
-              cat /tmp/probe.json | head -c 800; echo
+              CODE=$(curl -s -o /tmp/probe.json -w '%{http_code}' \
+                -X POST "http://127.0.0.1:8000/api/v1/products/$ID/push-woocommerce" || true)
+              echo "probe POST push-woocommerce status=$CODE"
+              head -c 800 /tmp/probe.json; echo
             fi
 
             echo "===== 6. build frontend ====="
@@ -128,11 +153,12 @@ jobs:
             tail -15 /tmp/fe-listing-gate.log
             if [ "$BRC" -ne 0 ]; then
               echo "WARN: frontend build failed - backend gate is live, old UI assets remain"
-              grep -n -E "Could not resolve|is not exported|failed to load|SyntaxError|error" /tmp/fe-listing-gate.log | head -20 || true
+              grep -n -E "Could not resolve|is not exported|failed to load|SyntaxError" /tmp/fe-listing-gate.log | head -20 || true
             else
               echo "===== 7. deploy frontend static ====="
               rm -rf /var/www/nuotao/*
               cp -r dist/* /var/www/nuotao/
+              cp "$LOG" /var/www/nuotao/deploy-listing-gate.log 2>/dev/null || true
               chown -R www-data:www-data /var/www/nuotao
               ls /var/www/nuotao | head
             fi
@@ -142,4 +168,4 @@ jobs:
             C=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
             echo "backend=$B console=$C"
             [ "$B" = "200" ] || { echo "ERROR backend health=$B"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1; }
-            echo "DONE listing-gate hotfix applied"
+            echo "########## DONE $(date -u +%FT%TZ) ##########"
