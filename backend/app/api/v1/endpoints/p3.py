@@ -9,15 +9,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.services.b2b_service import (
-    create_agent,
-    create_b2b_order,
-    get_b2b_system_status,
-    list_agents,
-    record_payment,
-    update_agent_status,
-    update_b2b_order_status,
-)
 from app.services.inventory_service import (
     calculate_replenishment,
     create_warehouse,
@@ -216,79 +207,46 @@ async def sync_inv(request: InventorySyncRequest) -> dict[str, Any]:
 # B2B 代理商管理端点
 # ============================================
 
-class CreateAgentRequest(BaseModel):
-    name: str
-    contact_person: str
-    email: str
-    phone: str = ""
-    country: str = ""
-    city: str = ""
-    address: str = ""
-    tier: str = "bronze"
-    commission_rate: float = 5.0
-    discount_percent: float = 0
-    credit_limit: float = 0
-    payment_terms_days: int = 30
-    notes: str = ""
+LEGACY_B2B_GONE_DETAIL = (
+    "Legacy file-based B2B API is retired. Use /api/v1/admin/b2b "
+    "or /api/v1/b2b-portal."
+)
 
 
-class B2BOrderRequest(BaseModel):
-    agent_id: str
-    items: list[dict[str, Any]]
-    shipping_address: dict[str, Any] | None = None
-    notes: str = ""
-
-
-class PaymentRequest(BaseModel):
-    amount: float
-    payment_method: str = "bank_transfer"
+def _legacy_b2b_gone() -> None:
+    raise HTTPException(status_code=410, detail=LEGACY_B2B_GONE_DETAIL)
 
 
 @router.get("/b2b/status")
 async def b2b_status() -> dict[str, Any]:
-    return get_b2b_system_status()
+    _legacy_b2b_gone()
 
 
 @router.post("/b2b/agents")
-async def create_agent_endpoint(request: CreateAgentRequest) -> dict[str, Any]:
-    try:
-        return {"success": True, "agent": create_agent(**request.dict())}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def create_agent_endpoint() -> dict[str, Any]:
+    _legacy_b2b_gone()
 
 
 @router.get("/b2b/agents")
 async def list_agents_endpoint() -> dict[str, Any]:
-    return list_agents()
+    _legacy_b2b_gone()
 
 
 @router.put("/b2b/agents/{agent_id}/status")
-async def update_agent_status_endpoint(agent_id: str, request: StatusUpdateRequest) -> dict[str, Any]:
-    try:
-        return {"success": True, "agent": update_agent_status(agent_id, request.status)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def update_agent_status_endpoint(agent_id: str) -> dict[str, Any]:
+    _legacy_b2b_gone()
 
 
 @router.post("/b2b/orders")
-async def create_b2b_order_endpoint(request: B2BOrderRequest) -> dict[str, Any]:
-    try:
-        return {"success": True, "order": create_b2b_order(request.agent_id, request.items, request.shipping_address, request.notes)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def create_b2b_order_endpoint() -> dict[str, Any]:
+    _legacy_b2b_gone()
 
 
 @router.put("/b2b/orders/{order_id}/status")
-async def update_b2b_order_endpoint(order_id: str, request: StatusUpdateRequest) -> dict[str, Any]:
-    try:
-        return {"success": True, "order": update_b2b_order_status(order_id, request.status)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def update_b2b_order_endpoint(order_id: str) -> dict[str, Any]:
+    _legacy_b2b_gone()
 
 
 @router.post("/b2b/orders/{order_id}/payment")
-async def record_payment_endpoint(order_id: str, request: PaymentRequest) -> dict[str, Any]:
-    try:
-        return {"success": True, "payment": record_payment(order_id, request.amount, request.payment_method)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def record_payment_endpoint(order_id: str) -> dict[str, Any]:
+    _legacy_b2b_gone()

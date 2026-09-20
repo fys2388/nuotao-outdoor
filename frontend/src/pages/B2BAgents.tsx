@@ -5,19 +5,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Table, Button, Modal, Form, Input, Select, Tag, Statistic,
-  Row, Col, DatePicker, message, Tabs, Space, Avatar, Typography,
-  Divider, Descriptions, InputNumber, Switch, Popconfirm,
+  Row, Col, DatePicker, Tabs, Space, Avatar, Typography, App as AntApp,
+  Divider, Descriptions, InputNumber, Switch, Popconfirm, Alert,
 } from 'antd';
 import {
   UserOutlined, ShoppingCartOutlined, DollarOutlined, PlusOutlined,
   SearchOutlined, ExportOutlined, EditOutlined, KeyOutlined,
-  CheckCircleOutlined, StopOutlined, EyeOutlined,
+  CheckCircleOutlined, StopOutlined, EyeOutlined, InboxOutlined,
+  CarOutlined,
 } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
-const { TabPane } = Tabs;
-
 const API_BASE = '/api/v1/admin/b2b';
 
 // ==================== 类型定义 ====================
@@ -71,6 +70,35 @@ interface B2BOrder {
   updated_at: string;
 }
 
+interface FulfillmentItem {
+  id: string;
+  order_item_id: string;
+  product_id: string;
+  inventory_snapshot_id: string;
+  quantity: number;
+  reserved_quantity: number;
+  shipped_quantity: number;
+  released_quantity: number;
+}
+
+interface Fulfillment {
+  id: string;
+  fulfillment_number: string;
+  order_id: string;
+  status: 'reserved' | 'shipped' | 'delivered' | 'released';
+  warehouse_location: string;
+  shipment_id: string | null;
+  reserved_at: string;
+  shipped_at: string | null;
+  delivered_at: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+  created_by: string;
+  items: FulfillmentItem[];
+  created_at: string;
+  updated_at: string;
+}
+
 interface Price {
   id: string;
   product_id: string;
@@ -105,6 +133,7 @@ const statusColors: Record<string, string> = {
   active: 'green', pending: 'orange', suspended: 'red', rejected: 'default',
   confirmed: 'blue', processing: 'cyan', shipped: 'geekblue',
   delivered: 'green', cancelled: 'red',
+  reserved: 'purple', released: 'default',
   unpaid: 'red', partial: 'orange', paid: 'green', overdue: 'red',
 };
 
@@ -127,17 +156,28 @@ const statusOptions = [
 ];
 
 const orderStatusOptions = [
-  { value: 'pending', label: '待确认' },
   { value: 'confirmed', label: '已确认' },
-  { value: 'processing', label: '处理中' },
-  { value: 'shipped', label: '已发货' },
-  { value: 'delivered', label: '已送达' },
   { value: 'cancelled', label: '已取消' },
+];
+
+const warehouseOptions = [
+  { value: 'cn', label: '中国仓' },
+  { value: 'us', label: '美国仓' },
+  { value: 'eu', label: '欧洲仓' },
 ];
 
 // ==================== API 辅助函数 ====================
 
-async function apiFetch<T = any>(url: string, options?: RequestInit): Promise<T | null> {
+interface MessageApi {
+  success: (content: string) => void;
+  error: (content: string) => void;
+}
+
+async function apiFetch<T = any>(
+  url: string,
+  options: RequestInit | undefined,
+  messageApi: MessageApi,
+): Promise<T | null> {
   try {
     const token = localStorage.getItem('admin_token')
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> || {}) }
@@ -148,23 +188,28 @@ async function apiFetch<T = any>(url: string, options?: RequestInit): Promise<T 
     });
     if (resp.ok) return resp.json();
     const err = await resp.json().catch(() => ({}));
-    message.error(`API错误(${resp.status}): ${err.detail || resp.statusText}`);
+    messageApi.error(`API错误(${resp.status}): ${err.detail || resp.statusText}`);
     return null;
   } catch (e: any) {
-    message.error(`网络错误: ${e.message}`);
+    messageApi.error(`网络错误: ${e.message}`);
     return null;
   }
 }
 
 // ==================== 主组件 ====================
 
-const B2BAgentsPage: React.FC = () => {
+interface B2BAgentsPageProps {
+  initialTab?: string;
+}
+
+const B2BAgentsPage: React.FC<B2BAgentsPageProps> = ({ initialTab = 'agents' }) => {
+  const { message: messageApi } = AntApp.useApp();
   const [stats, setStats] = useState<Stats | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [orders, setOrders] = useState<B2BOrder[]>([]);
   const [prices, setPrices] = useState<Price[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('agents');
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   // 代理商筛选
   const [agentSearch, setAgentSearch] = useState('');
@@ -192,20 +237,24 @@ const B2BAgentsPage: React.FC = () => {
   const [passwordAgent, setPasswordAgent] = useState<Agent | null>(null);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [viewingOrder, setViewingOrder] = useState<B2BOrder | null>(null);
+  const [orderFulfillment, setOrderFulfillment] = useState<Fulfillment | null>(null);
+  const [fulfillmentLoading, setFulfillmentLoading] = useState(false);
   const [priceModalOpen, setPriceModalOpen] = useState(false);
   const [editingPrice, setEditingPrice] = useState<Price | null>(null);
 
   const [agentForm] = Form.useForm();
   const [passwordForm] = Form.useForm();
   const [priceForm] = Form.useForm();
-  const [orderStatusForm] = Form.useForm();
+  const [reserveForm] = Form.useForm();
+  const [shipForm] = Form.useForm();
+  const [releaseForm] = Form.useForm();
 
   // ==================== 数据加载 ====================
 
   const loadStats = useCallback(async () => {
-    const data = await apiFetch<Stats>('/stats');
+    const data = await apiFetch<Stats>('/stats', undefined, messageApi);
     if (data) setStats(data);
-  }, []);
+  }, [messageApi]);
 
   const loadAgents = useCallback(async () => {
     setLoading(true);
@@ -213,28 +262,40 @@ const B2BAgentsPage: React.FC = () => {
     if (agentSearch) params.append('search', agentSearch);
     if (agentStatusFilter) params.append('status', agentStatusFilter);
     if (agentTierFilter) params.append('tier', agentTierFilter);
-    const data = await apiFetch<{ items: Agent[]; total: number }>(`/agents?${params}`);
+    const data = await apiFetch<{ items: Agent[]; total: number }>(
+      `/agents?${params}`,
+      undefined,
+      messageApi,
+    );
     if (data) { setAgents(data.items); setAgentTotal(data.total); }
     setLoading(false);
-  }, [agentPage, agentSearch, agentStatusFilter, agentTierFilter]);
+  }, [agentPage, agentSearch, agentStatusFilter, agentTierFilter, messageApi]);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: orderPage.toString(), page_size: '10' });
     if (orderStatusFilter) params.append('status', orderStatusFilter);
-    const data = await apiFetch<{ items: B2BOrder[]; total: number }>(`/orders?${params}`);
+    const data = await apiFetch<{ items: B2BOrder[]; total: number }>(
+      `/orders?${params}`,
+      undefined,
+      messageApi,
+    );
     if (data) { setOrders(data.items); setOrderTotal(data.total); }
     setLoading(false);
-  }, [orderPage, orderStatusFilter]);
+  }, [messageApi, orderPage, orderStatusFilter]);
 
   const loadPrices = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: pricePage.toString(), page_size: '20' });
     if (priceTierFilter) params.append('tier', priceTierFilter);
-    const data = await apiFetch<{ items: Price[]; total: number }>(`/prices?${params}`);
+    const data = await apiFetch<{ items: Price[]; total: number }>(
+      `/prices?${params}`,
+      undefined,
+      messageApi,
+    );
     if (data) { setPrices(data.items); setPriceTotal(data.total); }
     setLoading(false);
-  }, [pricePage, priceTierFilter]);
+  }, [messageApi, pricePage, priceTierFilter]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { if (activeTab === 'agents') loadAgents(); }, [activeTab, loadAgents]);
@@ -269,11 +330,15 @@ const B2BAgentsPage: React.FC = () => {
       if (editingAgent) {
         const ok = await apiFetch(`/agents/${editingAgent.id}`, {
           method: 'PUT', body: JSON.stringify(values),
-        });
-        if (ok) { message.success('代理商已更新'); setAgentModalOpen(false); loadAgents(); loadStats(); }
+        }, messageApi);
+        if (ok) { messageApi.success('代理商已更新'); setAgentModalOpen(false); loadAgents(); loadStats(); }
       } else {
-        const ok = await apiFetch('/agents', { method: 'POST', body: JSON.stringify(values) });
-        if (ok) { message.success('代理商已创建'); setAgentModalOpen(false); loadAgents(); loadStats(); }
+        const ok = await apiFetch(
+          '/agents',
+          { method: 'POST', body: JSON.stringify(values) },
+          messageApi,
+        );
+        if (ok) { messageApi.success('代理商已创建'); setAgentModalOpen(false); loadAgents(); loadStats(); }
       }
     } catch { /* 表单校验失败 */ }
   };
@@ -281,8 +346,8 @@ const B2BAgentsPage: React.FC = () => {
   const handleChangeStatus = async (agent: Agent, newStatus: string) => {
     const ok = await apiFetch(`/agents/${agent.id}/status`, {
       method: 'PATCH', body: JSON.stringify({ status: newStatus }),
-    });
-    if (ok) { message.success(`状态已更新为 ${newStatus}`); loadAgents(); loadStats(); }
+    }, messageApi);
+    if (ok) { messageApi.success(`状态已更新为 ${newStatus}`); loadAgents(); loadStats(); }
   };
 
   const handleResetPassword = async () => {
@@ -291,28 +356,146 @@ const B2BAgentsPage: React.FC = () => {
       if (!passwordAgent) return;
       const ok = await apiFetch(`/agents/${passwordAgent.id}/reset-password`, {
         method: 'POST', body: JSON.stringify({ new_password: values.new_password }),
-      });
-      if (ok) { message.success('密码已重置'); setPasswordModalOpen(false); passwordForm.resetFields(); }
+      }, messageApi);
+      if (ok) { messageApi.success('密码已重置'); setPasswordModalOpen(false); passwordForm.resetFields(); }
     } catch { /* 校验失败 */ }
   };
 
   // ==================== 订单操作 ====================
 
+  const loadOrderFulfillment = useCallback(async (orderId: string) => {
+    setFulfillmentLoading(true);
+    const data = await apiFetch<{ fulfillment: Fulfillment | null }>(
+      `/orders/${orderId}/fulfillment`,
+      undefined,
+      messageApi,
+    );
+    setOrderFulfillment(data?.fulfillment || null);
+    setFulfillmentLoading(false);
+  }, [messageApi]);
+
   const handleViewOrder = (order: B2BOrder) => {
     setViewingOrder(order);
-    orderStatusForm.setFieldsValue({ status: order.status, tracking_number: order.tracking_number, tracking_carrier: order.tracking_carrier });
+    setOrderFulfillment(null);
     setOrderModalOpen(true);
+    void loadOrderFulfillment(order.id);
   };
 
-  const handleUpdateOrderStatus = async () => {
+  useEffect(() => {
+    if (!orderModalOpen || !viewingOrder) return;
+
+    if (
+      viewingOrder.status === 'confirmed'
+      || (viewingOrder.status === 'processing' && !orderFulfillment)
+    ) {
+      reserveForm.setFieldsValue({ warehouse_location: 'us' });
+      return;
+    }
+
+    if (
+      viewingOrder.status === 'processing'
+      && orderFulfillment?.status === 'reserved'
+    ) {
+      shipForm.setFieldsValue({
+        carrier: viewingOrder.tracking_carrier || '',
+        tracking_number: viewingOrder.tracking_number || '',
+        origin: orderFulfillment.warehouse_location,
+        destination: [
+          viewingOrder.shipping_address?.address,
+          viewingOrder.shipping_address?.city,
+          viewingOrder.shipping_address?.country,
+        ].filter(Boolean).join(', '),
+      });
+      releaseForm.resetFields();
+    }
+  }, [
+    orderFulfillment,
+    orderModalOpen,
+    releaseForm,
+    reserveForm,
+    shipForm,
+    viewingOrder,
+  ]);
+
+  const handleUpdateOrderStatus = async (status: 'confirmed' | 'cancelled') => {
     try {
-      const values = await orderStatusForm.validateFields();
       if (!viewingOrder) return;
       const ok = await apiFetch(`/orders/${viewingOrder.id}/status`, {
-        method: 'PATCH', body: JSON.stringify(values),
-      });
-      if (ok) { message.success('订单状态已更新'); setOrderModalOpen(false); loadOrders(); loadStats(); }
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }, messageApi);
+      if (ok) { messageApi.success('订单状态已更新'); setOrderModalOpen(false); loadOrders(); loadStats(); }
     } catch { /* 校验失败 */ }
+  };
+
+  const handleReserveInventory = async () => {
+    try {
+      const values = await reserveForm.validateFields();
+      if (!viewingOrder) return;
+      const ok = await apiFetch(`/orders/${viewingOrder.id}/fulfillment/reserve`, {
+        method: 'POST',
+        body: JSON.stringify({
+          warehouse_location: values.warehouse_location,
+          reservation_key: crypto.randomUUID(),
+        }),
+      }, messageApi);
+      if (ok) {
+        messageApi.success('库存已预占');
+        setOrderModalOpen(false);
+        loadOrders();
+        loadStats();
+      }
+    } catch { /* 校验失败 */ }
+  };
+
+  const handleShipOrder = async () => {
+    try {
+      const values = await shipForm.validateFields();
+      if (!viewingOrder) return;
+      const ok = await apiFetch(`/orders/${viewingOrder.id}/fulfillment/ship`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...values,
+          shipment_key: crypto.randomUUID(),
+        }),
+      }, messageApi);
+      if (ok) {
+        messageApi.success('已确认出库并生成运单');
+        setOrderModalOpen(false);
+        loadOrders();
+        loadStats();
+      }
+    } catch { /* 校验失败 */ }
+  };
+
+  const handleReleaseInventory = async () => {
+    try {
+      const values = await releaseForm.validateFields();
+      if (!viewingOrder) return;
+      const ok = await apiFetch(`/orders/${viewingOrder.id}/fulfillment/release`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: values.reason }),
+      }, messageApi);
+      if (ok) {
+        messageApi.success('预占库存已释放');
+        setOrderModalOpen(false);
+        loadOrders();
+        loadStats();
+      }
+    } catch { /* 校验失败 */ }
+  };
+
+  const handleDeliverOrder = async () => {
+    if (!viewingOrder) return;
+    const ok = await apiFetch(`/orders/${viewingOrder.id}/fulfillment/deliver`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }, messageApi);
+    if (ok) {
+      messageApi.success('订单已确认送达');
+      setOrderModalOpen(false);
+      loadOrders();
+      loadStats();
+    }
   };
 
   // ==================== 定价操作 ====================
@@ -340,11 +523,15 @@ const B2BAgentsPage: React.FC = () => {
       if (editingPrice) {
         const ok = await apiFetch(`/prices/${editingPrice.id}`, {
           method: 'PUT', body: JSON.stringify(values),
-        });
-        if (ok) { message.success('定价已更新'); setPriceModalOpen(false); loadPrices(); }
+        }, messageApi);
+        if (ok) { messageApi.success('定价已更新'); setPriceModalOpen(false); loadPrices(); }
       } else {
-        const ok = await apiFetch('/prices', { method: 'POST', body: JSON.stringify(values) });
-        if (ok) { message.success('定价已创建'); setPriceModalOpen(false); loadPrices(); }
+        const ok = await apiFetch(
+          '/prices',
+          { method: 'POST', body: JSON.stringify(values) },
+          messageApi,
+        );
+        if (ok) { messageApi.success('定价已创建'); setPriceModalOpen(false); loadPrices(); }
       }
     } catch { /* 校验失败 */ }
   };
@@ -453,23 +640,29 @@ const B2BAgentsPage: React.FC = () => {
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
         <Col xs={24} sm={12} md={6}>
-          <Card><Statistic title="活跃代理商" value={stats?.active_agents ?? 0} prefix={<UserOutlined />} valueStyle={{ color: '#3f8600' }} /></Card>
+          <Card><Statistic title="活跃代理商" value={stats?.active_agents ?? 0} prefix={<UserOutlined />} styles={{ content: { color: '#3f8600' } }} /></Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card><Statistic title="待审核" value={stats?.pending_agents ?? 0} prefix={<UserOutlined />} valueStyle={{ color: '#d48806' }} /></Card>
+          <Card><Statistic title="待审核" value={stats?.pending_agents ?? 0} prefix={<UserOutlined />} styles={{ content: { color: '#d48806' } }} /></Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card><Statistic title="B2B 订单总数" value={stats?.total_orders ?? 0} prefix={<ShoppingCartOutlined />} /></Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card><Statistic title="B2B 总营收" value={stats?.total_revenue ?? 0} prefix={<DollarOutlined />} precision={2} valueStyle={{ color: '#3f8600' }} /></Card>
+          <Card><Statistic title="B2B 总营收" value={stats?.total_revenue ?? 0} prefix={<DollarOutlined />} precision={2} styles={{ content: { color: '#3f8600' } }} /></Card>
         </Col>
       </Row>
 
       <Card>
-        <Tabs activeKey={activeTab} onChange={setActiveTab}>
-          {/* 代理商管理 */}
-          <TabPane tab="代理商管理" key="agents">
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'agents',
+              label: '代理商管理',
+              children: (
+                <>
             <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
               <Space>
                 <Input placeholder="搜索公司/联系人/邮箱/编号" prefix={<SearchOutlined />} value={agentSearch}
@@ -485,10 +678,14 @@ const B2BAgentsPage: React.FC = () => {
               scroll={{ x: 'max-content' }}
               pagination={{ current: agentPage, pageSize: 10, total: agentTotal, showSizeChanger: false,
                 onChange: (p) => setAgentPage(p) }} />
-          </TabPane>
-
-          {/* B2B 订单 */}
-          <TabPane tab="B2B 订单" key="orders">
+                </>
+              ),
+            },
+            {
+              key: 'orders',
+              label: 'B2B 订单',
+              children: (
+                <>
             <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
               <Space>
                 <RangePicker />
@@ -500,10 +697,14 @@ const B2BAgentsPage: React.FC = () => {
             <Table columns={orderColumns} dataSource={orders} rowKey="id" loading={loading} scroll={{ x: 'max-content' }}
               pagination={{ current: orderPage, pageSize: 10, total: orderTotal, showSizeChanger: false,
                 onChange: (p) => setOrderPage(p) }} />
-          </TabPane>
-
-          {/* 批发价管理 */}
-          <TabPane tab="批发价管理" key="prices">
+                </>
+              ),
+            },
+            {
+              key: 'prices',
+              label: '批发价管理',
+              children: (
+                <>
             <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
               <Space>
                 <Select placeholder="按等级筛选" allowClear style={{ width: 140 }} value={priceTierFilter}
@@ -514,13 +715,16 @@ const B2BAgentsPage: React.FC = () => {
             <Table columns={priceColumns} dataSource={prices} rowKey="id" loading={loading} scroll={{ x: 'max-content' }}
               pagination={{ current: pricePage, pageSize: 20, total: priceTotal, showSizeChanger: false,
                 onChange: (p) => setPricePage(p) }} />
-          </TabPane>
-        </Tabs>
+                </>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       {/* 代理商编辑弹窗 */}
       <Modal title={editingAgent ? '编辑代理商' : '添加代理商'} open={agentModalOpen}
-        onCancel={() => setAgentModalOpen(false)} onOk={handleSaveAgent} width={700} destroyOnClose>
+        onCancel={() => setAgentModalOpen(false)} onOk={handleSaveAgent} width={700} destroyOnHidden>
         <Form form={agentForm} layout="vertical">
           <Row gutter={16}>
             <Col span={12}><Form.Item name="company_name" label="公司名称" rules={[{ required: true }]}><Input /></Form.Item></Col>
@@ -576,7 +780,7 @@ const B2BAgentsPage: React.FC = () => {
 
       {/* 重置密码弹窗 */}
       <Modal title="重置密码" open={passwordModalOpen} onCancel={() => setPasswordModalOpen(false)}
-        onOk={handleResetPassword} destroyOnClose>
+        onOk={handleResetPassword} destroyOnHidden>
         <Text type="secondary">为代理商 <strong>{passwordAgent?.company_name}</strong> 重置登录密码</Text>
         <Form form={passwordForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="new_password" label="新密码" rules={[{ required: true, min: 8, message: '密码至少8位' }]}>
@@ -587,18 +791,26 @@ const B2BAgentsPage: React.FC = () => {
 
       {/* 订单管理弹窗 */}
       <Modal title="订单管理" open={orderModalOpen} onCancel={() => setOrderModalOpen(false)}
-        onOk={handleUpdateOrderStatus} width={700} destroyOnClose>
+        footer={<Button onClick={() => setOrderModalOpen(false)}>关闭</Button>}
+        width={760} destroyOnHidden>
         {viewingOrder && (
           <>
-            <Descriptions column={2} bordered size="small" style={{ marginBottom: 16 }}>
+            <Descriptions
+              column={{ xs: 1, sm: 2 }}
+              bordered
+              size="small"
+              labelStyle={{ width: 88, whiteSpace: 'nowrap' }}
+              style={{ marginBottom: 16 }}
+            >
               <Descriptions.Item label="订单号">{viewingOrder.order_number}</Descriptions.Item>
               <Descriptions.Item label="代理商">{viewingOrder.agent_company}</Descriptions.Item>
               <Descriptions.Item label="总金额">${Number(viewingOrder.total).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="订单状态"><Tag color={statusColors[viewingOrder.status]}>{viewingOrder.status}</Tag></Descriptions.Item>
               <Descriptions.Item label="支付状态"><Tag color={statusColors[viewingOrder.payment_status]}>{viewingOrder.payment_status}</Tag></Descriptions.Item>
-              <Descriptions.Item label="创建时间">{new Date(viewingOrder.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
               <Descriptions.Item label="付款截止">{viewingOrder.payment_due_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{new Date(viewingOrder.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
             </Descriptions>
-            <Divider orientation="left">商品明细</Divider>
+            <Divider titlePlacement="start">商品明细</Divider>
             <Table dataSource={viewingOrder.items} rowKey="id" size="small" pagination={false}
               columns={[
                 { title: '商品', dataIndex: 'product_name', key: 'product_name' },
@@ -607,21 +819,129 @@ const B2BAgentsPage: React.FC = () => {
                 { title: '单价', dataIndex: 'unit_price', key: 'unit_price', width: 100, render: (v: number) => `$${v}` },
                 { title: '小计', dataIndex: 'subtotal', key: 'subtotal', width: 100, render: (v: number) => `$${v}` },
               ]} />
-            <Divider orientation="left">更新状态</Divider>
-            <Form form={orderStatusForm} layout="vertical">
-              <Row gutter={16}>
-                <Col span={12}><Form.Item name="status" label="订单状态" rules={[{ required: true }]}><Select options={orderStatusOptions} /></Form.Item></Col>
-                <Col span={12}><Form.Item name="tracking_carrier" label="物流公司"><Input placeholder="如 DHL / FedEx" /></Form.Item></Col>
-                <Col span={24}><Form.Item name="tracking_number" label="物流单号"><Input placeholder="发货后填写" /></Form.Item></Col>
-              </Row>
-            </Form>
+            <Divider titlePlacement="start">履约信息</Divider>
+            {fulfillmentLoading && <Alert type="info" showIcon title="正在加载履约信息" />}
+            {!fulfillmentLoading && orderFulfillment && (
+              <>
+                <Descriptions
+                  column={{ xs: 1, sm: 2 }}
+                  bordered
+                  size="small"
+                  labelStyle={{ width: 96, whiteSpace: 'nowrap' }}
+                  style={{ marginBottom: 12 }}
+                >
+                  <Descriptions.Item label="履约单号">{orderFulfillment.fulfillment_number}</Descriptions.Item>
+                  <Descriptions.Item label="履约状态"><Tag color={statusColors[orderFulfillment.status]}>{orderFulfillment.status}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="仓库">{warehouseOptions.find((item) => item.value === orderFulfillment.warehouse_location)?.label || orderFulfillment.warehouse_location}</Descriptions.Item>
+                  <Descriptions.Item label="运单">{orderFulfillment.shipment_id || '-'}</Descriptions.Item>
+                </Descriptions>
+                <Table dataSource={orderFulfillment.items} rowKey="id" size="small" pagination={false}
+                  columns={[
+                    { title: '订单行', dataIndex: 'order_item_id', key: 'order_item_id', ellipsis: true },
+                    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 70 },
+                    { title: '预占', dataIndex: 'reserved_quantity', key: 'reserved_quantity', width: 70 },
+                    { title: '出库', dataIndex: 'shipped_quantity', key: 'shipped_quantity', width: 70 },
+                    { title: '释放', dataIndex: 'released_quantity', key: 'released_quantity', width: 70 },
+                  ]} />
+              </>
+            )}
+            {!fulfillmentLoading && !orderFulfillment && (
+              <Alert type="warning" showIcon title="尚未预占库存" />
+            )}
+            <Divider titlePlacement="start">履约操作</Divider>
+            {viewingOrder.status === 'pending' && (
+              <Space>
+                <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleUpdateOrderStatus('confirmed')}>确认订单</Button>
+                <Popconfirm title="确定取消该订单？" onConfirm={() => handleUpdateOrderStatus('cancelled')}>
+                  <Button danger icon={<StopOutlined />}>取消订单</Button>
+                </Popconfirm>
+              </Space>
+            )}
+            {viewingOrder.status === 'confirmed' && (
+              <Space orientation="vertical" style={{ width: '100%' }}>
+                <Form form={reserveForm} layout="vertical">
+                  <Row gutter={16} align="bottom">
+                    <Col span={16}>
+                      <Form.Item name="warehouse_location" label="发货仓" rules={[{ required: true }]}>
+                        <Select options={warehouseOptions} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item>
+                        <Button type="primary" icon={<InboxOutlined />} onClick={handleReserveInventory}>预占库存</Button>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </Form>
+                <Popconfirm title="确定取消该订单？" onConfirm={() => handleUpdateOrderStatus('cancelled')}>
+                  <Button danger icon={<StopOutlined />}>取消订单</Button>
+                </Popconfirm>
+              </Space>
+            )}
+            {viewingOrder.status === 'processing' && orderFulfillment?.status === 'reserved' && (
+              <Space orientation="vertical" style={{ width: '100%' }}>
+                <Form form={shipForm} layout="vertical">
+                  <Row gutter={16}>
+                    <Col span={12}><Form.Item name="carrier" label="物流公司" rules={[{ required: true }]}><Input placeholder="DHL / FedEx" /></Form.Item></Col>
+                    <Col span={12}><Form.Item name="tracking_number" label="物流单号" rules={[{ required: true }]}><Input /></Form.Item></Col>
+                    <Col span={12}><Form.Item name="origin" label="起运地"><Input /></Form.Item></Col>
+                    <Col span={12}><Form.Item name="destination" label="目的地"><Input /></Form.Item></Col>
+                  </Row>
+                  <Button type="primary" icon={<CarOutlined />} onClick={handleShipOrder}>确认出库并生成运单</Button>
+                </Form>
+                <Form form={releaseForm} layout="vertical">
+                  <Row gutter={16} align="bottom">
+                    <Col span={18}>
+                      <Form.Item name="reason" label="释放原因" rules={[{ required: true }]}>
+                        <Input placeholder="换仓 / 缺货 / 客户变更" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={6}>
+                      <Form.Item>
+                        <Popconfirm title="确定释放本次预占库存？" onConfirm={handleReleaseInventory}>
+                          <Button danger>释放预占</Button>
+                        </Popconfirm>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </Form>
+              </Space>
+            )}
+            {viewingOrder.status === 'processing' && !orderFulfillment && (
+              <Space orientation="vertical" style={{ width: '100%' }}>
+                <Alert type="warning" showIcon title="历史订单缺少履约单，需补建库存预占" />
+                <Form form={reserveForm} layout="vertical">
+                  <Row gutter={16} align="bottom">
+                    <Col span={16}>
+                      <Form.Item name="warehouse_location" label="发货仓" rules={[{ required: true }]}>
+                        <Select options={warehouseOptions} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={8}>
+                      <Form.Item>
+                        <Button type="primary" icon={<InboxOutlined />} onClick={handleReserveInventory}>补建预占</Button>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </Form>
+              </Space>
+            )}
+            {viewingOrder.status === 'shipped' && (
+              <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleDeliverOrder}>确认送达</Button>
+            )}
+            {viewingOrder.status === 'delivered' && (
+              <Alert type="success" showIcon title="订单已完成履约" />
+            )}
+            {viewingOrder.status === 'cancelled' && (
+              <Alert type="warning" showIcon title="订单已取消" />
+            )}
           </>
         )}
       </Modal>
 
       {/* 定价编辑弹窗 */}
       <Modal title={editingPrice ? '编辑批发价' : '添加批发价'} open={priceModalOpen}
-        onCancel={() => setPriceModalOpen(false)} onOk={handleSavePrice} width={600} destroyOnClose>
+        onCancel={() => setPriceModalOpen(false)} onOk={handleSavePrice} width={600} destroyOnHidden>
         <Form form={priceForm} layout="vertical">
           <Form.Item name="product_id" label="商品 ID" rules={[{ required: true }]}>
             <Input placeholder="商品 UUID" disabled={!!editingPrice} />

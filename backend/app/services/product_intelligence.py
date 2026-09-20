@@ -49,6 +49,14 @@ from app.schemas.product_intelligence import (
     SourcingCandidateCreate,
 )
 from app.services import approval_service, event_service, rule_engine
+from app.services.product_content_service import (
+    get_approved_localization,
+    localization_values,
+    normalize_image_urls,
+    product_media_images,
+    target_language_for_market,
+    utc_now_iso,
+)
 from app.services.profit_engine import (
     ProfitInput,
     calculate_contribution_margin,
@@ -542,6 +550,48 @@ def _raw_data_snapshot(data: ProductIntakeRequest) -> dict:
     return snapshot
 
 
+def _intake_meta(data: ProductIntakeRequest) -> dict[str, Any]:
+    """Build the durable content/media snapshot for a product candidate."""
+    images = normalize_image_urls(data.images)
+    meta: dict[str, Any] = {}
+    if images:
+        meta["media"] = {
+            "images": images,
+            "main_image": images[0],
+            "gallery_images": images[1:],
+        }
+    if data.supplier_name:
+        meta["supplier"] = {
+            "name": data.supplier_name,
+            "source_id": data.source_id,
+        }
+    if data.ai_recognition or data.product_report:
+        meta["analysis"] = {
+            "ai_recognition": data.ai_recognition,
+            "product_report": data.product_report,
+            "captured_at": utc_now_iso(),
+        }
+    return meta
+
+
+def _merge_intake_meta(
+    current: dict[str, Any] | None,
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge intake metadata without dropping existing reviewed/localized data."""
+    merged = dict(current or {})
+    for key, value in incoming.items():
+        if key in {"media", "supplier", "analysis"} and isinstance(value, dict):
+            existing = merged.get(key)
+            merged[key] = {
+                **(existing if isinstance(existing, dict) else {}),
+                **value,
+            }
+        else:
+            merged[key] = value
+    return merged
+
+
 async def _upsert_product_cost(
     session: AsyncSession,
     *,
@@ -705,6 +755,7 @@ async def intake_product(
             workspace_id=workspace_id,
             sku=sku,
             name=data.title,
+            description=data.description,
             status="candidate",
             # M5.13: every intake row is a Product Candidate; the commerce
             # status is decoupled and managed by later human-approved stages.
@@ -712,6 +763,8 @@ async def intake_product(
             source="intake",
             source_url=data.source_url,
             category=data.category,
+            attributes=data.attributes,
+            meta=_intake_meta(data),
             weight_kg=data.weight_kg,
             dimensions=data.dimensions,
             target_market=data.target_market,
@@ -720,8 +773,15 @@ async def intake_product(
         await session.flush()
     else:
         product.name = data.title
-        product.description = data.description
+        if data.description:
+            product.description = data.description
         product.category = data.category
+        if data.attributes:
+            product.attributes = {
+                **(product.attributes or {}),
+                **data.attributes,
+            }
+        product.meta = _merge_intake_meta(product.meta, _intake_meta(data))
         product.source_url = data.source_url
         product.weight_kg = data.weight_kg
         product.dimensions = data.dimensions
@@ -1876,6 +1936,26 @@ async def _latest_source_type(
     return row
 
 
+async def _latest_source(
+    session: AsyncSession, *, workspace_id: UUID, product_id: UUID
+) -> ProductSource | None:
+    """Return the newest captured source row for content/media recovery."""
+    return (
+        (
+            await session.execute(
+                select(ProductSource)
+                .where(
+                    ProductSource.workspace_id == workspace_id,
+                    ProductSource.product_id == product_id,
+                )
+                .order_by(ProductSource.captured_at.desc(), ProductSource.created_at.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
 async def finalize_promote(
     session: AsyncSession,
     *,
@@ -1909,19 +1989,44 @@ async def finalize_promote(
     cost = await _load_cost(session, workspace_id=workspace_id, product_id=product_id)
     total_cost = _landed_cost(cost)
     recommended_price = _recommended_price(total_cost) if total_cost > ZERO else None
-    source_type = await _latest_source_type(
+    source = await _latest_source(
         session, workspace_id=workspace_id, product_id=product_id
     )
+    source_type = source.source_type if source else None
+    source_raw = source.raw_data if source and isinstance(source.raw_data, dict) else {}
+    language = target_language_for_market(product.target_market)
+    localization = get_approved_localization(product.meta, language)
+    localized_title, localized_description, localized_short, bullets = localization_values(
+        localization
+    )
+    source_text = f"{product.name}\n{product.description or ''}"
+    has_cjk = any("\u3400" <= char <= "\u9fff" for char in source_text)
+    if not localization and has_cjk:
+        raise ProductIntelligenceError(
+            f"missing approved {language} localization; generate and approve target-market "
+            "copy before promoting this product"
+        )
+
+    title = localized_title or product.name
+    description = localized_description or product.description or ""
+    short_description = localized_short or None
+    images = product_media_images(product.meta)
+    if not images:
+        images = normalize_image_urls(
+            source_raw.get("images") or source_raw.get("image_urls")
+        )
     weight_kg = product.weight_kg
     payload = {
         "sku": product.sku,
-        "name": product.name,
-        "description": product.description,
-        "short_description": None,
+        "name": title,
+        "description": description,
+        "short_description": short_description,
+        "bullet_points": bullets,
         "price": _json_draft_number(recommended_price),
         "regular_price": None,
-        "images": [],
+        "images": images,
         "categories": [{"name": product.category}] if product.category else [],
+        "attributes": product.attributes or {},
         "inventory": {"manage_stock": False, "stock_quantity": None},
         "weight": _json_draft_number(weight_kg),
         "dimensions": product.dimensions,
@@ -1930,13 +2035,15 @@ async def finalize_promote(
             "source_url": product.source_url,
             "product_id": str(product.id),
             "trace_id": trace_id,
+            "target_language": language,
+            "localization_status": localization.get("status") if localization else None,
         },
     }
     draft = WooCommerceDraft(
         workspace_id=workspace_id,
         product_id=product.id,
         sku=product.sku,
-        name=product.name,
+        name=title,
         payload=payload,
         status="generated",
         created_by=actor,

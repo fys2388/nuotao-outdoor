@@ -26,7 +26,7 @@ import tempfile
 import time
 import urllib.request
 import zipfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator  # noqa: TC003 - fixture annotations
 from pathlib import Path
 
 import asyncpg
@@ -161,7 +161,10 @@ def redis_url(redis_server_bin: Path) -> Iterator[str]:
             except Exception:
                 time.sleep(0.3)
         if not ready:
-            raise RuntimeError("redis server did not become ready")
+            pytest.skip(
+                "redis-server binary exists but did not become ready; "
+                "set NUOTAO_REDIS_SERVER_BIN to a working server binary"
+            )
         yield url
     finally:
         proc.terminate()
@@ -250,6 +253,16 @@ def run_alembic(url: str, command: str, revision: str) -> None:
         getattr(alembic_command, command)(cfg, revision)
     finally:
         settings.database_url = original
+
+
+def alembic_head() -> str:
+    """Return the current single Alembic head without using a database."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    return ScriptDirectory.from_config(cfg).get_current_head()
 
 
 @pytest.fixture()

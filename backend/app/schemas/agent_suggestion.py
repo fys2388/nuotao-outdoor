@@ -67,6 +67,25 @@ class RejectRequest(BaseModel):
     comment: str | None = Field(None, description="拒绝原因")
 
 
+class BatchDecideRequest(BaseModel):
+    """批量审批/拒绝请求。"""
+    suggestion_ids: list[int] = Field(..., min_length=1, max_length=200, description="建议ID列表")
+    decision: str = Field(..., description="approve 或 reject")
+    operator: str = Field(..., description="操作人", min_length=1)
+    comment: str | None = Field(None, description="审批/拒绝意见")
+    auto_execute: bool = Field(True, description="批准后是否自动执行低风险建议")
+
+
+class BatchDecideResponse(BaseModel):
+    """批量审批/拒绝响应。"""
+    decision: str
+    requested: int
+    succeeded: list[int]
+    skipped: list[dict[str, Any]]
+    executed: list[int]
+    exec_failed: list[dict[str, Any]]
+
+
 class SkipRequest(BaseModel):
     """跳过请求。"""
     skipped_by: str = Field(..., description="操作人", min_length=1)
@@ -92,6 +111,7 @@ class SuggestionResponse(BaseModel):
     id: int
     agent_id: str
     agent_run_id: int | None = None
+    source: str
     suggestion_type: str
     title: str
     description: str
@@ -111,6 +131,9 @@ class SuggestionResponse(BaseModel):
     feedback_comment: str | None = None
     feedback_at: datetime | None = None
     learned: bool = False
+    dispatch_status: str = "pending"
+    dispatch_reviewer: str | None = None
+    dispatch_fallback_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 

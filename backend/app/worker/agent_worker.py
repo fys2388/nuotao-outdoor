@@ -23,10 +23,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
-from uuid import UUID
-
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import get_settings
 from app.core.tracing import new_trace_id
@@ -41,6 +38,11 @@ from app.services import (
     task_queue,
 )
 from app.worker.executor import ExecutionResult, llm_executor
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +352,11 @@ async def process_message(
             return "failed"
 
         policy = await agent_policies.get_execution_policy(
-            session, workspace_id=workspace_id, agent_id=agent.id, trace_id=trace_id
+            session,
+            workspace_id=workspace_id,
+            agent_id=agent.id,
+            business_scope=task.business_scope,
+            trace_id=trace_id,
         )
         if not policy.enabled:
             task.status = "failed"
@@ -433,7 +439,11 @@ async def _run_attempt(
     group = settings.task_queue_group
 
     budget_policy = await agent_policies.get_budget_policy(
-        session, workspace_id=workspace_id, agent_id=agent.id, trace_id=trace_id
+        session,
+        workspace_id=workspace_id,
+        agent_id=agent.id,
+        business_scope=task.business_scope,
+        trace_id=trace_id,
     )
     decision = await agent_budget.check_budget(
         session,
@@ -441,6 +451,7 @@ async def _run_attempt(
         agent=agent,
         policy=budget_policy,
         projected_cost=budget_policy.max_cost_per_execution,
+        business_scope=task.business_scope,
         trace_id=trace_id,
     )
     if not decision.allowed:

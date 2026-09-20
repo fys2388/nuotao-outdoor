@@ -25,7 +25,7 @@ class Order(Base, TimestampMixin, WorkspaceMixin):
 
     PII policy: only non-identifying fields (country, no names/emails/addresses)
     are stored. Monetary fields use Numeric/Decimal. Idempotency is enforced by
-    a unique (workspace_id, external_order_id) constraint.
+    a unique (workspace_id, source, external_order_id) constraint.
     """
 
     __tablename__ = "orders"
@@ -39,9 +39,16 @@ class Order(Base, TimestampMixin, WorkspaceMixin):
     country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     payment_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="woocommerce")
+    business_model: Mapped[str] = mapped_column(String(8), nullable=False, default="B2C")
     # Non-PII link to customer_profiles.customer_reference_id (M3.4).
     customer_reference_id: Mapped[str | None] = mapped_column(
         String(128), nullable=True, index=True
+    )
+    customer_account_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("customer_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
@@ -67,8 +74,9 @@ class Order(Base, TimestampMixin, WorkspaceMixin):
     __table_args__ = (
         UniqueConstraint(
             "workspace_id",
+            "source",
             "external_order_id",
-            name="uq_orders_workspace_external",
+            name="uq_orders_workspace_source_external",
         ),
     )
 

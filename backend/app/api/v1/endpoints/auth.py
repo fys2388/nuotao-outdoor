@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -18,6 +19,7 @@ from app.core.security import (
     create_refresh_token,
     validate_token,
 )
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.schemas.user import (
     ChangePassword,
     Token,
@@ -73,6 +75,19 @@ async def get_current_user(
     return user
 
 
+async def get_current_workspace_id(
+    current_user: UserResponse = Depends(get_current_user),
+) -> UUID:
+    """Return the workspace bound to the authenticated management user.
+
+    The local user table is still single-workspace in this release. Keeping
+    this dependency separate from the public header resolver prevents a caller
+    from selecting another tenant with ``X-Workspace-Id``.
+    """
+    _ = current_user
+    return DEFAULT_WORKSPACE_ID
+
+
 def require_role(*roles: str):
     """角色权限装饰器工厂"""
     async def role_checker(
@@ -123,6 +138,7 @@ async def login(
         "role": user.role,
         "username": user.username,
         "email": user.email,
+        "workspace_id": str(DEFAULT_WORKSPACE_ID),
     }
 
     access_token = create_access_token(
@@ -165,6 +181,7 @@ async def refresh_token(
         "role": user.role,
         "username": user.username,
         "email": user.email,
+        "workspace_id": str(DEFAULT_WORKSPACE_ID),
     }
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)

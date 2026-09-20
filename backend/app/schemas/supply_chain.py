@@ -272,6 +272,7 @@ class ShipmentOut(BaseModel):
     id: UUID
     workspace_id: UUID
     purchase_order_id: UUID | None
+    b2b_order_id: UUID | None
     carrier: str
     origin: str | None
     destination: str | None

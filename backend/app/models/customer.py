@@ -41,6 +41,54 @@ CUSTOMER_ENTRY_TYPES: tuple[str, ...] = (
 INTERACTION_CHANNELS: tuple[str, ...] = ("email", "chat", "review", "social")
 
 
+class CustomerAccount(Base, TimestampMixin, WorkspaceMixin):
+    """Unified customer master record shared by B2C and B2B.
+
+    PII remains in the channel-specific source systems. This table stores only
+    the stable cross-channel identity, classification and routing metadata.
+    """
+
+    __tablename__ = "customer_accounts"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    customer_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    customer_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    business_model: Mapped[str] = mapped_column(String(8), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    country: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    default_currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    merged_into_account_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("customer_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "customer_number",
+            name="uq_customer_accounts_workspace_number",
+        ),
+        Index(
+            "ix_customer_accounts_workspace_type",
+            "workspace_id",
+            "customer_type",
+        ),
+        Index(
+            "ix_customer_accounts_workspace_business_model",
+            "workspace_id",
+            "business_model",
+        ),
+    )
+
+
 class CustomerProfile(Base, TimestampMixin, WorkspaceMixin):
     """Non-PII customer profile (M3.3).
 
@@ -60,6 +108,12 @@ class CustomerProfile(Base, TimestampMixin, WorkspaceMixin):
     total_orders: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_revenue: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    customer_account_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("customer_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         UniqueConstraint(

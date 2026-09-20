@@ -47,7 +47,7 @@ def get_image_gen_status() -> dict[str, Any]:
         "service": "image_generation",
         "status": "operational",
         "available_models": image_gen_gateway.list_available_models(),
-        "default_model": "wan2.7-image",
+        "default_model": image_gen_gateway.DEFAULT_MODEL,
         "monthly_budget_cny": float(DEFAULT_MONTHLY_BUDGET_CNY),
         "high_cost_threshold_cny": float(HIGH_COST_THRESHOLD_CNY),
         "storage_dir": IMAGE_STORAGE_DIR,
@@ -123,10 +123,11 @@ async def create_generation_task(
     prompt: str,
     product_id: UUID | None = None,
     use_case: str = "main_image",
-    model: str = "wan2.7-image",
+    model: str = image_gen_gateway.DEFAULT_MODEL,
     width: int = 1024,
     height: int = 1024,
     negative_prompt: str | None = None,
+    reference_image: str | None = None,
     trace_id: str | None = None,
 ) -> ImageGenerationTask:
     """Create a pending image generation task (does not call the API yet)."""
@@ -140,6 +141,7 @@ async def create_generation_task(
         product_id=product_id,
         prompt=prompt,
         negative_prompt=negative_prompt,
+        reference_image=reference_image,
         use_case=use_case,
         requested_model=model,
         width=width,
@@ -188,12 +190,17 @@ async def execute_generation_task(
     await session.flush()
 
     try:
+        from app.core.config import get_settings
+        settings = get_settings()
         gen_result = await image_gen_gateway.generate_image(
             prompt=task.prompt,
             model=task.requested_model,
             width=task.width,
             height=task.height,
             negative_prompt=task.negative_prompt,
+            reference_image=task.reference_image,
+            timeout_seconds=settings.image_gen_timeout_seconds,
+            max_retries=settings.image_gen_max_retries,
         )
         task.actual_model = gen_result.model
         task.cost_cny = Decimal(str(gen_result.cost_cny))
@@ -241,10 +248,11 @@ async def generate_image_and_save(
     prompt: str,
     product_id: UUID | None = None,
     use_case: str = "main_image",
-    model: str = "wan2.7-image",
+    model: str = image_gen_gateway.DEFAULT_MODEL,
     width: int = 1024,
     height: int = 1024,
     negative_prompt: str | None = None,
+    reference_image: str | None = None,
     trace_id: str | None = None,
 ) -> ImageGenerationTask:
     """Convenience: create task + execute in one call (for API / Agent use)."""
@@ -258,6 +266,7 @@ async def generate_image_and_save(
         width=width,
         height=height,
         negative_prompt=negative_prompt,
+        reference_image=reference_image,
         trace_id=trace_id,
     )
     return await execute_generation_task(session, task_id=task.id, workspace_id=workspace_id)
@@ -366,6 +375,7 @@ def _task_to_dict(task: ImageGenerationTask) -> dict[str, Any]:
         "id": str(task.id),
         "product_id": str(task.product_id) if task.product_id else None,
         "prompt": task.prompt,
+        "reference_image": task.reference_image,
         "use_case": task.use_case,
         "requested_model": task.requested_model,
         "actual_model": task.actual_model,

@@ -17,6 +17,13 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import (
+    B2C,
+    SHARED,
+    AgentScopeError,
+    normalize_scope,
+    scope_compatible,
+)
 from app.models.agent_runtime import (
     EXECUTION_STATUSES,
     MEMORY_SOURCE_TYPES,
@@ -77,6 +84,34 @@ class ToolNotFoundError(AgentRuntimeError):
 def agent_prompt_name(agent_id: str) -> str:
     """Registry name of the versioned prompt bound to an agent."""
     return f"{PROMPT_NAME_PREFIX}{agent_id.upper()}"
+
+
+def _normalized_scope(value: str | None, *, default: str = SHARED) -> str:
+    try:
+        return normalize_scope(value, default=default)
+    except AgentScopeError as exc:
+        raise AgentRuntimeError(str(exc)) from exc
+
+
+def _resolve_task_scope(agent: AgentRegistry, requested_scope: str | None) -> str:
+    """Resolve a task scope without widening a non-shared agent's authority.
+
+    Legacy B2C callers that omitted the new field are resolved to B2C for
+    shared agents. This is deliberately narrower than SHARED authority and
+    keeps old integrations safe while the API migrates.
+    """
+    agent_scope = _normalized_scope(agent.business_scope)
+    if agent_scope == SHARED:
+        return _normalized_scope(requested_scope, default=B2C)
+    if requested_scope is None:
+        return agent_scope
+    requested = _normalized_scope(requested_scope)
+    if requested == SHARED or requested != agent_scope:
+        raise AgentRuntimeError(
+            f"agent '{agent.agent_id}' is scoped to {agent_scope}; "
+            f"task scope {requested} is not allowed"
+        )
+    return requested
 
 
 # --------------------------------------------------------------------------- #
@@ -145,6 +180,7 @@ async def register_agent(
             model_name=data.model_name,
             prompt_version=data.prompt_version,
             permission_level=data.permission_level,
+            business_scope=_normalized_scope(data.business_scope),
             description=data.description,
             trace_id=trace_id,
         )
@@ -160,6 +196,7 @@ async def register_agent(
                 "agent_id": data.agent_id,
                 "domain": data.domain,
                 "permission_level": data.permission_level,
+                "business_scope": data.business_scope,
                 "prompt_version": data.prompt_version,
             },
             trace_id=trace_id,
@@ -174,8 +211,16 @@ async def register_agent(
     agent.status = data.status
     agent.model_provider = data.model_provider
     agent.model_name = data.model_name
+    requested_scope = _normalized_scope(data.business_scope)
+    current_scope = _normalized_scope(agent.business_scope)
+    if requested_scope != current_scope:
+        raise AgentRuntimeError(
+            "agent business_scope cannot be changed by registration; "
+            "publish and activate a governed Agent version instead"
+        )
     agent.prompt_version = data.prompt_version
     agent.permission_level = data.permission_level
+    agent.business_scope = requested_scope
     agent.description = data.description
     await session.flush()
     await event_service.create_event(
@@ -187,6 +232,7 @@ async def register_agent(
         payload={
             "agent_id": data.agent_id,
             "permission_level": data.permission_level,
+            "business_scope": data.business_scope,
             "prompt_version": data.prompt_version,
         },
         trace_id=trace_id,
@@ -229,6 +275,7 @@ async def list_agents(
     *,
     workspace_id: UUID,
     domain: str | None = None,
+    business_scope: str | None = None,
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -237,6 +284,10 @@ async def list_agents(
     filters = [AgentRegistry.workspace_id == workspace_id]
     if domain:
         filters.append(AgentRegistry.domain == domain)
+    if business_scope:
+        filters.append(
+            AgentRegistry.business_scope == _normalized_scope(business_scope)
+        )
     if status:
         filters.append(AgentRegistry.status == status)
     total = (
@@ -297,6 +348,7 @@ async def create_task(
         raise AgentRuntimeError("agent not found")
     if agent.status != "active":
         raise AgentRuntimeError(f"agent '{agent.agent_id}' is not active")
+    task_business_scope = _resolve_task_scope(agent, data.business_scope)
 
     if data.idempotency_key:
         existing = (
@@ -313,6 +365,10 @@ async def create_task(
             .first()
         )
         if existing is not None:
+            if existing.business_scope != task_business_scope:
+                raise AgentRuntimeError(
+                    "idempotency key already belongs to a task with a different business scope"
+                )
             await event_service.create_event(
                 session,
                 workspace_id=workspace_id,
@@ -321,6 +377,7 @@ async def create_task(
                 entity_id=str(existing.id),
                 payload={
                     "agent_id": agent.agent_id,
+                    "business_scope": existing.business_scope,
                     "idempotency_key": data.idempotency_key,
                 },
                 trace_id=trace_id,
@@ -339,6 +396,7 @@ async def create_task(
         input=data.input,
         status="pending",
         priority=data.priority,
+        business_scope=task_business_scope,
         idempotency_key=data.idempotency_key,
         trace_id=trace_id,
     )
@@ -350,7 +408,11 @@ async def create_task(
         event_type="agent.task_created",
         entity_type="agent_task",
         entity_id=str(task.id),
-        payload={"agent_id": agent.agent_id, "priority": data.priority},
+        payload={
+            "agent_id": agent.agent_id,
+            "priority": data.priority,
+            "business_scope": task_business_scope,
+        },
         trace_id=trace_id,
     )
     logger.info("task %s created for agent %s trace=%s", task.id, agent.agent_id, trace_id)
@@ -376,6 +438,7 @@ async def list_tasks(
     workspace_id: UUID,
     status: str | None = None,
     agent_id: UUID | None = None,
+    business_scope: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[AgentTask], int]:
@@ -387,6 +450,8 @@ async def list_tasks(
         filters.append(AgentTask.status == status)
     if agent_id is not None:
         filters.append(AgentTask.agent_id == agent_id)
+    if business_scope:
+        filters.append(AgentTask.business_scope == _normalized_scope(business_scope))
     total = (
         await session.execute(select(func.count()).select_from(AgentTask).where(*filters))
     ).scalar_one()
@@ -503,11 +568,13 @@ async def start_execution(
         "model_provider": agent.model_provider,
         "model_name": agent.model_name,
         "permission_level": agent.permission_level,
+        "business_scope": task.business_scope,
     }
     execution = AgentExecution(
         workspace_id=workspace_id,
         agent_id=agent.id,
         task_id=task.id,
+        business_scope=task.business_scope,
         context_snapshot=context_snapshot,
         input=task.input,
         status="running",
@@ -527,6 +594,7 @@ async def start_execution(
             "agent_id": agent.agent_id,
             "task_id": str(task.id),
             "permission_level": agent.permission_level,
+            "business_scope": task.business_scope,
         },
         trace_id=trace_id,
     )
@@ -659,6 +727,7 @@ async def _waiting_approval(
         entity_id=str(execution.id),
         target_task_id=execution.task_id,
         agent_id=execution.agent_id,
+        business_scope=execution.business_scope,
         metadata_={"reason": reason},
         trace_id=trace_id,
     )
@@ -788,6 +857,7 @@ async def list_executions(
     task_id: UUID | None = None,
     agent_id: UUID | None = None,
     status: str | None = None,
+    business_scope: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[AgentExecution], int]:
@@ -801,6 +871,10 @@ async def list_executions(
         if status not in EXECUTION_STATUSES:
             raise AgentRuntimeError(f"invalid execution status '{status}'")
         filters.append(AgentExecution.status == status)
+    if business_scope:
+        filters.append(
+            AgentExecution.business_scope == _normalized_scope(business_scope)
+        )
     total = (
         await session.execute(select(func.count()).select_from(AgentExecution).where(*filters))
     ).scalar_one()
@@ -862,8 +936,34 @@ async def execute_tool_call(
         "tool_name": tool_name,
         "arguments": arguments,
         "tool_level": tool.permission_level,
+        "tool_business_scope": tool.business_scope,
+        "execution_business_scope": execution.business_scope,
         "called_at": datetime.now(UTC).isoformat(),
     }
+    if not scope_compatible(execution.business_scope, tool.business_scope):
+        reason = (
+            f"tool '{tool_name}' scope '{tool.business_scope}' is not compatible "
+            f"with execution scope '{execution.business_scope}'"
+        )
+        record["status"] = "denied"
+        record["reason"] = reason
+        execution.tool_calls = [*execution.tool_calls, record]
+        await session.flush()
+        await event_service.create_event(
+            session,
+            workspace_id=workspace_id,
+            event_type="agent.tool_call_denied",
+            entity_type="agent_execution",
+            entity_id=str(execution.id),
+            payload={
+                "tool_name": tool_name,
+                "reason": reason,
+                "execution_business_scope": execution.business_scope,
+                "tool_business_scope": tool.business_scope,
+            },
+            trace_id=trace_id,
+        )
+        raise ToolPermissionError(reason)
     try:
         decision = permission_engine.check_tool(
             agent_level=agent.permission_level,
@@ -1027,6 +1127,7 @@ async def register_tool(
     description: str | None,
     permission_level: str,
     enabled: bool,
+    business_scope: str = SHARED,
     category: str | None = None,
     handler_name: str | None = None,
     args_schema: dict | None = None,
@@ -1035,6 +1136,7 @@ async def register_tool(
     """Register (or update) one tool in the whitelist (M5.1 binds handlers)."""
     if permission_level not in PERMISSION_LEVELS:
         raise AgentRuntimeError(f"invalid permission level '{permission_level}'")
+    normalized_scope = _normalized_scope(business_scope)
     tool = (
         await session.execute(
             select(AgentTool).where(
@@ -1049,6 +1151,7 @@ async def register_tool(
             tool_name=tool_name,
             description=description,
             permission_level=permission_level,
+            business_scope=normalized_scope,
             enabled=enabled,
             category=category,
             handler_name=handler_name,
@@ -1063,7 +1166,11 @@ async def register_tool(
             event_type="agent.tool_registered",
             entity_type="agent_tool",
             entity_id=tool_name,
-            payload={"tool_name": tool_name, "permission_level": permission_level},
+            payload={
+                "tool_name": tool_name,
+                "permission_level": permission_level,
+                "business_scope": normalized_scope,
+            },
             trace_id=trace_id,
         )
         logger.info("tool %s registered (level %s) trace=%s", tool_name, permission_level, trace_id)
@@ -1072,6 +1179,7 @@ async def register_tool(
 
     tool.description = description
     tool.permission_level = permission_level
+    tool.business_scope = normalized_scope
     tool.enabled = enabled
     tool.category = category
     tool.handler_name = handler_name
@@ -1084,7 +1192,12 @@ async def register_tool(
         event_type="agent.tool_updated",
         entity_type="agent_tool",
         entity_id=tool_name,
-        payload={"tool_name": tool_name, "permission_level": permission_level, "enabled": enabled},
+        payload={
+            "tool_name": tool_name,
+            "permission_level": permission_level,
+            "business_scope": normalized_scope,
+            "enabled": enabled,
+        },
         trace_id=trace_id,
     )
     await session.refresh(tool)
@@ -1098,6 +1211,7 @@ async def update_tool_enabled(
     tool_name: str,
     enabled: bool,
     description: str | None = None,
+    business_scope: str | None = None,
     handler_name: str | None = None,
     args_schema: dict[str, Any] | None = None,
     trace_id: str | None = None,
@@ -1116,6 +1230,8 @@ async def update_tool_enabled(
     tool.enabled = enabled
     if description is not None:
         tool.description = description
+    if business_scope is not None:
+        tool.business_scope = _normalized_scope(business_scope)
     if handler_name is not None:
         tool.handler_name = handler_name
     if args_schema is not None:
@@ -1139,12 +1255,17 @@ async def list_tools(
     *,
     workspace_id: UUID,
     enabled: bool | None = None,
+    business_scope: str | None = None,
     limit: int = 100,
 ) -> list[AgentTool]:
     """List the tool registry whitelist."""
     stmt = select(AgentTool).where(AgentTool.workspace_id == workspace_id)
     if enabled is not None:
         stmt = stmt.where(AgentTool.enabled == enabled)
+    if business_scope:
+        stmt = stmt.where(
+            AgentTool.business_scope == _normalized_scope(business_scope)
+        )
     stmt = stmt.order_by(AgentTool.tool_name).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows)

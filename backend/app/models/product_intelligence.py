@@ -45,6 +45,21 @@ DRAFT_PAYLOAD_STATUSES: tuple[str, ...] = ("generated",)
 DECISION_TYPES: tuple[str, ...] = ("test", "hold", "reject")
 APPROVAL_STATES: tuple[str, ...] = ("pending", "approved", "rejected")
 
+# V3.0 selection funnel (docs/nuotao_product_score_v3.0.md §4). Independent of
+# candidate_status; advanced by the V3 selection pipeline.
+FUNNEL_STAGES: tuple[str, ...] = (
+    "recalled",        # 100: recalled/sourced candidates (e.g. Newton search)
+    "screened",        # 60: passed deterministic compliance/commercial veto
+    "deep_candidate",  # 20: operational score reached the deep-candidate bar
+    "test_candidate",  # 8: Nuotao Score + brand-fit veto passed
+    "testing",         # 3: small-batch live test in progress
+    "hero",            # 1-2: Hero review approved
+    "rejected",        # vetoed / failed at any stage
+)
+
+# V3.0 Nuotao Score grades (docs/nuotao_product_score_v3.0.md §2.3).
+NUOTAO_GRADES: tuple[str, ...] = ("hero", "core", "long_tail", "reject")
+
 
 class ProductSource(Base, TimestampMixin, WorkspaceMixin):
     """A captured product source (1688 page, manual record, or other)."""
@@ -153,6 +168,54 @@ class ProductScore(Base, CreatedAtMixin, WorkspaceMixin):
         nullable=False,
     )
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ProductNuotaoScore(Base, CreatedAtMixin, WorkspaceMixin):
+    """Append-only V3.0 Nuotao Score (six brand dimensions 0-10, total 0-100).
+
+    Follows docs/nuotao_product_score_v3.0.md §2: weights Value 25%, Utility
+    20%, Weight&Packability 15%, Durability 15%, Brand Fit 15%,
+    Differentiation 10%. Brand Fit < 5 is a hard veto (rule V8). Rows are never
+    overwritten so score evolution stays auditable.
+    """
+
+    __tablename__ = "product_nuotao_scores"
+
+    id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
+    product_id: Mapped[Uuid] = mapped_column(
+        Uuid,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    value_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
+    utility_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
+    weight_packability_score: Mapped[Decimal] = mapped_column(
+        Numeric(4, 1), nullable=False, default=0
+    )
+    durability_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
+    brand_fit_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
+    differentiation_score: Mapped[Decimal] = mapped_column(
+        Numeric(4, 1), nullable=False, default=0
+    )
+    total: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    grade: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
+    dimension_evidence: Mapped[dict[str, Any]] = mapped_column(
+        AI_JSON, nullable=False, default=dict
+    )
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    scored_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_nuotao_scores_workspace_product", "workspace_id", "product_id"),
+    )
 
 
 class ProductAnalysisRun(Base, CreatedAtMixin, WorkspaceMixin):

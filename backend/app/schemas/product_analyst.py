@@ -13,6 +13,10 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DECISIONS = ("test", "hold", "reject")
+# V3.0 veto rules that require an AI/rulebook judgement rather than purely
+# deterministic data (compliance V1-V3 and brand-focus V5). The Product Analyst
+# may close them; every other veto rule stays deterministic.
+AI_VETO_RULES = ("V1", "V2", "V3", "V5")
 
 
 class PricingRecommendation(BaseModel):
@@ -34,6 +38,43 @@ class TestPlan(BaseModel):
     kpis: dict[str, Any] = Field(default_factory=dict)
 
 
+class AiVetoSignal(BaseModel):
+    """AI verdict for one compliance/brand veto rule (V1/V2/V3/V5 only).
+
+    ``uncertain`` is the explicit "cannot judge" state — it leaves the rule
+    pending rather than silently passing or inventing a veto.
+    """
+
+    verdict: Literal["pass", "fail", "uncertain"] = "uncertain"
+    reason: str = Field(default="", max_length=1000)
+
+
+class NuotaoAssessment(BaseModel):
+    """V3.0 brand-facing assessment supplied by the Product Analyst.
+
+    Closes the AI-dependent veto gaps (V1/V2/V3/V5) and supplies Brand Fit,
+    which has no deterministic source. All fields optional so an older prompt
+    / model that omits the block still validates.
+    """
+
+    brand_fit: Decimal | None = Field(default=None, ge=0, le=10)
+    veto_signals: dict[str, AiVetoSignal] = Field(default_factory=dict)
+    # Length is capped by the validator below (so an over-long LLM list is
+    # trimmed instead of rejected); do not add a Field max_length here.
+    why_we_recommend: list[str] = Field(default_factory=list)
+    differentiation_note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("veto_signals")
+    @classmethod
+    def _restrict_to_ai_rules(cls, value: dict) -> dict:
+        return {key: signal for key, signal in value.items() if key in AI_VETO_RULES}
+
+    @field_validator("why_we_recommend")
+    @classmethod
+    def _trim_reasons(cls, value: list[str]) -> list[str]:
+        return [str(item)[:300] for item in value][:5]
+
+
 class ProductAnalysisOutput(BaseModel):
     """Structured output contract for the Product Analyst Agent v1.
 
@@ -48,6 +89,7 @@ class ProductAnalysisOutput(BaseModel):
     risks: list[str] = Field(default_factory=list, max_length=20)
     pricing: PricingRecommendation
     test_plan: TestPlan
+    nuotao_assessment: NuotaoAssessment | None = None
 
     @field_validator("risks")
     @classmethod

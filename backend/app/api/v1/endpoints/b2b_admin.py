@@ -8,17 +8,24 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, or_
-from sqlalchemy.orm import selectinload
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.database import get_db
 from app.core.security import get_password_hash
-from app.models.b2b import B2BAgent, B2BOrder, B2BOrderItem, B2BProductPrice
+from app.core.tracing import get_trace_id
+from app.models.b2b import B2BAgent, B2BOrder, B2BProductPrice
+from app.services.b2b_portal_service import (
+    B2BOrderStateError,
+    update_b2b_order_status,
+)
+from app.services.customer_account_service import get_or_create_b2b_account
+from app.services.customer_identity_service import link_identity_to_account
 from app.services.email_service import (
     get_email_service,
     render_b2b_approval_email,
@@ -45,6 +52,46 @@ from app.schemas.user import UserResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/b2b", tags=["admin-b2b"])
+WorkspaceId = UUID
+
+
+def _parse_uuid(value: str | UUID) -> UUID | None:
+    try:
+        return value if isinstance(value, UUID) else UUID(str(value))
+    except ValueError:
+        return None
+
+
+async def _get_agent(
+    db: AsyncSession, *, workspace_id: UUID, agent_id: str
+) -> B2BAgent | None:
+    parsed_agent_id = _parse_uuid(agent_id)
+    if parsed_agent_id is None:
+        return None
+    return (
+        await db.execute(
+            select(B2BAgent).where(
+                B2BAgent.workspace_id == workspace_id,
+                B2BAgent.id == parsed_agent_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _get_product(
+    db: AsyncSession, *, workspace_id: UUID, product_id: str
+) -> Product | None:
+    parsed_product_id = _parse_uuid(product_id)
+    if parsed_product_id is None:
+        return None
+    return (
+        await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == parsed_product_id,
+            )
+        )
+    ).scalar_one_or_none()
 
 
 # ============================================
@@ -123,12 +170,15 @@ def _order_to_response(order: B2BOrder) -> AdminB2BOrderResponse:
 @router.get("/stats", response_model=AdminB2BStatsResponse)
 async def admin_b2b_stats(
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BStatsResponse:
     """B2B 业务统计概览。"""
     # 代理商统计
     agent_counts = await db.execute(
-        select(B2BAgent.status, func.count(B2BAgent.id)).group_by(B2BAgent.status)
+        select(B2BAgent.status, func.count(B2BAgent.id))
+        .where(B2BAgent.workspace_id == workspace_id)
+        .group_by(B2BAgent.status)
     )
     status_map = {row[0]: row[1] for row in agent_counts.all()}
 
@@ -138,7 +188,7 @@ async def admin_b2b_stats(
             func.count(B2BOrder.id),
             func.coalesce(func.sum(B2BOrder.total), Decimal("0")),
             func.count(B2BOrder.id).filter(B2BOrder.status == "pending"),
-        )
+        ).where(B2BOrder.workspace_id == workspace_id)
     )
     total_orders, total_revenue, pending_orders = order_stats.one()
 
@@ -147,7 +197,7 @@ async def admin_b2b_stats(
         select(
             func.coalesce(func.sum(B2BAgent.credit_limit), Decimal("0")),
             func.coalesce(func.sum(B2BAgent.current_balance), Decimal("0")),
-        )
+        ).where(B2BAgent.workspace_id == workspace_id)
     )
     total_credit, total_balance = credit_stats.one()
 
@@ -176,11 +226,12 @@ async def admin_b2b_list_agents(
     status_filter: str | None = Query(None, alias="status"),
     tier: str | None = None,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BAgentListResponse:
     """代理商列表（支持搜索、状态筛选、等级筛选、分页）。"""
-    query = select(B2BAgent)
-    count_query = select(func.count(B2BAgent.id))
+    query = select(B2BAgent).where(B2BAgent.workspace_id == workspace_id)
+    count_query = select(func.count(B2BAgent.id)).where(B2BAgent.workspace_id == workspace_id)
 
     if search:
         search_pattern = f"%{search}%"
@@ -213,7 +264,10 @@ async def admin_b2b_list_agents(
             select(
                 func.count(B2BOrder.id),
                 func.coalesce(func.sum(B2BOrder.total), Decimal("0")),
-            ).where(B2BOrder.agent_id == agent.id)
+            ).where(
+                B2BOrder.workspace_id == workspace_id,
+                B2BOrder.agent_id == agent.id,
+            )
         )
         order_count, total_rev = order_stats.one()
         items.append(_agent_to_response(agent, order_count or 0, total_rev or Decimal("0")))
@@ -225,21 +279,38 @@ async def admin_b2b_list_agents(
 async def admin_b2b_create_agent(
     req: AdminB2BAgentCreate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BAgentResponse:
     """创建代理商账号。"""
     # 检查邮箱是否已存在
-    existing = await db.execute(select(B2BAgent).where(B2BAgent.email == req.email.lower()))
+    existing = await db.execute(
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == workspace_id,
+            B2BAgent.email == req.email.lower(),
+        )
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already exists")
 
     now = datetime.now(timezone.utc)
-    agent_id = str(uuid4())
-    agent_number = f"AG-{now.strftime('%Y%m%d')}-{agent_id[:8].upper()}"
+    agent_id = uuid4()
+    agent_number = f"AG-{now.strftime('%Y%m%d')}-{str(agent_id)[:8].upper()}"
+    account = await get_or_create_b2b_account(
+        db,
+        workspace_id=workspace_id,
+        agent_number=agent_number,
+        company_name=req.company_name,
+        country=req.country,
+        default_currency=req.currency,
+        trace_id=get_trace_id(),
+    )
 
     agent = B2BAgent(
         id=agent_id,
+        workspace_id=workspace_id,
         agent_number=agent_number,
+        customer_account_id=account.id,
         company_name=req.company_name,
         contact_name=req.contact_name,
         email=req.email.lower(),
@@ -258,6 +329,19 @@ async def admin_b2b_create_agent(
         notes=req.notes,
     )
     db.add(agent)
+    await db.flush()
+    await link_identity_to_account(
+        db,
+        workspace_id=workspace_id,
+        account_id=account.id,
+        identity_type="email",
+        identity_value=req.email,
+        channel="b2b_portal",
+        external_system="b2b_agent",
+        source="b2b_agent_created",
+        metadata={"agent_id": str(agent.id)},
+        trace_id=get_trace_id(),
+    )
     await db.commit()
     await db.refresh(agent)
 
@@ -269,10 +353,11 @@ async def admin_b2b_create_agent(
 async def admin_b2b_get_agent(
     agent_id: str,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BAgentResponse:
     """代理商详情。"""
-    agent = await db.get(B2BAgent, agent_id)
+    agent = await _get_agent(db, workspace_id=workspace_id, agent_id=agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -280,7 +365,10 @@ async def admin_b2b_get_agent(
         select(
             func.count(B2BOrder.id),
             func.coalesce(func.sum(B2BOrder.total), Decimal("0")),
-        ).where(B2BOrder.agent_id == agent.id)
+        ).where(
+            B2BOrder.workspace_id == workspace_id,
+            B2BOrder.agent_id == agent.id,
+        )
     )
     order_count, total_rev = order_stats.one()
     return _agent_to_response(agent, order_count or 0, total_rev or Decimal("0"))
@@ -291,10 +379,11 @@ async def admin_b2b_update_agent(
     agent_id: str,
     req: AdminB2BAgentUpdate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BAgentResponse:
     """更新代理商信息。"""
-    agent = await db.get(B2BAgent, agent_id)
+    agent = await _get_agent(db, workspace_id=workspace_id, agent_id=agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -313,10 +402,11 @@ async def admin_b2b_update_agent_status(
     agent_id: str,
     req: AdminB2BAgentStatusUpdate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BAgentResponse:
     """更改代理商状态（审核通过/停用/启用等）。"""
-    agent = await db.get(B2BAgent, agent_id)
+    agent = await _get_agent(db, workspace_id=workspace_id, agent_id=agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -367,10 +457,11 @@ async def admin_b2b_reset_password(
     agent_id: str,
     req: AdminB2BResetPassword,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """重置代理商密码。"""
-    agent = await db.get(B2BAgent, agent_id)
+    agent = await _get_agent(db, workspace_id=workspace_id, agent_id=agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -392,11 +483,14 @@ async def admin_b2b_list_orders(
     payment_status: str | None = None,
     agent_id: str | None = None,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BOrderListResponse:
     """所有 B2B 订单列表。"""
-    query = select(B2BOrder).options(selectinload(B2BOrder.agent))
-    count_query = select(func.count(B2BOrder.id))
+    query = select(B2BOrder).where(B2BOrder.workspace_id == workspace_id)
+    count_query = select(func.count(B2BOrder.id)).where(
+        B2BOrder.workspace_id == workspace_id
+    )
 
     if status_filter:
         query = query.where(B2BOrder.status == status_filter)
@@ -405,11 +499,19 @@ async def admin_b2b_list_orders(
         query = query.where(B2BOrder.payment_status == payment_status)
         count_query = count_query.where(B2BOrder.payment_status == payment_status)
     if agent_id:
-        query = query.where(B2BOrder.agent_id == agent_id)
-        count_query = count_query.where(B2BOrder.agent_id == agent_id)
+        agent = await _get_agent(db, workspace_id=workspace_id, agent_id=agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        query = query.where(B2BOrder.agent_id == agent.id)
+        count_query = count_query.where(B2BOrder.agent_id == agent.id)
 
     total = (await db.execute(count_query)).scalar_one()
-    query = query.order_by(B2BOrder.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    query = (
+        query.options(selectinload(B2BOrder.agent))
+        .order_by(B2BOrder.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     orders = (await db.execute(query)).scalars().all()
 
     return AdminB2BOrderListResponse(
@@ -422,11 +524,20 @@ async def admin_b2b_list_orders(
 async def admin_b2b_get_order(
     order_id: str,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BOrderResponse:
     """订单详情。"""
+    parsed_order_id = _parse_uuid(order_id)
+    if parsed_order_id is None:
+        raise HTTPException(status_code=404, detail="Order not found")
     result = await db.execute(
-        select(B2BOrder).options(selectinload(B2BOrder.agent)).where(B2BOrder.id == order_id)
+        select(B2BOrder)
+        .options(selectinload(B2BOrder.agent))
+        .where(
+            B2BOrder.workspace_id == workspace_id,
+            B2BOrder.id == parsed_order_id,
+        )
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -439,22 +550,24 @@ async def admin_b2b_update_order_status(
     order_id: str,
     req: AdminB2BOrderStatusUpdate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BOrderResponse:
-    """更新订单状态（确认/发货/完成等），可附带物流信息。"""
-    order = await db.get(B2BOrder, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    order.status = req.status
-    if req.tracking_number is not None:
-        order.tracking_number = req.tracking_number
-    if req.tracking_carrier is not None:
-        order.tracking_carrier = req.tracking_carrier
-
-    await db.commit()
-    await db.refresh(order, ['agent'])
-    logger.info(f"Admin {current_user.email} updated order {order.order_number} status -> {req.status}")
+    """更新非履约状态；发货和送达只能通过履约工作流完成。"""
+    actor = current_user.email or current_user.username
+    try:
+        order = await update_b2b_order_status(
+            db,
+            workspace_id=workspace_id,
+            order_id=order_id,
+            new_status=req.status,
+            actor=actor,
+            trace_id=get_trace_id(),
+        )
+    except B2BOrderStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _order_to_response(order)
 
 
@@ -470,38 +583,61 @@ async def admin_b2b_list_prices(
     tier: str | None = None,
     agent_id: str | None = None,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BPriceListResponse:
     """批发价列表。"""
-    query = select(B2BProductPrice)
-    count_query = select(func.count(B2BProductPrice.id))
+    query = select(B2BProductPrice).where(B2BProductPrice.workspace_id == workspace_id)
+    count_query = select(func.count(B2BProductPrice.id)).where(
+        B2BProductPrice.workspace_id == workspace_id
+    )
 
     if product_id:
-        query = query.where(B2BProductPrice.product_id == product_id)
-        count_query = count_query.where(B2BProductPrice.product_id == product_id)
+        parsed_product_id = _parse_uuid(product_id)
+        if parsed_product_id is None:
+            return AdminB2BPriceListResponse(
+                items=[], total=0, page=page, page_size=page_size
+            )
+        query = query.where(B2BProductPrice.product_id == parsed_product_id)
+        count_query = count_query.where(B2BProductPrice.product_id == parsed_product_id)
     if tier:
         query = query.where(B2BProductPrice.tier == tier)
         count_query = count_query.where(B2BProductPrice.tier == tier)
     if agent_id:
-        query = query.where(B2BProductPrice.agent_id == agent_id)
-        count_query = count_query.where(B2BProductPrice.agent_id == agent_id)
+        parsed_agent_id = _parse_uuid(agent_id)
+        if parsed_agent_id is None:
+            return AdminB2BPriceListResponse(
+                items=[], total=0, page=page, page_size=page_size
+            )
+        query = query.where(B2BProductPrice.agent_id == parsed_agent_id)
+        count_query = count_query.where(B2BProductPrice.agent_id == parsed_agent_id)
 
     total = (await db.execute(count_query)).scalar_one()
     query = query.order_by(B2BProductPrice.product_id, B2BProductPrice.tier).offset((page - 1) * page_size).limit(page_size)
     prices = (await db.execute(query)).scalars().all()
 
     # 批量查询商品名和代理商名
-    product_ids = {str(p.product_id) for p in prices}
-    agent_ids = {str(p.agent_id) for p in prices if p.agent_id}
+    product_ids = {p.product_id for p in prices}
+    agent_ids = {p.agent_id for p in prices if p.agent_id}
 
     products = {}
     if product_ids:
-        prod_result = await db.execute(select(Product).where(Product.id.in_(product_ids)))
+        prod_result = await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id.in_(product_ids),
+            )
+        )
         products = {str(p.id): p for p in prod_result.scalars().all()}
 
     agents = {}
     if agent_ids:
-        agent_result = await db.execute(select(B2BAgent).where(B2BAgent.id.in_(agent_ids)))
+        agent_result = await db.execute(
+            select(B2BAgent).where(
+                B2BAgent.workspace_id == workspace_id,
+                B2BAgent.id.in_(agent_ids),
+            )
+        )
         agents = {str(a.id): a for a in agent_result.scalars().all()}
 
     items = []
@@ -531,29 +667,42 @@ async def admin_b2b_list_prices(
 async def admin_b2b_create_price(
     req: AdminB2BPriceCreate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BPriceResponse:
     """创建批发价（按等级或按代理商专属）。"""
     # 校验商品存在
-    product = await db.get(Product, req.product_id)
+    product = await _get_product(db, workspace_id=workspace_id, product_id=req.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+    if req.agent_id:
+        agent = await _get_agent(db, workspace_id=workspace_id, agent_id=req.agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
 
     # 校验唯一性
+    parsed_product_id = _parse_uuid(req.product_id)
+    parsed_agent_id = _parse_uuid(req.agent_id) if req.agent_id else None
+    if parsed_product_id is None:
+        raise HTTPException(status_code=404, detail="Product not found")
     existing = await db.execute(
         select(B2BProductPrice).where(
-            B2BProductPrice.product_id == req.product_id,
+            B2BProductPrice.workspace_id == workspace_id,
+            B2BProductPrice.product_id == parsed_product_id,
             B2BProductPrice.tier == req.tier if req.tier else B2BProductPrice.tier.is_(None),
-            B2BProductPrice.agent_id == req.agent_id if req.agent_id else B2BProductPrice.agent_id.is_(None),
+            B2BProductPrice.agent_id == parsed_agent_id
+            if parsed_agent_id
+            else B2BProductPrice.agent_id.is_(None),
         )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Price already exists for this product/tier/agent combination")
 
     price = B2BProductPrice(
-        product_id=req.product_id,
+        workspace_id=workspace_id,
+        product_id=parsed_product_id,
         tier=req.tier,
-        agent_id=req.agent_id,
+        agent_id=parsed_agent_id,
         wholesale_price=req.wholesale_price,
         moq=req.moq,
         currency=req.currency,
@@ -584,10 +733,21 @@ async def admin_b2b_update_price(
     price_id: str,
     req: AdminB2BPriceUpdate,
     current_user: UserResponse = Depends(get_current_user),
+    workspace_id: WorkspaceId = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ) -> AdminB2BPriceResponse:
     """更新批发价。"""
-    price = await db.get(B2BProductPrice, price_id)
+    parsed_price_id = _parse_uuid(price_id)
+    if parsed_price_id is None:
+        raise HTTPException(status_code=404, detail="Price not found")
+    price = (
+        await db.execute(
+            select(B2BProductPrice).where(
+                B2BProductPrice.workspace_id == workspace_id,
+                B2BProductPrice.id == parsed_price_id,
+            )
+        )
+    ).scalar_one_or_none()
     if not price:
         raise HTTPException(status_code=404, detail="Price not found")
 
@@ -598,7 +758,9 @@ async def admin_b2b_update_price(
     await db.commit()
     await db.refresh(price)
 
-    product = await db.get(Product, price.product_id)
+    product = await _get_product(
+        db, workspace_id=workspace_id, product_id=str(price.product_id)
+    )
     return AdminB2BPriceResponse(
         id=str(price.id),
         product_id=str(price.product_id),
@@ -613,4 +775,3 @@ async def admin_b2b_update_price(
         created_at=price.created_at,
         updated_at=price.updated_at,
     )
-

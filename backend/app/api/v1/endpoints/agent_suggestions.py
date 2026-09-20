@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.schemas.agent_suggestion import (
     ApproveRequest,
+    BatchDecideRequest,
+    BatchDecideResponse,
     ExecutionResponse,
     FeedbackRequest,
     FeedbackStatsResponse,
@@ -56,6 +58,8 @@ async def list_suggestions(
     suggestion_type: str | None = Query(None, description="类型"),
     priority: str | None = Query(None, description="优先级"),
     risk_level: str | None = Query(None, description="风险等级"),
+    dispatch_status: str | None = Query(None, description="分发状态: pending/dispatched/fallback_manual"),
+    needs_manual: bool = Query(False, description="仅返回需人工处理的建议（排除已分发审核 Agent 的）"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -68,6 +72,8 @@ async def list_suggestions(
         suggestion_type=suggestion_type,
         priority=priority,
         risk_level=risk_level,
+        dispatch_status=dispatch_status,
+        needs_manual=needs_manual,
         limit=limit,
         offset=offset,
     )
@@ -163,6 +169,29 @@ async def reject_suggestion(
     await db.commit()
     await db.refresh(suggestion)
     return SuggestionResponse.model_validate(suggestion)
+
+
+@router.post("/batch-decide", response_model=BatchDecideResponse)
+async def batch_decide(
+    body: BatchDecideRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量批准或拒绝建议（单一事务）。
+
+    仅对 pending_approval 状态生效；其余条目在 skipped 中说明原因。
+    """
+    try:
+        result = await agent_suggestion_service.batch_decide_suggestions(
+            db,
+            body.suggestion_ids,
+            decision=body.decision,
+            operator=body.operator,
+            comment=body.comment,
+            auto_execute=body.auto_execute,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BatchDecideResponse(**result)
 
 
 @router.post("/{suggestion_id}/skip", response_model=SuggestionResponse)

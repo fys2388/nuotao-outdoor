@@ -1,12 +1,18 @@
 """Shared pytest fixtures for the backend test suite."""
 
+from datetime import UTC, datetime
+from uuid import UUID
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.database import Base, get_db
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.main import app
+from app.schemas.user import UserResponse
 
 
 @pytest.fixture()
@@ -44,10 +50,31 @@ def api_client(db_session):
     async def override_get_db():
         yield db_session
 
+    admin = UserResponse(
+        id="test-admin",
+        username="admin",
+        email="admin@example.com",
+        role="admin",
+        is_active=True,
+        created_at=datetime.now(UTC),
+    )
+
+    def override_current_user() -> UserResponse:
+        return admin
+
+    def override_workspace_id() -> UUID:
+        return DEFAULT_WORKSPACE_ID
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_current_workspace_id] = override_workspace_id
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.pop(get_db, None)
+    if app.dependency_overrides.get(get_current_user) is override_current_user:
+        app.dependency_overrides.pop(get_current_user, None)
+    if app.dependency_overrides.get(get_current_workspace_id) is override_workspace_id:
+        app.dependency_overrides.pop(get_current_workspace_id, None)
 
 
 @pytest.fixture(autouse=True)

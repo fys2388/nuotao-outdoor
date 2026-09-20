@@ -199,13 +199,21 @@ async def get_task_result(task_id: str) -> StandardResponse:
 
 
 @router.post("/search", summary="自然语言找品")
-async def search_products(request: SearchRequest) -> StandardResponse:
+async def search_products(request: SearchRequest, db: DbSession) -> StandardResponse:
     """
     牛顿AI智能找品（高层封装）
-    用自然语言描述需求，Agent自动在1688找品、比价、筛选
+    用自然语言描述需求，Agent自动在1688找品、比价、筛选。
+
+    找到真实商品后自动写入选品候选池（mock 示例数据不入库），让 AI 找的品
+    沉淀为可管理候选，修复"找品结果只在前端、候选池为空"的断层。
     """
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.core.workspace import DEFAULT_WORKSPACE_ID
+
     try:
-        result = newton_agent_search(
+        result = await run_in_threadpool(
+            newton_agent_search,
             query=request.query,
             min_price=request.min_price,
             max_price=request.max_price,
@@ -215,7 +223,39 @@ async def search_products(request: SearchRequest) -> StandardResponse:
         )
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "找品失败"))
+
+        # 真实找品结果自动入候选池；mock 示例不入库以免污染
+        products = result.get("products") or []
+        if products and result.get("source") != "mock":
+            try:
+                import_res = await import_products_to_candidates(
+                    db,
+                    products,
+                    sourcing_id=result.get("task_id", ""),
+                    source_query=request.query,
+                    workspace_id=DEFAULT_WORKSPACE_ID,
+                )
+                result["candidate_import"] = {
+                    "imported": import_res.get("imported", 0),
+                    "skipped": import_res.get("skipped", 0),
+                }
+                # 同步落一份 JSON 快照，便于审计回看
+                try:
+                    save_sourcing_result(
+                        query=request.query,
+                        products=products,
+                        summary=result.get("summary", ""),
+                        task_id=result.get("task_id", ""),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception as import_err:  # noqa: BLE001
+                logger.warning("Auto-import newton products to candidates failed: %s", import_err)
+                result["candidate_import_error"] = str(import_err)
+
         return StandardResponse(success=True, data=result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Newton search failed: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -412,11 +452,25 @@ async def import_sourcing_to_candidates(
             sourcing_id=request.sourcing_id,
             source_query=request.source_query,
         )
-        log_api_call("sourcing_import", success=result.get("imported", 0) > 0)
+        total = result.get("total", 0)
+        imported = result.get("imported", 0)
+        skipped = result.get("skipped", 0)
+        # 全部已存在（skipped==total）也算成功；仅当有真实错误且无成功导入时视为失败
+        ok = imported > 0 or (total > 0 and skipped >= total)
+        log_api_call("sourcing_import", success=ok)
+        if result.get("errors"):
+            logger.warning(
+                "部分商品导入失败: imported=%d, skipped=%d, errors=%d",
+                imported, skipped, len(result["errors"]),
+            )
         return StandardResponse(success=True, data=result)
     except Exception as e:
         logger.error("Import sourcing to candidates failed: %s", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        # 不向前端暴露 SQLAlchemy 原始错误体（含 SQL、参数、约束名）
+        raise HTTPException(
+            status_code=500,
+            detail="选品结果导入失败，请稍后重试或联系管理员",
+        )
 
 
 @router.get("/sourcing/candidates", summary="查询牛顿来源的选品候选")

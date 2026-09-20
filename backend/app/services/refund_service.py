@@ -21,7 +21,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -160,7 +160,7 @@ async def create_refund_request(
     category: str = "other",
     refund_type: str = "partial",
     idempotency_key: str | None = None,
-    requested_by: str = "system",
+    requested_by: str = "unattributed",
     notes: str | None = None,
     trace_id: str | None = None,
 ) -> RefundCase:
@@ -247,6 +247,7 @@ async def submit_for_approval(
     *,
     workspace_id: UUID,
     refund_id: UUID,
+    submitted_by: str = "unattributed",
     trace_id: str | None = None,
 ) -> RefundCase:
     """Submit refund request for approval. requested -> pending_approval."""
@@ -256,7 +257,9 @@ async def submit_for_approval(
     await session.flush()
     await _write_event(
         session, workspace_id=workspace_id, event_type="refund.pending_approval",
-        refund=refund, payload={"previous": "requested"}, trace_id=trace_id,
+        refund=refund,
+        payload={"previous": "requested", "submitted_by": submitted_by},
+        trace_id=trace_id,
     )
     return refund
 
@@ -351,6 +354,7 @@ async def cancel_refund(
     """Cancel refund. requested/pending_approval/approved -> cancelled."""
     refund = await _load_refund(session, workspace_id=workspace_id, refund_id=refund_id)
     _check_transition(refund.status, "cancelled")
+    previous = refund.status
     refund.status = "cancelled"
     refund.resolution = "cancelled"
     if reason:
@@ -359,7 +363,7 @@ async def cancel_refund(
     await _write_event(
         session, workspace_id=workspace_id, event_type="refund.cancelled",
         refund=refund,
-        payload={"cancelled_by": cancelled_by, "reason": reason, "previous": refund.status},
+        payload={"cancelled_by": cancelled_by, "reason": reason, "previous": previous},
         trace_id=trace_id,
     )
     return refund
@@ -395,6 +399,7 @@ async def execute_refund(
     workspace_id: UUID,
     refund_id: UUID,
     payment_provider: str | None = None,
+    executed_by: str = "unattributed",
     trace_id: str | None = None,
 ) -> RefundCase:
     """Execute refund via payment provider. approved -> processing -> succeeded/failed.
@@ -419,7 +424,13 @@ async def execute_refund(
     await session.flush()
     await _write_event(
         session, workspace_id=workspace_id, event_type="refund.processing",
-        refund=refund, payload={"provider": provider, "previous": "approved"}, trace_id=trace_id,
+        refund=refund,
+        payload={
+            "provider": provider,
+            "previous": "approved",
+            "executed_by": executed_by,
+        },
+        trace_id=trace_id,
     )
 
     # Execute refund via provider.
@@ -434,7 +445,12 @@ async def execute_refund(
         await _write_event(
             session, workspace_id=workspace_id, event_type="refund.failed",
             refund=refund,
-            payload={"error": str(exc)[:500], "retry_count": refund.retry_count, "provider": provider},
+            payload={
+                "error": str(exc)[:500],
+                "retry_count": refund.retry_count,
+                "provider": provider,
+                "executed_by": executed_by,
+            },
             trace_id=trace_id,
         )
         logger.error("refund execution failed: id=%s error=%s trace=%s", refund.id, exc, trace_id)
@@ -460,6 +476,7 @@ async def execute_refund(
             "executed_amount": str(refund.executed_amount),
             "order_refunded_amount_updated_to": str(order.refunded_amount),
             "provider": provider,
+            "executed_by": executed_by,
         },
         trace_id=trace_id,
     )
@@ -519,6 +536,7 @@ async def retry_refund(
     *,
     workspace_id: UUID,
     refund_id: UUID,
+    retried_by: str = "unattributed",
     trace_id: str | None = None,
 ) -> RefundCase:
     """Retry a failed refund. failed -> processing.
@@ -539,7 +557,13 @@ async def retry_refund(
             f"max retries ({refund.max_retries}) exceeded; manual intervention required"
         )
 
-    return await execute_refund(session, workspace_id=workspace_id, refund_id=refund_id, trace_id=trace_id)
+    return await execute_refund(
+        session,
+        workspace_id=workspace_id,
+        refund_id=refund_id,
+        executed_by=retried_by,
+        trace_id=trace_id,
+    )
 
 
 # --------------------------------------------------------------------------- #

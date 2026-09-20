@@ -186,12 +186,20 @@ async def auto_approve_suggestion(
     """
     if not AUTO_APPROVAL_ENABLED:
         logger.info("Agent 自动审批已禁用，建议 %s 保持 pending_approval", suggestion.id)
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = "自动审批开关已关闭，回退人工审批"
+        await session.flush()
         return {"decision": "skipped", "reason": "auto_approval_disabled"}
 
     # 1. 确定审核 Agent
     reviewer_id, reviewer_name = get_reviewer_for_suggestion(
         suggestion.suggestion_type, suggestion.agent_id
     )
+    # 分发标记落库：中央审批页据此只展示未走完自动审批的建议。
+    suggestion.dispatch_status = "dispatched"
+    suggestion.dispatch_reviewer = reviewer_id
+    suggestion.dispatch_fallback_reason = None
+    await session.flush()
     logger.info(
         "建议 %s 自动审批：生成 Agent=%s → 审核 Agent=%s",
         suggestion.id, suggestion.agent_id, reviewer_id,
@@ -221,6 +229,9 @@ async def auto_approve_suggestion(
     except LLMError as exc:
         error_msg = f"审核 LLM 调用失败: {exc}"
         logger.error("建议 %s 自动审批失败: %s", suggestion.id, error_msg)
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = f"审核 Agent 调用失败，回退人工审批"
+        await session.flush()
         # LLM 失败时保守处理：保持 pending_approval，不自动批准也不拒绝
         await _persist_approval_audit(
             session, suggestion=suggestion, reviewer_id=reviewer_id,
@@ -243,6 +254,9 @@ async def auto_approve_suggestion(
     except (LLMError, ValueError, TypeError) as exc:
         error_msg = f"审核输出解析失败: {exc}"
         logger.error("建议 %s 自动审批解析失败: %s", suggestion.id, error_msg)
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = "审核 Agent 输出无法解析，回退人工审批"
+        await session.flush()
         await _persist_approval_audit(
             session, suggestion=suggestion, reviewer_id=reviewer_id,
             reviewer_name=reviewer_name, decision="error",

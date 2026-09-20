@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from tests.integration.conftest import run_alembic
+from tests.integration.conftest import alembic_head, run_alembic
 
 WORKSPACE = UUID("10000000-0000-0000-0000-000000000001")
 OTHER_WORKSPACE = UUID("20000000-0000-0000-0000-000000000001")
@@ -77,7 +77,7 @@ async def test_0024_downgrade_upgrade_drill(pg_database_url: str) -> None:
     await asyncio.to_thread(run_alembic, pg_database_url, "upgrade", "head")
     conn = await _connect(pg_database_url)
     try:
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0024"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == alembic_head()
     finally:
         await conn.close()
 

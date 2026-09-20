@@ -49,6 +49,9 @@ async def create_suggestion(
     risk_level: str = "medium",
     agent_run_id: int | None = None,
     workspace_id: UUID | None = None,
+    source: str = "auto",
+    auto_approve: bool = True,
+    commit: bool = True,
 ) -> AgentSuggestion:
     """创建一条 Agent 建议，状态为 pending_approval。
 
@@ -63,6 +66,7 @@ async def create_suggestion(
         workspace_id=workspace_id or DEFAULT_WORKSPACE_ID,
         agent_id=agent_id,
         agent_run_id=agent_run_id,
+        source=source,
         suggestion_type=suggestion_type,
         title=title,
         description=description,
@@ -81,9 +85,30 @@ async def create_suggestion(
         suggestion.id, agent_id, suggestion_type, risk_level,
     )
 
+    if not commit:
+        return suggestion
+
     # 先提交建议创建，确保后续自动审批失败时建议已落库
     await session.commit()
     await session.refresh(suggestion)
+
+    # B2B 商业建议必须由业务人员确认，禁止进入 LLM 自动审批和执行。
+    if not auto_approve or source == "b2b_agent":
+        fallback_reason = (
+            "B2B 商业建议需业务负责人确认，不进入自动审批"
+            if source == "b2b_agent"
+            else "创建时未请求自动审批，等待人工处理"
+        )
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = fallback_reason
+        await session.flush()
+        logger.info(
+            "Agent建议等待人工审批: id=%s agent=%s source=%s",
+            suggestion.id,
+            agent_id,
+            source,
+        )
+        return suggestion
 
     # Agent 自动审批（替代飞书人工审批）
     # 流程：根据建议类型分发给对应审核 Agent（生成 Agent ≠ 审核 Agent），
@@ -105,6 +130,9 @@ async def create_suggestion(
         # 自动审批可能已修改 suggestion 状态，刷新后返回
         await session.refresh(suggestion)
     except Exception as e:
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = "自动审批流程异常，回退人工审批"
+        await session.flush()
         logger.warning(
             "Agent自动审批失败（非阻塞，建议保持 pending_approval 等待人工处理）: %s",
             e,
@@ -134,6 +162,8 @@ async def list_suggestions(
     suggestion_type: str | None = None,
     priority: str | None = None,
     risk_level: str | None = None,
+    dispatch_status: str | None = None,
+    needs_manual: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[AgentSuggestion], int]:
@@ -159,6 +189,14 @@ async def list_suggestions(
     if risk_level:
         stmt = stmt.where(AgentSuggestion.risk_level == risk_level)
         count_stmt = count_stmt.where(AgentSuggestion.risk_level == risk_level)
+    if dispatch_status:
+        stmt = stmt.where(AgentSuggestion.dispatch_status == dispatch_status)
+        count_stmt = count_stmt.where(AgentSuggestion.dispatch_status == dispatch_status)
+    if needs_manual:
+        # 中央审批页只展示"需要人工处理"的建议：已分发审核 Agent 成功、
+        # 不需人工的(dispatched)一律排除；回退人工(fallback_manual)与待分发(pending)保留。
+        stmt = stmt.where(AgentSuggestion.dispatch_status != "dispatched")
+        count_stmt = count_stmt.where(AgentSuggestion.dispatch_status != "dispatched")
 
     # 简单排序：按创建时间倒序（最新的在前）
     stmt = stmt.order_by(AgentSuggestion.created_at.desc())
@@ -231,6 +269,90 @@ async def approve_suggestion(
         await execute_suggestion(session, suggestion)
 
     return suggestion
+
+
+async def batch_decide_suggestions(
+    session: AsyncSession,
+    suggestion_ids: list[int],
+    *,
+    decision: str,
+    operator: str,
+    comment: str | None = None,
+    auto_execute: bool = True,
+) -> dict[str, Any]:
+    """批量审批或拒绝建议（单一事务，避免前端循环调用造成半成功状态）。
+
+    只对处于 pending_approval 的建议生效；其余记入 skipped 并说明原因，
+    不抛异常，保证批量操作的幂等与可解释性。
+    """
+    if decision not in ("approve", "reject"):
+        raise ValueError("decision 必须为 approve 或 reject")
+
+    result_ids = list(dict.fromkeys(suggestion_ids))
+    succeeded: list[int] = []
+    skipped: list[dict[str, Any]] = []
+
+    if result_ids:
+        rows = (
+            await session.execute(
+                select(AgentSuggestion).where(AgentSuggestion.id.in_(result_ids))
+            )
+        ).scalars().all()
+        by_id = {row.id: row for row in rows}
+        now = datetime.now(UTC)
+        for sid in result_ids:
+            suggestion = by_id.get(sid)
+            if suggestion is None:
+                skipped.append({"id": sid, "reason": "建议不存在"})
+                continue
+            if suggestion.status != "pending_approval":
+                skipped.append({"id": sid, "reason": f"当前状态 {suggestion.status} 不可审批"})
+                continue
+            if decision == "approve":
+                suggestion.status = "approved"
+                suggestion.approved_by = operator
+                suggestion.approval_comment = comment
+            else:
+                suggestion.status = "rejected"
+                suggestion.approved_by = operator
+                suggestion.approval_comment = comment or "已拒绝"
+            suggestion.approved_at = now
+            succeeded.append(sid)
+        await session.flush()
+        await session.commit()
+
+    # 低风险且批准时逐条触发执行；执行失败不回滚审批状态（与单条审批一致）。
+    executed: list[int] = []
+    exec_failed: list[dict[str, Any]] = []
+    if decision == "approve" and auto_execute and succeeded:
+        from app.services.execution_router import execute_suggestion
+
+        for sid in succeeded:
+            suggestion = await get_suggestion(session, sid)
+            if suggestion is None or suggestion.risk_level != "low":
+                continue
+            try:
+                await execute_suggestion(session, suggestion)
+                executed.append(sid)
+            except Exception as exc:  # 单条执行失败不影响其余批量结果
+                logger.error("批量审批后执行建议 %s 失败: %s", sid, exc)
+                exec_failed.append({"id": sid, "error": str(exc)})
+
+    logger.info(
+        "批量%s建议完成: 成功 %d 条，跳过 %d 条，执行人 %s",
+        "批准" if decision == "approve" else "拒绝",
+        len(succeeded),
+        len(skipped),
+        operator,
+    )
+    return {
+        "decision": decision,
+        "requested": len(result_ids),
+        "succeeded": succeeded,
+        "skipped": skipped,
+        "executed": executed,
+        "exec_failed": exec_failed,
+    }
 
 
 async def reject_suggestion(

@@ -36,6 +36,9 @@ SUGGESTION_TYPES = (
     "listing_optimization",    # 上架优化（标题/关键词/图片）
     "supply_chain",            # 供应链优化（采购/物流/供应商）
     "business_insight",        # 商业洞察（报表/趋势/建议）
+    "b2b_sales_follow_up",     # B2B 询盘跟进
+    "b2b_quote_recommendation",# B2B 报价建议
+    "b2b_collection_action",   # B2B 回款跟进
     "other",                   # 其他
 )
 
@@ -107,6 +110,21 @@ class AgentSuggestion(Base, TimestampMixin, WorkspaceMixin):
     feedback_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="反馈意见")
     feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     learned: Mapped[bool] = mapped_column(default=False, comment="是否已被Agent学习吸收")
+
+    # --- 审批分发（建议自动分发给对应审核 Agent/负责人，失败才回落到中央人工审批）---
+    dispatch_status: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="pending",
+        index=True,
+        comment="审批分发状态: pending(待分发)/dispatched(已分发审核)/fallback_manual(回退人工审批)",
+    )
+    dispatch_reviewer: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="分发的审核 Agent/负责人 ID"
+    )
+    dispatch_fallback_reason: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="回退到人工审批的原因（审核失败/禁用自动审批/需业务确认等）"
+    )
 
     # --- 关联 ---
     agent_run: Mapped["AiAgentRun | None"] = relationship("AiAgentRun", backref="suggestions", lazy="selectin")  # noqa: F821 (SQLAlchemy string relationship reference)

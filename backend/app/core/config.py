@@ -247,6 +247,8 @@ class Settings(BaseSettings):
     dashscope_workspace_id: str = ""
     volcengine_api_key: str = ""
     volcengine_ark_endpoint: str = ""
+    volc_accesskey: str = ""
+    volc_secretkey: str = ""
 
     # --- Database Backup (auto daily backup, Neon PostgreSQL) ---------------
     backup_dir: str = "backups/database"

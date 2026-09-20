@@ -12,6 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+BusinessScope = Literal["B2C", "B2B", "SHARED"]
+
 # --------------------------------------------------------------------------- #
 # Execution policy
 # --------------------------------------------------------------------------- #
@@ -26,6 +28,7 @@ class ExecutionPolicyCreate(BaseModel):
     approval_timeout_seconds: int = Field(default=86400, ge=60, le=2_592_000)
     max_context_size: int = Field(default=20000, ge=100, le=1_000_000)
     retry_policy_id: str = Field(default="standard", min_length=1, max_length=64)
+    business_scope: BusinessScope = "SHARED"
     enabled: bool = True
 
 
@@ -39,6 +42,7 @@ class ExecutionPolicyOut(BaseModel):
     agent_id: UUID | None
     policy_version: str
     is_current: bool
+    business_scope: str
     max_concurrent: int
     execution_timeout_seconds: int
     approval_timeout_seconds: int
@@ -69,6 +73,7 @@ class BudgetPolicyCreate(BaseModel):
         default=Decimal("0.80"), gt=0, le=1, max_digits=4, decimal_places=3
     )
     currency: Literal["USD"] = "USD"
+    business_scope: BusinessScope = "SHARED"
     enabled: bool = True
 
 
@@ -82,6 +87,7 @@ class BudgetPolicyOut(BaseModel):
     agent_id: UUID | None
     policy_version: str
     is_current: bool
+    business_scope: str
     monthly_budget: Decimal
     max_cost_per_execution: Decimal
     alert_threshold: Decimal

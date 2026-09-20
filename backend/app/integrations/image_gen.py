@@ -53,7 +53,7 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
         "cost_cny": 0.20,
         "provider": "volcengine",
         "quality": "high",
-        "default": True,
+        "default": False,
         "free_quota": "200 images (new user)",
         "api_style": "openai_images",
     },
@@ -61,9 +61,25 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
         "cost_cny": 0.30,
         "provider": "volcengine",
         "quality": "very_high",
-        "default": False,
+        "default": True,
         "free_quota": "input image first free",
         "api_style": "openai_images",
+    },
+    "doubao-seedream-5-0-260128": {
+        "cost_cny": 0.22,
+        "provider": "volcengine",
+        "quality": "high",
+        "default": False,
+        "free_quota": "none",
+        "api_style": "openai_images",
+    },
+    "jimeng-marketing-3.0": {
+        "cost_cny": 0.20,
+        "provider": "volcengine_visual",
+        "quality": "very_high",
+        "default": False,
+        "free_quota": "free trial",
+        "api_style": "jimeng_async_i2i",
     },
     "doubao-seedream-4-5-251128": {
         "cost_cny": 0.25,
@@ -119,17 +135,19 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
     },
 }
 
-# Fallback chain: Seedream 4.0 (default, 200 free) -> 4.5 (200 free) -> 5.0 pro -> qwen-image -> mock.
+# Fallback chain: Seedream 5.0 pro (default) -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image -> mock.
 FALLBACK_CHAIN: list[str] = [
-    "doubao-seedream-4-0-250828",
-    "doubao-seedream-4-5-251128",
     "doubao-seedream-5-0-pro-260628",
+    "doubao-seedream-5-0-260128",
+    "doubao-seedream-4-5-251128",
+    "doubao-seedream-4-0-250828",
     "qwen-image-3.0",
     "mock",
 ]
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_RETRIES = 2
+DEFAULT_MODEL = "doubao-seedream-5-0-pro-260628"
 
 
 def list_available_models() -> list[dict[str, Any]]:
@@ -155,7 +173,7 @@ def get_model_cost(model: str) -> float:
 async def generate_image(
     *,
     prompt: str,
-    model: str = "doubao-seedream-4-0-250828",
+    model: str = DEFAULT_MODEL,
     width: int = 1024,
     height: int = 1024,
     negative_prompt: str | None = None,
@@ -245,6 +263,15 @@ async def _dispatch_to_backend(
             width=width,
             height=height,
             negative_prompt=negative_prompt,
+            timeout_seconds=timeout_seconds,
+        )
+
+    if provider == "volcengine_visual":
+        return await _generate_jimeng_marketing(
+            model=model,
+            prompt=prompt,
+            width=width,
+            height=height,
             timeout_seconds=timeout_seconds,
         )
 
@@ -564,3 +591,172 @@ async def _async_sleep(seconds: float) -> None:
     """Small async sleep helper (avoids importing asyncio at module top)."""
     import asyncio
     await asyncio.sleep(seconds)
+
+
+# ---------------------------------------------------------------------------
+# Jimeng (即梦) visual service — marketing product image 3.0 (I2I background replace)
+# ---------------------------------------------------------------------------
+
+async def generate_marketing_image(
+    *,
+    prompt: str,
+    product_image_b64: str,
+    seg_prompt: str | None = None,
+    timeout_seconds: float = 120.0,
+) -> ImageGenResult:
+    """Generate a marketing product image (I2I background replacement).
+
+    Uses 即梦AI-AI营销商品图3.0 (req_key: i2i_dreamlight3_0_background_replace).
+    Uploads a product photo, replaces the background per prompt, keeps the product.
+
+    Args:
+        prompt: scene/background description (e.g. "camping table, sunset forest")
+        product_image_b64: base64-encoded product image (JPEG/PNG, <4.7MB)
+        seg_prompt: optional subject description for precise cutout
+        timeout_seconds: polling timeout (default 120s; async task)
+    """
+    return await _generate_jimeng_marketing(
+        model="jimeng-marketing-3.0",
+        prompt=prompt,
+        width=1024,
+        height=1024,
+        timeout_seconds=timeout_seconds,
+        product_image_b64=product_image_b64,
+        seg_prompt=seg_prompt,
+    )
+
+
+async def _generate_jimeng_marketing(
+    *,
+    model: str,
+    prompt: str,
+    width: int,
+    height: int,
+    timeout_seconds: float,
+    product_image_b64: str | None = None,
+    seg_prompt: str | None = None,
+) -> ImageGenResult:
+    """即梦营销商品图3.0 adapter: V4-signed async I2I background replacement.
+
+    Requires VOLC_ACCESSKEY / VOLC_SECRETKEY (IAM AK/SK, not Ark API key).
+    """
+    import hashlib
+    import hmac
+    import time
+    import httpx
+
+    settings = get_settings()
+    ak = settings.volc_accesskey
+    sk = settings.volc_secretkey
+    if not ak or not sk:
+        raise ImageGenError("VOLC_ACCESSKEY / VOLC_SECRETKEY not configured")
+    if not product_image_b64:
+        raise ImageGenError("jimeng marketing requires product_image_b64 (I2I)")
+
+    host = "visual.volcengineapi.com"
+    region = "cn-north-1"
+    service = "cv"
+    req_key = "i2i_dreamlight3_0_background_replace"
+
+    def _hmac(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+    def _sign(action: str, body: dict) -> dict:
+        body_str = json.dumps(body)
+        payload_hash = hashlib.sha256(body_str.encode()).hexdigest()
+        now = int(time.time())
+        date = time.strftime("%Y%m%d", time.gmtime(now))
+        amz_date = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+        query = f"Action={action}&Version=2022-08-31"
+        canonical_headers = f"host:{host}\nx-content-sha256:{payload_hash}\nx-date:{amz_date}\n"
+        signed_headers = "host;x-content-sha256;x-date"
+        canonical_request = (
+            f"POST\n/\n{query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        )
+        credential_scope = f"{date}/{region}/{service}/request"
+        string_to_sign = (
+            f"HMAC-SHA256\n{amz_date}\n{credential_scope}\n"
+            f"{hashlib.sha256(canonical_request.encode()).hexdigest()}"
+        )
+        k_date = _hmac(sk.encode(), date)
+        k_region = _hmac(k_date, region)
+        k_service = _hmac(k_region, service)
+        k_signing = _hmac(k_service, "request")
+        signature = hmac.new(k_signing, string_to_sign.encode(), hashlib.sha256).hexdigest()
+        authorization = (
+            f"HMAC-SHA256 Credential={ak}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        headers = {
+            "Host": host,
+            "Content-Type": "application/json",
+            "X-Date": amz_date,
+            "X-Content-Sha256": payload_hash,
+            "Authorization": authorization,
+        }
+        return headers, f"https://{host}/?{query}", body_str
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            # 1. Submit task
+            submit_body: dict[str, Any] = {
+                "req_key": req_key,
+                "binary_data_base64": [product_image_b64],
+                "prompt": prompt,
+                "downscale_longer_side": max(width, height),
+            }
+            if seg_prompt:
+                submit_body["seg_prompt"] = seg_prompt
+
+            headers, url, body_str = _sign("CVSync2AsyncSubmitTask", submit_body)
+            resp = await client.post(url, headers=headers, content=body_str)
+            if resp.status_code != 200:
+                raise ImageGenError(f"jimeng submit failed: {resp.status_code} {resp.text[:300]}")
+            data = resp.json()
+            if data.get("code") != 10000:
+                raise ImageGenError(f"jimeng submit error: {data.get('message', data)}")
+            task_id = data["data"]["task_id"]
+
+            # 2. Poll
+            poll_interval = 3.0
+            max_polls = int(timeout_seconds / poll_interval)
+            for _ in range(max_polls):
+                await _async_sleep(poll_interval)
+                poll_body = {
+                    "req_key": req_key,
+                    "task_id": task_id,
+                    "req_json": json.dumps({
+                        "logo_info": {"add_logo": False},
+                        "return_url": True,
+                    }),
+                }
+                headers, purl, pbody = _sign("CVSync2AsyncGetResult", poll_body)
+                presp = await client.get(purl, headers=headers, params={"Action": "CVSync2AsyncGetResult", "Version": "2022-08-31"})
+                # Note: signed GET needs empty body hash; recompute for GET
+                # Simpler: use POST with query string (matches docs example)
+                presp = await client.post(purl, headers=headers, content=pbody)
+                if presp.status_code != 200:
+                    continue
+                pdata = presp.json()
+                if not isinstance(pdata.get("data"), dict):
+                    continue
+                status = pdata["data"].get("status", "")
+                if status == "done":
+                    urls = pdata["data"].get("image_urls", [])
+                    if urls:
+                        return ImageGenResult(
+                            image_url=urls[0],
+                            image_b64=None,
+                            model=model,
+                            cost_cny=get_model_cost(model),
+                            raw_response=pdata,
+                        )
+                    raise ImageGenError(f"jimeng done but no image: {pdata}")
+                if status in ("not_found", "expired"):
+                    raise ImageGenError(f"jimeng task {status}")
+            raise ImageGenError("jimeng polling timed out")
+    except httpx.TimeoutException:
+        raise ImageGenError("jimeng request timed out") from None
+    except httpx.HTTPError as exc:
+        raise ImageGenError(f"jimeng HTTP error: {exc}") from None
+

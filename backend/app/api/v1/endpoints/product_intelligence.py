@@ -5,10 +5,11 @@ Routes under ``/products`` extend the existing product domain; routes under
 involved in this phase - all processing is deterministic.
 """
 
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +20,14 @@ from app.core.workspace import get_workspace_id
 from app.models.product import Product
 from app.schemas.agent_operations import ApprovalOut
 from app.schemas.product import ProductOut
+from app.schemas.product_cost import (
+    ProductCostOverview,
+    ProductCostUpsertRequest,
+    ProductCostUpsertResult,
+    ProfitAnalysisOut,
+)
 from app.schemas.product_intelligence import (
+    ApprovedImageAttachRequest,
     CandidateCsvIntakeResult,
     CandidateStatusUpdateRequest,
     DecisionApproveRequest,
@@ -44,10 +52,17 @@ from app.schemas.product_intelligence import (
 from app.services import (
     approval_service,
     product_copy_service,
+    product_cost_service as pcs,
     product_intelligence as pi,
     task_queue,
 )
 from app.services.approval_rbac import ApprovalRBACError, check_actor_permission
+from app.services.product_content_service import (
+    attach_approved_image,
+    build_localization_record,
+    target_language_for_market,
+    utc_now_iso,
+)
 from app.services.product_intelligence import ProductDecisionActorError
 
 product_router = APIRouter(prefix="/products", tags=["product-intelligence"])
@@ -58,6 +73,81 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 MAX_CSV_INTAKE_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+
+@product_router.get(
+    "/cost-overview",
+    response_model=ProductCostOverview,
+    summary="Per-product landed cost and derived profit overview",
+)
+async def cost_overview(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    search: Annotated[str | None, Query(max_length=128)] = None,
+    cost_status: Annotated[str | None, Query(pattern="^(known|missing)$")] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ProductCostOverview:
+    """List live products with newest landed cost, reference price and margin."""
+    result = await pcs.list_cost_overview(
+        db,
+        workspace_id=workspace_id,
+        search=search,
+        cost_status=cost_status,
+        limit=limit,
+        offset=offset,
+    )
+    return ProductCostOverview.model_validate(result)
+
+
+@product_router.post(
+    "/{product_id}/cost-snapshots",
+    response_model=ProductCostUpsertResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new version of a product's authoritative cost",
+)
+async def upsert_cost(
+    product_id: UUID,
+    body: ProductCostUpsertRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductCostUpsertResult:
+    """Manually record/edit a cost; appends an immutable snapshot and audit event."""
+    try:
+        result = await pcs.upsert_product_cost(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            data=body,
+            trace_id=get_trace_id(),
+        )
+    except pcs.ProductCostError as exc:
+        raise _http_error(exc) from exc
+    return ProductCostUpsertResult.model_validate(result)
+
+
+@product_router.get(
+    "/{product_id}/profit-analysis",
+    response_model=ProfitAnalysisOut,
+    summary="Single-product profit analysis",
+)
+async def product_profit_analysis(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    sale_price: Annotated[Decimal | None, Query(gt=0)] = None,
+) -> ProfitAnalysisOut:
+    """Break landed + period cost vs reference price into contribution margin."""
+    try:
+        result = await pcs.profit_analysis(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            sale_price=sale_price,
+        )
+    except pcs.ProductCostError as exc:
+        raise _http_error(exc) from exc
+    return ProfitAnalysisOut.model_validate(result)
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -685,7 +775,7 @@ async def generate_product_copy(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
-    """Generate English product copy from raw product info using LLM.
+    """Generate and persist English product copy from raw product info using LLM.
 
     Returns title, description, bullet_points, seo_keywords, short_description.
     """
@@ -700,16 +790,123 @@ async def generate_product_copy(
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
 
+    source_description = product.description
+    if not source_description:
+        sources = await pi.list_sources(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+        )
+        if sources:
+            raw_data = sources[0].raw_data if isinstance(sources[0].raw_data, dict) else {}
+            source_description = raw_data.get("description")
+
+    target_language = target_language_for_market(product.target_market)
     result = await product_copy_service.generate_product_copy(
         name=product.name,
         category=product.category,
-        description=product.description,
+        description=source_description,
         source_url=product.source_url,
         weight_kg=float(product.weight_kg) if product.weight_kg else None,
         target_market=product.target_market or "US",
         trace_id=get_trace_id(),
     )
+    meta = dict(product.meta or {})
+    localizations = meta.get("localizations")
+    localizations = dict(localizations) if isinstance(localizations, dict) else {}
+    localizations[target_language] = build_localization_record(
+        result,
+        language=target_language,
+        target_market=product.target_market or "US",
+        source_trace_id=get_trace_id(),
+    )
+    meta["localizations"] = localizations
+    meta["content_updated_at"] = utc_now_iso()
+    product.meta = meta
+    await db.commit()
     return result
+
+
+@product_router.post(
+    "/{product_id}/localizations/{language}/approve",
+    summary="Approve a generated localization for listing use",
+)
+async def approve_product_localization(
+    product_id: UUID,
+    language: str,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    body: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """Mark a generated localization as human-reviewed and listing-ready."""
+    product = (
+        await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+
+    normalized_language = language.strip().lower()
+    meta = dict(product.meta or {})
+    localizations = meta.get("localizations")
+    localizations = dict(localizations) if isinstance(localizations, dict) else {}
+    localization = localizations.get(normalized_language)
+    if not isinstance(localization, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"localization {normalized_language!r} has not been generated",
+        )
+
+    localization = dict(localization)
+    localization["status"] = "approved"
+    localization["approved_by"] = str(body.get("actor") or "admin")[:64]
+    localization["approved_at"] = utc_now_iso()
+    localizations[normalized_language] = localization
+    meta["localizations"] = localizations
+    product.meta = meta
+    await db.commit()
+    return {
+        "success": True,
+        "product_id": str(product.id),
+        "language": normalized_language,
+        "status": "approved",
+        "localization": localization,
+    }
+
+
+@product_router.post(
+    "/{product_id}/media/approved-image",
+    summary="Attach an approved AI image to product media",
+)
+async def attach_product_approved_image(
+    request: Request,
+    product_id: UUID,
+    body: ApprovedImageAttachRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Attach a reviewed image task to the product main or gallery media."""
+    try:
+        result = await attach_approved_image(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            task_id=body.task_id,
+            placement=body.placement,
+            actor=resolve_actor(request, body.actor),
+        )
+        await db.commit()
+        return {"success": True, **result}
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 @product_router.get(
@@ -751,7 +948,7 @@ async def get_low_stock_products(
         select(Product).where(Product.workspace_id == workspace_id)
     )
     products = result.scalars().all()
-    
+
     low_stock = []
     for p in products:
         stock = p.meta.get("stock", 0) if isinstance(p.meta, dict) else 0
@@ -764,7 +961,7 @@ async def get_low_stock_products(
                 "source_url": p.source_url,
                 "status": p.status,
             })
-    
+
     return {
         "threshold": threshold,
         "total_low_stock": len(low_stock),
@@ -784,7 +981,7 @@ async def batch_update_products(
     """Batch update products by IDs."""
     product_ids = body.get("product_ids", [])
     updates = body.get("updates", {})
-    
+
     updated_count = 0
     for pid in product_ids:
         result = await db.execute(
@@ -802,14 +999,14 @@ async def batch_update_products(
             if "status" in updates:
                 product.status = updates["status"]
             updated_count += 1
-    
+
     await db.commit()
     return {"success": True, "updated_count": updated_count, "total": len(product_ids)}
 
 
 @product_router.post("/sync-inventory", summary="Trigger inventory sync")
 async def sync_inventory(db: DbSession, workspace_id: WorkspaceId) -> dict:
-    from app.tasks.inventory_sync import sync_inventory_from_woocommerce, sync_inventory_from_1688
+    from app.tasks.inventory_sync import sync_inventory_from_1688, sync_inventory_from_woocommerce
     wc = await sync_inventory_from_woocommerce()
     ali = await sync_inventory_from_1688()
     return {"success": True, "woocommerce": wc, "alibaba_1688": ali}

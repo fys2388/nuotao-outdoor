@@ -15,6 +15,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import Order, OrderItem
+from app.services import consolidation_service
+from app.services.customer_identity_service import (
+    CustomerIdentityConflictError,
+    ensure_account_for_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,17 +105,43 @@ async def sync_order_from_woocommerce(
 
     wc_status = wc_order.get("status", "pending")
     date_paid = wc_order.get("date_paid")
-    date_completed = wc_order.get("date_completed")
 
     # 计算退款总额
     refunded_amount = Decimal("0")
     for refund in wc_order.get("refunds", []):
         refunded_amount += _safe_decimal(refund.get("total", 0))
 
+    billing = wc_order.get("billing") if isinstance(wc_order.get("billing"), dict) else {}
+    customer_email = billing.get("email")
+    customer_account_id = None
+    if customer_email:
+        try:
+            account = await ensure_account_for_identity(
+                session,
+                workspace_id=workspace_id,
+                identity_type="email",
+                identity_value=str(customer_email),
+                channel="b2c_store",
+                external_system="woocommerce",
+                customer_type="CONSUMER",
+                business_model="B2C",
+                country=billing.get("country"),
+                default_currency=str(wc_order.get("currency") or "USD"),
+                source="woocommerce_sync",
+                trace_id=trace_id,
+            )
+            customer_account_id = account.id
+        except CustomerIdentityConflictError:
+            logger.warning(
+                "customer identity conflict for order %s; manual review required",
+                external_order_id,
+            )
+
     # 查找现有订单
     result = await session.execute(
         select(Order).where(
             Order.workspace_id == workspace_id,
+            Order.source == "woocommerce",
             Order.external_order_id == external_order_id,
         )
     )
@@ -131,7 +162,8 @@ async def sync_order_from_woocommerce(
                 country=(wc_order.get("billing", {}) or {}).get("country"),
                 payment_method=wc_order.get("payment_method"),
                 source="woocommerce",
-                customer_reference_id=str(wc_order.get("customer_id", "")) if wc_order.get("customer_id") else None,
+                business_model="B2C",
+                customer_account_id=customer_account_id,
                 subtotal=_safe_decimal(wc_order.get("subtotal")),
                 shipping_total=_safe_decimal(wc_order.get("shipping_total")),
                 discount_total=_safe_decimal(wc_order.get("discount_total")),
@@ -155,6 +187,7 @@ async def sync_order_from_woocommerce(
             result = await session.execute(
                 select(Order).where(
                     Order.workspace_id == workspace_id,
+                    Order.source == "woocommerce",
                     Order.external_order_id == external_order_id,
                 )
             )
@@ -174,6 +207,7 @@ async def sync_order_from_woocommerce(
             order.currency = wc_order.get("currency", order.currency)
             order.country = (wc_order.get("billing", {}) or {}).get("country", order.country)
             order.payment_method = wc_order.get("payment_method", order.payment_method)
+            order.customer_account_id = order.customer_account_id or customer_account_id
             order.subtotal = _safe_decimal(wc_order.get("subtotal"), float(order.subtotal))
             order.shipping_total = _safe_decimal(wc_order.get("shipping_total"), float(order.shipping_total))
             order.discount_total = _safe_decimal(wc_order.get("discount_total"), float(order.discount_total))
@@ -190,6 +224,7 @@ async def sync_order_from_woocommerce(
         order.currency = wc_order.get("currency", order.currency)
         order.country = (wc_order.get("billing", {}) or {}).get("country", order.country)
         order.payment_method = wc_order.get("payment_method", order.payment_method)
+        order.customer_account_id = order.customer_account_id or customer_account_id
         order.subtotal = _safe_decimal(wc_order.get("subtotal"), float(order.subtotal))
         order.shipping_total = _safe_decimal(wc_order.get("shipping_total"), float(order.shipping_total))
         order.discount_total = _safe_decimal(wc_order.get("discount_total"), float(order.discount_total))
@@ -235,6 +270,23 @@ async def sync_order_from_woocommerce(
         trace_id,
     )
 
+    await session.commit()
+    try:
+        await consolidation_service.ensure_attribution(
+            session,
+            workspace_id=workspace_id,
+            entity_type="b2c_order",
+            entity_id=order.id,
+            actor="system:woocommerce-sync",
+            trace_id=trace_id,
+        )
+    except Exception:
+        logger.warning(
+            "automatic consolidation attribution failed for order %s",
+            order.id,
+            exc_info=True,
+        )
+
     return order, is_new
 
 
@@ -242,6 +294,7 @@ async def get_order_by_external_id(
     session: AsyncSession,
     external_order_id: str,
     workspace_id: UUID | None = None,
+    source: str = "woocommerce",
 ) -> Order | None:
     """根据外部订单 ID 获取本地订单"""
     if workspace_id is None:
@@ -250,6 +303,7 @@ async def get_order_by_external_id(
     result = await session.execute(
         select(Order).where(
             Order.workspace_id == workspace_id,
+            Order.source == source,
             Order.external_order_id == external_order_id,
         )
     )

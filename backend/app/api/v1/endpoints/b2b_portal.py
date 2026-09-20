@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import validate_token
-from app.models.b2b import B2BAgent
+from app.core.workspace import DEFAULT_WORKSPACE_ID
+from app.models.b2b import B2BAgent, B2BOrder
+from app.models.b2b_sales import B2BRFQ, B2BContract, B2BQuote
 from app.schemas.b2b_portal import (
     B2BAccountSummary,
     B2BAgentProfile,
@@ -27,21 +30,44 @@ from app.schemas.b2b_portal import (
     B2BOrderItemResponse,
     B2BOrderListResponse,
     B2BOrderResponse,
+    B2BPortalContractListResponse,
+    B2BPortalContractResponse,
+    B2BPortalContractSignRequest,
+    B2BPortalOrderConversionResponse,
+    B2BPortalQuoteDecisionRequest,
+    B2BPortalQuoteItemResponse,
+    B2BPortalQuoteListResponse,
+    B2BPortalQuoteResponse,
+    B2BPortalRFQCreate,
+    B2BPortalRFQItemResponse,
+    B2BPortalRFQListResponse,
+    B2BPortalRFQResponse,
     B2BProductDetail,
     B2BProductListResponse,
     B2BTokenResponse,
 )
+from app.services import b2b_credit_service, b2b_sales_service
 from app.services.b2b_portal_service import (
-    authenticate_agent,
+    accept_agent_quote,
     change_agent_password,
+    convert_agent_contract_to_order,
+    create_agent_rfq,
     create_agent_token,
     create_b2b_order,
     get_account_summary,
     get_agent_by_id,
+    get_agent_contract,
     get_agent_order,
+    get_agent_quote,
+    get_agent_rfq,
     get_product_detail_for_agent,
+    list_agent_contracts,
     list_agent_orders,
+    list_agent_quotes,
+    list_agent_rfqs,
     list_products_for_agent,
+    reject_agent_quote,
+    sign_agent_contract,
     submit_application,
 )
 
@@ -55,6 +81,7 @@ b2b_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/b2b-portal/auth/login
 async def get_current_b2b_agent(
     token: str = Depends(b2b_oauth2_scheme),
     db: AsyncSession = Depends(get_db),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
 ) -> B2BAgent:
     """B2B 代理商认证依赖注入。
 
@@ -74,7 +101,23 @@ async def get_current_b2b_agent(
     if not agent_id:
         raise credentials_exception
 
-    agent = await get_agent_by_id(db, agent_id)
+    token_workspace = payload.get("workspace_id")
+    if not token_workspace:
+        raise credentials_exception
+    try:
+        workspace_id = UUID(str(token_workspace))
+    except ValueError as exc:
+        raise credentials_exception from exc
+
+    if x_workspace_id is not None:
+        try:
+            requested_workspace = UUID(x_workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid X-Workspace-Id") from exc
+        if requested_workspace != workspace_id:
+            raise HTTPException(status_code=403, detail="workspace header mismatch")
+
+    agent = await get_agent_by_id(db, agent_id, workspace_id=workspace_id)
     if not agent:
         raise credentials_exception
     if agent.status != "active":
@@ -141,6 +184,7 @@ async def b2b_submit_application(
             estimated_annual_volume=req.estimated_annual_volume,
             product_interests=req.product_interests,
             message=req.message,
+            workspace_id=DEFAULT_WORKSPACE_ID,
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -164,10 +208,16 @@ async def b2b_login(
 ) -> Any:
     """代理商登录（邮箱+密码），返回 JWT。"""
     from sqlalchemy import select
+
     from app.core.security import verify_password
 
     # 先查账号，区分"不存在/密码错误"和"状态未激活"
-    result = await db.execute(select(B2BAgent).where(B2BAgent.email == req.email.lower().strip()))
+    result = await db.execute(
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == DEFAULT_WORKSPACE_ID,
+            B2BAgent.email == req.email.lower().strip(),
+        )
+    )
     agent = result.scalar_one_or_none()
 
     if not agent or not verify_password(req.password, agent.hashed_password):
@@ -221,7 +271,11 @@ async def b2b_change_password(
 ) -> Any:
     """修改密码。"""
     success = await change_agent_password(
-        db, str(current_agent.id), req.old_password, req.new_password
+        db,
+        str(current_agent.id),
+        req.old_password,
+        req.new_password,
+        workspace_id=current_agent.workspace_id,
     )
     if not success:
         raise HTTPException(status_code=400, detail="Old password is incorrect")
@@ -302,6 +356,141 @@ def _order_to_response(order: B2BOrder) -> B2BOrderResponse:
     )
 
 
+def _portal_rfq_item_response(item) -> B2BPortalRFQItemResponse:
+    return B2BPortalRFQItemResponse(
+        id=str(item.id),
+        product_id=str(item.product_id),
+        sku_snapshot=item.sku_snapshot,
+        product_name_snapshot=item.product_name_snapshot,
+        requested_quantity=item.requested_quantity,
+        target_unit_price=item.target_unit_price,
+        specifications=item.specifications or {},
+        notes=item.notes,
+    )
+
+
+def _portal_rfq_response(rfq: B2BRFQ) -> B2BPortalRFQResponse:
+    return B2BPortalRFQResponse(
+        id=str(rfq.id),
+        rfq_number=rfq.rfq_number,
+        status=rfq.status,
+        source=rfq.source,
+        requested_currency=rfq.requested_currency,
+        destination_country=rfq.destination_country,
+        incoterm=rfq.incoterm,
+        requested_delivery_date=rfq.requested_delivery_date,
+        notes=rfq.notes,
+        submitted_at=rfq.submitted_at,
+        closed_at=rfq.closed_at,
+        items=[_portal_rfq_item_response(item) for item in rfq.items],
+        created_at=rfq.created_at,
+        updated_at=rfq.updated_at,
+    )
+
+
+def _portal_quote_item_response(item) -> B2BPortalQuoteItemResponse:
+    return B2BPortalQuoteItemResponse(
+        id=str(item.id),
+        product_id=str(item.product_id),
+        sku_snapshot=item.sku_snapshot,
+        product_name_snapshot=item.product_name_snapshot,
+        quantity=item.quantity,
+        unit_price=item.unit_price,
+        discount_percent=item.discount_percent,
+        line_subtotal=item.line_subtotal,
+        line_total=item.line_total,
+        price_source=item.price_source,
+        specifications=item.specifications or {},
+    )
+
+
+def _portal_quote_response(quote: B2BQuote) -> B2BPortalQuoteResponse:
+    contract = quote.contract
+    return B2BPortalQuoteResponse(
+        id=str(quote.id),
+        quote_number=quote.quote_number,
+        version_number=quote.version_number,
+        rfq_id=str(quote.rfq_id) if quote.rfq_id else None,
+        rfq_number=quote.rfq.rfq_number if quote.rfq else None,
+        status=quote.status,
+        currency=quote.currency,
+        valid_until=quote.valid_until,
+        payment_terms_days=quote.payment_terms_days,
+        incoterm=quote.incoterm,
+        shipping_terms=quote.shipping_terms,
+        subtotal=quote.subtotal,
+        discount_amount=quote.discount_amount,
+        shipping_cost=quote.shipping_cost,
+        tax_amount=quote.tax_amount,
+        total=quote.total,
+        sent_at=quote.sent_at,
+        accepted_at=quote.accepted_at,
+        rejected_at=quote.rejected_at,
+        rejection_reason=quote.rejection_reason,
+        notes=quote.notes,
+        items=[_portal_quote_item_response(item) for item in quote.items],
+        contract=(
+            {
+                "id": str(contract.id),
+                "contract_number": contract.contract_number,
+                "status": contract.status,
+                "customer_signed_at": contract.customer_signed_at,
+                "company_signed_at": contract.company_signed_at,
+                "activated_at": contract.activated_at,
+            }
+            if contract
+            else None
+        ),
+        created_at=quote.created_at,
+        updated_at=quote.updated_at,
+    )
+
+
+def _portal_contract_response(contract: B2BContract) -> B2BPortalContractResponse:
+    quote = contract.quote
+    return B2BPortalContractResponse(
+        id=str(contract.id),
+        contract_number=contract.contract_number,
+        quote_id=str(contract.quote_id),
+        quote_number=quote.quote_number if quote else None,
+        version_number=quote.version_number if quote else None,
+        status=contract.status,
+        effective_from=contract.effective_from,
+        effective_to=contract.effective_to,
+        currency=contract.currency,
+        total=contract.total,
+        document_url=contract.document_url,
+        terms=contract.terms or {},
+        customer_signed_by=contract.customer_signed_by,
+        customer_signed_at=contract.customer_signed_at,
+        company_signed_at=contract.company_signed_at,
+        activated_at=contract.activated_at,
+        terminated_at=contract.terminated_at,
+        items=[_portal_quote_item_response(item) for item in quote.items] if quote else [],
+        created_at=contract.created_at,
+        updated_at=contract.updated_at,
+    )
+
+
+def _portal_sales_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, b2b_credit_service.B2BCreditError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, b2b_sales_service.B2BSalesStateError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, ValueError):
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 422
+        return HTTPException(status_code=status_code, detail=message)
+    return HTTPException(status_code=500, detail="B2B portal operation failed")
+
+
+def _require_portal_uuid(value: str, resource: str) -> None:
+    try:
+        UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"{resource} not found") from exc
+
+
 @router.post("/orders", response_model=B2BOrderResponse, status_code=201)
 async def b2b_create_order(
     req: B2BCreateOrderRequest,
@@ -317,8 +506,8 @@ async def b2b_create_order(
             req.shipping_address,
             req.notes,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise _portal_sales_http_error(exc) from exc
     return _order_to_response(order)
 
 
@@ -332,7 +521,12 @@ async def b2b_list_orders(
 ) -> Any:
     """我的订单列表。"""
     orders, total = await list_agent_orders(
-        db, str(current_agent.id), page, page_size, status_filter
+        db,
+        str(current_agent.id),
+        current_agent.workspace_id,
+        page,
+        page_size,
+        status_filter,
     )
     return B2BOrderListResponse(
         items=[_order_to_response(o) for o in orders], total=total, page=page, page_size=page_size
@@ -346,10 +540,254 @@ async def b2b_get_order(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """订单详情（含明细、物流）。"""
-    order = await get_agent_order(db, str(current_agent.id), order_id)
+    order = await get_agent_order(
+        db,
+        str(current_agent.id),
+        order_id,
+        current_agent.workspace_id,
+    )
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return _order_to_response(order)
+
+
+# ============================================
+# 门户自助销售：RFQ、报价与合同
+# ============================================
+
+@router.post("/rfqs", response_model=B2BPortalRFQResponse, status_code=201)
+async def b2b_create_rfq(
+    req: B2BPortalRFQCreate,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Submit an RFQ for the authenticated agent."""
+    try:
+        rfq = await create_agent_rfq(
+            db,
+            current_agent,
+            items=[item.model_dump() for item in req.items],
+            requested_currency=req.requested_currency,
+            destination_country=req.destination_country,
+            incoterm=req.incoterm,
+            requested_delivery_date=req.requested_delivery_date,
+            notes=req.notes,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return _portal_rfq_response(rfq)
+
+
+@router.get("/rfqs", response_model=B2BPortalRFQListResponse)
+async def b2b_list_rfqs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status_filter: str | None = Query(None, alias="status", max_length=24),
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """List RFQs owned by the authenticated agent."""
+    try:
+        rfqs, total = await list_agent_rfqs(
+            db,
+            current_agent,
+            page=page,
+            page_size=page_size,
+            status=status_filter,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return B2BPortalRFQListResponse(
+        items=[_portal_rfq_response(rfq) for rfq in rfqs],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/rfqs/{rfq_id}", response_model=B2BPortalRFQResponse)
+async def b2b_get_rfq(
+    rfq_id: str,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Return one RFQ owned by the authenticated agent."""
+    _require_portal_uuid(rfq_id, "RFQ")
+    rfq = await get_agent_rfq(db, current_agent, rfq_id)
+    if rfq is None:
+        raise HTTPException(status_code=404, detail="RFQ not found")
+    return _portal_rfq_response(rfq)
+
+
+@router.get("/quotes", response_model=B2BPortalQuoteListResponse)
+async def b2b_list_quotes(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status_filter: str | None = Query(None, alias="status", max_length=24),
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """List quotes released to the authenticated agent."""
+    try:
+        quotes, total = await list_agent_quotes(
+            db,
+            current_agent,
+            page=page,
+            page_size=page_size,
+            status=status_filter,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return B2BPortalQuoteListResponse(
+        items=[_portal_quote_response(quote) for quote in quotes],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/quotes/{quote_id}", response_model=B2BPortalQuoteResponse)
+async def b2b_get_quote(
+    quote_id: str,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Return one released quote owned by the authenticated agent."""
+    _require_portal_uuid(quote_id, "Quote")
+    quote = await get_agent_quote(db, current_agent, quote_id)
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return _portal_quote_response(quote)
+
+
+@router.post("/quotes/{quote_id}/accept", response_model=B2BPortalQuoteResponse)
+async def b2b_accept_quote(
+    quote_id: str,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Accept a sent quote as the authenticated customer."""
+    _require_portal_uuid(quote_id, "Quote")
+    try:
+        quote = await accept_agent_quote(db, current_agent, quote_id)
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return _portal_quote_response(quote)
+
+
+@router.post("/quotes/{quote_id}/reject", response_model=B2BPortalQuoteResponse)
+async def b2b_reject_quote(
+    quote_id: str,
+    req: B2BPortalQuoteDecisionRequest,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Reject a sent quote as the authenticated customer."""
+    _require_portal_uuid(quote_id, "Quote")
+    try:
+        quote = await reject_agent_quote(
+            db,
+            current_agent,
+            quote_id,
+            reason=req.reason,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return _portal_quote_response(quote)
+
+
+@router.get("/contracts", response_model=B2BPortalContractListResponse)
+async def b2b_list_contracts(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status_filter: str | None = Query(None, alias="status", max_length=24),
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """List contracts owned by the authenticated agent."""
+    try:
+        contracts, total = await list_agent_contracts(
+            db,
+            current_agent,
+            page=page,
+            page_size=page_size,
+            status=status_filter,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return B2BPortalContractListResponse(
+        items=[_portal_contract_response(contract) for contract in contracts],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/contracts/{contract_id}", response_model=B2BPortalContractResponse)
+async def b2b_get_contract(
+    contract_id: str,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Return one contract owned by the authenticated agent."""
+    _require_portal_uuid(contract_id, "Contract")
+    contract = await get_agent_contract(db, current_agent, contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    return _portal_contract_response(contract)
+
+
+@router.post("/contracts/{contract_id}/sign", response_model=B2BPortalContractResponse)
+async def b2b_sign_contract(
+    contract_id: str,
+    req: B2BPortalContractSignRequest,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Record the authenticated customer's signature."""
+    _require_portal_uuid(contract_id, "Contract")
+    try:
+        contract = await sign_agent_contract(
+            db,
+            current_agent,
+            contract_id,
+            signed_by=req.signed_by,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return _portal_contract_response(contract)
+
+
+@router.post(
+    "/contracts/{contract_id}/convert-to-order",
+    response_model=B2BPortalOrderConversionResponse,
+    status_code=201,
+)
+async def b2b_convert_contract_to_order(
+    contract_id: str,
+    current_agent: B2BAgent = Depends(get_current_b2b_agent),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Idempotently convert an active contract's accepted quote to an order."""
+    _require_portal_uuid(contract_id, "Contract")
+    try:
+        order = await convert_agent_contract_to_order(
+            db,
+            current_agent,
+            contract_id,
+        )
+    except ValueError as exc:
+        raise _portal_sales_http_error(exc) from exc
+    return B2BPortalOrderConversionResponse(
+        id=str(order.id),
+        order_number=order.order_number,
+        quote_id=str(order.quote_id),
+        contract_id=str(order.contract_id),
+        status=order.status,
+        payment_status=order.payment_status,
+        total=order.total,
+        currency=order.currency,
+    )
 
 
 # ============================================

@@ -19,16 +19,20 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import SHARED, normalize_scope
 from app.models.agent_operations import (
     AgentApproval,
 )
+from app.models.agent_runtime import AgentRegistry
 from app.services import event_service, task_queue
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +84,7 @@ async def ensure_approval(
     entity_id: str,
     target_task_id: UUID | None = None,
     agent_id: UUID | None = None,
+    business_scope: str | None = None,
     metadata_: dict[str, Any] | None = None,
     trace_id: str | None = None,
 ) -> AgentApproval:
@@ -98,10 +103,18 @@ async def ensure_approval(
     )
     if existing is not None:
         return existing
+    if business_scope is not None:
+        scope = normalize_scope(business_scope)
+    elif agent_id is not None:
+        agent = await session.get(AgentRegistry, agent_id)
+        scope = normalize_scope(agent.business_scope if agent else SHARED)
+    else:
+        scope = SHARED
     approval = AgentApproval(
         workspace_id=workspace_id,
         approval_type=approval_type,
         status=APPROVAL_PENDING,
+        business_scope=scope,
         entity_type=entity_type,
         entity_id=entity_id,
         target_task_id=target_task_id,
@@ -122,6 +135,7 @@ async def ensure_approval(
             "entity_type": entity_type,
             "entity_id": entity_id,
             "target_task_id": str(target_task_id) if target_task_id else None,
+            "business_scope": scope,
         },
         trace_id=trace_id,
     )
@@ -174,6 +188,7 @@ async def list_approvals(
     approval_type: str | None = None,
     agent_id: UUID | None = None,
     task_id: UUID | None = None,
+    business_scope: str | None = None,
     trace_id: str | None = None,
     from_dt: datetime | None = None,
     to_dt: datetime | None = None,
@@ -190,6 +205,10 @@ async def list_approvals(
         filters.append(AgentApproval.agent_id == agent_id)
     if task_id is not None:
         filters.append(AgentApproval.target_task_id == task_id)
+    if business_scope is not None:
+        filters.append(
+            AgentApproval.business_scope == normalize_scope(business_scope)
+        )
     if trace_id is not None:
         filters.append(AgentApproval.trace_id == trace_id)
     if from_dt is not None:
@@ -438,6 +457,7 @@ async def _decide(
         actor=actor,
         approval_type=approval.approval_type,
         action=decision,
+        business_scope=approval.business_scope,
     )
     claimed = await session.execute(
         update(AgentApproval)
@@ -476,6 +496,7 @@ async def _decide(
             "approval_type": approval.approval_type,
             "entity_type": approval.entity_type,
             "entity_id": approval.entity_id,
+            "business_scope": approval.business_scope,
             "actor": actor,
             "note": note,
         },

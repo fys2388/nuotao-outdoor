@@ -12,14 +12,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import SHARED, normalize_scope, scope_compatible
 from app.models.agent_runtime import AgentExecution, AgentRegistry
 from app.models.agent_runtime_hardening import AgentBudgetPolicy
 from app.services import event_service
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @dataclass(frozen=True)
@@ -42,16 +47,21 @@ async def monthly_usage(
     *,
     workspace_id: UUID,
     agent_id: UUID,
+    business_scope: str | None = None,
 ) -> Decimal:
     """Sum execution costs for the current calendar month (UTC)."""
+    filters = [
+        AgentExecution.workspace_id == workspace_id,
+        AgentExecution.agent_id == agent_id,
+        AgentExecution.status.in_(("completed", "failed", "rejected")),
+        AgentExecution.started_at >= _month_start(datetime.now(UTC)),
+    ]
+    scope = normalize_scope(business_scope, default=SHARED) if business_scope else None
+    if scope and scope != SHARED:
+        filters.append(AgentExecution.business_scope == scope)
     total = (
         await session.execute(
-            select(func.coalesce(func.sum(AgentExecution.cost), 0)).where(
-                AgentExecution.workspace_id == workspace_id,
-                AgentExecution.agent_id == agent_id,
-                AgentExecution.status.in_(("completed", "failed", "rejected")),
-                AgentExecution.started_at >= _month_start(datetime.now(UTC)),
-            )
+            select(func.coalesce(func.sum(AgentExecution.cost), 0)).where(*filters)
         )
     ).scalar_one()
     return Decimal(str(total or 0))
@@ -64,6 +74,7 @@ async def check_budget(
     agent: AgentRegistry,
     policy: AgentBudgetPolicy,
     projected_cost: Decimal,
+    business_scope: str | None = None,
     trace_id: str | None = None,
 ) -> BudgetDecision:
     """Return whether an execution may proceed under the budget policy.
@@ -71,7 +82,27 @@ async def check_budget(
     Never auto-executes anything: it only blocks (or permits) the next model
     call. Crossing the alert threshold emits ``agent.budget_alert``.
     """
-    usage = await monthly_usage(session, workspace_id=workspace_id, agent_id=agent.id)
+    execution_scope = normalize_scope(
+        business_scope or policy.business_scope,
+        default=SHARED,
+    )
+    if not scope_compatible(execution_scope, policy.business_scope):
+        return BudgetDecision(
+            allowed=False,
+            monthly_usage=Decimal("0"),
+            monthly_budget=policy.monthly_budget,
+            projected_cost=projected_cost,
+            reason=(
+                f"budget policy scope '{policy.business_scope}' is not compatible "
+                f"with execution scope '{execution_scope}'"
+            ),
+        )
+    usage = await monthly_usage(
+        session,
+        workspace_id=workspace_id,
+        agent_id=agent.id,
+        business_scope=execution_scope,
+    )
     budget = policy.monthly_budget
     threshold = budget * policy.alert_threshold
     if budget <= 0:

@@ -1,17 +1,19 @@
 """
-1688 开放平台 API 集成服务
-支持产品搜索、详情获取、供应商信息、价格行情
-无 API 密钥时自动降级为 mock 数据，保证闭环可用
+1688 开放平台 API 集成服务。
+
+调用必须使用官方 AOP 格式：
+``param2/{version}/{namespace}/{name}/{app_key}``。
+未配置密钥时仍保留 Mock 能力供本地联调，但真实商品导入链路会拒绝 Mock。
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import time
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 
@@ -27,27 +29,109 @@ ALI1688_BASE_URL = "https://gw.open.1688.com/openapi"
 # 请求超时
 DEFAULT_TIMEOUT = 15
 
+# 官方 API 元数据。路径必须同时包含 namespace 和 name，不能只传方法名。
+API_METADATA: dict[str, dict[str, str | int]] = {
+    "alibaba.product.get": {
+        "namespace": "com.alibaba.product",
+        "name": "alibaba.product.get",
+        "version": 1,
+    },
+    "alibaba.product.search": {
+        "namespace": "com.alibaba.product",
+        "name": "alibaba.product.search",
+        "version": 1,
+    },
+    "alibaba.member.get": {
+        "namespace": "com.alibaba.member",
+        "name": "alibaba.member.get",
+        "version": 1,
+    },
+    "alibaba.fenxiao.productInfo.get": {
+        "namespace": "com.alibaba.fenxiao",
+        "name": "alibaba.fenxiao.productInfo.get",
+        "version": 1,
+    },
+}
 
-def _sign(params: dict[str, Any], secret: str) -> str:
-    """1688 API 签名（MD5）"""
-    sorted_params = sorted(params.items())
-    sign_str = secret + "".join(f"{k}{v}" for k, v in sorted_params) + secret
-    return hashlib.md5(sign_str.encode("utf-8")).hexdigest().upper()
+
+class OpenAPIError(RuntimeError):
+    """1688 开放平台返回的业务或网关错误。"""
 
 
-def _build_common_params(method: str) -> dict[str, Any]:
-    """构建公共参数"""
-    params = {
-        "method": method,
-        "app_key": ALI1688_APP_KEY,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "format": "json",
-        "v": "2.0",
-        "sign_method": "md5",
+def _api_metadata(method: str) -> dict[str, str | int]:
+    """返回官方 API 元数据，未知方法按点号拆分做兼容。"""
+    metadata = API_METADATA.get(method)
+    if metadata:
+        return metadata
+    namespace, _, name = method.rpartition(".")
+    if not namespace or not name:
+        raise OpenAPIError(f"invalid 1688 API method: {method}")
+    return {"namespace": namespace, "name": name, "version": 1}
+
+
+def _build_aop_url_path(method: str, app_key: str | None = None) -> str:
+    """构造官方 AOP URL Path，不包含域名和 query string。"""
+    metadata = _api_metadata(method)
+    key = app_key if app_key is not None else ALI1688_APP_KEY
+    return (
+        f"param2/{metadata['version']}/{metadata['namespace']}/"
+        f"{metadata['name']}/{key}"
+    )
+
+
+def _sign_aop(url_path: str, params: dict[str, Any], secret: str) -> str:
+    """按 1688 官方 AOP 规则生成 HMAC-SHA1 签名。"""
+    sign_params = {k: v for k, v in params.items() if k != "_aop_signature"}
+    sign_base = url_path + "".join(
+        f"{key}{value}" for key, value in sorted(sign_params.items())
+    )
+    return hmac.new(
+        secret.encode("utf-8"),
+        sign_base.encode("utf-8"),
+        hashlib.sha1,
+    ).hexdigest().upper()
+
+
+def _call_open_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
+    """调用一个 1688 开放平台接口并统一检查网关业务错误。"""
+    if not is_configured():
+        raise OpenAPIError("1688 open API credentials are not configured")
+
+    url_path = _build_aop_url_path(method)
+    params: dict[str, Any] = {
+        **biz_params,
+        "access_token": ALI1688_ACCESS_TOKEN,
+        "_aop_timestamp": str(int(time.time() * 1000)),
     }
-    if ALI1688_ACCESS_TOKEN:
-        params["access_token"] = ALI1688_ACCESS_TOKEN
-    return params
+    params["_aop_signature"] = _sign_aop(url_path, params, ALI1688_APP_SECRET)
+
+    response = requests.get(
+        f"{ALI1688_BASE_URL}/{url_path}",
+        params=params,
+        timeout=DEFAULT_TIMEOUT,
+        proxies={"http": None, "https": None},
+    )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise OpenAPIError(f"1688 open API returned HTTP {response.status_code}") from exc
+
+    error_code = payload.get("error_code") or payload.get("errorCode")
+    if response.status_code >= 400 or error_code:
+        error_message = (
+            payload.get("error_message")
+            or payload.get("errorMsg")
+            or f"HTTP {response.status_code}"
+        )
+        raise OpenAPIError(f"{error_code or 'gateway_error'}: {error_message}")
+
+    result = payload.get("result")
+    if isinstance(result, dict) and result.get("success") is False:
+        raise OpenAPIError(
+            f"{result.get('errorCode') or 'business_error'}: "
+            f"{result.get('errorMsg') or 'unknown error'}"
+        )
+    return payload
 
 
 def is_configured() -> bool:
@@ -78,33 +162,32 @@ def search_products(
 
     try:
         method = "alibaba.product.search"
-        params = _build_common_params(method)
-        params.update({
+        data = _call_open_api(method, {
             "keyword": keyword,
             "pageNo": page,
             "pageSize": page_size,
             "sortType": sort,
         })
-        params["sign"] = _sign(params, ALI1688_APP_SECRET)
 
-        url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
-        resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-
-        products = data.get("result", {}).get("products", [])
+        result = data.get("result") or {}
+        products = result.get("products") or result.get("productInfos") or []
         return {
             "success": True,
-            "source": "1688_api",
+            "source": "1688_open_api",
             "keyword": keyword,
             "page": page,
             "page_size": page_size,
-            "total": data.get("result", {}).get("total", 0),
+            "total": result.get("total", 0),
             "products": [_normalize_product(p) for p in products],
         }
     except Exception as e:
         logger.error("1688 search failed: %s", str(e))
-        return {"success": False, "error": str(e), "products": [], "source": "1688_api"}
+        return {
+            "success": False,
+            "error": str(e),
+            "products": [],
+            "source": "1688_open_api",
+        }
 
 
 def get_product_detail(product_id: str) -> dict[str, Any]:
@@ -122,24 +205,22 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
 
     try:
         method = "alibaba.product.get"
-        params = _build_common_params(method)
-        params["productId"] = product_id
-        params["sign"] = _sign(params, ALI1688_APP_SECRET)
-
-        url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
-        resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-
-        product = data.get("result", {}).get("product", {})
+        data = _call_open_api(method, {"productID": product_id})
+        result = data.get("result") or {}
+        product = result.get("productInfo") or result.get("product") or {}
         return {
             "success": True,
-            "source": "1688_api",
+            "source": "1688_open_api",
             "product": _normalize_product_detail(product),
         }
     except Exception as e:
         logger.error("1688 product detail failed: %s", str(e))
-        return {"success": False, "error": str(e), "product": None, "source": "1688_api"}
+        return {
+            "success": False,
+            "error": str(e),
+            "product": None,
+            "source": "1688_open_api",
+        }
 
 
 def get_supplier_info(member_id: str) -> dict[str, Any]:
@@ -157,19 +238,17 @@ def get_supplier_info(member_id: str) -> dict[str, Any]:
 
     try:
         method = "alibaba.member.get"
-        params = _build_common_params(method)
-        params["memberId"] = member_id
-        params["sign"] = _sign(params, ALI1688_APP_SECRET)
-
-        url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
-        resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-
-        member = data.get("result", {}).get("member", {})
+        data = _call_open_api(method, {"memberId": member_id})
+        result = data.get("result") or {}
+        member = (
+            result.get("member")
+            or result.get("memberInfo")
+            or result.get("result")
+            or {}
+        )
         return {
             "success": True,
-            "source": "1688_api",
+            "source": "1688_open_api",
             "supplier": {
                 "member_id": member.get("memberId", member_id),
                 "company_name": member.get("companyName", ""),
@@ -182,7 +261,12 @@ def get_supplier_info(member_id: str) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("1688 supplier info failed: %s", str(e))
-        return {"success": False, "error": str(e), "supplier": None, "source": "1688_api"}
+        return {
+            "success": False,
+            "error": str(e),
+            "supplier": None,
+            "source": "1688_open_api",
+        }
 
 
 def get_price_trend(product_id: str, days: int = 30) -> dict[str, Any]:
@@ -242,19 +326,85 @@ def _normalize_product(p: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_product_detail(p: dict[str, Any]) -> dict[str, Any]:
-    """标准化 1688 产品详情"""
+    """标准化 1688 产品详情（兼容开放平台新旧字段命名）。"""
+    sale_info = p.get("saleInfo") if isinstance(p.get("saleInfo"), dict) else {}
+    price_ranges = (
+        p.get("priceRange")
+        or p.get("priceRanges")
+        or sale_info.get("priceRanges")
+        or []
+    )
+    if not price_ranges:
+        price_ranges = [
+            sku.get("priceRange", [])
+            for sku in (p.get("skuInfos") or p.get("skuList") or [])
+            if isinstance(sku, dict) and sku.get("priceRange")
+        ]
+        price_ranges = [item for group in price_ranges for item in group]
+
+    price = p.get("price") or sale_info.get("retailprice") or ""
+    if not price and price_ranges:
+        first_range = price_ranges[0]
+        if isinstance(first_range, dict):
+            price = first_range.get("price", "")
+        else:
+            price = first_range
+
+    images = p.get("images") or p.get("imageUrls") or []
+    image_block = p.get("image")
+    if not images and isinstance(image_block, dict):
+        images = image_block.get("images") or []
+    if not images:
+        intelligent = p.get("intelligentInfo")
+        if isinstance(intelligent, dict):
+            images = intelligent.get("images") or intelligent.get("descriptionImages") or []
+    if not isinstance(images, list):
+        images = [images]
+    normalized_images = []
+    for image in images:
+        if isinstance(image, dict):
+            image = image.get("url") or image.get("imageUrl") or image.get("urls") or ""
+        if isinstance(image, str) and image.strip():
+            normalized_images.append(image.strip())
+
+    supplier = p.get("supplier") if isinstance(p.get("supplier"), dict) else {}
+    supplier_login_id = (
+        p.get("supplierLoginId")
+        or p.get("sellerLoginId")
+        or supplier.get("login_id")
+        or ""
+    )
+    supplier_company = (
+        p.get("companyName")
+        or supplier.get("company_name")
+        or supplier.get("companyName")
+        or ""
+    )
+
     return {
         "product_id": str(p.get("productID", p.get("productId", ""))),
         "subject": p.get("subject", ""),
-        "description": p.get("description", ""),
-        "price": p.get("price", ""),
-        "price_range": p.get("priceRange", []),
-        "sku_list": p.get("skuList", []),
+        "description": p.get("description", "") or p.get("detail", ""),
+        "price": price,
+        "price_range": price_ranges,
+        "sku_list": p.get("skuInfos") or p.get("skuList") or [],
         "attributes": p.get("attributes", []),
-        "images": p.get("images", []),
-        "supplier_login_id": p.get("supplierLoginId", ""),
+        "images": normalized_images,
+        "supplier_login_id": supplier_login_id,
+        "company_name": supplier_company,
+        "supplier": {
+            "login_id": supplier_login_id,
+            "company_name": supplier_company,
+        },
         "main_image": p.get("mainImage", ""),
         "category_id": p.get("categoryID", ""),
+        "category_name": p.get("categoryName", ""),
+        "min_order_quantity": (
+            sale_info.get("minOrderQuantity")
+            or p.get("minOrderQuantity")
+            or p.get("minOrderQty")
+            or ""
+        ),
         "create_time": p.get("createTime", ""),
         "last_update_time": p.get("lastUpdateTime", ""),
         "status": p.get("status", ""),
