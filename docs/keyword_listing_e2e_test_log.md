@@ -423,3 +423,117 @@ WooCommerce REST v3 中空字符串语义是「不修改」，null 被类型校�
 - A++：**65 / 100（B+），未达到**。缺口 35 分（主图 15 + 可购性 10 + 品牌 5 + 属性 5）。
 - 阻塞项：BUG-14（1688 AppKey ACL）——外部凭据问题，需人工到 1688 开放平台处理。
 - BUG-13 修复已上线，**一旦 1688 权限恢复并重跑管道，图片/属性/重量将自动落库**，无需再改代码。
+
+## 第 4 轮：牛顿链路定位与上游解锁（2026-09-20 10:0x UTC）
+
+> 用户纠偏：1688 官方 API 根本不可用，牛顿才是唯一通道。据此重新定位。
+
+### BUG-14 结论修正
+
+第 3 轮把根因归为「1688 AppKey ACL 失效」。实际 `_fetch_1688_product`（1391 行）逻辑是：
+
+```
+Step 2: 优先使用牛顿 Agent 读取商品（1688 官方 API 权限不足）
+        → 牛顿失败才降级到开放 API
+```
+
+即**开放 API 是兜底、且本就无权限，ACL 被拒是设计预期**。真正失败的是牛顿。
+归因修正：**根因是牛顿超时，属代码缺陷，可修**。
+
+### BUG-15：牛顿超时窗口过短（已修复上线）
+
+实测同一商品真实抓取：
+
+```
+extract_1688_product(max_wait=90)  → elapsed 53s   success=True
+extract_1688_product(max_wait=300) → elapsed 114s  success=True
+```
+
+`max_wait=90` 而真实耗时可达 114s → **必然误报超时**，即第 3 轮观察到的
+`Newton product extraction timed out`。已改为 `max_wait=300`，保留超时后 `kill_task` 清理。
+积分配额 5000，`qwen3.6-plus` 为合法默认模型（`isDefault: true`）。
+
+### BUG-16：属性表被硬编码为空（已修复上线）
+
+`_normalize_extracted_product` 原为 `"attributes": []`，牛顿 prompt 也未索取，
+因此 `product_info["attributes"]` 恒为 `[]`，weight / dimensions / materials 全部落空。
+已改为原样透传 `data.get("attributes")`。
+
+### BUG-17：转换层不携带属性表（已修复上线）
+
+`convert_1688_to_pipeline_input` 解析了属性表（派生 materials/dimensions/weight），
+但 return dict 未包含 `attributes`，`collect_attributes` 永远读不到。已补 `"attributes": attributes`。
+
+### 增强 prompt 实测（离线验证，符合 §3.4 先评测再上线）
+
+加入 `"attributes": [{name, value}]` 并要求完整搬运「商品属性 / 产品参数」表格后，
+同一商品实测（208s，22 条属性）：
+
+```
+{"name": "重量(g)",        "value": "1800"}
+{"name": "规格(长*宽*高)",  "value": "47cm*47cm*90cm"}
+{"name": "包装长(cm)",      "value": "92"}        ← 另含宽/高 = 16/16
+{"name": "材质",           "value": "牛津布,碳钢"}
+{"name": "品牌",           "value": "怡佳文嫣"}
+{"name": "颜色",           "value": "高靠背绿色,高靠背白色,..."}
+{"name": "产地",           "value": "河北廊坊"}
+```
+
+附带收益：`description` 由标题变为真描述（"600D牛津布耐磨抗撕…承重240斤"），
+`category` 拿到 `户外/露营/折叠椅`，`images` 由 1 张增至 5 张。
+
+### BUG-18：重量单位被读错一千倍（已修复上线）
+
+`convert_1688_to_pipeline_input` 只取属性值、不读属性名里的单位。
+`{"name": "重量(g)", "value": "1800"}` → `_parse_weight_kg("1800")` → **1800 kg**，
+实际应为 1.8 kg。按公斤计费时运费误差可达三个数量级。已改为把单位一并带给解析器：
+
+```python
+unit_match = re.search(r"[(（]([^)）]{1,6})[)）]", attr_name_raw)
+weight = f"{attr.get('value', '')} {unit_match.group(1).strip() if unit_match else ''}".strip()
+```
+
+单测 7 例全过：`1800 g→1.800`、`500g→0.500`、`0.5kg→0.5`、`1.2千克→1.2`、
+`2公斤→2`、`1800→1800`、`3 lbs→3`（未知单位保持原行为）。
+
+### BUG-19：尺寸取了产品规格而非包装箱（已修复上线）
+
+1688 同时给产品规格（47×47×90）与包装尺寸（92×16×16）。运费按**外包装**计费，
+取产品规格使体积重虚高约 20 倍。已改为优先 `包装长/宽/高`，缺省才退回 `规格/尺寸`。
+
+### 部署纪律修正
+
+第 4b 轮补丁脚本在锚点未命中时 `sys.exit(1)`，但部署脚本未检查子脚本退出码，
+导致「prompt 已改、重量未改」却报告成功。第 4c 轮起改用 `PATCH_OK` 哨兵断言，
+未见即回滚。
+
+### 行为验证（合成真实属性表，全部通过）
+
+```
+weight raw     : '1800 g' -> kg = 1.800                    ✅
+dimensions     : '92*16*16'（包装箱，非产品规格）          ✅
+parse_dimensions: {length:92.0, width:16.0, height:16.0}   ✅
+attributes     : 9 entries                                  ✅
+materials      : ['牛津布,碳钢']                            ✅
+category       : 户外/露营/折叠椅                           ✅
+```
+
+### 已部署（备份 `listing-gate-20260920T100037Z` / `T100642Z` / `T101100Z`）
+
+- `newton_agent_service.py`：`max_wait` 90→300、attributes 透传、prompt 索取属性表
+- `product_pipeline_service.py`：attributes 保留、重量单位修正、包装尺寸优先
+
+每轮均 COMPILE_OK + 单测通过 + readyz 200。
+
+### 单位统一与遗留
+
+按用户指令统一到 kg：`_parse_weight_kg` 输出 kg，payload 直接下发该值。
+**未完成**：WC 店铺级 `weight_unit` / `dimension_unit` 不在 `/wc/v3/settings` 内
+（实测该端点仅 36 项且无任何单位字段），需 WP 用户权限读取，而现有 key 仅能访问
+`wc/v3/*`。故 WC 后台「设置 → 常规 → 计量单位」需人工确认为 kg / cm，否则数值仍会被误读。
+
+### 明确不做
+
+- **不自动写 `product.brand`**：1688 同时返回 `有可授权的自有品牌: 否`，
+  品牌名「怡佳文嫣」无授权依据，按 §3.1「Agent 是提议者不是执行者」留给人工。
+- **不编造**：数据源无字段时按 §1.2 留空。
