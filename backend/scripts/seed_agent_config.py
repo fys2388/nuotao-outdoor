@@ -295,6 +295,11 @@ M6_EXECUTABLE_TOOLS: list[tuple[str, str, str, str]] = [
     ("get_customer_template", "L0", "customer_service", "客服话术模板检索（15 场景 x 6 语言，零 LLM 成本）"),
 ]
 
+# Tool names that have a real handler, for O(1) lookup inside seed_tools().
+# Derived, not a second source of truth: adding a tool to M6_EXECUTABLE_TOOLS
+# above is all that is required.
+_M6_EXECUTABLE_NAMES = {tool[0] for tool in M6_EXECUTABLE_TOOLS}
+
 
 # --------------------------------------------------------------------------- #
 # Seed steps
@@ -444,7 +449,7 @@ async def seed_tools(session: AsyncSession, *, workspace_id: UUID) -> tuple[int,
         existed = await _exists(
             session, AgentTool, workspace_id=workspace_id, tool_name=tool_name
         )
-        handler_name = tool_name if tool_name in dict(M6_EXECUTABLE_TOOLS) else None
+        handler_name = tool_name if tool_name in _M6_EXECUTABLE_NAMES else None
         schema = TOOL_SCHEMAS.get(tool_name)
         args_schema = json.loads(schema) if schema else {}
         await agent_runtime.register_tool(
