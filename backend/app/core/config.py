@@ -3,6 +3,7 @@
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,7 +23,17 @@ class Settings(BaseSettings):
 
     app_name: str = "Nuotao AI OS"
     app_version: str = "0.1.0"
-    environment: str = "development"  # development | staging | production
+    # Accept both ENVIRONMENT and APP_ENV. Production's .env uses APP_ENV;
+    # without the alias pydantic-settings matched only the field name, so
+    # `environment` silently fell back to "development" and is_production was
+    # False in production - which defeated the production-only guards in
+    # customer_identity_service._identity_secret() and any other
+    # is_production check.
+    environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"),
+        description="development | staging | production",
+    )
     debug: bool = False
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
@@ -40,6 +51,28 @@ class Settings(BaseSettings):
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
     # MUST be overridden in staging/production environments.
     woocommerce_webhook_secret: str = "dev-webhook-secret-change-me"
+
+    # --- Cross-channel customer identity hashing -----------------------------
+    # HMAC-SHA256 key used to hash raw customer identity values (email, phone,
+    # company tax id, WooCommerce customer id) into a workspace-scoped digest.
+    # Only the digest + a short fingerprint are persisted in
+    # customer_identity_links; the raw value is never stored.
+    #
+    # Empty in PRODUCTION is a hard failure: customer_identity_service raises
+    # rather than silently reusing a dev default. Empty in dev/staging falls
+    # back to woocommerce_webhook_secret, then IDENTITY_KEY_DEFAULT, so local
+    # runs work without extra configuration.
+    customer_identity_hmac_key: str = ""
+    # Version label recorded on every hash (hash_key_version column) so a
+    # future key rotation can re-hash legacy rows unambiguously. Bump only
+    # when the key above actually changes.
+    customer_identity_key_version: str = "v1"
+
+    # GDPR data subject request (access / export / delete) response deadline,
+    # in days, per Art. 12(3): respond within one month of receipt. Used to set
+    # DataSubjectRequest.due_at in customer_privacy_service. Overridable per
+    # environment for stricter SLAs (e.g. 15 for a contractual requirement).
+    data_subject_request_due_days: int = 30
 
     # --- M5.16 Scrapling scraping capability (compliance-gated) --------------
     # Compliance review (docs/M5.16) approved a low-frequency, robots.txt-

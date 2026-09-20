@@ -284,22 +284,25 @@ async def get_refund_rate(
 async def get_inventory_available(
     session: AsyncSession, *, workspace_id: UUID
 ) -> DashboardMetric:
-    """Total available inventory. Returns 0 if inventory table not populated."""
-    # Try to query inventory table if it exists; otherwise return 0 with note
+    """Total available inventory across warehouses.
+
+    Returns 0 with a note when the table is missing or never populated, so a
+    fresh install still renders the dashboard.
+    """
     try:
-        from app.models.inventory import InventoryItem
+        from app.models.supply_chain import InventorySnapshot
         result = await session.execute(
-            select(func.coalesce(func.sum(InventoryItem.quantity_available), 0)).where(
-                InventoryItem.workspace_id == workspace_id,
+            select(func.coalesce(func.sum(InventorySnapshot.available), 0)).where(
+                InventorySnapshot.workspace_id == workspace_id,
             )
         )
         available = result.scalar() or 0
-        source = "postgresql:inventory_items.quantity_available"
+        source = "postgresql:sum(inventory_snapshots.available)"
         note = None
     except Exception:
         available = 0
-        source = "postgresql (inventory table not available)"
-        note = "Inventory table not found or not populated; returning 0"
+        source = "postgresql (inventory_snapshots not available)"
+        note = "inventory_snapshots table not found or not populated; returning 0"
 
     return DashboardMetric(
         "inventory_available", available,
@@ -312,22 +315,33 @@ async def get_inventory_available(
 async def get_stockout_risk(
     session: AsyncSession, *, workspace_id: UUID
 ) -> DashboardMetric:
-    """Count of products at risk of stockout (below reorder threshold)."""
+    """Count of products at risk of stockout (at/below the shared threshold).
+
+    The threshold is the same one the alert engine uses
+    (business_alert_service.DEFAULT_THRESHOLDS["stockout_threshold"]), so the
+    dashboard and the alerts never disagree about what counts as low stock.
+    InventorySnapshot has no per-row reorder_threshold column - that lived
+    only in the never-created app.models.inventory.InventoryItem.
+    """
     try:
-        from app.models.inventory import InventoryItem
+        from app.models.supply_chain import InventorySnapshot
+        from app.services.business_alert_service import DEFAULT_THRESHOLDS
+        threshold = int(DEFAULT_THRESHOLDS["stockout_threshold"])
         result = await session.execute(
-            select(func.count(InventoryItem.id)).where(
-                InventoryItem.workspace_id == workspace_id,
-                InventoryItem.quantity_available <= InventoryItem.reorder_threshold,
+            select(func.count(InventorySnapshot.id)).where(
+                InventorySnapshot.workspace_id == workspace_id,
+                InventorySnapshot.available <= threshold,
             )
         )
         risk_count = result.scalar() or 0
-        source = "postgresql:count(inventory_items WHERE quantity <= reorder_threshold)"
+        source = (
+            f"postgresql:count(inventory_snapshots WHERE available <= {threshold})"
+        )
         note = None
     except Exception:
         risk_count = 0
-        source = "postgresql (inventory table not available)"
-        note = "Inventory table not found; returning 0"
+        source = "postgresql (inventory_snapshots not available)"
+        note = "inventory_snapshots table not found; returning 0"
 
     return DashboardMetric(
         "stockout_risk", risk_count,

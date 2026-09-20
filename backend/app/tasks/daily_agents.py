@@ -761,10 +761,19 @@ async def _get_marketing_stats(session: AsyncSession) -> dict[str, Any]:
 
 
 async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
-    """获取供应链统计数据（真实数据，来自 products 和 inventory_snapshots 表）。"""
+    """供应链统计：产品取自 products 表，库存/补货明细仍是占位值。
+
+    历史版本此处 `from app.models.inventory import InventorySnapshot` —— 该模块
+    不存在，真实的库存模型是 app.models.supply_chain.InventorySnapshot
+    （表 inventory_snapshots）。导入位于函数体内且 ImportError 未被捕获，导致
+    daily_supply_chain_manager 每次调度都直接失败。
+
+    接真实 inventory_snapshots 汇总（total_inventory_value、
+    need_reorder_products、pending_purchase_orders、supplier_count）属于
+    P2 backlog，见 docs/agent_team_workflow_refactor.md §P2。
+    """
     from app.models.product import Product
-    from app.models.inventory import InventorySnapshot
-    
+
     workspace_id = DEFAULT_WORKSPACE_ID
     
     # 1. 获取所有active产品
