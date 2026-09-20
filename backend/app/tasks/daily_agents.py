@@ -52,6 +52,14 @@ DEDUP_WINDOW_MINUTES = 30
 ANALYST_PRODUCT_STATUSES = ("draft", "candidate")
 SUPPLY_CHAIN_PRODUCT_STATUSES = ("candidate", "active")
 
+# 补货目标 = 低库存阈值的 N 倍。阈值本身来自
+# business_alert_service.DEFAULT_THRESHOLDS["stockout_threshold"]（"低库存"的
+# 唯一权威定义），这里只定一个倍数把"低于阈值"翻译成"补到多少"。
+#
+# 不做成纯魔法数埋在调用点，是为了让公式可评审、可单点调整；也避免 AGENTS.md
+# §1.2 第 5 条禁止的"硬编码业务经验值"。实测 available 为 0 时按目标全量补。
+REORDER_TARGET_MULTIPLIER = 4
+
 
 class _DedupSuggestionService:
     """调度路径的建议创建适配器：自动附加幂等键。
@@ -125,25 +133,32 @@ async def run_product_analyst_daily(session: AsyncSession) -> dict[str, Any]:
     # 1. 获取产品数据（简化版，实际应从 product_intelligence_service 获取）
     product_stats = await _get_product_stats(session)
 
-    # 2. 生成选品建议（简化版，实际应调用 LLM）
+    # 2. 生成库存预警建议（available 来自 inventory_snapshots 实测值）
     if product_stats.get("low_stock_products"):
         for product in product_stats["low_stock_products"]:
+            threshold = product.get("stockout_threshold", 0)
             suggestion = await agent_suggestion_service.create_suggestion(
                 session,
                 agent_id="product_analyst",
                 suggestion_type="inventory_restock",
                 title=f"库存预警: {product.get('name', '未知产品')} 库存不足",
                 description=(
-                    f"产品 {product.get('name')} 当前库存 {product.get('stock', 0)}，"
-                    f"低于安全库存阈值。建议立即补货 {product.get('reorder_qty', 50)} 件。"
+                    f"产品 {product.get('name')} 当前可发货库存 {product.get('available', 0)} 件，"
+                    f"低于低库存阈值 {threshold}；在途 {product.get('in_transit', 0)} 件，"
+                    f"覆盖仓位 {', '.join(product.get('locations', []))}。"
+                    f"建议补货 {product.get('reorder_qty', 0)} 件"
+                    f"（目标库存 = 阈值 × {REORDER_TARGET_MULTIPLIER}）。"
                 ),
                 execution_params={
                     "product_id": product.get("id"),
-                    "quantity": product.get("reorder_qty", 50),
-                    "current_stock": product.get("stock", 0),
+                    "quantity": product.get("reorder_qty", 0),
+                    "current_available": product.get("available", 0),
+                    "in_transit": product.get("in_transit", 0),
+                    "locations": product.get("locations", []),
+                    "stockout_threshold": threshold,
                 },
                 execution_action="restock_inventory",
-                expected_impact="避免断货，维持销售连续性",
+                expected_impact=f"可发货库存从 {product.get('available', 0)} 补至 {threshold * REORDER_TARGET_MULTIPLIER}",
                 priority="high",
                 risk_level="medium",
             )
@@ -359,27 +374,33 @@ async def run_supply_chain_daily(session: AsyncSession) -> dict[str, Any]:
     # 获取供应链数据（简化版）
     supply_stats = await _get_supply_chain_stats(session)
 
-    # 生成补货建议
+    # 生成补货建议（available 来自 inventory_snapshots 实测值）
     if supply_stats.get("need_reorder_products"):
         for product in supply_stats["need_reorder_products"]:
+            threshold = product.get("stockout_threshold", 0)
             suggestion = await agent_suggestion_service.create_suggestion(
                 session,
                 agent_id="supply_chain_manager",
                 suggestion_type="inventory_restock",
                 title=f"补货建议: {product.get('name')} 需补货",
                 description=(
-                    f"产品 {product.get('name')} 库存 {product.get('stock', 0)}，"
-                    f"预计 {product.get('days_to_stockout', 7)} 天后断货。"
-                    f"建议向 {product.get('supplier', '默认供应商')} 采购 {product.get('reorder_qty', 100)} 件。"
+                    f"产品 {product.get('name')} 可发货库存 {product.get('available', 0)} 件，"
+                    f"低于低库存阈值 {threshold}；在途 {product.get('in_transit', 0)} 件，"
+                    f"覆盖仓位 {', '.join(product.get('locations', []))}。"
+                    f"建议采购 {product.get('reorder_qty', 0)} 件"
+                    f"（目标库存 = 阈值 × {REORDER_TARGET_MULTIPLIER}）。"
+                    f"供应商与到货周期需审批时指定（当前无供应商主数据）。"
                 ),
                 execution_params={
                     "product_id": product.get("id"),
-                    "quantity": product.get("reorder_qty", 100),
-                    "supplier": product.get("supplier"),
-                    "estimated_delivery_days": product.get("delivery_days", 15),
+                    "quantity": product.get("reorder_qty", 0),
+                    "current_available": product.get("available", 0),
+                    "in_transit": product.get("in_transit", 0),
+                    "locations": product.get("locations", []),
+                    "stockout_threshold": threshold,
                 },
                 execution_action="create_purchase_order",
-                expected_impact=f"避免 {product.get('days_to_stockout', 7)} 天后断货",
+                expected_impact=f"可发货库存从 {product.get('available', 0)} 补至 {threshold * REORDER_TARGET_MULTIPLIER}",
                 priority="high",
                 risk_level="medium",
             )
@@ -663,12 +684,101 @@ async def run_business_analyst_daily(session: AsyncSession) -> dict[str, Any]:
 # 数据获取辅助函数（简化版，实际应调用对应业务服务）
 # --------------------------------------------------------------------------- #
 
+async def _low_stock_from_inventory(
+    session: AsyncSession, *, workspace_id, product_ids: list[Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """从 inventory_snapshots 查真实低库存产品，返回 (产品列表, 诊断信息)。
+
+    ``inventory_snapshots`` 是**当前状态表**：每个 (workspace, product,
+    location) 一行，唯一约束，不是历史快照。``available`` 为可发货量。
+
+    阈值复用 ``business_alert_service.DEFAULT_THRESHOLDS["stockout_threshold"]``，
+    与预警引擎和仪表盘共用单一来源 —— 否则三处对"低库存"的定义会各说各话。
+
+    关键约束：**没有快照行的产品不出现在结果里**。此前本函数用
+    ``product_rows[:3]`` + 硬编码 ``stock: 5`` 伪造低库存，等于把没测量过的
+    数字写进审批队列，人会据此真去补货。宁可返回空列表，也不编造库存水平；
+    诊断信息里会给出"多少产品缺快照"，让空结果可解释而不是静默。
+
+    同一产品在多个 location 有库存时按 location 汇总 available。
+    """
+    from app.models.supply_chain import InventorySnapshot
+    from app.services.business_alert_service import DEFAULT_THRESHOLDS
+
+    threshold = int(DEFAULT_THRESHOLDS["stockout_threshold"])
+    diagnostic: dict[str, Any] = {
+        "source": "inventory_snapshots",
+        "stockout_threshold": threshold,
+        "snapshot_rows_in_workspace": 0,
+        "products_in_scope": len(product_ids),
+        "products_without_snapshot": len(product_ids),
+    }
+
+    if not product_ids:
+        return [], diagnostic
+
+    total_rows = (
+        await session.execute(
+            select(func.count()).select_from(InventorySnapshot).where(
+                InventorySnapshot.workspace_id == workspace_id
+            )
+        )
+    ).scalar() or 0
+    diagnostic["snapshot_rows_in_workspace"] = int(total_rows)
+
+    rows = (
+        await session.execute(
+            select(InventorySnapshot).where(
+                InventorySnapshot.workspace_id == workspace_id,
+                InventorySnapshot.product_id.in_(product_ids),
+                InventorySnapshot.available <= threshold,
+            )
+        )
+    ).scalars().all()
+
+    by_product: dict[Any, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_product.setdefault(r.product_id, []).append(r)
+
+    covered = set(by_product) | set(
+        (await session.execute(
+            select(InventorySnapshot.product_id).where(
+                InventorySnapshot.workspace_id == workspace_id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+        )).scalars().all()
+    )
+    diagnostic["products_without_snapshot"] = len(product_ids) - len(covered)
+
+    products: list[dict[str, Any]] = []
+    for pid, parts in sorted(by_product.items(), key=lambda kv: str(kv[0])):
+        available = sum(p.available for p in parts)
+        products.append({
+            "id": str(pid),
+            "available": available,
+            "quantity": sum(p.quantity for p in parts),
+            "reserved": sum(p.reserved for p in parts),
+            "in_transit": sum(p.in_transit for p in parts),
+            "locations": sorted({p.location for p in parts}),
+            "snapshot_time": max(p.snapshot_time for p in parts),
+        })
+    return products, diagnostic
+
+
 async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
-    """获取产品统计数据（真实数据，来自 products 表）。"""
+    """产品分析师数据：产品取自 products 表，库存取自 inventory_snapshots。
+
+    此前 low_stock_products 用 ``product_rows[:3]`` + 硬编码 ``stock: 5`` 伪造，
+    low_conversion_products 用 ``product_rows[3:5]`` + 硬编码 ``conversion_rate:
+    0.008`` 伪造。两者都已改为查真实数据或返回空列表。
+
+    low_conversion_products 目前**恒为空**：prod 没有任何订单/转化数据
+    （orders 相关表全部为 0 行），转化率无从计算。等有订单数据后再接真实来源。
+    """
     from app.models.product import Product
-    
+
     workspace_id = DEFAULT_WORKSPACE_ID
-    
+
     # 1. 获取选品候选池（draft + candidate）
     product_rows = (
         await session.execute(
@@ -678,37 +788,44 @@ async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
             )
         )
     ).scalars().all()
-    
+
     total_products = len(product_rows)
-    
-    # 2. 模拟低库存产品（基于产品列表，取前3个作为示例）
-    # 实际应从 inventory_snapshots 表获取真实库存
+    product_ids = [p.id for p in product_rows]
+
+    # 2. 真实低库存产品（来自 inventory_snapshots，无快照则不出现在列表里）
+    low_stock_rows, inventory_diagnostic = await _low_stock_from_inventory(
+        session, workspace_id=workspace_id, product_ids=product_ids
+    )
+
+    threshold = inventory_diagnostic["stockout_threshold"]
+    by_id = {str(p.id): p for p in product_rows}
     low_stock_products = []
-    for p in product_rows[:3]:
+    for row in low_stock_rows:
+        p = by_id.get(row["id"])
         low_stock_products.append({
-            "id": str(p.id),
-            "name": p.name or p.sku or "未知产品",
-            "sku": p.sku,
-            "stock": 5,  # 模拟低库存
-            "reorder_qty": 50,
-            "category": p.category,
+            "id": row["id"],
+            "name": (p.name or p.sku or "未知产品") if p else "未知产品",
+            "sku": p.sku if p else None,
+            "category": p.category if p else None,
+            "available": row["available"],
+            "in_transit": row["in_transit"],
+            "locations": row["locations"],
+            "stockout_threshold": threshold,
+            "reorder_qty": max(threshold * REORDER_TARGET_MULTIPLIER - row["available"], 0),
         })
-    
-    # 3. 模拟低转化率产品（取接下来的2个作为示例）
-    low_conversion_products = []
-    for p in product_rows[3:5]:
-        low_conversion_products.append({
-            "id": str(p.id),
-            "name": p.name or p.sku or "未知产品",
-            "sku": p.sku,
-            "conversion_rate": 0.008,  # 模拟0.8%低转化率
-            "category": p.category,
-        })
-    
+
+    # 3. 低转化率产品：恒为空。prod 无订单数据，转化率无法计算，不伪造。
+    low_conversion_products: list[dict[str, Any]] = []
+
     return {
         "total_products": total_products,
         "low_stock_products": low_stock_products,
         "low_conversion_products": low_conversion_products,
+        "low_conversion_empty_reason": (
+            "prod 无订单/转化数据，无法计算产品级转化率；"
+            "有 orders 数据后应接真实来源"
+        ),
+        "inventory_diagnostic": inventory_diagnostic,
     }
 
 
@@ -791,21 +908,29 @@ async def _get_marketing_stats(session: AsyncSession) -> dict[str, Any]:
 
 
 async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
-    """供应链统计：产品取自 products 表，库存/补货明细仍是占位值。
+    """供应链统计：产品取自 products 表，库存取自 inventory_snapshots。
 
     历史版本此处 `from app.models.inventory import InventorySnapshot` —— 该模块
     不存在，真实的库存模型是 app.models.supply_chain.InventorySnapshot
     （表 inventory_snapshots）。导入位于函数体内且 ImportError 未被捕获，导致
     daily_supply_chain_manager 每次调度都直接失败。
 
-    接真实 inventory_snapshots 汇总（total_inventory_value、
-    need_reorder_products、pending_purchase_orders、supplier_count）属于
-    P2 backlog，见 docs/agent_team_workflow_refactor.md §P2。
+    更早的版本 need_reorder_products 用 ``product_rows[:2]`` + 硬编码
+    ``stock: 3`` / ``days_to_stockout: 5`` / ``supplier: "默认供应商"`` 伪造，
+    现已改为查真实 inventory_snapshots。
+
+    ``days_to_stockout`` 与 ``supplier`` 已移除：前者需要订单流速数据
+    （prod orders 表全空），后者需要供应商主数据（当前无 suppliers 表），
+    两者都没有真实来源，宁可不给也不编造。
+
+    ``total_inventory_value`` / ``pending_purchase_orders`` / ``supplier_count``
+    仍是占位值：库存价值需要单品成本数据（inventory_snapshots 无单价字段），
+    采购单与供应商需要相应业务表。见 docs/agent_team_workflow_refactor.md §P2。
     """
     from app.models.product import Product
 
     workspace_id = DEFAULT_WORKSPACE_ID
-    
+
     # 1. 获取已立项产品（candidate + active）
     product_rows = (
         await session.execute(
@@ -815,25 +940,34 @@ async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
             )
         )
     ).scalars().all()
-    
-    # 2. 模拟需要补货的产品（取前2个）
+
+    # 2. 真实需补货产品（来自 inventory_snapshots，无快照则不出现在列表里）
+    need_reorder_rows, inventory_diagnostic = await _low_stock_from_inventory(
+        session, workspace_id=workspace_id, product_ids=[p.id for p in product_rows]
+    )
+
+    threshold = inventory_diagnostic["stockout_threshold"]
+    by_id = {str(p.id): p for p in product_rows}
     need_reorder_products = []
-    for p in product_rows[:2]:
+    for row in need_reorder_rows:
+        p = by_id.get(row["id"])
         need_reorder_products.append({
-            "id": str(p.id),
-            "name": p.name or p.sku or "未知产品",
-            "sku": p.sku,
-            "stock": 3,
-            "days_to_stockout": 5,
-            "supplier": "默认供应商",
-            "reorder_qty": 100,
+            "id": row["id"],
+            "name": (p.name or p.sku or "未知产品") if p else "未知产品",
+            "sku": p.sku if p else None,
+            "available": row["available"],
+            "in_transit": row["in_transit"],
+            "locations": row["locations"],
+            "stockout_threshold": threshold,
+            "reorder_qty": max(threshold * REORDER_TARGET_MULTIPLIER - row["available"], 0),
         })
-    
+
     return {
-        "total_inventory_value": 15000,
+        "total_inventory_value": 15000,  # 占位：需单品成本数据才能真实计算
         "need_reorder_products": need_reorder_products,
-        "pending_purchase_orders": 0,
-        "supplier_count": 3,
+        "pending_purchase_orders": 0,     # 占位：需采购单表
+        "supplier_count": 3,              # 占位：需供应商主数据
+        "inventory_diagnostic": inventory_diagnostic,
     }
 
 
