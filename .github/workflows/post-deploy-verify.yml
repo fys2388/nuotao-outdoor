@@ -19,11 +19,25 @@ jobs:
             echo "=========================================="
             echo " 1. SYSTEMD SERVICES"
             echo "=========================================="
-            for svc in nuotao-backend nuotao-agent-scheduler postgresql redis prometheus grafana-server alertmanager; do
+            for svc in nuotao-backend nuotao-agent-scheduler nuotao-agent-worker postgresql redis prometheus grafana-server alertmanager; do
               status=$(systemctl is-active $svc 2>/dev/null || echo "not-found")
               enabled=$(systemctl is-enabled $svc 2>/dev/null || echo "n/a")
               printf "%-30s active=%-12s enabled=%s\n" "$svc" "$status" "$enabled"
             done
+
+            echo ""
+            echo "=========================================="
+            echo " 1b. AGENT RUNTIME (scheduler + worker)"
+            echo "=========================================="
+            echo "  Processes (期望各为 1，确认无 crontab/compose 双跑):"
+            echo "    agent_scheduler: $(pgrep -fc 'app.services.agent_scheduler' || echo 0)"
+            echo "    agent_worker:    $(pgrep -fc 'app.worker' || echo 0)"
+            echo "  Worker heartbeat registry:"
+            redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "    (redis not available)"
+            echo "  Queue depth (nuotao:agent-tasks):"
+            redis-cli --raw XLEN nuotao:agent-tasks 2>/dev/null || echo "    (redis not available)"
+            echo "  Pending tasks in consumer group:"
+            redis-cli --raw XPENDING nuotao:agent-tasks nuotao:agent-worker 2>/dev/null | head -3 || echo "    (redis not available)"
 
             echo ""
             echo "=========================================="

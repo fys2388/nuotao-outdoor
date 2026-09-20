@@ -1,13 +1,37 @@
 # Nuotao AI OS - AI Agent 管控流程配置总结
 
-**版本**: v1.1  
+**版本**: v2.0  
 **配置日期**: 2026-09-05  
-**更新日期**: 2026-09-06  
-**状态**: ✅ 已完成并验证通过
+**更新日期**: 2026-09-20（v2.0 身份治理修订）  
+**状态**: ⚠️ 部分已落地，工具层可执行覆盖率待补齐
 
-> v1.1 变更：新增 **报告防造假规则 v1.0**（report_truthfulness），
-> 营销经理报告强制收入对账、来源标注、预测带模型、小样本禁结论，
-> 详见本文档「十三、报告防造假规则」。
+> **v2.0 修订说明（重要，请先读）**
+>
+> v1.1 记录的"5 个 Agent 全部 active、26 个工具注册成功、2 个 L3 工具必须人工审批"
+> 是**一次性人工执行 SQL 的结果**，无部署可复现性，且与 runtime 实际状态不一致：
+>
+> 1. **Agent 身份重复**：v1.1 使用 hyphen ID（`product-manager` 等）写入 `agents` 表，
+>    而 runtime 种子（`app/agents/agent_seed.py`、`init_all_agents.py`）使用 snake_case
+>    （`product_analyst` 等），同一角色最多出现 3 个 ID（客户角色：
+>    `customer_manager` / `customer-manager` / `customer_service_manager`）。
+>    v2.0 统一为 **snake_case 规范 ID**，由 `backend/scripts/seed_agent_config.py`
+>    在 CI 中幂等执行。详见 `docs/agent_team_workflow_refactor.md`。
+>
+> 2. **工具白名单与 handler 注册 0 匹配**：`register_agent_tools.sql` 的 `handler_name`
+>    写成 `module.func` 路径形式，而 `tool_gateway` 实际注册的 handler 只有 5 个
+>    （`generate_product_image`、`generate_activity_plan`、`match_influencers`、
+>    `localize_listing`、`get_customer_template`）。结果：26 个工具全部
+>    whitelist-only（仅审计、**不可执行**，含 2 个 L3 高风险工具），
+>    而那 5 个真 handler 不在白名单内（调用会被门禁拒绝）。
+>
+> 3. **调度路径不写 `ai_agent_runs`**：`app/tasks/daily_agents.py` 的 5 个 `run_*_daily`
+>    当前不调用 LLM（属规则建议生成器），因此不产生 `ai_agent_runs` 审计行，
+>    也不经过 Budget Gate / Execution Policy。真正调 LLM 的 5 个 Agent 仅通过
+>    API 端点与 Worker executor 可达。
+>
+> 下文保留 v1.1 的管控设计口径（职责/权限/预算/审批/防造假），
+> 但**实际可执行状态以 v2.0 修订说明与「十一·补、实际状态核对」为准**。
+> 相关技术债已登记到 `docs/agent_team_workflow_refactor.md` P2 清单。
 
 ---
 
@@ -24,15 +48,21 @@
 
 ---
 
-## 二、Agent注册配置（5个）
+## 二、Agent 注册配置（5 个，v2.0 统一 snake_case 规范 ID）
 
-| Agent ID | 名称 | 领域 | 权限 | 模型 | 职责 |
+> ❗ v1.1 使用的 hyphen ID（`product-manager` 等）已在 v2.0 废弃。
+> `agents` 表中同名的 hyphen 行**不删除**（避免破坏已有引用），但不再更新；
+> 唯一权威身份为下表 snake_case ID，由 `backend/scripts/seed_agent_config.py` 幂等注册。
+
+| Agent ID（规范） | 名称 | 领域 | 权限 | 模型 | 职责 |
 |----------|------|------|------|------|------|
-| product-manager | 产品经理AI | product | L2 | deepseek-chat | 1688选品分析、产品导入、图片合规检查、WooCommerce上架 |
-| marketing-manager | 营销经理AI | marketing | L2 | deepseek-chat | AI文案生成、文案合规检查、AI生图（主图+详情图）、生图质量检查 |
-| supply-chain-manager | 供应链经理AI | supply_chain | L2 | deepseek-chat | 库存同步、采购单创建、1688下单、采购物流追踪、物流信息同步 |
-| customer-manager | 客户经理AI | customer | L1 | deepseek-chat | 客户咨询回复、订单状态查询、售后问题处理 |
-| business-analyst | 商业分析师AI | analytics | L3 | deepseek-chat | 经营数据分析、成本模型、AI周报、选品模型评估 |
+| product_analyst | 产品分析师AI | product | L2 | gpt-4o-mini（种子默认） | 1688选品分析、产品导入、图片合规检查、WooCommerce上架 |
+| marketing_manager | 营销经理AI | marketing | L2 | deepseek-chat | AI文案生成、文案合规检查、AI生图（主图+详情图）、生图质量检查 |
+| supply_chain_manager | 供应链经理AI | supply_chain | L2 | deepseek-chat | 库存同步、采购单创建、1688下单、采购物流追踪、物流信息同步 |
+| customer_manager | 客户经理AI | customer | L1 | deepseek-chat | 客户咨询回复、订单状态查询、售后问题处理 |
+| business_analyst | 商业分析师AI | analytics | L3 | deepseek-chat | 经营数据分析、成本模型、AI周报、选品模型评估 |
+
+> ⚠️ v1.1 曾出现的第三个客户角色 ID `customer_service_manager` 已废弃，不再注册。
 
 **权限级别说明**:
 - L0: 公开读
@@ -43,6 +73,17 @@
 ---
 
 ## 三、工具白名单配置（26个工具，9个类别）
+
+> ⚠️ **v2.0 实际可执行状态**：下表 26 个工具已入库为白名单，但其中
+> **仅 5 个真正可执行**（`generate_product_image`、`generate_activity_plan`、
+> `match_influencers`、`localize_listing`、`get_customer_template`，
+> 见 `app/services/m6_tool_registry.py`）。其余 21 个工具的 `handler_name`
+> 与实际注册的 handler 名不匹配，处于 **whitelist-only（仅审计、不可执行）** 状态，
+> 包含 2 个 L3 高风险工具 `publish_woocommerce_product`、`submit_1688_order`——
+> 因此文档所述"L3 人工审批后执行"当前**实际什么都执行不了**（偏安全侧，但非预期）。
+>
+> 补齐方式：在 `m6_tool_registry.py` 中按真实 handler 名注册对应 handler，
+> 并让 `seed_agent_config.py` 写入一致的 `handler_name`。已列为 P2 待办。
 
 | 类别 | 工具数 | L0 | L1 | L2 | L3高风险 |
 |------|--------|----|----|----|----------|
@@ -215,6 +256,23 @@ agent_id, input, plan, tool_calls, output, approval, cost, status, trace_id, cre
 ✅ **生图方法**: i2i_only（仅允许I2I图生图，禁止纯文字T2I）  
 ✅ **审批队列**: 系统已有2条PRODUCT_DECISION审批记录（approved）  
 ✅ **流程编排**: 产品生命周期14状态 + 订单采购11状态 + 生图SOP完整配置
+
+---
+
+### 11.2 v2.0 实际状态核对（2026-09-20，如实标注）
+
+| 项 | v1.1 声称 | 实际核查 | 差距 |
+|----|-----------|----------|------|
+| Agent 身份 | 5 个全部 active | 5 角色 / **11 个身份** / 3 条注册路径 | 🔴 已治理（v2.0 统一 snake_case） |
+| 工具白名单 | 26 个注册成功 | 26 个入库，但 **0 个 handler 名匹配** | 🔴 5/26 可执行，21/26 仅审计 |
+| 高风险工具 | 2 个 L3 必须人工审批 | L3 门禁逻辑正确，但 handler 未注册 → 无法执行 | 🟠 门禁生效、执行通路未通 |
+| 成本护栏 | v1.0 生效，月度预算 $230 | `agent_budget.py` 仅在 Worker 内生效；调度路径绕过 | 🟠 |
+| 审批队列 | 已有 2 条 PRODUCT_DECISION approved | 审批流 + RBAC + SLA 完整；但 `create_suggestion` 对低风险建议**自动审批后自动执行** | 🟡 低风险绕过人工 |
+| 调度审计 | 5 个 Agent 每日运行入库 | 调度路径**不调 LLM、不写 `ai_agent_runs`** | 🔴 见 P2-1 |
+| 提示词入库 | 5 个 Agent 提示词版本化 | 仅 `AGENT_PRODUCT_ANALYST v1` 有幂等种子；其余靠手工脚本 | 🟠 |
+| Worker 部署 | 未提及 | **此前无 systemd 单元**，队列无人消费 | 🔴 已补齐（v2.0） |
+
+完整评估、变更清单与验证命令见 `docs/agent_team_workflow_refactor.md`。
 
 ---
 

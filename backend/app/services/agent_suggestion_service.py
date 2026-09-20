@@ -1,4 +1,4 @@
-﻿"""Agent 建议服务 — 建议生命周期管理（创建/查询/审批/拒绝/执行/反馈）。
+"""Agent 建议服务 — 建议生命周期管理（创建/查询/审批/拒绝/执行/反馈）。
 
 与 approval_service.py 的区别：
 - approval_service 是通用审批引擎（任意实体的审批流）
@@ -13,7 +13,10 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 
 from app.models.agent_suggestion import (
     SUGGESTION_STATUSES,
@@ -27,8 +30,6 @@ from app.schemas.agent_suggestion import (
 )
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 # --------------------------------------------------------------------------- #
@@ -52,18 +53,44 @@ async def create_suggestion(
     source: str = "auto",
     auto_approve: bool = True,
     commit: bool = True,
+    dedup_key: str | None = None,
 ) -> AgentSuggestion:
     """创建一条 Agent 建议，状态为 pending_approval。
 
     低风险建议可自动审批（auto_approve_low_risk 配置开启时），
     中高风险必须人工审批。
+
+    ``dedup_key`` 供调度路径传入（格式 ``{agent_id}:{suggestion_type}:{时间窗}``）。
+    同一 workspace 内该键唯一：重复调用返回**已存在的建议行**而不新建，
+    用于消除 systemd ``Restart=always`` 后调度首轮重跑带来的重复建议。
+    API/人工路径不传该键，行为与原先完全一致。
     """
     if suggestion_type not in SUGGESTION_TYPES:
         logger.warning("未知建议类型: %s，降级为 other", suggestion_type)
         suggestion_type = "other"
 
+    ws_id = workspace_id or DEFAULT_WORKSPACE_ID
+
+    # 幂等快路径：同一 workspace 内 dedup_key 已存在则直接返回既有行，
+    # 避免调度重跑把重复建议灌入审批队列。
+    if dedup_key:
+        existing = (
+            await session.execute(
+                select(AgentSuggestion).where(
+                    AgentSuggestion.workspace_id == ws_id,
+                    AgentSuggestion.dedup_key == dedup_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            logger.info(
+                "建议幂等命中，跳过创建: dedup_key=%s existing_id=%s",
+                dedup_key, existing.id,
+            )
+            return existing
+
     suggestion = AgentSuggestion(
-        workspace_id=workspace_id or DEFAULT_WORKSPACE_ID,
+        workspace_id=ws_id,
         agent_id=agent_id,
         agent_run_id=agent_run_id,
         source=source,
@@ -76,9 +103,32 @@ async def create_suggestion(
         execution_params=execution_params or {},
         execution_action=execution_action,
         status="pending_approval",
+        dedup_key=dedup_key,
     )
     session.add(suggestion)
-    await session.flush()
+    try:
+        # SAVEPOINT 隔离：并发窗口内命中唯一约束时只回滚本次插入，
+        # 不会波及同一事务中调用方已 flush 的其他建议。
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError:
+        # 并发窗口内的重复插入：savepoint 已回滚，返回已存在行，
+        # 保持调用方幂等语义。
+        existing = (
+            await session.execute(
+                select(AgentSuggestion).where(
+                    AgentSuggestion.workspace_id == ws_id,
+                    AgentSuggestion.dedup_key == dedup_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            logger.info(
+                "建议幂等命中（并发），跳过创建: dedup_key=%s existing_id=%s",
+                dedup_key, existing.id,
+            )
+            return existing
+        raise
 
     logger.info(
         "Agent建议已创建: id=%s agent=%s type=%s risk=%s",

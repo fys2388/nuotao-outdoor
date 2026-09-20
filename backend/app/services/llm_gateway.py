@@ -40,12 +40,17 @@ PRICING: dict[str, tuple[Decimal, Decimal]] = {
     "openai:gpt-4o": (Decimal("0.002500"), Decimal("0.010000")),
     "deepseek:deepseek-chat": (Decimal("0.000270"), Decimal("0.001100")),
     "deepseek:deepseek-reasoner": (Decimal("0.000550"), Decimal("0.002190")),
+    # SenseNova Free public beta: 0.00 credits consumed per token, so the
+    # budget gate must not charge agents for calls that cost nothing. Leaving
+    # this out would fall back to DEFAULT_* (conservative >0) and eventually
+    # block all agents on a free quota.
+    "sensenova:sensenova-6.8-flash-lite": (Decimal("0"), Decimal("0")),
 }
 # Fallback pricing for models without an explicit entry (conservative).
 DEFAULT_INPUT_PRICE = Decimal("0.000300")
 DEFAULT_OUTPUT_PRICE = Decimal("0.001200")
 
-SUPPORTED_PROVIDERS = ("openai", "deepseek")
+SUPPORTED_PROVIDERS = ("sensenova", "openai", "deepseek")
 
 
 class LLMError(Exception):
@@ -123,6 +128,12 @@ def _provider_config(provider: str) -> tuple[str, str, str]:
             settings.deepseek_api_key,
             settings.deepseek_base_url,
             settings.deepseek_default_model,
+        )
+    if provider == "sensenova":
+        return (
+            settings.sensenova_api_key,
+            settings.sensenova_base_url,
+            settings.sensenova_default_model,
         )
     raise LLMError(f"unsupported provider '{provider}'", kind="invalid_response")
 

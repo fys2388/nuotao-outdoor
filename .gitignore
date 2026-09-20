@@ -122,6 +122,8 @@ admin_token*.txt
 *token*.txt
 /backend/_*.py
 /backend/scripts/*.py
+# CI 必需的幂等种子脚本：非临时脚本，必须入库供 deploy.yml §3.6 调用
+!/backend/scripts/seed_agent_config.py
 
 # Sensitive files
 server_credentials.txt

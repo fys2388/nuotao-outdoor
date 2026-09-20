@@ -206,6 +206,14 @@ jobs:
             python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
             echo "[db] table check done"
 
+            echo "=== 3.6 Seeding agent config (idempotent) ==="
+            # 规范 ID 注册 5 个 Agent + 工具白名单（handler_name 对齐真实注册名）
+            # + 成本护栏 + 审批 SLA。upsert 语义，不执行 DELETE。
+            # 取代 scripts/configure_agent_roles.sql（hyphen ID 与 runtime 冲突，已删除）。
+            # 详见 docs/agent_team_workflow_refactor.md
+            python3 /opt/nuotao/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] agent config seed failed (non-blocking, check logs)"
+            echo "[seed] agent config seed done"
+
             echo "=== 3.4 Ensure nuotao system user and permissions ==="
             id nuotao >/dev/null 2>&1 || useradd -r -s /bin/false nuotao
             mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
@@ -372,7 +380,8 @@ jobs:
                 echo ''
                 echo '[Service]'
                 echo 'Type=simple'
-                echo 'User=root'
+                echo 'User=nuotao'
+                echo 'Group=nuotao'
                 echo 'WorkingDirectory=/opt/nuotao/backend'
                 echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
                 echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler'
@@ -395,5 +404,60 @@ jobs:
             sleep 3
             systemctl status nuotao-agent-scheduler --no-pager | head -8 || echo "[scheduler] status check failed"
             echo "[scheduler] AI Agent Scheduler configured and started"
+
+            echo "=== 7.6 Configuring AI Agent Worker ==="
+            # 此前无任何 systemd 单元：POST /api/v1/agent-tasks 入队后无人消费，
+            # 任务永久 pending、队列持续堆积。详见 docs/agent_team_workflow_refactor.md
+            WORKER_SERVICE=/etc/systemd/system/nuotao-agent-worker.service
+            WORKER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-worker.service
+            if [ -f "$WORKER_TEMPLATE" ]; then
+              cp "$WORKER_TEMPLATE" "$WORKER_SERVICE"
+              chmod 644 "$WORKER_SERVICE"
+              echo "[worker] installed versioned template -> $WORKER_SERVICE"
+            elif [ ! -f "$WORKER_SERVICE" ]; then
+              {
+                echo '[Unit]'
+                echo 'Description=Nuotao AI Agent Worker (Redis Streams consumer)'
+                echo 'After=network.target postgresql.service redis.service'
+                echo 'Wants=postgresql.service redis.service'
+                echo ''
+                echo '[Service]'
+                echo 'Type=simple'
+                echo 'User=nuotao'
+                echo 'Group=nuotao'
+                echo 'WorkingDirectory=/opt/nuotao/backend'
+                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
+                echo 'EnvironmentFile=/opt/nuotao/backend/.env'
+                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker'
+                echo 'Restart=always'
+                echo 'RestartSec=10'
+                echo 'StandardOutput=journal'
+                echo 'StandardError=journal'
+                echo ''
+                echo '[Install]'
+                echo 'WantedBy=multi-user.target'
+              } > "$WORKER_SERVICE"
+              echo "[worker] template missing, generated inline fallback"
+            else
+              echo "[worker] template missing, keeping existing $WORKER_SERVICE"
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker|' "$WORKER_SERVICE"
+            fi
+            systemctl daemon-reload
+            systemctl enable nuotao-agent-worker 2>/dev/null || true
+            systemctl restart nuotao-agent-worker
+            sleep 3
+            if systemctl is-active --quiet nuotao-agent-worker; then
+              echo "[worker] nuotao-agent-worker is active"
+            else
+              echo "[worker] WARNING: nuotao-agent-worker is NOT active; scheduling agent tasks will pile up in Redis"
+              journalctl -u nuotao-agent-worker -n 20 --no-pager || true
+            fi
+            systemctl status nuotao-agent-worker --no-pager | head -8 || echo "[worker] status check failed"
+            echo "[worker] AI Agent Worker configured"
+
+            echo "=== 7.7 Single-process check (scheduler + worker) ==="
+            echo "[procs] agent_scheduler: $(pgrep -fc 'app.services.agent_scheduler' || echo 0) (期望 1)"
+            echo "[procs] agent_worker:    $(pgrep -fc 'app.worker' || echo 0) (期望 1)"
+            redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "[redis] not available, skipping worker registry check"
 
             echo "=== Deployment completed successfully ==="

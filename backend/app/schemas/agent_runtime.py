@@ -58,8 +58,8 @@ class AgentRegisterRequest(BaseModel):
     ]
     version: str = Field(default="v1", pattern=r"^v\d+$")
     status: Literal["active", "inactive", "draft"] = "active"
-    model_provider: Literal["openai", "deepseek"] = "openai"
-    model_name: str = Field(default="gpt-4o-mini", min_length=1, max_length=64)
+    model_provider: Literal["sensenova", "openai", "deepseek"] = "sensenova"
+    model_name: str = Field(default="sensenova-6.8-flash-lite", min_length=1, max_length=64)
     prompt_version: str = Field(default="v1", pattern=r"^v\d+$")
     permission_level: Literal["L0", "L1", "L2", "L3"] = "L1"
     business_scope: BusinessScope = "SHARED"

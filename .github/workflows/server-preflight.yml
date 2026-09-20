@@ -26,13 +26,14 @@ jobs:
 
             echo ""
             echo "=== 1. Systemd Services ==="
-            for svc in nuotao-backend nuotao-agent-scheduler postgresql redis-server prometheus grafana-server alertmanager node-exporter nginx; do
+            for svc in nuotao-backend nuotao-agent-scheduler nuotao-agent-worker postgresql redis-server prometheus grafana-server alertmanager node-exporter nginx; do
               if systemctl is-active --quiet "$svc" 2>/dev/null; then
                 echo "  [RUNNING] $svc"
               else
                 echo "  [STOPPED] $svc (or not installed)"
               fi
             done
+            echo "  agent processes: scheduler=$(pgrep -fc 'app.services.agent_scheduler' || echo 0) worker=$(pgrep -fc 'app.worker' || echo 0)"
 
             echo ""
             echo "=== 2. HTTP Health ==="

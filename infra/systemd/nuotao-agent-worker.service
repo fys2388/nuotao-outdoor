@@ -1,23 +1,24 @@
 [Unit]
-Description=Nuotao AI Agent Scheduler (选品/营销/供应链/执行/反馈)
+Description=Nuotao AI Agent Worker (Redis Streams consumer: claim/policy/budget/concurrency/retry)
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 
 [Service]
 Type=simple
-# v1.1: 由 root 改为 nuotao，与 backend/worker 权限模型一致
-# （AGENTS.md §4.3 最小权限；调度器无需写系统区）
 User=nuotao
 Group=nuotao
 WorkingDirectory=/opt/nuotao/backend
 Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/opt/nuotao/backend/.env
-ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler
+# AGENT_WORKER_ID must be unique per process when scaling; empty => auto
+# worker-{hostname}-{pid}. See docs/agent_team_workflow_refactor.md.
+Environment="AGENT_WORKER_CONCURRENCY=4"
+ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=nuotao-agent-scheduler
+SyslogIdentifier=nuotao-agent-worker
 
 # 安全限制（与 nuotao-backend.service 对齐）
 NoNewPrivileges=true

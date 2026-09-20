@@ -18,6 +18,7 @@ import socket
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging
+from app.services.m6_tool_registry import register_m6_tool_handlers
 from app.worker.agent_worker import run_worker
 from app.worker.bootstrap import register_builtin_executors
 
@@ -35,6 +36,11 @@ def main() -> None:
     # Bind every built-in agent to its production executor. Unknown agents
     # still fall back to the generic LLM executor.
     register_builtin_executors()
+    # M6 tool handlers are registered in the API process at app.main lifespan;
+    # the worker is a separate process, so it must register them again -
+    # otherwise execute_tool_call() finds an empty handler registry and every
+    # whitelisted tool call resolves to whitelist-only (audit-only) behavior.
+    register_m6_tool_handlers()
     setup_logging()
     logger = logging.getLogger(__name__)
     worker_id = _resolve_worker_id()
