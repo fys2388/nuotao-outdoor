@@ -197,6 +197,21 @@ async def business_alerts_task(session: AsyncSession) -> dict[str, Any]:
     }
 
 
+def _parse_last_run(raw: str) -> datetime:
+    """Parse a persisted last_run into an aware UTC datetime.
+
+    _check_and_run subtracts this value from datetime.now(UTC), so a naive
+    datetime raises "can't subtract offset-naive and offset-aware datetimes"
+    and crash-loops the whole scheduler. Values without an explicit UTC offset
+    are assumed to already be UTC and normalized; anything with an offset is
+    converted to UTC so the subtraction is always safe.
+    """
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 # --------------------------------------------------------------------------- #
 # 调度器核心
 # --------------------------------------------------------------------------- #
@@ -250,7 +265,7 @@ class AgentScheduler:
                         payload = json.loads(raw)
                         last_run = payload.get("last_run")
                         if last_run:
-                            task["last_run"] = datetime.fromisoformat(last_run)
+                            task["last_run"] = _parse_last_run(last_run)
                             task["run_count"] = int(payload.get("run_count", 0))
                             restored += 1
                     except (ValueError, TypeError):
