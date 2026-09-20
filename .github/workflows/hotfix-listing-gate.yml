@@ -70,12 +70,15 @@ jobs:
             BACKEND=/opt/nuotao/backend
             FRONTEND=/opt/nuotao/frontend
             PY="$BACKEND/.venv/bin/python"
-            LOG=/tmp/deploy-listing-gate.log
-            : > "$LOG"
-            exec > >(tee -a "$LOG") 2>&1
+            TMPLOG=/tmp/deploy-listing-gate.log
+            LOG=/var/www/nuotao/deploy-listing-gate.log
+            : > "$TMPLOG"
+            exec > >(tee -a "$TMPLOG") 2>&1
+            mirror() { cp -f "$TMPLOG" "$LOG" 2>/dev/null || true; chown www-data:www-data "$LOG" 2>/dev/null || true; }
 
             echo "########## listing-gate hotfix started $(date -u +%FT%TZ) ##########"
             cd /opt/nuotao
+            mirror
 
             echo "===== 0. unpack patch package ====="
             rm -rf /tmp/listing-gate-patch && mkdir -p /tmp/listing-gate-patch
@@ -83,6 +86,13 @@ jobs:
             find /tmp/listing-gate-patch -type f | sort
             test -f "$PY" || { echo "ERROR: $PY missing"; exit 1; }
             echo "python: $($PY --version 2>&1)"
+
+            echo "===== 0b. production layout probe ====="
+            echo "backend files:"; ls -la "$BACKEND/app/api/v1/router.py" "$BACKEND/app/services/woocommerce_sync_service.py" 2>&1
+            echo "frontend page candidates:"
+            ls -la "$FRONTEND/src/pages/" 2>&1 | grep -i -E "publish|product" || echo "  (no ProductPublish* under src/pages)"
+            find "$FRONTEND/src" -maxdepth 3 -iname "*ProductPublish*" 2>/dev/null || echo "  (find returned nothing)"
+            mirror
 
             PATCHDIR=/tmp/listing-gate-patch/hotfix-listing-gate
             APPLY="$PATCHDIR/scripts/apply_patch.py"
@@ -94,8 +104,10 @@ jobs:
               echo "DRY RUN OK"
             else
               echo "ERROR: dry run failed - nothing was changed"
+              mirror
               exit 1
             fi
+            mirror
 
             echo "===== 2. APPLY ====="
             if "$PY" "$APPLY" --patch-dir "$PATCHDIR" \
@@ -103,8 +115,10 @@ jobs:
               echo "APPLY OK"
             else
               echo "ERROR: apply failed - restore from the backup dir printed above"
+              mirror
               exit 1
             fi
+            mirror
 
             echo "===== 3. confirm router registration ====="
             grep -n "listing_publish\|listing-gate hotfix" "$BACKEND/app/api/v1/router.py" | head -8
@@ -153,7 +167,6 @@ jobs:
               echo "===== 7. deploy frontend static ====="
               rm -rf /var/www/nuotao/*
               cp -r dist/* /var/www/nuotao/
-              cp "$LOG" /var/www/nuotao/deploy-listing-gate.log 2>/dev/null || true
               chown -R www-data:www-data /var/www/nuotao
               ls /var/www/nuotao | head
             fi
@@ -162,5 +175,6 @@ jobs:
             B=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/readyz || true)
             C=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/ || true)
             echo "backend=$B console=$C"
-            [ "$B" = "200" ] || { echo "ERROR backend health=$B"; journalctl -u nuotao-backend -n 40 --no-pager || true; exit 1; }
+            [ "$B" = "200" ] || { echo "ERROR backend health=$B"; journalctl -u nuotao-backend -n 40 --no-pager || true; mirror; exit 1; }
             echo "########## DONE $(date -u +%FT%TZ) ##########"
+            mirror
