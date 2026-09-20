@@ -313,6 +313,28 @@ async def _exists(session: AsyncSession, model, **where_values) -> bool:
     return row is not None
 
 
+async def _active_prompt_version(
+    session: AsyncSession, *, workspace_id: UUID, name: str
+) -> str | None:
+    """Return the ``version`` of the active prompt called ``name``.
+
+    ``None`` when no active prompt with that name exists. Production has
+    upgraded some prompts out of band (migration 0050 rebinds
+    ``product_analyst`` to ``v3``), so registration must follow the version
+    that is actually active rather than forcing ``PROMPT_VERSION`` —
+    otherwise ``register_agent`` refuses with "active prompt ... version 'v1'
+    not found", or worse, silently downgrades the agent back to v1.
+    """
+    row = await session.execute(
+        select(Prompt.version).where(
+            Prompt.workspace_id == workspace_id,
+            Prompt.name == name,
+            Prompt.status == "active",
+        )
+    )
+    return row.scalar_one_or_none()
+
+
 async def seed_prompts(session: AsyncSession, *, workspace_id: UUID) -> tuple[int, int]:
     """Create-if-missing the versioned prompt for every agent."""
     created = existing = 0
@@ -376,6 +398,13 @@ async def seed_agents(session: AsyncSession, *, workspace_id: UUID) -> tuple[int
             workspace_id=workspace_id,
             agent_id=agent["agent_id"],
         )
+        name = prompt_name_for(agent["agent_id"])
+        # Follow the version that is actually active (see _active_prompt_version).
+        prompt_version = await _active_prompt_version(
+            session, workspace_id=workspace_id, name=name
+        )
+        if prompt_version is None:
+            prompt_version = PROMPT_VERSION
         await agent_runtime.register_agent(
             session,
             workspace_id=workspace_id,
@@ -387,7 +416,7 @@ async def seed_agents(session: AsyncSession, *, workspace_id: UUID) -> tuple[int
                 status="active",
                 model_provider=agent["model_provider"],
                 model_name=agent["model_name"],
-                prompt_version=PROMPT_VERSION,
+                prompt_version=prompt_version,
                 permission_level=agent["permission_level"],
                 description=agent["description"],
             ),
@@ -395,7 +424,7 @@ async def seed_agents(session: AsyncSession, *, workspace_id: UUID) -> tuple[int
         )
         if existed:
             updated += 1
-            logger.info("agent updated: %s", agent["agent_id"])
+            logger.info("agent updated: %s (prompt %s)", agent["agent_id"], prompt_version)
         else:
             created += 1
             logger.info(
