@@ -62,7 +62,14 @@ jobs:
         run: |
           echo "Branch: ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
+          echo "Run: #${GITHUB_RUN_NUMBER}"
           echo "Deploying to: ${{ env.SERVER_HOST }}"
+          # An empty host means the server secrets are not visible to this
+          # branch; fail loudly instead of letting ssh-action die silently.
+          if [ -z "${env.SERVER_HOST}" ] || [ -z "${env.SSH_PRIVATE_KEY}" ]; then
+            echo "::error::SERVER_HOST/SSH_PRIVATE_KEY secrets are not available on branch ${{ github.ref_name }}"
+            exit 1
+          fi
 
       - name: Apply patch, restart backend, rebuild frontend
         uses: appleboy/ssh-action@v1.0.3
