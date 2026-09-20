@@ -21,6 +21,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.product_analyst_prompt import (
+    PRODUCT_ANALYST_TEMPLATE_V3,
+    PROMPT_VERSION_V3,
+)
 from app.models.agent_runtime import AgentRegistry
 from app.schemas.agent_runtime import AgentRegisterRequest
 from app.schemas.prompt import PromptCreate
@@ -28,12 +32,8 @@ from app.services import agent_runtime, prompt_registry
 
 AGENT_ID = "product_analyst"
 PROMPT_NAME = "AGENT_PRODUCT_ANALYST"
-PROMPT_VERSION = "v1"
-PROMPT_TEMPLATE = (
-    "You are the Nuotao Outdoor Product Analyst. Analyze the provided product "
-    "context and respond with ONLY a JSON object matching the output schema.\n"
-    "Context: {context_json}\nOutput schema: {output_schema}"
-)
+PROMPT_VERSION = PROMPT_VERSION_V3
+PROMPT_TEMPLATE = PRODUCT_ANALYST_TEMPLATE_V3
 PROMPT_VARIABLES = ["context_json", "output_schema"]
 
 
@@ -58,7 +58,7 @@ async def ensure_product_analyst_agent(
                 template=PROMPT_TEMPLATE,
                 variables=PROMPT_VARIABLES,
                 status="active",
-                description="Product Analyst agent runtime prompt v1 (M5.2)",
+                description="Product Analyst agent runtime prompt v3 (Nuotao Score V3.0)",
             ),
             trace_id=trace_id,
         )

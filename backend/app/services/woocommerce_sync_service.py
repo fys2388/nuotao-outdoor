@@ -9,10 +9,23 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any
-from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID, uuid4
 
 import requests
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services import consolidation_service
+from app.services.customer_identity_service import (
+    CustomerIdentityConflictError,
+    ensure_account_for_identity,
+)
+from app.services.product_content_service import (
+    get_approved_localization,
+    localization_values,
+    normalize_image_urls,
+    product_media_images,
+    target_language_for_market,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +461,13 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
         "rating_count": wc_product.get("rating_count"),
         "product_type": wc_product.get("type"),
     }
+    images = normalize_image_urls(wc_product.get("images"))
+    if images:
+        meta["media"] = {
+            "images": images,
+            "main_image": images[0],
+            "gallery_images": images[1:],
+        }
 
     # 清理空值
     meta = {k: v for k, v in meta.items() if v is not None}
@@ -488,8 +508,9 @@ async def sync_products_to_db(
     Returns:
         同步结果统计
     """
-    from app.models.product import Product
     from sqlalchemy import select
+
+    from app.models.product import Product
 
     imported = 0
     updated = 0
@@ -519,12 +540,13 @@ async def sync_products_to_db(
             try:
                 data = convert_wc_product_to_internal(wc_product)
 
-                # 按 workspace + sku 查找现有产品
+                # 按 workspace + sku 查找现有产品; 忽略已软删行, 删后重传走新建
                 existing = (
                     await session.execute(
                         select(Product).where(
                             Product.workspace_id == workspace_id,
                             Product.sku == data["sku"],
+                            Product.deleted_at.is_(None),
                         )
                     )
                 ).scalar_one_or_none()
@@ -619,9 +641,11 @@ async def sync_orders_to_db(
     Returns:
         同步结果统计
     """
-    from app.models.order import Order, OrderItem
-    from sqlalchemy import select
     from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.models.order import Order, OrderItem
 
     now = datetime.utcnow()
     date_after = (now - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -630,6 +654,7 @@ async def sync_orders_to_db(
     updated = 0
     failed = 0
     errors: list[str] = []
+    batch_order_ids: list[UUID] = []
     page = 1
     total_fetched = 0
 
@@ -666,6 +691,7 @@ async def sync_orders_to_db(
                     await session.execute(
                         select(Order).where(
                             Order.workspace_id == workspace_id,
+                            Order.source == "woocommerce",
                             Order.external_order_id == external_order_id,
                         )
                     )
@@ -701,12 +727,32 @@ async def sync_orders_to_db(
                 tax_total = to_decimal(wc_order.get("total_tax"))
                 total = to_decimal(wc_order.get("total"))
 
-                # 客户引用 ID（非 PII，使用哈希）
-                customer_email = billing.get("email", "")
-                customer_reference_id = None
+                # Resolve to the unified account using a workspace-scoped HMAC.
+                # The raw email remains in memory and is never persisted.
+                customer_account_id = None
+                customer_email = billing.get("email")
                 if customer_email:
-                    import hashlib
-                    customer_reference_id = hashlib.sha256(customer_email.encode()).hexdigest()[:32]
+                    try:
+                        account = await ensure_account_for_identity(
+                            session,
+                            workspace_id=workspace_id,
+                            identity_type="email",
+                            identity_value=str(customer_email),
+                            channel="b2c_store",
+                            external_system="woocommerce",
+                            customer_type="CONSUMER",
+                            business_model="B2C",
+                            country=country,
+                            default_currency=str(wc_order.get("currency") or "USD"),
+                            source="woocommerce_sync",
+                            trace_id=None,
+                        )
+                        customer_account_id = account.id
+                    except CustomerIdentityConflictError:
+                        logger.warning(
+                            "customer identity conflict for order %s; manual review required",
+                            external_order_id,
+                        )
 
                 # 元数据
                 meta = {
@@ -731,7 +777,8 @@ async def sync_orders_to_db(
                         country=country,
                         payment_method=wc_order.get("payment_method"),
                         source="woocommerce",
-                        customer_reference_id=customer_reference_id,
+                        business_model="B2C",
+                        customer_account_id=customer_account_id,
                         subtotal=subtotal,
                         shipping_total=shipping_total,
                         discount_total=discount_total,
@@ -741,18 +788,21 @@ async def sync_orders_to_db(
                     )
                     session.add(order)
                     await session.flush()
+                    batch_order_ids.append(order.id)
 
                     # 创建订单项
                     for item in wc_order.get("line_items", []):
                         order_item = OrderItem(
+                            workspace_id=workspace_id,
                             order_id=order.id,
-                            product_id=None,  # 后续关联产品
+                            external_item_id=(
+                                str(item.get("id")) if item.get("id") is not None else None
+                            ),
                             sku=item.get("sku", ""),
                             name=item.get("name", ""),
                             quantity=int(item.get("quantity", 0)),
                             unit_price=to_decimal(item.get("price")),
-                            total=to_decimal(item.get("total")),
-                            meta={"product_id": item.get("product_id"), "variation_id": item.get("variation_id")},
+                            line_total=to_decimal(item.get("total")),
                         )
                         session.add(order_item)
 
@@ -768,7 +818,11 @@ async def sync_orders_to_db(
                     existing.discount_total = discount_total
                     existing.tax_total = tax_total
                     existing.total = total
+                    existing.customer_account_id = (
+                        existing.customer_account_id or customer_account_id
+                    )
                     existing.profit_snapshot = meta
+                    batch_order_ids.append(existing.id)
                     updated += 1
 
             except Exception as e:
@@ -779,6 +833,23 @@ async def sync_orders_to_db(
 
         # 每批提交一次
         await session.commit()
+        for order_id in batch_order_ids:
+            try:
+                await consolidation_service.ensure_attribution(
+                    session,
+                    workspace_id=workspace_id,
+                    entity_type="b2c_order",
+                    entity_id=order_id,
+                    actor="system:woocommerce-batch-sync",
+                )
+            except Exception:
+                await session.rollback()
+                logger.warning(
+                    "automatic consolidation attribution failed for order %s",
+                    order_id,
+                    exc_info=True,
+                )
+        batch_order_ids = []
 
         total_fetched += len(orders)
         pagination = result.get("pagination", {})
@@ -820,10 +891,10 @@ async def update_product_listing(product_id: str, updates: dict) -> dict:
         from app.core.database import async_session_factory
     else:
         async_session_factory = _sys.modules["app.core.database"].async_session_factory
-    from app.models.product import Product
-    from sqlalchemy import select
     from datetime import datetime, timezone
     from uuid import UUID
+
+    from app.models.product import Product
 
     async with async_session_factory() as session:
         product = await session.get(Product, UUID(str(product_id).replace("-", "")))
@@ -980,10 +1051,11 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
         from app.core.database import async_session_factory
     else:
         async_session_factory = _sys.modules["app.core.database"].async_session_factory
-    from app.models.product import Product
-    from sqlalchemy import select
     from uuid import UUID
+
     import requests as _requests
+
+    from app.models.product import Product
 
     async def _get_session():
         if db_session:
@@ -1008,13 +1080,33 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
         if product.meta and isinstance(product.meta, dict):
             wc_id = product.meta.get("woocommerce_id")
 
-        # 构建 WooCommerce 产品数据
+        target_language = target_language_for_market(product.target_market)
+        localization = get_approved_localization(product.meta, target_language)
+        localized_title, localized_description, localized_short, bullets = localization_values(
+            localization
+        )
+        source_text = f"{product.name}\n{product.description or ''}"
+        has_cjk = any("\u3400" <= char <= "\u9fff" for char in source_text)
+        if not localization and has_cjk:
+            return {
+                "success": False,
+                "product_id": str(product.id),
+                "action": "blocked",
+                "error": (
+                    f"缺少已审核的 {target_language} 商品文案，禁止将中文商品直接推送到 WooCommerce"
+                ),
+            }
+
+        # 构建 WooCommerce 产品数据；目标市场文案优先于来源语言字段。
+        title = localized_title or product.name
+        description = localized_description or product.description or ""
+        short_description = localized_short or (description[:200] if description else "")
         wc_product = {
-            "name": product.name,
+            "name": title,
             "sku": product.sku,
             "status": "publish" if product.status == "active" else "draft",
-            "description": product.description or "",
-            "short_description": (product.description or "")[:200] if product.description else "",
+            "description": description,
+            "short_description": short_description,
         }
 
         # 添加价格（从 meta 中获取）
@@ -1033,6 +1125,31 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
         # 添加分类
         if product.category:
             wc_product["categories"] = [{"name": product.category}]
+
+        if product.attributes and isinstance(product.attributes, dict):
+            wc_product["attributes"] = [
+                {
+                    "name": str(name),
+                    "options": (
+                        [str(item) for item in value]
+                        if isinstance(value, list)
+                        else [str(value)]
+                    ),
+                    "visible": True,
+                }
+                for name, value in product.attributes.items()
+                if value not in (None, "", [])
+            ]
+
+        images = product_media_images(product.meta)
+        if images:
+            wc_product["images"] = [{"src": url} for url in images]
+
+        if bullets:
+            meta = product.meta or {}
+            meta["listing_bullets"] = bullets
+            meta["listing_language"] = target_language
+            product.meta = meta
 
         action = "update" if wc_id else "create"
 

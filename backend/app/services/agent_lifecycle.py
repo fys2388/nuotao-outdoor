@@ -26,15 +26,19 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import Any
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import SHARED, normalize_scope
 from app.models.agent_platform import AgentVersion
 from app.models.agent_runtime import AgentRegistry
 from app.services import approval_service, event_service
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,18 @@ class AgentLifecycleError(Exception):
 def _version_key(version: str) -> tuple[int, ...]:
     """Sortable numeric key for version strings (``v1`` < ``v2`` < ``v10``)."""
     return tuple(int(part) for part in re.findall(r"\d+", version) or [0])
+
+
+def _validate_scope_transition(current_scope: str, target_scope: str) -> None:
+    """Prevent an activation from widening a non-shared agent's authority."""
+    current = normalize_scope(current_scope)
+    target = normalize_scope(target_scope)
+    if current == SHARED or target == current:
+        return
+    raise AgentLifecycleError(
+        f"agent scope {current} cannot activate version scope {target}; "
+        "scope widening requires a SHARED agent or a new governed agent"
+    )
 
 
 async def _load_agent(
@@ -87,6 +103,7 @@ async def publish_version(
     version: str,
     prompt_name: str | None = None,
     prompt_version: str = "v1",
+    business_scope: str = SHARED,
     config_snapshot: dict[str, Any] | None = None,
     model_config: dict[str, Any] | None = None,
     execution_policy_version: str = "1",
@@ -96,7 +113,9 @@ async def publish_version(
     trace_id: str | None = None,
 ) -> AgentVersion:
     """Create a new ``draft`` configuration version (append-only)."""
-    await _load_agent(session, workspace_id=workspace_id, agent_uuid=agent_uuid)
+    agent = await _load_agent(session, workspace_id=workspace_id, agent_uuid=agent_uuid)
+    normalized_scope = normalize_scope(business_scope)
+    _validate_scope_transition(agent.business_scope, normalized_scope)
     existing = (
         await session.execute(
             select(AgentVersion).where(
@@ -112,6 +131,7 @@ async def publish_version(
         workspace_id=workspace_id,
         agent_id=agent_uuid,
         version=version,
+        business_scope=normalized_scope,
         prompt_name=prompt_name,
         prompt_version=prompt_version,
         config_snapshot=config_snapshot or {},
@@ -131,7 +151,11 @@ async def publish_version(
         event_type="agent.lifecycle.created",
         entity_type="agent_version",
         entity_id=str(row.id),
-        payload={"agent_uuid": str(agent_uuid), "version": version},
+        payload={
+            "agent_uuid": str(agent_uuid),
+            "version": version,
+            "business_scope": row.business_scope,
+        },
         trace_id=trace_id,
     )
     await session.refresh(row)
@@ -201,6 +225,7 @@ async def activate_version(
     target = await _load_version(
         session, workspace_id=workspace_id, agent_uuid=agent_uuid, version=version
     )
+    _validate_scope_transition(agent.business_scope, target.business_scope)
     if target.status == VERSION_RETIRED:
         raise AgentLifecycleError("retired versions cannot be re-activated; use rollback")
     # Retire the currently active version first so the partial unique index
@@ -234,6 +259,7 @@ async def activate_version(
         agent.model_name = target.model_config.get("model_name", agent.model_name)
     if target.prompt_version:
         agent.prompt_version = target.prompt_version
+    agent.business_scope = normalize_scope(target.business_scope)
     await session.flush()
     await event_service.create_event(
         session,
@@ -430,6 +456,7 @@ async def _execute_rollback(
         workspace_id=workspace_id,
         agent_id=agent_uuid,
         version=new_version,
+        business_scope=target.business_scope,
         prompt_name=target.prompt_name,
         prompt_version=target.prompt_version,
         config_snapshot=target.config_snapshot,

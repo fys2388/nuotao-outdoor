@@ -11,9 +11,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import (
+    get_current_user,
+    get_current_workspace_id,
+    require_role,
+)
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
-from app.core.workspace import get_workspace_id
 from app.schemas.refund import (
     RefundApproveRequest,
     RefundCancelRequest,
@@ -23,12 +27,19 @@ from app.schemas.refund import (
     RefundRejectRequest,
     RefundSummaryOut,
 )
+from app.schemas.user import UserResponse
 from app.services import refund_service
 
 router = APIRouter(prefix="/refunds", tags=["refunds"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
-WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+WorkspaceId = Annotated[UUID, Depends(get_current_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
+RefundWriter = Annotated[
+    UserResponse,
+    Depends(require_role("admin", "operator", "customer_service")),
+]
+RefundAdmin = Annotated[UserResponse, Depends(require_role("admin"))]
 
 
 def _http_error(exc: refund_service.RefundError) -> HTTPException:
@@ -44,14 +55,9 @@ def _http_error(exc: refund_service.RefundError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
-def _get_actor() -> str:
-    """Get authenticated actor from context.
-
-    In production, this comes from JWT/auth middleware. For now, returns
-    'system' as a safe default. Client cannot override this via payload.
-    """
-    # TODO: integrate with auth middleware to get real actor identity.
-    return "system"
+def _get_actor(current_user: UserResponse) -> str:
+    """Return the authenticated human actor for audit records."""
+    return str(current_user.email or current_user.username)
 
 
 @router.post(
@@ -62,6 +68,7 @@ def _get_actor() -> str:
 )
 async def create_refund(
     body: RefundCreateRequest,
+    current_user: RefundWriter,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
@@ -76,7 +83,7 @@ async def create_refund(
             category=body.category,
             refund_type=body.refund_type,
             idempotency_key=body.idempotency_key,
-            requested_by=_get_actor(),
+            requested_by=_get_actor(current_user),
             notes=body.notes,
             trace_id=get_trace_id(),
         )
@@ -91,12 +98,14 @@ async def create_refund(
     summary="List refunds",
 )
 async def list_refunds(
+    current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     order_id: UUID | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[RefundOut]:
+    _ = current_user
     refunds = await refund_service.list_refunds(
         db, workspace_id=workspace_id, order_id=order_id, status=status_filter, limit=limit
     )
@@ -110,9 +119,11 @@ async def list_refunds(
 )
 async def get_refund(
     refund_id: UUID,
+    current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
+    _ = current_user
     try:
         refund = await refund_service.get_refund(db, workspace_id=workspace_id, refund_id=refund_id)
     except refund_service.RefundError as exc:
@@ -127,13 +138,19 @@ async def get_refund(
 )
 async def submit_refund(
     refund_id: UUID,
+    current_user: RefundWriter,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
     """requested -> pending_approval."""
+    _ = current_user
     try:
         refund = await refund_service.submit_for_approval(
-            db, workspace_id=workspace_id, refund_id=refund_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            refund_id=refund_id,
+            submitted_by=_get_actor(current_user),
+            trace_id=get_trace_id(),
         )
     except refund_service.RefundError as exc:
         raise _http_error(exc) from exc
@@ -148,6 +165,7 @@ async def submit_refund(
 async def approve_refund(
     refund_id: UUID,
     body: RefundApproveRequest,
+    current_user: RefundAdmin,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
@@ -157,7 +175,7 @@ async def approve_refund(
             db,
             workspace_id=workspace_id,
             refund_id=refund_id,
-            approved_by=_get_actor(),
+            approved_by=_get_actor(current_user),
             approved_amount=body.approved_amount,
             approval_notes=body.approval_notes,
             trace_id=get_trace_id(),
@@ -175,6 +193,7 @@ async def approve_refund(
 async def reject_refund(
     refund_id: UUID,
     body: RefundRejectRequest,
+    current_user: RefundAdmin,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
@@ -184,7 +203,7 @@ async def reject_refund(
             db,
             workspace_id=workspace_id,
             refund_id=refund_id,
-            rejected_by=_get_actor(),
+            rejected_by=_get_actor(current_user),
             reason=body.reason,
             trace_id=get_trace_id(),
         )
@@ -201,6 +220,7 @@ async def reject_refund(
 async def cancel_refund(
     refund_id: UUID,
     body: RefundCancelRequest,
+    current_user: RefundAdmin,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
@@ -210,7 +230,7 @@ async def cancel_refund(
             db,
             workspace_id=workspace_id,
             refund_id=refund_id,
-            cancelled_by=_get_actor(),
+            cancelled_by=_get_actor(current_user),
             reason=body.reason,
             trace_id=get_trace_id(),
         )
@@ -227,6 +247,7 @@ async def cancel_refund(
 async def execute_refund(
     refund_id: UUID,
     body: RefundExecuteRequest,
+    current_user: RefundAdmin,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
@@ -235,12 +256,14 @@ async def execute_refund(
     Payment provider not configured -> 503, refund stays in 'approved'.
     Never fakes success.
     """
+    _ = current_user
     try:
         refund = await refund_service.execute_refund(
             db,
             workspace_id=workspace_id,
             refund_id=refund_id,
             payment_provider=body.payment_provider,
+            executed_by=_get_actor(current_user),
             trace_id=get_trace_id(),
         )
     except refund_service.RefundError as exc:
@@ -255,13 +278,19 @@ async def execute_refund(
 )
 async def retry_refund(
     refund_id: UUID,
+    current_user: RefundAdmin,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundOut:
     """failed -> processing. Respects max_retries. Idempotent if already succeeded."""
+    _ = current_user
     try:
         refund = await refund_service.retry_refund(
-            db, workspace_id=workspace_id, refund_id=refund_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            refund_id=refund_id,
+            retried_by=_get_actor(current_user),
+            trace_id=get_trace_id(),
         )
     except refund_service.RefundError as exc:
         raise _http_error(exc) from exc
@@ -275,10 +304,12 @@ async def retry_refund(
 )
 async def get_order_refund_summary(
     order_id: UUID,
+    current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> RefundSummaryOut:
     """Get total refunded, active refunds, and refundable balance for an order."""
+    _ = current_user
     try:
         summary = await refund_service.get_order_refund_summary(
             db, workspace_id=workspace_id, order_id=order_id

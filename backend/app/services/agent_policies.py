@@ -15,11 +15,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import (
+    SHARED,
+    AgentScopeError,
+    normalize_scope,
+    require_scope_compatible,
+)
 from app.core.config import get_settings
 from app.models.agent_runtime import AgentRegistry
 from app.models.agent_runtime_hardening import (
@@ -28,6 +33,11 @@ from app.models.agent_runtime_hardening import (
     AgentRetryPolicy,
 )
 from app.services import event_service
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 DEFAULT_RETRY_POLICY_ID = "standard"
 
@@ -46,6 +56,24 @@ def _now() -> datetime:
 def _next_version(current: str) -> str:
     number = int(current.lstrip("v") or "0") + 1
     return f"v{number}"
+
+
+def _policy_scope(value: str | None) -> str:
+    try:
+        return normalize_scope(value, default=SHARED)
+    except AgentScopeError as exc:
+        raise AgentPolicyError(str(exc)) from exc
+
+
+def _assert_agent_scope(agent: AgentRegistry, policy_scope: str) -> None:
+    try:
+        require_scope_compatible(
+            agent.business_scope,
+            policy_scope,
+            resource="policy",
+        )
+    except AgentScopeError as exc:
+        raise AgentPolicyError(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -199,18 +227,32 @@ async def get_execution_policy(
     *,
     workspace_id: UUID,
     agent_id: UUID,
+    business_scope: str = SHARED,
     trace_id: str | None = None,
 ) -> AgentExecutionPolicy:
     """Return the current execution policy; seed defaults on first use."""
+    scope = _policy_scope(business_scope)
     policy = (
         await session.execute(
             select(AgentExecutionPolicy).where(
                 AgentExecutionPolicy.workspace_id == workspace_id,
                 AgentExecutionPolicy.agent_id == agent_id,
                 AgentExecutionPolicy.is_current.is_(True),
+                AgentExecutionPolicy.business_scope == scope,
             )
         )
     ).scalar_one_or_none()
+    if policy is None and scope != SHARED:
+        policy = (
+            await session.execute(
+                select(AgentExecutionPolicy).where(
+                    AgentExecutionPolicy.workspace_id == workspace_id,
+                    AgentExecutionPolicy.agent_id == agent_id,
+                    AgentExecutionPolicy.is_current.is_(True),
+                    AgentExecutionPolicy.business_scope == SHARED,
+                )
+            )
+        ).scalar_one_or_none()
     if policy is not None:
         return policy
     settings = get_settings()
@@ -219,6 +261,7 @@ async def get_execution_policy(
         agent_id=agent_id,
         policy_version="v1",
         is_current=True,
+        business_scope=scope,
         max_concurrent=settings.agent_default_max_concurrent,
         execution_timeout_seconds=settings.agent_default_execution_timeout,
         approval_timeout_seconds=settings.agent_default_approval_timeout,
@@ -235,7 +278,10 @@ async def get_execution_policy(
         event_type="agent.execution_policy_created",
         entity_type="agent_execution_policy",
         entity_id=str(agent_id),
-        payload={"policy_version": policy.policy_version},
+        payload={
+            "policy_version": policy.policy_version,
+            "business_scope": policy.business_scope,
+        },
         trace_id=trace_id,
     )
     return policy
@@ -251,6 +297,7 @@ async def set_execution_policy(
     approval_timeout_seconds: int,
     max_context_size: int,
     retry_policy_id: str,
+    business_scope: str = SHARED,
     enabled: bool = True,
     trace_id: str | None = None,
 ) -> AgentExecutionPolicy:
@@ -264,12 +311,15 @@ async def set_execution_policy(
     agent = await session.get(AgentRegistry, agent_id)
     if agent is None or agent.workspace_id != workspace_id:
         raise AgentPolicyError("agent not found in workspace")
+    scope = _policy_scope(business_scope)
+    _assert_agent_scope(agent, scope)
     current = (
         await session.execute(
             select(AgentExecutionPolicy).where(
                 AgentExecutionPolicy.workspace_id == workspace_id,
                 AgentExecutionPolicy.agent_id == agent_id,
                 AgentExecutionPolicy.is_current.is_(True),
+                AgentExecutionPolicy.business_scope == scope,
             )
         )
     ).scalar_one_or_none()
@@ -285,6 +335,7 @@ async def set_execution_policy(
         agent_id=agent_id,
         policy_version=version,
         is_current=True,
+        business_scope=scope,
         max_concurrent=max_concurrent,
         execution_timeout_seconds=execution_timeout_seconds,
         approval_timeout_seconds=approval_timeout_seconds,
@@ -303,6 +354,7 @@ async def set_execution_policy(
         entity_id=str(agent_id),
         payload={
             "policy_version": version,
+            "business_scope": scope,
             "execution_timeout_seconds": execution_timeout_seconds,
             "max_concurrent": max_concurrent,
         },
@@ -338,18 +390,32 @@ async def get_budget_policy(
     *,
     workspace_id: UUID,
     agent_id: UUID,
+    business_scope: str = SHARED,
     trace_id: str | None = None,
 ) -> AgentBudgetPolicy:
     """Return the current budget policy; seed defaults on first use."""
+    scope = _policy_scope(business_scope)
     policy = (
         await session.execute(
             select(AgentBudgetPolicy).where(
                 AgentBudgetPolicy.workspace_id == workspace_id,
                 AgentBudgetPolicy.agent_id == agent_id,
                 AgentBudgetPolicy.is_current.is_(True),
+                AgentBudgetPolicy.business_scope == scope,
             )
         )
     ).scalar_one_or_none()
+    if policy is None and scope != SHARED:
+        policy = (
+            await session.execute(
+                select(AgentBudgetPolicy).where(
+                    AgentBudgetPolicy.workspace_id == workspace_id,
+                    AgentBudgetPolicy.agent_id == agent_id,
+                    AgentBudgetPolicy.is_current.is_(True),
+                    AgentBudgetPolicy.business_scope == SHARED,
+                )
+            )
+        ).scalar_one_or_none()
     if policy is not None:
         return policy
     settings = get_settings()
@@ -358,6 +424,7 @@ async def get_budget_policy(
         agent_id=agent_id,
         policy_version="v1",
         is_current=True,
+        business_scope=scope,
         monthly_budget=settings.agent_default_monthly_budget,
         max_cost_per_execution=settings.agent_default_max_cost_per_execution,
         alert_threshold=settings.agent_default_budget_alert_threshold,
@@ -373,7 +440,10 @@ async def get_budget_policy(
         event_type="agent.budget_policy_created",
         entity_type="agent_budget_policy",
         entity_id=str(agent_id),
-        payload={"policy_version": policy.policy_version},
+        payload={
+            "policy_version": policy.policy_version,
+            "business_scope": policy.business_scope,
+        },
         trace_id=trace_id,
     )
     return policy
@@ -388,6 +458,7 @@ async def set_budget_policy(
     max_cost_per_execution: Decimal,
     alert_threshold: Decimal,
     currency: str = "USD",
+    business_scope: str = SHARED,
     enabled: bool = True,
     trace_id: str | None = None,
 ) -> AgentBudgetPolicy:
@@ -401,12 +472,15 @@ async def set_budget_policy(
     agent = await session.get(AgentRegistry, agent_id)
     if agent is None or agent.workspace_id != workspace_id:
         raise AgentPolicyError("agent not found in workspace")
+    scope = _policy_scope(business_scope)
+    _assert_agent_scope(agent, scope)
     current = (
         await session.execute(
             select(AgentBudgetPolicy).where(
                 AgentBudgetPolicy.workspace_id == workspace_id,
                 AgentBudgetPolicy.agent_id == agent_id,
                 AgentBudgetPolicy.is_current.is_(True),
+                AgentBudgetPolicy.business_scope == scope,
             )
         )
     ).scalar_one_or_none()
@@ -422,6 +496,7 @@ async def set_budget_policy(
         agent_id=agent_id,
         policy_version=version,
         is_current=True,
+        business_scope=scope,
         monthly_budget=monthly_budget,
         max_cost_per_execution=max_cost_per_execution,
         alert_threshold=alert_threshold,
@@ -439,6 +514,7 @@ async def set_budget_policy(
         entity_id=str(agent_id),
         payload={
             "policy_version": version,
+            "business_scope": scope,
             "monthly_budget": str(monthly_budget),
             "max_cost_per_execution": str(max_cost_per_execution),
         },

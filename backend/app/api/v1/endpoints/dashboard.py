@@ -1,7 +1,4 @@
-"""
-统一经营看板 API 端点
-支持经营指标查询、趋势分析、产品表现、营销 ROI
-"""
+"""Unified operating dashboard API endpoints."""
 from __future__ import annotations
 
 import logging
@@ -9,16 +6,13 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.workspace import get_workspace_id
 from app.services.dashboard_service import (
-    generate_daily_metrics,
     get_dashboard_status,
     get_dashboard_summary_real,
-    get_product_performance,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,17 +21,6 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
-
-
-# ============================================
-# 请求/响应模型
-# ============================================
-
-class GenerateDailyMetricsRequest(BaseModel):
-    """生成每日经营指标请求"""
-    date: str | None = Field(None, description="日期（YYYY-MM-DD），默认今天")
-    orders_data: list[dict[str, Any]] | None = Field(None, description="订单数据列表")
-    ad_spend: float = Field(0, description="广告投入", ge=0)
 
 
 # ============================================
@@ -63,12 +46,7 @@ async def get_summary(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
-    """
-    获取经营看板汇总数据（基于真实WooCommerce订单）
-
-    包含：今日数据、本周数据、本月数据、上周数据、环比趋势、关键指标。
-    支持自定义时间范围。
-    """
+    """Return dashboard totals, comparisons, and cost-quality status."""
     try:
         summary = await get_dashboard_summary_real(
             db,
@@ -80,71 +58,46 @@ async def get_summary(
             "success": True,
             "summary": summary,
         }
-    except Exception as e:
-        logger.exception("Get dashboard summary failed: %s", str(e))
+    except Exception as exc:
+        logger.exception("Get dashboard summary failed: %s", str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Get dashboard summary failed: {e!s}",
-        )
+            detail=f"Get dashboard summary failed: {exc!s}",
+        ) from exc
 
 
 @router.post(
     "/daily-metrics",
     summary="生成每日经营指标",
+    status_code=status.HTTP_410_GONE,
+    deprecated=True,
 )
-async def generate_daily_metrics_endpoint(
-    request: GenerateDailyMetricsRequest,
-) -> dict[str, Any]:
-    """
-    生成每日经营指标
-
-    基于订单数据和广告投入，计算订单、收入、成本、毛利、营销 ROI、客户等指标。
-    生成后自动保存为每日数据文件。
-    """
-    try:
-        metrics = generate_daily_metrics(
-            date=request.date,
-            orders_data=request.orders_data,
-            ad_spend=request.ad_spend,
-        )
-        return {
-            "success": True,
-            "metrics": metrics,
-            "message": "每日经营指标生成成功",
-        }
-    except Exception as e:
-        logger.exception("Generate daily metrics failed: %s", str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Generate daily metrics failed: {e!s}",
-        )
+async def generate_daily_metrics_endpoint() -> dict[str, Any]:
+    """Retire the legacy endpoint that estimated cost as 60% of revenue."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "This endpoint is retired because it produced estimated profit. "
+            "Use persisted order cost snapshots and channel analytics instead."
+        ),
+    )
 
 
 @router.get(
     "/product-performance",
     summary="获取产品表现排行",
+    status_code=status.HTTP_410_GONE,
+    deprecated=True,
 )
-async def get_product_performance_endpoint(
-    limit: int = 10,
-) -> dict[str, Any]:
-    """
-    获取产品表现排行
-
-    包含：销量、收入、毛利率、趋势。
-    支持限制返回数量。
-    """
-    try:
-        performance = get_product_performance(limit)
-        return {
-            "success": True,
-            "performance": performance,
-        }
-    except Exception as e:
-        logger.exception("Get product performance failed: %s", str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Get product performance failed: {e!s}",
-        )
+async def get_product_performance_endpoint() -> dict[str, Any]:
+    """Retire the legacy endpoint that returned simulated product rankings."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "This endpoint is retired because it returned simulated data. "
+            "Use /api/v1/analytics/channel-performance for product inventory signals."
+        ),
+    )
 
 
 @router.get(
@@ -155,12 +108,7 @@ async def get_key_metrics(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict[str, Any]:
-    """
-    获取关键经营指标（精简版，基于真实WooCommerce订单）
-
-    返回最核心的经营指标：今日收入、今日订单、毛利率、ROAS、
-    本周收入、本周订单、本月收入、本月订单、环比趋势。
-    """
+    """Return the core persisted metrics and period-over-period trends."""
     try:
         summary = await get_dashboard_summary_real(db, workspace_id)
         key_metrics = summary["key_metrics"]
@@ -172,9 +120,9 @@ async def get_key_metrics(
             "trends": trends,
             "generated_at": summary["period"]["generated_at"],
         }
-    except Exception as e:
-        logger.exception("Get key metrics failed: %s", str(e))
+    except Exception as exc:
+        logger.exception("Get key metrics failed: %s", str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Get key metrics failed: {e!s}",
-        )
+            detail=f"Get key metrics failed: {exc!s}",
+        ) from exc

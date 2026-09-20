@@ -9,22 +9,70 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.tracing import get_trace_id
+from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.b2b import (
     B2BAgent,
     B2BOrder,
     B2BOrderItem,
-    B2BProductPrice,
 )
-from app.models.product import Product, ProductCost
+from app.models.b2b_sales import B2BRFQ, B2BContract, B2BQuote
+from app.models.product import Product
+from app.services import (
+    b2b_credit_service,
+    b2b_pricing_service,
+    b2b_sales_service,
+    event_service,
+)
+from app.services.customer_account_service import get_or_create_b2b_account
 
 logger = logging.getLogger(__name__)
+
+B2B_ORDER_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"confirmed", "cancelled"},
+    "confirmed": {"cancelled"},
+    "processing": set(),
+    "shipped": set(),
+    "delivered": set(),
+    "cancelled": set(),
+}
+
+PORTAL_RFQ_VISIBLE_STATUSES = {
+    "submitted",
+    "in_review",
+    "quoted",
+    "won",
+    "lost",
+    "cancelled",
+}
+PORTAL_QUOTE_VISIBLE_STATUSES = {
+    "sent",
+    "accepted",
+    "rejected",
+    "expired",
+    "converted",
+}
+PORTAL_CONTRACT_VISIBLE_STATUSES = {
+    "pending_signature",
+    "active",
+    "expired",
+    "terminated",
+}
+
+
+class B2BOrderStateError(ValueError):
+    """Raised when a B2B order attempts an invalid state transition."""
+
+
+def _to_uuid(value: str | UUID) -> UUID:
+    return value if isinstance(value, UUID) else UUID(str(value))
 
 
 # ============================================
@@ -32,11 +80,18 @@ logger = logging.getLogger(__name__)
 # ============================================
 
 async def authenticate_agent(
-    db: AsyncSession, email: str, password: str
+    db: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    workspace_id: UUID = DEFAULT_WORKSPACE_ID,
 ) -> B2BAgent | None:
     """验证代理商邮箱密码，返回代理商对象或 None。"""
     result = await db.execute(
-        select(B2BAgent).where(B2BAgent.email == email.lower().strip())
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == workspace_id,
+            B2BAgent.email == email.lower().strip(),
+        )
     )
     agent = result.scalar_one_or_none()
     if not agent:
@@ -62,6 +117,7 @@ def create_agent_token(agent: B2BAgent) -> str:
         extra_claims={
             "type": "b2b_access",
             "role": "b2b_agent",
+            "workspace_id": str(agent.workspace_id),
             "tier": agent.tier,
             "agent_number": agent.agent_number,
         },
@@ -90,6 +146,7 @@ async def submit_application(
     estimated_annual_volume: str | None = None,
     product_interests: str | None = None,
     message: str | None = None,
+    workspace_id: UUID = DEFAULT_WORKSPACE_ID,
 ) -> B2BAgent:
     """提交代理商申请。
 
@@ -99,7 +156,12 @@ async def submit_application(
     email_lower = email.lower().strip()
 
     # 检查邮箱是否已存在
-    existing = await db.execute(select(B2BAgent).where(B2BAgent.email == email_lower))
+    existing = await db.execute(
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == workspace_id,
+            B2BAgent.email == email_lower,
+        )
+    )
     if existing.scalar_one_or_none():
         raise ValueError(f"Email already registered: {email_lower}")
 
@@ -126,9 +188,19 @@ async def submit_application(
     if message:
         notes_parts.append(f"Message: {message}")
     notes = "\n".join(notes_parts) if notes_parts else None
+    account = await get_or_create_b2b_account(
+        db,
+        workspace_id=workspace_id,
+        agent_number=agent_number,
+        company_name=company_name.strip(),
+        country=country,
+        default_currency="USD",
+    )
 
     agent = B2BAgent(
+        workspace_id=workspace_id,
         agent_number=agent_number,
+        customer_account_id=account.id,
         company_name=company_name.strip(),
         contact_name=contact_name.strip(),
         email=email_lower,
@@ -153,15 +225,30 @@ async def submit_application(
     return agent
 
 
-async def get_agent_by_id(db: AsyncSession, agent_id: str) -> B2BAgent | None:
-    result = await db.execute(select(B2BAgent).where(B2BAgent.id == agent_id))
+async def get_agent_by_id(
+    db: AsyncSession,
+    agent_id: str,
+    *,
+    workspace_id: UUID,
+) -> B2BAgent | None:
+    result = await db.execute(
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == workspace_id,
+            B2BAgent.id == _to_uuid(agent_id),
+        )
+    )
     return result.scalar_one_or_none()
 
 
 async def change_agent_password(
-    db: AsyncSession, agent_id: str, old_password: str, new_password: str
+    db: AsyncSession,
+    agent_id: str,
+    old_password: str,
+    new_password: str,
+    *,
+    workspace_id: UUID,
 ) -> bool:
-    agent = await get_agent_by_id(db, agent_id)
+    agent = await get_agent_by_id(db, agent_id, workspace_id=workspace_id)
     if not agent:
         return False
     if not verify_password(old_password, agent.hashed_password):
@@ -178,50 +265,30 @@ async def change_agent_password(
 async def get_wholesale_price(
     db: AsyncSession, product_id: str, agent: B2BAgent
 ) -> tuple[Decimal, int]:
-    """获取某商品对该代理商的批发价和 MOQ。
-
-    优先级：代理商专属定价 > 等级定价 > 成本价 × 1.4（兜底）
-    返回 (wholesale_price, moq)
-    """
-    # 1. 代理商专属定价
-    result = await db.execute(
-        select(B2BProductPrice).where(
-            and_(
-                B2BProductPrice.product_id == product_id,
-                B2BProductPrice.agent_id == agent.id,
-                B2BProductPrice.is_active.is_(True),
-            )
-        )
+    """Return the published customer-specific or tier price and its MOQ."""
+    resolved = await b2b_pricing_service.resolve_b2b_display_price(
+        db,
+        workspace_id=agent.workspace_id,
+        product_id=product_id,
+        agent=agent,
     )
-    agent_price = result.scalar_one_or_none()
-    if agent_price:
-        return Decimal(agent_price.wholesale_price), int(agent_price.moq)
+    return resolved.unit_price, resolved.min_quantity
 
-    # 2. 等级定价
-    result = await db.execute(
-        select(B2BProductPrice).where(
-            and_(
-                B2BProductPrice.product_id == product_id,
-                B2BProductPrice.tier == agent.tier,
-                B2BProductPrice.agent_id.is_(None),
-                B2BProductPrice.is_active.is_(True),
-            )
-        )
+
+async def get_matching_wholesale_price(
+    db: AsyncSession,
+    product_id: str,
+    agent: B2BAgent,
+    quantity: int,
+) -> b2b_pricing_service.ResolvedB2BPrice:
+    """Resolve the exact published tier for a requested quantity."""
+    return await b2b_pricing_service.resolve_b2b_price(
+        db,
+        workspace_id=agent.workspace_id,
+        product_id=product_id,
+        agent=agent,
+        quantity=quantity,
     )
-    tier_price = result.scalar_one_or_none()
-    if tier_price:
-        return Decimal(tier_price.wholesale_price), int(tier_price.moq)
-
-    # 3. 兜底：成本价 × 1.4，MOQ=10
-    cost_result = await db.execute(
-        select(ProductCost).where(ProductCost.product_id == product_id)
-    )
-    cost = cost_result.scalar_one_or_none()
-    if cost and cost.total_cost > 0:
-        fallback_price = (Decimal(cost.total_cost) * Decimal("1.4")).quantize(Decimal("0.01"))
-        return fallback_price, 10
-
-    return Decimal("0.00"), 10
 
 
 # ============================================
@@ -242,6 +309,7 @@ async def list_products_for_agent(
     只展示 status=active/published 的商品。
     """
     query = select(Product).where(
+        Product.workspace_id == agent.workspace_id,
         Product.status.in_(["active", "published"])
     )
 
@@ -264,7 +332,17 @@ async def list_products_for_agent(
 
     items = []
     for p in products:
-        wholesale_price, moq = await get_wholesale_price(db, str(p.id), agent)
+        try:
+            resolved = await b2b_pricing_service.resolve_b2b_display_price(
+                db,
+                workspace_id=agent.workspace_id,
+                product_id=p.id,
+                agent=agent,
+            )
+        except b2b_pricing_service.PricingError:
+            resolved = None
+        wholesale_price = resolved.unit_price if resolved else None
+        moq = resolved.min_quantity if resolved else None
         # 库存（简化：从 meta 或 attributes 中取，没有则默认有货）
         stock_qty = int(p.attributes.get("stock_quantity", 100)) if p.attributes else 100
         in_stock = stock_qty > 0
@@ -301,13 +379,26 @@ async def get_product_detail_for_agent(
 ) -> dict[str, Any] | None:
     """获取商品详情（含批发价）。"""
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).where(
+            Product.workspace_id == agent.workspace_id,
+            Product.id == _to_uuid(product_id),
+        )
     )
     p = result.scalar_one_or_none()
     if not p or p.status not in ("active", "published"):
         return None
 
-    wholesale_price, moq = await get_wholesale_price(db, str(p.id), agent)
+    try:
+        resolved = await b2b_pricing_service.resolve_b2b_display_price(
+            db,
+            workspace_id=agent.workspace_id,
+            product_id=p.id,
+            agent=agent,
+        )
+    except b2b_pricing_service.PricingError:
+        resolved = None
+    wholesale_price = resolved.unit_price if resolved else None
+    moq = resolved.min_quantity if resolved else None
     stock_qty = int(p.attributes.get("stock_quantity", 100)) if p.attributes else 100
 
     return {
@@ -360,42 +451,60 @@ async def create_b2b_order(
         quantity = int(item["quantity"])
 
         # 查商品
-        result = await db.execute(select(Product).where(Product.id == product_id))
+        result = await db.execute(
+            select(Product).where(
+                Product.workspace_id == agent.workspace_id,
+                Product.id == _to_uuid(product_id),
+            )
+        )
         product = result.scalar_one_or_none()
         if not product or product.status not in ("active", "published"):
             raise ValueError(f"Product not found or unavailable: {product_id}")
 
-        # 查批发价和 MOQ
-        wholesale_price, moq = await get_wholesale_price(db, product_id, agent)
-        if quantity < moq:
+        # 只使用已审批发布的客户专属价或等级价。
+        try:
+            resolved_price = await get_matching_wholesale_price(
+                db,
+                product_id,
+                agent,
+                quantity,
+            )
+        except b2b_pricing_service.PricingError as exc:
+            raise ValueError(f"No active B2B price for {product.name}: {exc}") from exc
+        if quantity < resolved_price.min_quantity:
             raise ValueError(
-                f"Product {product.name} MOQ is {moq}, got {quantity}"
+                f"Product {product.name} MOQ is {resolved_price.min_quantity}, got {quantity}"
             )
 
-        line_subtotal = wholesale_price * quantity
+        line_subtotal = resolved_price.unit_price * quantity
         subtotal += line_subtotal
 
         order_items.append(B2BOrderItem(
+            workspace_id=agent.workspace_id,
             order_id=order_id,
-            product_id=product_id,
+            product_id=product.id,
             product_name=product.name,
             sku=product.sku,
             quantity=quantity,
-            unit_price=wholesale_price,
+            unit_price=resolved_price.unit_price,
             subtotal=line_subtotal,
+            currency=resolved_price.currency,
+            price_book_version_id=resolved_price.price_book_version_id,
+            price_tier_id=resolved_price.price_tier_id,
+            price_source=resolved_price.source,
         ))
 
     # 折扣
     discount_amount = (subtotal * agent.discount_percent / Decimal("100")).quantize(Decimal("0.01"))
     total = subtotal - discount_amount
 
-    # 信用额度检查
-    if agent.credit_limit > 0:
-        if agent.current_balance + total > agent.credit_limit:
-            raise ValueError(
-                f"Credit limit exceeded. Available: {agent.credit_limit - agent.current_balance}, "
-                f"Order total: {total}"
-            )
+    # 所有订单入口共享同一信用状态、冻结和额度准入规则。
+    await b2b_credit_service.assert_order_credit(
+        db,
+        workspace_id=agent.workspace_id,
+        agent_id=agent.id,
+        additional_amount=total,
+    )
 
     # 账期到期日
     payment_due_date = (now + timedelta(days=agent.payment_terms_days)).date()
@@ -412,8 +521,11 @@ async def create_b2b_order(
 
     order = B2BOrder(
         id=order_id,
+        workspace_id=agent.workspace_id,
         order_number=order_number,
         agent_id=agent.id,
+        customer_account_id=agent.customer_account_id,
+        business_model="B2B",
         status="pending",
         payment_status="unpaid",
         subtotal=subtotal,
@@ -432,12 +544,96 @@ async def create_b2b_order(
 
     db.add(order)
     db.add_all(order_items)
+    await db.flush()
+    await event_service.create_event(
+        db,
+        workspace_id=agent.workspace_id,
+        event_type="b2b_order.created",
+        entity_type="b2b_order",
+        entity_id=str(order.id),
+        payload={
+            "order_number": order.order_number,
+            "agent_id": str(agent.id),
+            "customer_account_id": (
+                str(order.customer_account_id) if order.customer_account_id else None
+            ),
+            "total": str(order.total),
+            "currency": order.currency,
+            "status": order.status,
+        },
+    )
     await db.commit()
-    await db.refresh(order)
+    await db.refresh(order, ["agent", "items"])
 
     logger.info(
         "B2B order created: %s agent=%s total=%.2f items=%d",
         order_number, agent.agent_number, total, len(order_items),
+    )
+    return order
+
+
+async def update_b2b_order_status(
+    db: AsyncSession,
+    *,
+    workspace_id: UUID,
+    order_id: str,
+    new_status: str,
+    actor: str,
+    trace_id: str | None = None,
+) -> B2BOrder:
+    """Apply a non-fulfillment status transition and append an audit event.
+
+    Inventory reservation, shipment, and delivery are driven by the
+    fulfillment service so stock and TMS records cannot be bypassed.
+    """
+    if new_status not in {"confirmed", "cancelled"}:
+        raise B2BOrderStateError(
+            f"status '{new_status}' must be applied through the fulfillment workflow "
+            "or a dedicated lifecycle service"
+        )
+    order = (
+        await db.execute(
+            select(B2BOrder)
+            .where(
+                B2BOrder.workspace_id == workspace_id,
+                B2BOrder.id == _to_uuid(order_id),
+            )
+            .options(selectinload(B2BOrder.agent), selectinload(B2BOrder.items))
+        )
+    ).scalar_one_or_none()
+    if order is None:
+        raise ValueError("B2B order not found")
+
+    old_status = order.status
+    allowed = B2B_ORDER_TRANSITIONS.get(old_status, set())
+    if new_status not in allowed:
+        raise B2BOrderStateError(f"invalid transition: {old_status} -> {new_status}")
+
+    order.status = new_status
+
+    await db.flush()
+    await event_service.create_event(
+        db,
+        workspace_id=workspace_id,
+        event_type="b2b_order.status_changed",
+        entity_type="b2b_order",
+        entity_id=str(order.id),
+        payload={
+            "order_number": order.order_number,
+            "previous_status": old_status,
+            "new_status": new_status,
+            "actor": actor,
+        },
+        trace_id=trace_id,
+    )
+    await db.commit()
+    await db.refresh(order, ["agent", "items"])
+    logger.info(
+        "B2B order status changed: %s %s -> %s actor=%s",
+        order.order_number,
+        old_status,
+        new_status,
+        actor,
     )
     return order
 
@@ -449,12 +645,16 @@ async def create_b2b_order(
 async def list_agent_orders(
     db: AsyncSession,
     agent_id: str,
+    workspace_id: UUID,
     page: int = 1,
     page_size: int = 20,
     status: str | None = None,
 ) -> tuple[list[B2BOrder], int]:
     """获取代理商的订单列表（严格隔离，只查自己的订单）。"""
-    query = select(B2BOrder).where(B2BOrder.agent_id == agent_id)
+    query = select(B2BOrder).where(
+        B2BOrder.workspace_id == workspace_id,
+        B2BOrder.agent_id == _to_uuid(agent_id),
+    )
     if status:
         query = query.where(B2BOrder.status == status)
 
@@ -470,12 +670,19 @@ async def list_agent_orders(
 
 
 async def get_agent_order(
-    db: AsyncSession, agent_id: str, order_id: str
+    db: AsyncSession,
+    agent_id: str,
+    order_id: str,
+    workspace_id: UUID,
 ) -> B2BOrder | None:
     """获取代理商订单详情（严格隔离）。"""
     result = await db.execute(
         select(B2BOrder).where(
-            and_(B2BOrder.id == order_id, B2BOrder.agent_id == agent_id)
+            and_(
+                B2BOrder.workspace_id == workspace_id,
+                B2BOrder.id == _to_uuid(order_id),
+                B2BOrder.agent_id == _to_uuid(agent_id),
+            )
         ).options(selectinload(B2BOrder.items))
     )
     return result.scalar_one_or_none()
@@ -489,7 +696,8 @@ async def get_account_summary(db: AsyncSession, agent: B2BAgent) -> dict[str, An
     """获取代理商账户概览。"""
     orders_result = await db.execute(
         select(func.count(), func.coalesce(func.sum(B2BOrder.total), 0)).where(
-            B2BOrder.agent_id == agent.id
+            B2BOrder.workspace_id == agent.workspace_id,
+            B2BOrder.agent_id == agent.id,
         )
     )
     total_orders, total_revenue = orders_result.one()
@@ -497,6 +705,7 @@ async def get_account_summary(db: AsyncSession, agent: B2BAgent) -> dict[str, An
     pending_result = await db.execute(
         select(func.coalesce(func.sum(B2BOrder.total), 0)).where(
             and_(
+                B2BOrder.workspace_id == agent.workspace_id,
                 B2BOrder.agent_id == agent.id,
                 B2BOrder.payment_status.in_(["unpaid", "partial", "overdue"]),
             )
@@ -508,6 +717,7 @@ async def get_account_summary(db: AsyncSession, agent: B2BAgent) -> dict[str, An
     due_result = await db.execute(
         select(B2BOrder.payment_due_date).where(
             and_(
+                B2BOrder.workspace_id == agent.workspace_id,
                 B2BOrder.agent_id == agent.id,
                 B2BOrder.payment_status.in_(["unpaid", "partial"]),
                 B2BOrder.payment_due_date.isnot(None),
@@ -523,3 +733,316 @@ async def get_account_summary(db: AsyncSession, agent: B2BAgent) -> dict[str, An
         "pending_payments": Decimal(str(pending_payments)),
         "payment_due_date": next_due,
     }
+
+
+# ============================================
+# 门户销售自助：RFQ、报价与合同
+# ============================================
+
+async def create_agent_rfq(
+    db: AsyncSession,
+    agent: B2BAgent,
+    *,
+    items: list[dict[str, Any]],
+    requested_currency: str = "USD",
+    destination_country: str | None = None,
+    incoterm: str | None = None,
+    requested_delivery_date: date | None = None,
+    notes: str | None = None,
+) -> B2BRFQ:
+    """Create an RFQ for the authenticated agent and submit it immediately."""
+    rfq = await b2b_sales_service.create_rfq(
+        db,
+        workspace_id=agent.workspace_id,
+        agent_id=agent.id,
+        items=items,
+        created_by=agent.email,
+        source="portal",
+        requested_currency=requested_currency,
+        destination_country=destination_country,
+        incoterm=incoterm,
+        requested_delivery_date=requested_delivery_date,
+        notes=notes,
+    )
+    if rfq.status == "draft":
+        rfq = await b2b_sales_service.update_rfq_status(
+            db,
+            workspace_id=agent.workspace_id,
+            rfq_id=rfq.id,
+            new_status="submitted",
+            actor=agent.email,
+        )
+    return rfq
+
+
+async def list_agent_rfqs(
+    db: AsyncSession,
+    agent: B2BAgent,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+) -> tuple[list[B2BRFQ], int]:
+    """List only RFQs owned by the authenticated agent."""
+    if status and status not in PORTAL_RFQ_VISIBLE_STATUSES:
+        raise ValueError("invalid portal RFQ status")
+    query = select(B2BRFQ).where(
+        B2BRFQ.workspace_id == agent.workspace_id,
+        B2BRFQ.agent_id == agent.id,
+        B2BRFQ.status.in_(PORTAL_RFQ_VISIBLE_STATUSES),
+    )
+    count_query = select(func.count(B2BRFQ.id)).where(
+        B2BRFQ.workspace_id == agent.workspace_id,
+        B2BRFQ.agent_id == agent.id,
+        B2BRFQ.status.in_(PORTAL_RFQ_VISIBLE_STATUSES),
+    )
+    if status:
+        query = query.where(B2BRFQ.status == status)
+        count_query = count_query.where(B2BRFQ.status == status)
+    total = int((await db.execute(count_query)).scalar_one())
+    rows = (
+        await db.execute(
+            query.options(selectinload(B2BRFQ.items))
+            .order_by(B2BRFQ.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return list(rows), total
+
+
+async def get_agent_rfq(
+    db: AsyncSession,
+    agent: B2BAgent,
+    rfq_id: str,
+) -> B2BRFQ | None:
+    """Return an RFQ only when it belongs to the authenticated agent."""
+    return (
+        await db.execute(
+            select(B2BRFQ)
+            .where(
+                B2BRFQ.workspace_id == agent.workspace_id,
+                B2BRFQ.agent_id == agent.id,
+                B2BRFQ.id == _to_uuid(rfq_id),
+                B2BRFQ.status.in_(PORTAL_RFQ_VISIBLE_STATUSES),
+            )
+            .options(selectinload(B2BRFQ.items))
+        )
+    ).scalar_one_or_none()
+
+
+async def list_agent_quotes(
+    db: AsyncSession,
+    agent: B2BAgent,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+) -> tuple[list[B2BQuote], int]:
+    """List only quotes that have been released to the authenticated agent."""
+    if status and status not in PORTAL_QUOTE_VISIBLE_STATUSES:
+        raise ValueError("invalid portal quote status")
+    query = select(B2BQuote).where(
+        B2BQuote.workspace_id == agent.workspace_id,
+        B2BQuote.agent_id == agent.id,
+        B2BQuote.status.in_(PORTAL_QUOTE_VISIBLE_STATUSES),
+    )
+    count_query = select(func.count(B2BQuote.id)).where(
+        B2BQuote.workspace_id == agent.workspace_id,
+        B2BQuote.agent_id == agent.id,
+        B2BQuote.status.in_(PORTAL_QUOTE_VISIBLE_STATUSES),
+    )
+    if status:
+        query = query.where(B2BQuote.status == status)
+        count_query = count_query.where(B2BQuote.status == status)
+    total = int((await db.execute(count_query)).scalar_one())
+    rows = (
+        await db.execute(
+            query.options(
+                selectinload(B2BQuote.items),
+                selectinload(B2BQuote.contract),
+                selectinload(B2BQuote.rfq),
+            )
+            .order_by(B2BQuote.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return list(rows), total
+
+
+async def get_agent_quote(
+    db: AsyncSession,
+    agent: B2BAgent,
+    quote_id: str,
+) -> B2BQuote | None:
+    """Return a released quote only when it belongs to the authenticated agent."""
+    return (
+        await db.execute(
+            select(B2BQuote)
+            .where(
+                B2BQuote.workspace_id == agent.workspace_id,
+                B2BQuote.agent_id == agent.id,
+                B2BQuote.id == _to_uuid(quote_id),
+                B2BQuote.status.in_(PORTAL_QUOTE_VISIBLE_STATUSES),
+            )
+            .options(
+                selectinload(B2BQuote.items),
+                selectinload(B2BQuote.contract),
+                selectinload(B2BQuote.rfq),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def accept_agent_quote(
+    db: AsyncSession,
+    agent: B2BAgent,
+    quote_id: str,
+) -> B2BQuote:
+    """Accept one of the authenticated agent's sent quotes."""
+    quote = await get_agent_quote(db, agent, quote_id)
+    if quote is None or quote.status != "sent":
+        raise ValueError("Quote not found or is not awaiting a customer decision")
+    return await b2b_sales_service.transition_quote(
+        db,
+        workspace_id=agent.workspace_id,
+        quote_id=quote.id,
+        new_status="accepted",
+        actor=agent.email,
+        reason="accepted in customer portal",
+        trace_id=get_trace_id(),
+    )
+
+
+async def reject_agent_quote(
+    db: AsyncSession,
+    agent: B2BAgent,
+    quote_id: str,
+    *,
+    reason: str | None = None,
+) -> B2BQuote:
+    """Reject one of the authenticated agent's sent quotes."""
+    quote = await get_agent_quote(db, agent, quote_id)
+    if quote is None or quote.status != "sent":
+        raise ValueError("Quote not found or is not awaiting a customer decision")
+    return await b2b_sales_service.transition_quote(
+        db,
+        workspace_id=agent.workspace_id,
+        quote_id=quote.id,
+        new_status="rejected",
+        actor=agent.email,
+        reason=reason or "rejected in customer portal",
+        trace_id=get_trace_id(),
+    )
+
+
+async def list_agent_contracts(
+    db: AsyncSession,
+    agent: B2BAgent,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+) -> tuple[list[B2BContract], int]:
+    """List only contracts owned by the authenticated agent."""
+    if status and status not in PORTAL_CONTRACT_VISIBLE_STATUSES:
+        raise ValueError("invalid portal contract status")
+    query = select(B2BContract).where(
+        B2BContract.workspace_id == agent.workspace_id,
+        B2BContract.agent_id == agent.id,
+        B2BContract.status.in_(PORTAL_CONTRACT_VISIBLE_STATUSES),
+    )
+    count_query = select(func.count(B2BContract.id)).where(
+        B2BContract.workspace_id == agent.workspace_id,
+        B2BContract.agent_id == agent.id,
+        B2BContract.status.in_(PORTAL_CONTRACT_VISIBLE_STATUSES),
+    )
+    if status:
+        query = query.where(B2BContract.status == status)
+        count_query = count_query.where(B2BContract.status == status)
+    total = int((await db.execute(count_query)).scalar_one())
+    rows = (
+        await db.execute(
+            query.options(
+                selectinload(B2BContract.quote).selectinload(B2BQuote.items)
+            )
+            .order_by(B2BContract.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return list(rows), total
+
+
+async def get_agent_contract(
+    db: AsyncSession,
+    agent: B2BAgent,
+    contract_id: str,
+) -> B2BContract | None:
+    """Return a visible contract only when it belongs to the authenticated agent."""
+    return (
+        await db.execute(
+            select(B2BContract)
+            .where(
+                B2BContract.workspace_id == agent.workspace_id,
+                B2BContract.agent_id == agent.id,
+                B2BContract.id == _to_uuid(contract_id),
+                B2BContract.status.in_(PORTAL_CONTRACT_VISIBLE_STATUSES),
+            )
+            .options(
+                selectinload(B2BContract.quote).selectinload(B2BQuote.items)
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def sign_agent_contract(
+    db: AsyncSession,
+    agent: B2BAgent,
+    contract_id: str,
+    *,
+    signed_by: str,
+) -> B2BContract:
+    """Record only the customer-side signature for the authenticated agent."""
+    contract = await get_agent_contract(db, agent, contract_id)
+    if contract is None:
+        raise ValueError("Contract not found")
+    if contract.status != "pending_signature":
+        raise b2b_sales_service.B2BSalesStateError(
+            "contract must be pending_signature before customer signing"
+        )
+    return await b2b_sales_service.sign_contract(
+        db,
+        workspace_id=agent.workspace_id,
+        contract_id=contract.id,
+        party="customer",
+        signed_by=signed_by,
+        trace_id=get_trace_id(),
+    )
+
+
+async def convert_agent_contract_to_order(
+    db: AsyncSession,
+    agent: B2BAgent,
+    contract_id: str,
+) -> B2BOrder:
+    """Idempotently convert the accepted quote behind an active customer contract."""
+    contract = await get_agent_contract(db, agent, contract_id)
+    if contract is None:
+        raise ValueError("Contract not found")
+    if contract.status != "active":
+        raise b2b_sales_service.B2BSalesStateError(
+            "contract must be active before order conversion"
+        )
+    if contract.quote is None or contract.quote.status not in {"accepted", "converted"}:
+        raise b2b_sales_service.B2BSalesStateError(
+            "an accepted quote is required before order conversion"
+        )
+    return await b2b_sales_service.convert_quote_to_order(
+        db,
+        workspace_id=agent.workspace_id,
+        quote_id=contract.quote_id,
+        actor=agent.email,
+        trace_id=get_trace_id(),
+    )

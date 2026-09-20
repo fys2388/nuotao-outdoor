@@ -735,7 +735,6 @@ async def get_purchase_order_stats(
     workspace_id: WorkspaceId,
 ) -> dict:
     """Return purchase order statistics grouped by supplier."""
-    from app.models.supplier import Supplier
     from sqlalchemy import select, func
     
     # 查询所有供应商
@@ -782,70 +781,6 @@ async def get_purchase_order_stats(
         "total_amount": sum(s["total_amount"] for s in stats),
         "by_supplier": stats,
     }
-
-
-
-@router.post(
-    "/purchase-orders",
-    summary="Create a new purchase order",
-)
-async def create_purchase_order(
-    db: DbSession,
-    workspace_id: WorkspaceId,
-    body: dict = Body(...),
-) -> dict:
-    """Create a new purchase order."""
-    from sqlalchemy import text
-    from uuid import uuid4
-    from datetime import datetime
-    
-    try:
-        po_id = str(uuid4())
-        po_number = body.get("po_number") or f"PO-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:4].upper()}"
-        supplier_id = body.get("supplier_id")
-        status = body.get("status", "pending")
-        currency = body.get("currency", "CNY")
-        subtotal = float(body.get("subtotal", 0))
-        shipping_cost = float(body.get("shipping_cost", 0))
-        total = float(body.get("total", subtotal + shipping_cost))
-        expected_delivery_at = body.get("expected_delivery_at")
-        notes = body.get("notes", "")
-        
-        await db.execute(text("""
-            INSERT INTO purchase_orders 
-            (id, workspace_id, po_number, supplier_id, status, currency, 
-             subtotal, shipping_cost, total, expected_delivery_at, notes, created_at, updated_at)
-            VALUES (:id, :workspace_id, :po_number, :supplier_id, :status, :currency,
-                    :subtotal, :shipping_cost, :total, :expected_delivery_at, :notes, NOW(), NOW())
-        """), {
-            "id": po_id,
-            "workspace_id": str(workspace_id),
-            "po_number": po_number,
-            "supplier_id": supplier_id,
-            "status": status,
-            "currency": currency,
-            "subtotal": subtotal,
-            "shipping_cost": shipping_cost,
-            "total": total,
-            "expected_delivery_at": expected_delivery_at,
-            "notes": notes,
-        })
-        await db.commit()
-        
-        return {
-            "success": True,
-            "id": po_id,
-            "po_number": po_number,
-            "message": "采购订单创建成功",
-        }
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"创建采购订单失败: {str(e)}",
-        )
-
-
 
 @router.patch(
     "/purchase-orders/{po_id}/status",

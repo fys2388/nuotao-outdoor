@@ -18,11 +18,15 @@ async def create_event(
     entity_id: str,
     payload: dict | None = None,
     trace_id: str | None = None,
+    commit: bool = True,
 ) -> EventLog:
-    """Append an event to the event log and commit.
+    """Append an event to the event log.
 
     Events are the source of truth for audit and downstream analytics, so
     every business state change should publish one.
+
+    ``commit=False`` keeps the event in the caller's transaction. Use it when
+    the event must be atomic with the business fact that produced it.
     """
     event = EventLog(
         workspace_id=workspace_id,
@@ -33,8 +37,11 @@ async def create_event(
         trace_id=trace_id,
     )
     session.add(event)
-    await session.commit()
-    await session.refresh(event)
+    if commit:
+        await session.commit()
+        await session.refresh(event)
+    else:
+        await session.flush()
     return event
 
 

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.content_marketing import EDMCampaign
 from app.models.edm_subscription import EDMSendLog, EmailSubscription
+from app.services import customer_consent_service, customer_identity_service
 from app.services import event_service
 
 logger = logging.getLogger(__name__)
@@ -57,8 +58,21 @@ class EDMProviderNotConfigured(EDMSendError):
 # --------------------------------------------------------------------------- #
 
 
-def _hash_email(email: str) -> str:
-    """Hash email for PII-minimized storage (SHA-256)."""
+def _hash_email(email: str, workspace_id: UUID | None = None) -> str:
+    """Hash email for PII-minimized storage.
+
+    The legacy one-argument form remains available for existing data and tests.
+    New writes use the workspace-scoped HMAC when ``workspace_id`` is supplied.
+    """
+    if workspace_id is not None:
+        identity_hash, _fingerprint, _version = (
+            customer_identity_service.build_identity_hash(
+                workspace_id=workspace_id,
+                identity_type="email",
+                identity_value=email,
+            )
+        )
+        return identity_hash
     return hashlib.sha256(email.lower().strip().encode("utf-8")).hexdigest()
 
 
@@ -81,6 +95,33 @@ async def _load_subscription(
     return result.scalar_one_or_none()
 
 
+def _email_hashes(email: str, workspace_id: UUID) -> list[str]:
+    primary = _hash_email(email, workspace_id)
+    legacy = _hash_email(email)
+    return [primary] if primary == legacy else [primary, legacy]
+
+
+async def _load_subscription_for_email(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    email: str,
+) -> EmailSubscription | None:
+    hashes = _email_hashes(email, workspace_id)
+    rows = (
+        await session.execute(
+            select(EmailSubscription).where(
+                EmailSubscription.workspace_id == workspace_id,
+                EmailSubscription.email_hash.in_(hashes),
+            )
+        )
+    ).scalars().all()
+    if not rows:
+        return None
+    by_hash = {row.email_hash: row for row in rows}
+    return next((by_hash[item] for item in hashes if item in by_hash), None)
+
+
 async def _load_campaign(
     session: AsyncSession, *, workspace_id: UUID, campaign_id: UUID
 ) -> EDMCampaign | None:
@@ -94,7 +135,7 @@ async def _load_campaign(
 
 
 async def _check_dedup_24h(
-    session: AsyncSession, *, workspace_id: UUID, email_hash: str, campaign_id: UUID
+    session: AsyncSession, *, workspace_id: UUID, email: str, campaign_id: UUID
 ) -> bool:
     """Check if recipient has received this campaign in the last 24 hours.
 
@@ -107,7 +148,7 @@ async def _check_dedup_24h(
     result = await session.execute(
         select(EDMSendLog).where(
             EDMSendLog.workspace_id == workspace_id,
-            EDMSendLog.email_hash == email_hash,
+            EDMSendLog.email_hash.in_(_email_hashes(email, workspace_id)),
             EDMSendLog.campaign_id == campaign_id,
             EDMSendLog.status.in_(["sent", "dry_run"]),
             EDMSendLog.created_at >= cutoff,
@@ -134,8 +175,24 @@ async def create_or_update_subscription(
     trace_id: str | None = None,
 ) -> EmailSubscription:
     """Create or update email subscription. Idempotent by (workspace_id, email_hash)."""
-    email_hash = _hash_email(email)
-    existing = await _load_subscription(session, workspace_id=workspace_id, email_hash=email_hash)
+    email_hash = _hash_email(email, workspace_id)
+    existing = await _load_subscription_for_email(
+        session,
+        workspace_id=workspace_id,
+        email=email,
+    )
+    account = await customer_identity_service.ensure_account_for_identity(
+        session,
+        workspace_id=workspace_id,
+        identity_type="email",
+        identity_value=email,
+        channel="email",
+        external_system="edm",
+        customer_type="CONSUMER",
+        business_model="B2C",
+        source="edm_subscription",
+        trace_id=trace_id,
+    )
 
     if existing:
         if consent_given and not existing.consent_given:
@@ -147,13 +204,33 @@ async def create_or_update_subscription(
                 existing.consent_ip = consent_ip
             if consent_user_agent:
                 existing.consent_user_agent = consent_user_agent
+            await customer_consent_service.append_consent_event(
+                session,
+                workspace_id=workspace_id,
+                customer_account_id=account.id,
+                purpose="marketing_email",
+                channel="email",
+                status="granted",
+                policy_version="edm-consent-v1",
+                source=consent_source,
+                recorded_by="edm_send_service",
+                idempotency_key=f"edm-subscription-{existing.id}-grant-{datetime.now(UTC).isoformat()}",
+                trace_id=trace_id,
+                commit=False,
+            )
+        if existing.customer_account_id is None:
+            existing.customer_account_id = account.id
+        if existing.email_hash != email_hash:
+            existing.email_hash = email_hash
         if tags:
             existing.tags = list(set(existing.tags + tags))
         await session.flush()
+        await session.commit()
         return existing
 
     sub = EmailSubscription(
         workspace_id=workspace_id,
+        customer_account_id=account.id,
         email_hash=email_hash,
         email_domain=_get_email_domain(email),
         subscription_status="subscribed" if consent_given else "pending_confirmation",
@@ -167,6 +244,22 @@ async def create_or_update_subscription(
     )
     session.add(sub)
     await session.flush()
+
+    if consent_given:
+        await customer_consent_service.append_consent_event(
+            session,
+            workspace_id=workspace_id,
+            customer_account_id=account.id,
+            purpose="marketing_email",
+            channel="email",
+            status="granted",
+            policy_version="edm-consent-v1",
+            source=consent_source,
+            recorded_by="edm_send_service",
+            idempotency_key=f"edm-subscription-{sub.id}-initial-grant",
+            trace_id=trace_id,
+            commit=False,
+        )
 
     await event_service.create_event(
         session, workspace_id=workspace_id, event_type="edm.subscription_created",
@@ -186,12 +279,29 @@ async def unsubscribe(
     trace_id: str | None = None,
 ) -> EmailSubscription:
     """Unsubscribe email. Honored immediately per GDPR."""
-    email_hash = _hash_email(email)
-    sub = await _load_subscription(session, workspace_id=workspace_id, email_hash=email_hash)
+    email_hash = _hash_email(email, workspace_id)
+    sub = await _load_subscription_for_email(
+        session,
+        workspace_id=workspace_id,
+        email=email,
+    )
+    account = await customer_identity_service.ensure_account_for_identity(
+        session,
+        workspace_id=workspace_id,
+        identity_type="email",
+        identity_value=email,
+        channel="email",
+        external_system="edm",
+        customer_type="CONSUMER",
+        business_model="B2C",
+        source="edm_unsubscribe",
+        trace_id=trace_id,
+    )
     if sub is None:
         # Create a record marking as unsubscribed to prevent future sends
         sub = EmailSubscription(
             workspace_id=workspace_id,
+            customer_account_id=account.id,
             email_hash=email_hash,
             email_domain=_get_email_domain(email),
             subscription_status="unsubscribed",
@@ -200,11 +310,31 @@ async def unsubscribe(
         )
         session.add(sub)
 
+    if sub.customer_account_id is None:
+        sub.customer_account_id = account.id
+    if sub.email_hash != email_hash:
+        sub.email_hash = email_hash
     sub.subscription_status = "unsubscribed"
     sub.consent_given = False
     sub.unsubscribe_timestamp = datetime.now(UTC)
     sub.unsubscribe_reason = reason
     await session.flush()
+
+    await customer_consent_service.append_consent_event(
+        session,
+        workspace_id=workspace_id,
+        customer_account_id=account.id,
+        purpose="marketing_email",
+        channel="email",
+        status="withdrawn",
+        policy_version="edm-consent-v1",
+        source="edm_unsubscribe",
+        recorded_by="edm_send_service",
+        idempotency_key=f"edm-subscription-{sub.id}-withdrawn-{datetime.now(UTC).isoformat()}",
+        evidence={"reason": reason} if reason else {},
+        trace_id=trace_id,
+        commit=False,
+    )
 
     await event_service.create_event(
         session, workspace_id=workspace_id, event_type="edm.unsubscribed",
@@ -226,7 +356,7 @@ async def validate_send_preconditions(
     workspace_id: UUID,
     email: str,
     campaign_id: UUID,
-) -> tuple[EmailSubscription, EDMCampaign]:
+) -> tuple[EmailSubscription | None, EDMCampaign]:
     """Validate all 6 preconditions before sending.
 
     Raises EDMSendBlocked with skip_reason if any check fails.
@@ -241,18 +371,53 @@ async def validate_send_preconditions(
             skip_reason="send_disabled",
         )
 
-    email_hash = _hash_email(email)
+    email_hash = _hash_email(email, workspace_id)
 
     # Check 2: Recipient must not be unsubscribed (GDPR: honored immediately)
-    sub = await _load_subscription(session, workspace_id=workspace_id, email_hash=email_hash)
+    sub = await _load_subscription_for_email(
+        session,
+        workspace_id=workspace_id,
+        email=email,
+    )
     if sub is not None and sub.subscription_status == "unsubscribed":
         raise EDMSendBlocked(
             f"Recipient is unsubscribed: {email_hash[:16]}",
             skip_reason="unsubscribed",
         )
 
-    # Check 3: Recipient must have valid subscription consent
-    if sub is None or not sub.consent_given:
+    # Check 3: The unified consent ledger is authoritative. The legacy
+    # subscription is only a compatibility fallback when no ledger event
+    # exists for the resolved canonical account.
+    account = await customer_identity_service.resolve_identity(
+        session,
+        workspace_id=workspace_id,
+        identity_type="email",
+        identity_value=email,
+    )
+    account_id = account.id if account is not None else (
+        sub.customer_account_id if sub is not None else None
+    )
+    if account_id is not None:
+        status, event, _legacy_subscription = (
+            await customer_consent_service.current_consent_status(
+                session,
+                workspace_id=workspace_id,
+                customer_account_id=account_id,
+                purpose="marketing_email",
+                channel="email",
+            )
+        )
+        if event is not None and status == "withdrawn":
+            raise EDMSendBlocked(
+                f"Recipient withdrew marketing consent: {email_hash[:16]}",
+                skip_reason="consent_withdrawn",
+            )
+        if event is None and (sub is None or not sub.consent_given):
+            raise EDMSendBlocked(
+                f"Recipient has no valid subscription consent: {email_hash[:16]}",
+                skip_reason="no_consent",
+            )
+    elif sub is None or not sub.consent_given:
         raise EDMSendBlocked(
             f"Recipient has no valid subscription consent: {email_hash[:16]}",
             skip_reason="no_consent",
@@ -269,7 +434,12 @@ async def validate_send_preconditions(
         )
 
     # Check 5: 24-hour dedup
-    if await _check_dedup_24h(session, workspace_id=workspace_id, email_hash=email_hash, campaign_id=campaign_id):
+    if await _check_dedup_24h(
+        session,
+        workspace_id=workspace_id,
+        email=email,
+        campaign_id=campaign_id,
+    ):
         raise EDMSendBlocked(
             f"Recipient received this campaign within {settings.edm_dedup_window_hours}h (dedup)",
             skip_reason="dedup_24h",
@@ -308,7 +478,7 @@ async def send_edm_email(
     """
     settings = get_settings()
     is_dry_run = dry_run if dry_run is not None else settings.edm_dry_run_default
-    email_hash = _hash_email(email)
+    email_hash = _hash_email(email, workspace_id)
     idem_key = idempotency_key or f"edm-{campaign_id}-{email_hash}-{datetime.now(UTC).strftime('%Y%m%d')}"
 
     # Idempotency: return existing log if same key
@@ -341,7 +511,8 @@ async def send_edm_email(
         sub, campaign = await validate_send_preconditions(
             session, workspace_id=workspace_id, email=email, campaign_id=campaign_id,
         )
-        log.subscription_id = sub.id
+        if sub is not None:
+            log.subscription_id = sub.id
         log.subject = campaign.subject
         log.from_email = campaign.from_email
 

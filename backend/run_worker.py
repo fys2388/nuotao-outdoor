@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 
@@ -17,6 +18,7 @@ from app.core.database import async_session_factory
 from app.core.logging import setup_logging
 from app.services.alert_scheduler import AlertScheduler
 from app.worker.agent_worker import run_worker
+from app.worker.bootstrap import register_builtin_executors
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ settings = get_settings()
 
 async def main() -> None:
     """Start the alert scheduler, then run the worker loop."""
+    register_builtin_executors()
     stop_event = asyncio.Event()
 
     def _handle_signal(signum: int) -> None:
@@ -34,10 +37,8 @@ async def main() -> None:
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _handle_signal, sig)
-        except NotImplementedError:
-            pass
 
     # Start alert scheduler in the background
     scheduler = AlertScheduler(session_factory=async_session_factory)

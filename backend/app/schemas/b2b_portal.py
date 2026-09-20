@@ -190,5 +190,168 @@ class B2BOrderListResponse(BaseModel):
     page_size: int
 
 
+# ============================================
+# 门户自助销售：RFQ、报价与合同
+# ============================================
+
+class B2BPortalRFQItemCreate(BaseModel):
+    product_id: str
+    quantity: int = Field(ge=1)
+    target_unit_price: DecimalFloat | None = Field(default=None, gt=0)
+    specifications: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class B2BPortalRFQCreate(BaseModel):
+    requested_currency: str = Field(default="USD", min_length=3, max_length=8)
+    destination_country: str | None = Field(default=None, max_length=8)
+    incoterm: str | None = Field(default=None, max_length=16)
+    requested_delivery_date: date | None = None
+    notes: str | None = Field(default=None, max_length=5000)
+    items: list[B2BPortalRFQItemCreate] = Field(min_length=1)
+
+
+class B2BPortalRFQItemResponse(BaseModel):
+    id: str
+    product_id: str
+    sku_snapshot: str
+    product_name_snapshot: str
+    requested_quantity: int
+    target_unit_price: DecimalFloat | None = None
+    specifications: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = None
+
+
+class B2BPortalRFQResponse(BaseModel):
+    id: str
+    rfq_number: str
+    status: str
+    source: str
+    requested_currency: str
+    destination_country: str | None = None
+    incoterm: str | None = None
+    requested_delivery_date: date | None = None
+    notes: str | None = None
+    submitted_at: datetime | None = None
+    closed_at: datetime | None = None
+    items: list[B2BPortalRFQItemResponse] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class B2BPortalRFQListResponse(BaseModel):
+    items: list[B2BPortalRFQResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class B2BPortalQuoteItemResponse(BaseModel):
+    id: str
+    product_id: str
+    sku_snapshot: str
+    product_name_snapshot: str
+    quantity: int
+    unit_price: DecimalFloat
+    discount_percent: DecimalFloat
+    line_subtotal: DecimalFloat
+    line_total: DecimalFloat
+    price_source: str
+    specifications: dict[str, Any] = Field(default_factory=dict)
+
+
+class B2BPortalContractSummary(BaseModel):
+    id: str
+    contract_number: str
+    status: str
+    customer_signed_at: datetime | None = None
+    company_signed_at: datetime | None = None
+    activated_at: datetime | None = None
+
+
+class B2BPortalQuoteResponse(BaseModel):
+    id: str
+    quote_number: str
+    version_number: int
+    rfq_id: str | None = None
+    rfq_number: str | None = None
+    status: str
+    currency: str
+    valid_until: date
+    payment_terms_days: int
+    incoterm: str | None = None
+    shipping_terms: str | None = None
+    subtotal: DecimalFloat
+    discount_amount: DecimalFloat
+    shipping_cost: DecimalFloat
+    tax_amount: DecimalFloat
+    total: DecimalFloat
+    sent_at: datetime | None = None
+    accepted_at: datetime | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+    notes: str | None = None
+    items: list[B2BPortalQuoteItemResponse] = Field(default_factory=list)
+    contract: B2BPortalContractSummary | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class B2BPortalQuoteListResponse(BaseModel):
+    items: list[B2BPortalQuoteResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class B2BPortalQuoteDecisionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class B2BPortalContractResponse(BaseModel):
+    id: str
+    contract_number: str
+    quote_id: str
+    quote_number: str | None = None
+    version_number: int | None = None
+    status: str
+    effective_from: date
+    effective_to: date | None = None
+    currency: str
+    total: DecimalFloat
+    document_url: str | None = None
+    terms: dict[str, Any] = Field(default_factory=dict)
+    customer_signed_by: str | None = None
+    customer_signed_at: datetime | None = None
+    company_signed_at: datetime | None = None
+    activated_at: datetime | None = None
+    terminated_at: datetime | None = None
+    items: list[B2BPortalQuoteItemResponse] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class B2BPortalContractListResponse(BaseModel):
+    items: list[B2BPortalContractResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class B2BPortalContractSignRequest(BaseModel):
+    signed_by: str = Field(min_length=1, max_length=128)
+
+
+class B2BPortalOrderConversionResponse(BaseModel):
+    id: str
+    order_number: str
+    quote_id: str
+    contract_id: str
+    status: str
+    payment_status: str
+    total: DecimalFloat
+    currency: str
+
+
 # 解决前向引用
 B2BTokenResponse.model_rebuild()

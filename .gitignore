@@ -131,3 +131,16 @@ website-check-images/
 
 # Sensitive infra scripts
 infra/verify_b2b_cloudflare.py
+
+# --- 生产服务器草稿/构建产物（2026-09-21 回收时加入）---
+/staging/
+/frontend/dist.bak-*/
+/uploads/
+/backend/uploads/
+releases/
+*.bak
+*.bak_*
+*.bak-*.py
+*.bak-*.ts
+*.tgz
+*.xlsx

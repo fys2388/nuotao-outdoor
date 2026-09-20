@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     ForeignKey,
     Index,
@@ -52,6 +53,7 @@ class AgentExecutionPolicy(Base, TimestampMixin, WorkspaceMixin):
     )
     policy_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     max_concurrent: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     execution_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     approval_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=86400)
@@ -62,7 +64,15 @@ class AgentExecutionPolicy(Base, TimestampMixin, WorkspaceMixin):
 
     __table_args__ = (
         UniqueConstraint(
-            "workspace_id", "agent_id", "policy_version", name="uq_agent_exec_pol_ws_agent_ver"
+            "workspace_id",
+            "agent_id",
+            "business_scope",
+            "policy_version",
+            name="uq_agent_exec_pol_ws_agent_scope_ver",
+        ),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_execution_policies_business_scope",
         ),
         Index("ix_agent_exec_pol_ws_current", "workspace_id", "is_current"),
         Index("ix_agent_exec_pol_ws_agent", "workspace_id", "agent_id"),
@@ -80,6 +90,7 @@ class AgentBudgetPolicy(Base, TimestampMixin, WorkspaceMixin):
     )
     policy_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     monthly_budget: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=100)
     max_cost_per_execution: Mapped[Decimal] = mapped_column(
         Numeric(12, 6), nullable=False, default=5
@@ -91,7 +102,15 @@ class AgentBudgetPolicy(Base, TimestampMixin, WorkspaceMixin):
 
     __table_args__ = (
         UniqueConstraint(
-            "workspace_id", "agent_id", "policy_version", name="uq_agent_budget_pol_ws_agent_ver"
+            "workspace_id",
+            "agent_id",
+            "business_scope",
+            "policy_version",
+            name="uq_agent_budget_pol_ws_agent_scope_ver",
+        ),
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_budget_policies_business_scope",
         ),
         Index("ix_agent_budget_pol_ws_current", "workspace_id", "is_current"),
         Index("ix_agent_budget_pol_ws_agent", "workspace_id", "agent_id"),

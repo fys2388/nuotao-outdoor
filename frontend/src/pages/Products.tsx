@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Modal, Form, message, Popconfirm, Upload,
-  Alert, Descriptions, Badge, Tooltip, Empty, InputNumber, Divider
+  Alert, Descriptions, Badge, Tooltip, Empty, InputNumber, Divider,
+  Image, Collapse
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, DownloadOutlined, UploadOutlined,
@@ -27,8 +28,37 @@ interface Product {
   woocommerce_id?: number
   stock_quantity?: number
   attributes?: Record<string, any>
+  meta?: Record<string, any>
+  dimensions?: Record<string, any>
+  weight_kg?: number | string
+  target_market?: string
+  source?: string
+  candidate_status?: string | null
   created_at: string
   updated_at: string
+}
+
+function getProductImages(product: Product | null): string[] {
+  if (!product) return []
+  const media = product.meta?.media
+  const candidates =
+    media?.images ||
+    media?.gallery_images ||
+    product.meta?.images ||
+    []
+  if (!Array.isArray(candidates)) return []
+  return Array.from(
+    new Set(
+      candidates
+        .map((item) => (typeof item === 'string' ? item : item?.url || item?.src))
+        .filter((url): url is string => typeof url === 'string' && /^https?:\/\//.test(url)),
+    ),
+  )
+}
+
+function getEnglishLocalization(product: Product | null): Record<string, any> | null {
+  const localization = product?.meta?.localizations?.en
+  return localization && typeof localization === 'object' ? localization : null
 }
 
 const statusColors: Record<string, string> = {
@@ -479,10 +509,34 @@ export default function Products() {
           }}>编辑</Button>,
           <Button key="close" onClick={() => setDetailModalOpen(false)}>关闭</Button>,
         ]}
-        width={700}
+        width={920}
       >
         {viewingProduct && (
           <div>
+            {getProductImages(viewingProduct).length > 0 && (
+              <div style={{ marginBottom: '18px' }}>
+                <Text strong>商品图片：</Text>
+                <Image.PreviewGroup>
+                  <Space wrap size={12} style={{ marginTop: '10px' }}>
+                    {getProductImages(viewingProduct).map((url, index) => (
+                      <Space key={url} direction="vertical" size={4}>
+                        <Image
+                          src={url}
+                          alt={`商品图片 ${index + 1}`}
+                          width={index === 0 ? 180 : 110}
+                          height={index === 0 ? 180 : 110}
+                          style={{ objectFit: 'cover', borderRadius: 6 }}
+                        />
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {index === 0 ? '主图' : `详情图 ${index}`}
+                        </Text>
+                      </Space>
+                    ))}
+                  </Space>
+                </Image.PreviewGroup>
+              </div>
+            )}
+
             <Descriptions column={2} bordered size="small">
               <Descriptions.Item label="产品名称" span={2}>{viewingProduct.name}</Descriptions.Item>
               <Descriptions.Item label="SKU">{viewingProduct.sku}</Descriptions.Item>
@@ -514,8 +568,19 @@ export default function Products() {
                 })()}
               </Descriptions.Item>
               <Descriptions.Item label="供应商编号">{(viewingProduct as any).supplier_code || '-'}</Descriptions.Item>
-              <Descriptions.Item label="来源">{(viewingProduct as any).source || '-'}</Descriptions.Item>
-              <Descriptions.Item label="目标市场">{(viewingProduct as any).target_market || '-'}</Descriptions.Item>
+              <Descriptions.Item label="来源">{viewingProduct.source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="目标市场">{viewingProduct.target_market || '-'}</Descriptions.Item>
+              <Descriptions.Item label="重量">
+                {viewingProduct.weight_kg ? `${viewingProduct.weight_kg} kg` : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="尺寸">
+                {viewingProduct.dimensions
+                  ? Object.entries(viewingProduct.dimensions)
+                      .map(([key, value]) => `${key}: ${String(value)}`)
+                      .join(' / ')
+                  : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="候选状态">{viewingProduct.candidate_status || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建时间" span={2}>{viewingProduct.created_at ? new Date(viewingProduct.created_at).toLocaleString() : '-'}</Descriptions.Item>
               <Descriptions.Item label="更新时间" span={2}>{viewingProduct.updated_at ? new Date(viewingProduct.updated_at).toLocaleString() : '-'}</Descriptions.Item>
             </Descriptions>
@@ -545,17 +610,82 @@ export default function Products() {
                 <Text strong>产品属性：</Text>
                 <Descriptions column={2} size="small" style={{ marginTop: '8px' }}>
                   {Object.entries((viewingProduct as any).attributes).map(([key, value]) => (
-                    <Descriptions.Item key={key} label={key}>{String(value)}</Descriptions.Item>
+                    <Descriptions.Item key={key} label={key}>
+                      {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                    </Descriptions.Item>
                   ))}
                 </Descriptions>
               </div>
             )}
 
-            {(viewingProduct as any).source_url && (
+            {getEnglishLocalization(viewingProduct) && (
+              <div style={{ marginTop: '16px' }}>
+                <Text strong>英文上架文案：</Text>
+                <Card size="small" style={{ marginTop: '8px' }}>
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color={getEnglishLocalization(viewingProduct)?.status === 'approved' ? 'green' : 'orange'}>
+                        {getEnglishLocalization(viewingProduct)?.status === 'approved' ? '已确认' : '待确认'}
+                      </Tag>
+                      <Text strong>{getEnglishLocalization(viewingProduct)?.title}</Text>
+                    </Space>
+                    <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {getEnglishLocalization(viewingProduct)?.description || '-'}
+                    </Paragraph>
+                  </Space>
+                </Card>
+              </div>
+            )}
+
+            {viewingProduct.meta?.analysis && (
+              <Collapse
+                style={{ marginTop: '16px' }}
+                items={[
+                  {
+                    key: 'analysis',
+                    label: 'AI 分析与识别参数',
+                    children: (
+                      <Paragraph
+                        style={{
+                          margin: 0,
+                          whiteSpace: 'pre-wrap',
+                          maxHeight: '360px',
+                          overflow: 'auto',
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        }}
+                      >
+                        {JSON.stringify(viewingProduct.meta.analysis, null, 2)}
+                      </Paragraph>
+                    ),
+                  },
+                  {
+                    key: 'meta',
+                    label: '完整商品元数据',
+                    children: (
+                      <Paragraph
+                        style={{
+                          margin: 0,
+                          whiteSpace: 'pre-wrap',
+                          maxHeight: '420px',
+                          overflow: 'auto',
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        }}
+                      >
+                        {JSON.stringify(viewingProduct.meta || {}, null, 2)}
+                      </Paragraph>
+                    ),
+                  },
+                ]}
+              />
+            )}
+
+            {viewingProduct.source_url && (
               <div style={{ marginTop: '16px' }}>
                 <Text strong>来源链接：</Text>
-                <a href={(viewingProduct as any).source_url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px' }}>
-                  {(viewingProduct as any).source_url}
+                <a href={viewingProduct.source_url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px' }}>
+                  {viewingProduct.source_url}
                 </a>
               </div>
             )}

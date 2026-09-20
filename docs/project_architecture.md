@@ -1,9 +1,11 @@
 # Nuotao Outdoor AI OS — 项目架构分析
 
-> 版本：v0.3（架构规划草案）
-> 状态：规划阶段，未开始编码
-> 适用阶段：Phase 1（1688 选品 + WooCommerce DTC + 中国直发）
+> 版本：v0.4
+> 状态：B2C + B2B 双模式架构基线
+> 适用阶段：共享底座 + B2C 零售闭环 + B2B 受控试点
 > 作者角色：首席架构师
+
+> 架构修订（2026-09-13）：产品定位更新为 AI 原生 B2C + B2B 跨境电商经营操作系统。B2B 的完整规模化仍按阶段推进，但数据库、权限、客户、价格和订单领域从当前阶段起必须兼容双业务模式。权威决策见 `docs/business_decisions/ADR/COMMERCE-001.md`，现状审计见 `docs/b2c_b2b_compatibility_audit.md`。
 
 ---
 
@@ -11,11 +13,11 @@
 
 ### 1.1 业务背景
 
-Nuotao Outdoor 是 AI 驱动的跨境户外品牌，采用「中国 1688 供应链 → WooCommerce 独立站 → 海外消费者直发」的轻资产模式起步。爆品验证后建立海外仓，最终发展海外代理商与 B2B 渠道。
+Nuotao Outdoor 是 AI 驱动的跨境户外品牌，采用「中国 1688 供应链 → B2C 独立站/平台/社媒 + B2B 批发/代理商」的双轮模式。共享商品、供应链、库存、物流、CRM 和 AI 底座；爆品验证后建设海外仓，并逐步扩大 B2B 渠道规模。
 
 ### 1.2 系统目标
 
-建设 **AI Native Outdoor Commerce Operating System（AI 原生户外电商操作系统）**，以数据为底座，用 AI Agent 替代传统人工运营环节，实现：
+建设 **AI Native Outdoor Commerce Operating System（AI 原生户外电商操作系统）**，以数据为底座，用 AI Agent 增强 B2C + B2B 的选品、营销、销售、供应链、履约、客户和经营分析，实现：
 
 | Agent | 核心职责 | 替代的传统岗位 |
 |---|---|---|
@@ -312,6 +314,15 @@ flowchart LR
 7. L3 人工审批超时：`expire_stale_approvals` 只**自动 reject**（绝不自动 approve），任务 fail 并记录 `approval timed out`；审批期限来自 Execution Policy。
 8. Tool Gateway/Handler：`agent_tools` 增加 `handler_name + args_schema` 绑定进程内 handler（`register_handler` 注册，handler 只接收最小 ToolContext、返回 JSON-safe 结果）；L0-L2 经网关执行并审计，L3 仍停 `waiting_approval` 人工审批；handler 缺失或失败一律 deny 403 + 审计事件。
 9. Agent Metrics：`agent_metrics` 按 workspace+agent+UTC 日聚合（executions/success/failure/timeout/retried/tokens/cost/avg/p95/error_breakdown），`POST /api/v1/agent-metrics/snapshot` 手动快照、`GET /api/v1/agent-metrics` 查询。
+
+**B2B 专业 Agent（P2 已落地：销售、报价、回款建议）**
+
+1. `b2b_sales_agent`：读取活跃 RFQ、阶段时效、目标金额和报价状态，输出跟进优先级、风险和下一步动作。
+2. `b2b_quotation_agent`：读取 RFQ、客户等级、已发布阶梯价和商品到岸成本，输出报价行建议、目标价缺口、毛利率和阻断项。
+3. `b2b_collection_agent`：读取未结发票、账龄、信用占用和客户状态，输出回款优先级和动作建议。
+4. 三个 Agent 固定 `business_scope=B2B`、`permission_level=L2`，只返回 `requires_human_approval=true` 的建议，执行结果为 `write_actions_performed=[]`。
+5. 运行时执行器通过 `resolve_b2b_price`、B2B Sales Service 和 B2B Finance Service 读取权威数据，禁止直接修改价格、报价、发票、收款或核销。
+6. 管理端 `/b2b/ai` 提供 Agent 初始化、分析任务创建和运行状态查看。
 10. 事件贯穿：`agent.task_*`（enqueued/requeued/deferred/dead_letter）、`agent.execution_*`（timed_out/budget_blocked）、`agent.approval_expired`、`agent.tool_call_*`（executed/denied）、`agent.metrics_snapshotted`、`agent.budget_alert` 全部写入 `event_log`，`trace_id` 贯穿任务 → 执行 → 工具调用 → 审批 → 重试；全部 workspace 隔离。
 
 **Product Analyst Agent 接入运行时（M5.2 已落地：第一个真正业务 Agent）**

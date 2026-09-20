@@ -460,10 +460,10 @@ export const imageGenConfig: ModuleConfig = {
   description: 'AI 驱动的商品图片生成，支持多模型可插拔网关，月度成本护栏与审批流',
   apiEndpoint: '/api/v1/image-gen',
   stats: [
-    { title: '默认模型', value: 'wan2.7', color: '#1677ff' },
-    { title: '单张成本', value: '¥0.08', color: '#52c41a' },
+    { title: '默认模型', value: 'Seedream 5.0 pro', color: '#1677ff' },
+    { title: '单张成本', value: '¥0.30', color: '#52c41a' },
     { title: '月度预算', value: '¥100', color: '#722ed1' },
-    { title: '可用模型', value: 4, color: '#faad14' },
+    { title: '能力', value: '文生图+图生图', color: '#faad14' },
   ],
   fields: [
     { key: 'id', label: '任务ID', type: 'text', inForm: false, width: 200 },
@@ -476,11 +476,10 @@ export const imageGenConfig: ModuleConfig = {
       { label: '广告素材', value: 'ad_creative' },
     ], width: 120 },
     { key: 'requested_model', label: '请求模型', type: 'select', options: [
-      { label: 'wan2.7-image (¥0.08)', value: 'wan2.7-image' },
-      { label: 'qwen-image-3.0 (¥0.18)', value: 'qwen-image-3.0' },
-      { label: 'seedream-4.0 (¥0.22)', value: 'seedream-4.0' },
+      { label: 'Seedream 5.0 pro (¥0.30, 支持图生图)', value: 'doubao-seedream-5-0-pro-260628' },
+      { label: 'qwen-image-3.0 (¥0.18, 仅文生图)', value: 'qwen-image-3.0' },
       { label: 'mock (开发用)', value: 'mock' },
-    ], width: 160 },
+    ], width: 220 },
     { key: 'status', label: '状态', type: 'status', width: 100 },
     { key: 'cost_cny', label: '成本(¥)', type: 'number', inForm: false, width: 80 },
     { key: 'created_at', label: '创建时间', type: 'text', inForm: false, width: 160 },

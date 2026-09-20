@@ -21,6 +21,7 @@ import {
   ThunderboltOutlined,
   ApiOutlined,
 } from '@ant-design/icons'
+import { request } from '../api/client'
 
 const { Title, Text } = Typography
 const { Option } = Select
@@ -45,6 +46,18 @@ const statusLabels: Record<string, string> = {
   cancelled: '已取消',
 }
 
+const scopeColors: Record<string, string> = {
+  B2C: 'blue',
+  B2B: 'geekblue',
+  SHARED: 'gold',
+}
+
+const scopeLabels: Record<string, string> = {
+  B2C: 'B2C 零售',
+  B2B: 'B2B 批发',
+  SHARED: '共享',
+}
+
 interface Execution {
   id: string
   agent_id?: string | null
@@ -55,6 +68,7 @@ interface Execution {
   cost?: string | number | null
   latency_ms?: number | null
   status: string
+  business_scope: string
   error_message?: string | null
   trace_id?: string | null
   started_at?: string | null
@@ -67,6 +81,7 @@ interface Task {
   agent_id?: string | null
   name?: string
   status: string
+  business_scope: string
   priority?: string
   created_at: string
 }
@@ -77,30 +92,28 @@ export default function AgentMonitorPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('')
+  const [scopeFilter, setScopeFilter] = useState<string>('')
 
-  const fetchData = useCallback(async (status?: string) => {
+  const fetchData = useCallback(async (status?: string, businessScope?: string) => {
     setLoading(true)
     try {
-      // 1. 运行时总览
-      const overviewRes = await fetch('/api/v1/agent-operations/runtime-overview')
-      if (overviewRes.ok) {
-        setOverview(await overviewRes.json())
-      }
+      const overviewData = await request<Record<string, unknown>>('/agent-runtime/overview')
+      setOverview(overviewData)
 
-      // 2. 执行历史
-      const execQuery = status ? `?status=${encodeURIComponent(status)}&limit=100` : '?limit=100'
-      const execRes = await fetch(`/api/v1/agent-runtime/agent-executions${execQuery}`)
-      if (execRes.ok) {
-        const items = await execRes.json()
-        setExecutions(Array.isArray(items) ? items : [])
-      }
+      const execParams = new URLSearchParams({ limit: '100' })
+      if (status) execParams.set('status', status)
+      if (businessScope) execParams.set('business_scope', businessScope)
+      const executionsData = await request<Execution[]>(
+        `/agent-executions?${execParams.toString()}`,
+      )
+      setExecutions(Array.isArray(executionsData) ? executionsData : [])
 
-      // 3. 任务列表
-      const taskRes = await fetch('/api/v1/agent-runtime/agent-tasks?limit=50')
-      if (taskRes.ok) {
-        const items = await taskRes.json()
-        setTasks(Array.isArray(items) ? items : [])
-      }
+      const taskParams = new URLSearchParams({ limit: '50' })
+      if (businessScope) taskParams.set('business_scope', businessScope)
+      const tasksData = await request<Task[]>(
+        `/agent-tasks?${taskParams.toString()}`,
+      )
+      setTasks(Array.isArray(tasksData) ? tasksData : [])
     } catch (error) {
       console.error('获取 Agent 运行数据失败', error)
     } finally {
@@ -109,8 +122,8 @@ export default function AgentMonitorPage() {
   }, [])
 
   useEffect(() => {
-    fetchData(statusFilter)
-  }, [statusFilter, fetchData])
+    fetchData(statusFilter, scopeFilter)
+  }, [statusFilter, scopeFilter, fetchData])
 
   const execStats = overview?.executions || {}
   const costInfo = overview?.cost || {}
@@ -185,6 +198,15 @@ export default function AgentMonitorPage() {
       ),
     },
     {
+      title: '业务范围',
+      dataIndex: 'business_scope',
+      key: 'business_scope',
+      width: 100,
+      render: (scope: string) => (
+        <Tag color={scopeColors[scope] || 'default'}>{scopeLabels[scope] || scope}</Tag>
+      ),
+    },
+    {
       title: 'Trace',
       dataIndex: 'trace_id',
       key: 'trace_id',
@@ -222,6 +244,15 @@ export default function AgentMonitorPage() {
       width: 100,
       render: (s: string) => (
         <Tag color={statusColors[s] || 'default'}>{statusLabels[s] || s}</Tag>
+      ),
+    },
+    {
+      title: '业务范围',
+      dataIndex: 'business_scope',
+      key: 'business_scope',
+      width: 100,
+      render: (scope: string) => (
+        <Tag color={scopeColors[scope] || 'default'}>{scopeLabels[scope] || scope}</Tag>
       ),
     },
     {
@@ -316,7 +347,18 @@ export default function AgentMonitorPage() {
               <Option value="failed">失败</Option>
               <Option value="pending">待运行</Option>
             </Select>
-            <Button icon={<SyncOutlined />} onClick={() => fetchData(statusFilter)}>
+            <Select
+              value={scopeFilter}
+              onChange={setScopeFilter}
+              style={{ width: 130 }}
+              allowClear
+              placeholder="全部业务范围"
+            >
+              <Option value="B2C">B2C 零售</Option>
+              <Option value="B2B">B2B 批发</Option>
+              <Option value="SHARED">共享</Option>
+            </Select>
+            <Button icon={<SyncOutlined />} onClick={() => fetchData(statusFilter, scopeFilter)}>
               刷新
             </Button>
           </Space>
@@ -330,7 +372,7 @@ export default function AgentMonitorPage() {
           loading={loading}
           size="small"
           pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1200 }}
         />
       </Card>
 
@@ -349,7 +391,7 @@ export default function AgentMonitorPage() {
           rowKey="id"
           size="small"
           pagination={{ pageSize: 10 }}
-          scroll={{ x: 700 }}
+          scroll={{ x: 820 }}
         />
       </Card>
     </div>

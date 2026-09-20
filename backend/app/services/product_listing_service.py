@@ -55,6 +55,136 @@ def is_restricted(product_name: str, sku: str = "") -> tuple[bool, str]:
     return False, ""
 
 
+# 上架图片齐套标准（硬约束）：主图 5 张 1:1 + 详情图 6 张 3:4
+REQUIRED_MAIN_IMAGES = 5
+REQUIRED_DETAIL_IMAGES = 6
+
+
+# --------------------------------------------------------------------------- #
+# 内部分类 → WooCommerce 真实分类 term id 映射
+# （WC 站点 term id 与内部 id 无关；此前硬编码 15 恰好是 WC 的 Uncategorized，
+#  导致所有商品落到"未分类"。id 取自 WC GET /products/categories。）
+# --------------------------------------------------------------------------- #
+WC_CATEGORY_KEYWORD_MAP: list[tuple[tuple[str, ...], int]] = [
+    # 露营家具：椅 / 桌 / 床
+    (("椅", "月亮椅", "折叠椅", "板凳", "凳", "chair", "stool", "lounger", "cot"), 119),  # Camping Chairs
+    (("桌", "table", "desk"), 120),  # Camping Tables
+    (("收纳柜", "置物架", "储物", "收纳", "storage", "organizer"), 121),  # Storage & Organizers
+    (("家具", "furniture"), 55),  # Camping Furniture
+    # 帐篷 / 遮蔽
+    (("帐篷", "天幕", "遮阳", "防潮垫", "tent", "tarp", "shelter", "canopy"), 53),  # Tents & Shelters
+    # 睡眠
+    (("睡袋", "sleeping bag"), 17),
+    (("睡垫", "防潮垫", "充气垫", "气垫", "枕头", "枕", "mattress", "pad", "pillow", "cot bed"), 54),  # Sleeping Gear
+    # 照明 / 电源
+    (("头灯", "headlamp"), 130),
+    (("营地灯", "露营灯", "台灯", "lantern"), 129),
+    (("灯", "照明", "手电", "充电宝", "电源", "light", "lamp", "flashlight", "power bank"), 22),  # Lighting & Power
+    # 炊具 / 餐具 / 厨房
+    (("烧烤", "烤炉", "烤网", "bbq", "grill", "barbecue"), 102),  # Cooking & Grills
+    (("锅", "炉", "灶", "炊具", "厨房", "cookware", "stove", "pot", "pan", "kettle"), 21),  # Cooking
+    (("餐具", "杯", "碗", "壶", "餐", "刀叉", "筷", "spoon", "bowl", "cup", "mug", "bottle", "tableware", "picnic"), 56),  # Cookware & Picnic
+    # 水具
+    (("水杯", "水壶", "水瓶", "保温杯", "water bottle", "tumbler", "hydration"), 94),  # Sports Bottles
+    # 背包 / 徒步
+    (("背包", "登山包", "双肩包", "腰包", "backpack", "rucksack", "daypack", "hydration pack"), 57),  # Backpacks & Hiking Gear
+    # 配件兜底
+    (("配件", "accessory", "gear"), 58),  # Outdoor Accessories
+]
+
+# 无法判断品类时的户外兜底分类（避免落入 Uncategorized=15）
+WC_DEFAULT_CATEGORY_ID = 58  # Outdoor Accessories
+
+
+def map_category_to_wc(product_name: str = "", internal_category: str = "") -> list[dict[str, int]]:
+    """按商品名 + 内部类目关键词映射到 WooCommerce 分类 term id。
+
+    命中第一个关键词组即返回；都不命中返回户外兜底分类，绝不返回 Uncategorized。
+    """
+    haystack = f"{product_name} {internal_category}".lower()
+    for keywords, wc_id in WC_CATEGORY_KEYWORD_MAP:
+        for kw in keywords:
+            if kw.lower() in haystack:
+                return [{"id": wc_id}]
+    return [{"id": WC_DEFAULT_CATEGORY_ID}]
+
+
+
+
+
+def _is_real_image_url(src: Any) -> bool:
+    """真实可上架图片：http(s) 远程图；排除 mock 的 data: SVG 占位图与空值。"""
+    if not isinstance(src, str):
+        return False
+    s = src.strip()
+    if not s:
+        return False
+    if s.startswith(("http://", "https://")):
+        return True
+    return False
+
+
+def _extract_src(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return item.get("src") or item.get("url") or item.get("image_url") or ""
+    return ""
+
+
+def check_image_gate(listing_data: dict[str, Any]) -> dict[str, Any]:
+    """
+    上架图片齐套门禁。
+
+    统计主图 / 详情图中的真实远程图片数量（mock 占位图、data: URI 不计）。
+    主图取 main_images/main_image_urls，详情图取 detail_images/detail_image_urls/
+    gallery_images；若都没有则回退到扁平 images（按总数 5+6=11 判定）。
+
+    Returns:
+        {"passed", "main_count", "detail_count", "reasons"}
+    """
+    def collect(*keys: str) -> list[str]:
+        for k in keys:
+            v = listing_data.get(k)
+            if isinstance(v, list) and v:
+                return [_extract_src(x) for x in v]
+        return []
+
+    main_raw = collect("main_images", "main_image_urls")
+    detail_raw = collect("detail_images", "detail_image_urls", "gallery_images")
+
+    main_count = sum(1 for s in main_raw if _is_real_image_url(s))
+    detail_count = sum(1 for s in detail_raw if _is_real_image_url(s))
+
+    categorized = bool(main_raw or detail_raw)
+    reasons: list[str] = []
+
+    if categorized:
+        if main_count < REQUIRED_MAIN_IMAGES:
+            reasons.append(f"主图不足：{main_count}/{REQUIRED_MAIN_IMAGES}（需 1:1 主图 5 张）")
+        if detail_count < REQUIRED_DETAIL_IMAGES:
+            reasons.append(f"详情图不足：{detail_count}/{REQUIRED_DETAIL_IMAGES}（需 3:4 详情图 6 张）")
+        passed = main_count >= REQUIRED_MAIN_IMAGES and detail_count >= REQUIRED_DETAIL_IMAGES
+    else:
+        flat = collect("images", "image_urls")
+        total = sum(1 for s in flat if _is_real_image_url(s))
+        main_count = min(total, REQUIRED_MAIN_IMAGES)
+        detail_count = max(0, total - REQUIRED_MAIN_IMAGES)
+        required_total = REQUIRED_MAIN_IMAGES + REQUIRED_DETAIL_IMAGES
+        if total < required_total:
+            reasons.append(
+                f"商品图不足：{total}/{required_total}（需主图 {REQUIRED_MAIN_IMAGES} 张 + 详情图 {REQUIRED_DETAIL_IMAGES} 张）"
+            )
+        passed = total >= required_total
+
+    return {
+        "passed": passed,
+        "main_count": main_count,
+        "detail_count": detail_count,
+        "reasons": reasons,
+    }
+
+
 def create_listing_queue(
     products: list[dict[str, Any]],
     auto_filter_restricted: bool = True,

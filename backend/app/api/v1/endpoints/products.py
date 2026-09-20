@@ -7,8 +7,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
-from app.schemas.product import ProductImportResult, ProductOut
+from app.schemas.product import (
+    ProductBatchDeleteRequest,
+    ProductDeleteResult,
+    ProductImportResult,
+    ProductOut,
+)
 from app.services import product_service
 
 router = APIRouter(prefix="/products", tags=["products 产品管理"])
@@ -84,6 +90,51 @@ async def list_products(
     return [ProductOut.model_validate(row) for row in rows]
 
 
+@router.post(
+    "/batch-delete",
+    response_model=ProductDeleteResult,
+    status_code=status.HTTP_200_OK,
+    summary="批量软删产品 / Batch soft-delete products",
+)
+async def batch_delete_products(
+    body: ProductBatchDeleteRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductDeleteResult:
+    """Soft-delete many products at once. Missing/foreign IDs are reported."""
+    return await product_service.soft_delete_products(
+        db,
+        workspace_id=workspace_id,
+        product_ids=body.product_ids,
+        trace_id=get_trace_id(),
+    )
+
+
+@router.delete(
+    "/{product_id}",
+    response_model=ProductDeleteResult,
+    status_code=status.HTTP_200_OK,
+    summary="软删单个产品 / Soft-delete one product",
+)
+async def delete_product(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductDeleteResult:
+    """Soft-delete a single product; 404 if it is missing or already deleted."""
+    result = await product_service.soft_delete_products(
+        db,
+        workspace_id=workspace_id,
+        product_ids=[product_id],
+        trace_id=get_trace_id(),
+    )
+    if result.deleted == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Product {product_id} not found",
+        )
+    return result
+
 
 @router.post(
     "/sync-woocommerce",
@@ -143,6 +194,7 @@ async def push_products_to_woocommerce(
                 select(Product.id).where(
                     Product.workspace_id == workspace_id,
                     Product.status == "active",
+                    Product.deleted_at.is_(None),
                 )
             )).scalars().all()
             product_ids = [str(r) for r in rows]

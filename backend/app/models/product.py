@@ -8,11 +8,12 @@ from uuid import uuid4
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
-    UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,12 +31,24 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    brand_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("brands.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft")
     # M5.13 Product Candidate lifecycle (candidate|approved|testing|winner|
     # rejected). NULL means the row is a downstream commerce product (e.g.
     # WooCommerce-synced), not a candidate. Decoupled from `status` which
     # stays the commerce/execution status.
     candidate_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # V3.0 selection funnel (docs/nuotao_product_score_v3.0.md §4); independent
+    # of candidate_status. NULL means the row is not in a V3 selection funnel.
+    funnel_stage: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    # Latest V1-V12 veto snapshot (list of rule ids / notes); history in
+    # product_nuotao_scores. Defaults to an empty list for new rows.
+    reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
@@ -45,10 +58,23 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
     dimensions: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True)
     target_market: Mapped[str] = mapped_column(String(16), nullable=False, default="US")
+    # Soft delete: NULL means the product is live; a timestamp hides it from all
+    # business reads while keeping the row for audit and later re-creation.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     __table_args__ = (
-        # SKU is unique within a workspace; used by CSV import upsert.
-        UniqueConstraint("workspace_id", "sku", name="uq_products_workspace_sku"),
+        # SKU is unique only among live rows within a workspace, so a soft-deleted
+        # SKU can be re-imported/re-created without a uniqueness conflict.
+        Index(
+            "uq_products_workspace_sku",
+            "workspace_id",
+            "sku",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
     )
 
     cost: Mapped["ProductCost | None"] = relationship(

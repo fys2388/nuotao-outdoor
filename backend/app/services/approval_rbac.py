@@ -20,13 +20,18 @@ at least one role per workspace (documented in ``docs/development.md``).
 from __future__ import annotations
 
 import logging
-from uuid import UUID
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.agent_scope import SHARED, normalize_scope, scope_compatible
 from app.core.config import get_settings
 from app.models.agent_platform import AgentApprovalRole
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +91,7 @@ async def check_approval_permission(
     actor: str,
     approval_type: str,
     action: str,
+    business_scope: str = SHARED,
 ) -> bool:
     """Return True when the actor may decide this approval type.
 
@@ -103,15 +109,21 @@ async def check_approval_permission(
             workspace_id,
         )
         return True
+    scope = normalize_scope(business_scope)
+    scoped_roles = [
+        role
+        for role in roles
+        if scope_compatible(scope, role.business_scope)
+    ]
     required = permission_name(approval_type, action)
-    for role in roles:
+    for role in scoped_roles:
         if actor not in (role.actors or []):
             continue
         if required in (role.permissions or []):
             return True
     raise ApprovalRBACError(
         f"actor '{actor}' lacks permission '{required}' for approval type "
-        f"'{approval_type}' (workspace {workspace_id})"
+        f"'{approval_type}' in scope '{scope}' (workspace {workspace_id})"
     )
 
 
@@ -126,6 +138,7 @@ async def check_actor_permission(
     workspace_id: UUID,
     actor: str,
     permission: str,
+    business_scope: str = SHARED,
 ) -> bool:
     """Generic actor -> permission check for the M5.14 identity chain.
 
@@ -145,11 +158,15 @@ async def check_actor_permission(
             workspace_id,
         )
         return True
+    scope = normalize_scope(business_scope)
     for role in roles:
+        if not scope_compatible(scope, role.business_scope):
+            continue
         if actor in (role.actors or []) and permission in (role.permissions or []):
             return True
     raise ApprovalRBACError(
-        f"actor '{actor}' lacks permission '{permission}' (workspace {workspace_id})"
+        f"actor '{actor}' lacks permission '{permission}' in scope '{scope}' "
+        f"(workspace {workspace_id})"
     )
 
 
@@ -160,10 +177,12 @@ async def create_role(
     role_name: str,
     permissions: list[str],
     actors: list[str],
+    business_scope: str = SHARED,
     enabled: bool = True,
     trace_id: str | None = None,
 ) -> AgentApprovalRole:
     """Create (or replace) one approval role; conflicts are overwritten."""
+    scope = normalize_scope(business_scope)
     existing = (
         await session.execute(
             select(AgentApprovalRole).where(
@@ -175,12 +194,14 @@ async def create_role(
     if existing is not None:
         existing.permissions = permissions
         existing.actors = actors
+        existing.business_scope = scope
         existing.enabled = enabled
         role = existing
     else:
         role = AgentApprovalRole(
             workspace_id=workspace_id,
             role_name=role_name,
+            business_scope=scope,
             permissions=permissions,
             actors=actors,
             enabled=enabled,
@@ -192,13 +213,21 @@ async def create_role(
     return role
 
 
-async def list_roles(session: AsyncSession, *, workspace_id: UUID) -> list[AgentApprovalRole]:
+async def list_roles(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    business_scope: str | None = None,
+) -> list[AgentApprovalRole]:
     """List the approval roles of a workspace."""
+    filters = [AgentApprovalRole.workspace_id == workspace_id]
+    if business_scope is not None:
+        filters.append(AgentApprovalRole.business_scope == normalize_scope(business_scope))
     rows = (
         (
             await session.execute(
                 select(AgentApprovalRole)
-                .where(AgentApprovalRole.workspace_id == workspace_id)
+                .where(*filters)
                 .order_by(AgentApprovalRole.role_name)
             )
         )

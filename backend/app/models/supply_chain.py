@@ -214,7 +214,11 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
 
 
 class ShipmentRecord(Base, TimestampMixin, WorkspaceMixin):
-    """One shipment with carrier/tracking and delivery outcome (M4.1)."""
+    """One shipment with carrier/tracking and delivery outcome (M4.1).
+
+    ``purchase_order_id`` covers inbound supplier shipments;
+    ``b2b_order_id`` covers outbound B2B customer shipments.
+    """
 
     __tablename__ = "shipment_records"
 
@@ -222,6 +226,12 @@ class ShipmentRecord(Base, TimestampMixin, WorkspaceMixin):
     purchase_order_id: Mapped[Uuid | None] = mapped_column(
         Uuid,
         ForeignKey("purchase_orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    b2b_order_id: Mapped[Uuid | None] = mapped_column(
+        Uuid,
+        ForeignKey("b2b_orders.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

@@ -15,10 +15,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import (
+    get_current_user,
+    get_current_workspace_id,
+    require_role,
+)
 from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
-from app.core.workspace import get_workspace_id
 from app.schemas.agent_operations import (
     AlertAckRequest,
     AlertListOut,
@@ -31,6 +35,7 @@ from app.schemas.agent_operations import (
     DlqReplayProposeRequest,
     RuntimeOverviewOut,
 )
+from app.schemas.user import UserResponse
 from app.services import (
     agent_queue,
     alert_service,
@@ -43,7 +48,7 @@ from app.services.approval_rbac import ApprovalRBACError
 router = APIRouter(tags=["agent-operations"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
-WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+WorkspaceId = Annotated[UUID, Depends(get_current_workspace_id)]
 logger = logging.getLogger(__name__)
 
 
@@ -77,6 +82,7 @@ async def list_alerts(
     to_dt: Annotated[datetime | None, Query()] = None,
     limit: int = 50,
     offset: int = 0,
+    _user: UserResponse = Depends(get_current_user),
 ) -> AlertListOut:
     """Return alerts, newest first, filtered by agent/type/status/time."""
     items, total = await alert_service.list_alerts(
@@ -103,7 +109,11 @@ async def list_alerts(
     response_model=list[AlertOut],
     summary="Run the alert evaluation pass (opens new alerts only)",
 )
-async def evaluate_alerts(db: DbSession, workspace_id: WorkspaceId) -> list[AlertOut]:
+async def evaluate_alerts(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
+) -> list[AlertOut]:
     """Evaluate every alert rule against live state; returns new alerts."""
     backend = task_queue.get_queue_backend()
     created = await alert_service.evaluate_alerts(
@@ -121,6 +131,7 @@ async def get_alert(
     alert_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(get_current_user),
 ) -> AlertOut:
     """Return one alert (workspace-scoped)."""
     from app.services.alert_service import _load_alert
@@ -142,6 +153,7 @@ async def acknowledge_alert(
     request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> AlertOut:
     """Acknowledge the alert; the actor and note are audited."""
     try:
@@ -169,6 +181,7 @@ async def resolve_alert(
     request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> AlertOut:
     """Resolve the alert; the actor and note are audited."""
     try:
@@ -202,11 +215,15 @@ async def list_approvals(
     approval_type: Annotated[str | None, Query()] = None,
     agent_id: Annotated[UUID | None, Query()] = None,
     task_id: Annotated[UUID | None, Query()] = None,
+    business_scope: Annotated[
+        str | None, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = None,
     trace_id: Annotated[str | None, Query()] = None,
     from_dt: Annotated[datetime | None, Query()] = None,
     to_dt: Annotated[datetime | None, Query()] = None,
     limit: int = 50,
     offset: int = 0,
+    _user: UserResponse = Depends(get_current_user),
 ) -> ApprovalListOut:
     """Return approval requests, newest first, with optional filters."""
     items, total = await approval_service.list_approvals(
@@ -216,6 +233,7 @@ async def list_approvals(
         approval_type=approval_type,
         agent_id=agent_id,
         task_id=task_id,
+        business_scope=business_scope,
         trace_id=trace_id,
         from_dt=from_dt,
         to_dt=to_dt,
@@ -239,6 +257,7 @@ async def get_approval(
     approval_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(get_current_user),
 ) -> ApprovalOut:
     """Return one approval request (workspace-scoped)."""
     approval = await approval_service._load_approval(
@@ -260,6 +279,7 @@ async def approve_approval(
     request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> ApprovalOut:
     """Approve the request and dispatch to the underlying service."""
     backend = task_queue.get_queue_backend()
@@ -289,6 +309,7 @@ async def reject_approval(
     request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> ApprovalOut:
     """Reject the request and dispatch to the underlying service."""
     backend = task_queue.get_queue_backend()
@@ -323,6 +344,7 @@ async def propose_dlq_replay(
     body: DlqReplayProposeRequest,
     db: DbSession,
     workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> DlqReplayProposalOut:
     """Create a replay proposal; it only runs after a human approval."""
     try:
@@ -358,7 +380,11 @@ async def propose_dlq_replay(
     response_model=RuntimeOverviewOut,
     summary="Runtime Dashboard summary (one request)",
 )
-async def runtime_overview(db: DbSession, workspace_id: WorkspaceId) -> RuntimeOverviewOut:
+async def runtime_overview(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    _user: UserResponse = Depends(get_current_user),
+) -> RuntimeOverviewOut:
     """Return agents/workers/queue/executions/retry/DLQ/approvals/alerts/cost."""
     backend = task_queue.get_queue_backend()
     overview = await runtime_ops.runtime_overview(

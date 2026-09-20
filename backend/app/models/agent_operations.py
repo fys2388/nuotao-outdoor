@@ -22,6 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -108,6 +109,7 @@ class AgentApproval(Base, TimestampMixin, WorkspaceMixin):
     id: Mapped[Any] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
     approval_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    business_scope: Mapped[str] = mapped_column(String(8), nullable=False, default="SHARED")
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
     target_task_id: Mapped[Any | None] = mapped_column(
@@ -129,6 +131,10 @@ class AgentApproval(Base, TimestampMixin, WorkspaceMixin):
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "business_scope IN ('B2C', 'B2B', 'SHARED')",
+            name="ck_agent_approvals_business_scope",
+        ),
         # One pending/warning DLQ replay proposal per task at a time: two
         # approvers cannot both replay the same dead letter (the row claim +
         # the task state guard in the replay service protect the execution).
@@ -146,4 +152,9 @@ class AgentApproval(Base, TimestampMixin, WorkspaceMixin):
         Index("ix_agent_approvals_ws_type", "workspace_id", "approval_type"),
         Index("ix_agent_approvals_ws_entity", "workspace_id", "entity_type", "entity_id"),
         Index("ix_agent_approvals_ws_trace", "workspace_id", "trace_id"),
+        Index(
+            "ix_agent_approvals_ws_business_scope",
+            "workspace_id",
+            "business_scope",
+        ),
     )

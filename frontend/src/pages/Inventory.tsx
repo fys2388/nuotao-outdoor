@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, Spin, Alert, Row, Col, Card, Statistic, Timeline, Badge, message } from 'antd'
+import { Table, Tag, Button, Space, Modal, Form, Input, InputNumber, Select, Spin, Alert, Row, Col, Card, Statistic, Timeline, Badge, Typography, message } from 'antd'
 import { DatabaseOutlined, PlusOutlined, ShopOutlined, SyncOutlined, CloudUploadOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
+
+const { Text } = Typography
 
 interface Warehouse {
   id: string

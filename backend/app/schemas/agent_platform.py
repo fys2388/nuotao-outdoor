@@ -1,10 +1,12 @@
 """Agent platform productionization schemas (M5.5)."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+BusinessScope = Literal["B2C", "B2B", "SHARED"]
 
 # --------------------------------------------------------------------------- #
 # Agent lifecycle versions
@@ -18,6 +20,7 @@ class VersionPublishRequest(BaseModel):
     prompt_name: str | None = Field(default=None, max_length=64)
     prompt_version: str = Field(default="v1", min_length=1, max_length=16)
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
+    business_scope: BusinessScope = "SHARED"
     # ``model_settings`` mirrors the ORM ``model_config`` column (the name
     # ``model_config`` is reserved by pydantic and cannot be a field).
     model_settings: dict[str, Any] = Field(default_factory=dict)
@@ -36,6 +39,7 @@ class VersionOut(BaseModel):
     workspace_id: UUID
     agent_id: UUID
     version: str
+    business_scope: str
     prompt_name: str | None = None
     prompt_version: str
     config_snapshot: dict[str, Any]
@@ -76,6 +80,7 @@ class ApprovalRoleCreate(BaseModel):
     """Create/replace an approval RBAC role."""
 
     role_name: str = Field(min_length=1, max_length=64)
+    business_scope: BusinessScope = "SHARED"
     permissions: list[str] = Field(default_factory=list)
     actors: list[str] = Field(default_factory=list)
     enabled: bool = True
@@ -89,6 +94,7 @@ class ApprovalRoleOut(BaseModel):
     id: UUID
     workspace_id: UUID
     role_name: str
+    business_scope: str
     permissions: list[Any]
     actors: list[Any]
     enabled: bool

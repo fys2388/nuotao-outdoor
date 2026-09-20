@@ -51,6 +51,7 @@ from app.api.v1.endpoints import (
     marketing,
     marketing_learning,
     notifications,
+    nuotao_selection,
     newton_agent,
     operation_logs,
     orders,
@@ -87,6 +88,13 @@ api_router.include_router(i18n_tax.router)
 api_router.include_router(events.router)
 api_router.include_router(identity.router)
 api_router.include_router(rules.router)
+# [listing-gate hotfix] Gate-controlled publish route. Registered before
+# products.router so POST /products/{id}/push-woocommerce is served by the
+# gated endpoint; all other products.py routes stay intact.
+import importlib as _listing_gate_il
+api_router.include_router(
+    _listing_gate_il.import_module('app.api.v1.endpoints.listing_publish').router
+)
 api_router.include_router(products.router)
 api_router.include_router(product_analysis.router)
 api_router.include_router(product_pipeline.router)
@@ -107,6 +115,7 @@ api_router.include_router(product_intelligence.candidate_router)
 api_router.include_router(product_listing.router)
 api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
+api_router.include_router(nuotao_selection.router)
 api_router.include_router(seo.router)
 api_router.include_router(sourcing.router)
 api_router.include_router(sourcing_enhanced.router)

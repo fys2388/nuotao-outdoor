@@ -336,7 +336,7 @@ export default function PurchaseOrdersPage() {
               showTotal: (total) => `共 ${total} 条订单`,
             }}
             locale={{
-              emptyText: <Empty description="暂无采购订单，点击"新建采购单"创建" />,
+              emptyText: <Empty description="暂无采购订单，点击新建采购单创建" />,
             }}
           />
         </Spin>
@@ -386,7 +386,6 @@ export default function PurchaseOrdersPage() {
           </div>
         )}
       </Modal>
-    </div>
 
       {/* 新建采购单弹窗 */}
       <Modal

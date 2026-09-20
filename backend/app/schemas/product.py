@@ -48,3 +48,16 @@ class ProductOut(BaseModel):
     target_market: str
     created_at: datetime
     updated_at: datetime
+
+
+class ProductBatchDeleteRequest(BaseModel):
+    """Request body for batch soft-deleting products."""
+
+    product_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class ProductDeleteResult(BaseModel):
+    """Outcome of a single or batch soft-delete operation."""
+
+    deleted: int
+    not_found: list[UUID] = Field(default_factory=list)

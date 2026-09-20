@@ -1,264 +1,304 @@
-# B2B 代理商门户（端子）设计文档
+# Nuotao B2B 客户门户架构设计
 
-> 版本：v1.0
-> 状态：设计中
-> 创建日期：2026-09-09
-> 关联：`docs/development_roadmap.md` M6 里程碑、`docs/business_context.md` 阶段3
+> 版本：v2.1  
+> 状态：P2 首期已完成并验收  
+> 创建日期：2026-09-09  
+> 最近更新：2026-09-13  
+> 关联：`docs/development_roadmap.md` M6、`docs/business_decisions/ADR/SALES-001.md`、`docs/business_decisions/ADR/SALES-002.md`
 
 ---
 
-## 1. 目标与范围
+## 1. 目标与边界
 
 ### 1.1 目标
 
-搭建独立的 B2B 代理商门户端子（`b2b.nuotaooutdoor.com`），使海外代理商能够：
+B2B 客户门户面向已审核激活的代理商、批发商和小 B 客户，提供以下自助能力：
 
-- 自助登录门户
-- 浏览批发价目表（按代理商等级差异化定价）
-- 在线批量下单
-- 查询订单状态与物流
-- 查看账户信用额度与账单
+- 使用独立 B2B 身份登录。
+- 浏览当前客户可见的批发价、MOQ 和库存。
+- 提交 RFQ 询盘并查看处理进度。
+- 查看已发送的报价版本，接受或拒绝报价。
+- 查看合同，以客户身份签署合同。
+- 在合同生效后，将已接受报价幂等转换为 B2B 订单。
+- 查询自己的订单、账户额度和账期信息。
 
-### 1.2 范围（MVP）
+### 1.2 明确不做
 
-| 模块 | 包含 | 不包含（后续迭代） |
-|---|---|---|
-| 代理商认证 | 邮箱/密码登录、JWT、密码重置 | 社交登录、SSO |
-| 商品目录 | 商品列表、详情、批发价、库存 | 高级筛选、对比、收藏 |
-| 下单 | 购物车、批量下单、订单提交 | 在线支付（先账期/对公转账） |
-| 订单管理 | 订单列表、详情、状态跟踪 | 退换货流程、发票 |
-| 账户中心 | 代理商资料、信用额度、账单 | 佣金报表、文档下载 |
+- 门户客户不能创建、审批或发送报价。
+- 门户客户不能代表公司签署合同。
+- 门户客户不能修改价格、折扣、账期或信用额度。
+- 门户客户不能访问其他客户、其他工作区或内部经营数据。
+- 门户不提供在线支付；收款和核销仍由内部财务流程处理。
 
-### 1.3 与现有系统的关系
+### 1.3 职责边界
 
-- **内部管理控制台**（`admin.nuotaooutdoor.com`）：运营人员管理代理商审批、定价、订单履约。现有 `B2BAgents.tsx` 页面升级为对接真实 API。
-- **B2B 代理门户**（`b2b.nuotaooutdoor.com`）：面向代理商的自助站点，独立部署。
-- **DTC 独立站**（`nuotaooutdoor.com`）：面向消费者，不受影响。
-- **共享后端**：同一个 FastAPI 服务，B2B 门户 API 使用独立路由前缀 `/api/v1/b2b-portal/`，代理商认证独立于内部用户认证。
-
----
-
-## 2. 域名与部署架构
-
-```
-                    ┌─────────────────────────┐
-                    │   Nginx (Hetzner VPS)    │
-                    │                         │
-  nuotaooutdoor.com │── server_block ──► WooCommerce (Docker)
-  admin.nuotao...   │── server_block ──► 前端控制台 + FastAPI /api
-  b2b.nuotao...     │── server_block ──► B2B门户前端 + FastAPI /api/v1/b2b-portal
-                    └─────────────────────────┘
+```text
+内部管理控制台                          B2B 客户门户
+----------------                      ----------------
+客户审核与授信                         登录与账户自助
+价格簿、版本与审批                     查看客户可见价格
+RFQ 受理与报价                         提交 RFQ
+报价审批与发送                         接受 / 拒绝报价
+合同起草与公司签署                     客户签署
+公司签署并确认合同生效                 查看合同状态
+履约、开票、收款与核销                 查看订单、额度和账期
+高风险管理操作                         仅触发有明确规则的客户动作
 ```
 
-- **子域名**：`b2b.nuotaooutdoor.com`
-- **SSL**：Let's Encrypt（certbot --nginx）
-- **前端部署路径**：`/var/www/b2b-portal/`
-- **API 反代**：`b2b.nuotaooutdoor.com/api/` → `127.0.0.1:8000/api/`
+---
+
+## 2. 架构原则
+
+1. **共用底座，门户分流**：门户复用 `b2b_agents`、价格簿、RFQ、报价、合同、订单和客户账户模型，不新建第二套销售链路。
+2. **客户范围硬隔离**：每次读写同时校验 `workspace_id` 与 `agent_id`，客户端不能通过请求头选择租户。
+3. **令牌类型隔离**：门户只接受 `token_type=b2b_access`，内部用户令牌不能访问门户接口。
+4. **服务层复用状态机**：门户通过既有 B2B Sales Service 执行状态迁移，不复制报价、合同和订单规则。
+5. **最小信息披露**：门户响应不返回成本快照、内部审批人、内部备注或其他客户数据。
+6. **幂等与审计**：重复接受、重复签署和重复转订单不得产生重复业务记录；关键动作写入事件日志。
+7. **人工审批边界**：报价发送、公司签署和合同生效继续由内部授权人员完成。
 
 ---
 
-## 3. 数据模型设计
+## 3. 业务链路
 
-### 3.1 b2b_agents（代理商账号）
-
-独立于内部 `users` 表，代理商是外部实体。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| id | UUID PK | |
-| agent_number | String(32) UNIQUE | 代理商编号 AG-YYYYMMDD-XXXX |
-| company_name | String(200) | 公司名称 |
-| contact_name | String(100) | 联系人 |
-| email | String(255) UNIQUE | 登录邮箱 |
-| phone | String(50) | |
-| country | String(64) | |
-| city | String(100) | |
-| address | String(500) | |
-| hashed_password | String(255) | |
-| tier | String(16) | bronze/silver/gold/platinum |
-| status | String(16) | pending/active/suspended/rejected |
-| commission_rate | Numeric(5,2) | 佣金率 % |
-| discount_percent | Numeric(5,2) | 额外折扣 % |
-| credit_limit | Numeric(12,2) | 信用额度 |
-| current_balance | Numeric(12,2) | 当前欠款 |
-| payment_terms_days | Integer | 账期天数 |
-| currency | String(8) | 结算货币，默认 USD |
-| notes | Text | 运营备注 |
-| last_login_at | DateTime | |
-| created_at / updated_at | DateTime | |
-
-### 3.2 b2b_product_prices（分级定价）
-
-商品批发价按等级配置，支持单个代理商覆盖。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| id | UUID PK | |
-| product_id | UUID FK → products.id | |
-| tier | String(16) NULL | bronze/silver/gold/platinum，NULL 表示代理商专属 |
-| agent_id | UUID FK → b2b_agents.id NULL | 专属定价时指定 |
-| wholesale_price | Numeric(12,2) | 批发单价 |
-| moq | Integer | 最小起订量 |
-| currency | String(8) | |
-| is_active | Boolean | |
-| created_at / updated_at | DateTime | |
-
-唯一约束：`(product_id, tier)` 当 agent_id IS NULL；`(product_id, agent_id)` 当 tier IS NULL。
-
-定价优先级：代理商专属 > 等级定价 > 商品默认零售价 × (1 - discount_percent)。
-
-### 3.3 b2b_orders（B2B 订单）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| id | UUID PK | |
-| order_number | String(32) UNIQUE | B2B-YYYYMMDD-XXXX |
-| agent_id | UUID FK → b2b_agents.id | |
-| status | String(16) | pending/confirmed/processing/shipped/delivered/cancelled |
-| payment_status | String(16) | unpaid/partial/paid/overdue |
-| subtotal | Numeric(12,2) | |
-| discount_amount | Numeric(12,2) | |
-| shipping_cost | Numeric(12,2) | |
-| total | Numeric(12,2) | |
-| currency | String(8) | |
-| shipping_address | JSONB | 收货地址 |
-| payment_due_date | Date | 账期到期日 |
-| tracking_number | String(100) NULL | |
-| tracking_carrier | String(50) NULL | |
-| notes | Text | |
-| created_at / updated_at | DateTime | |
-
-### 3.4 b2b_order_items（订单明细）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| id | UUID PK | |
-| order_id | UUID FK → b2b_orders.id | |
-| product_id | UUID FK → products.id | |
-| product_name | String(255) | 快照 |
-| sku | String(64) | 快照 |
-| quantity | Integer | |
-| unit_price | Numeric(12,2) | 快照（下单时批发价） |
-| subtotal | Numeric(12,2) | |
-
----
-
-## 4. API 设计
-
-所有 B2B 门户 API 前缀：`/api/v1/b2b-portal`
-
-### 4.1 认证
-
-| 方法 | 路径 | 说明 | 鉴权 |
-|---|---|---|---|
-| POST | /auth/login | 邮箱密码登录，返回 JWT | 公开 |
-| GET | /auth/me | 当前代理商信息 | Bearer |
-| POST | /auth/change-password | 修改密码 | Bearer |
-
-JWT payload 包含 `sub`（agent_id）、`role: "b2b_agent"`、`tier`。
-
-### 4.2 商品
-
-| 方法 | 路径 | 说明 | 鉴权 |
-|---|---|---|---|
-| GET | /products | 商品列表（含该代理商批发价、库存） | Bearer |
-| GET | /products/{id} | 商品详情 | Bearer |
-
-查询参数：`page`、`page_size`、`category`、`search`、`in_stock_only`。
-
-### 4.3 购物车（前端 localStorage，不存后端）
-
-MVP 阶段购物车存前端 localStorage，下单时直接提交。
-
-### 4.4 订单
-
-| 方法 | 路径 | 说明 | 鉴权 |
-|---|---|---|---|
-| POST | /orders | 创建订单（提交购物车） | Bearer |
-| GET | /orders | 我的订单列表 | Bearer |
-| GET | /orders/{id} | 订单详情（含明细） | Bearer |
-
-### 4.5 账户
-
-| 方法 | 路径 | 说明 | 鉴权 |
-|---|---|---|---|
-| GET | /account/summary | 账户概览（信用额度、余额、账期） | Bearer |
-| GET | /account/transactions | 账单流水 | Bearer |
-
----
-
-## 5. 前端门户设计
-
-### 5.1 技术栈
-
-- React 18 + Vite + TypeScript（与控制台一致）
-- Ant Design 6
-- 独立构建产物，部署到 `/var/www/b2b-portal/`
-- API base：`/api/v1/b2b-portal`（同域反代）
-
-### 5.2 页面结构
-
-```
-/login                    登录页
-/                         首页（品牌介绍 + 热门商品）
-/products                 商品列表
-/products/:id             商品详情
-/cart                     购物车
-/checkout                 确认下单
-/orders                   我的订单
-/orders/:id               订单详情
-/account                  账户中心
+```text
+客户门户提交 RFQ
+        |
+        v
+内部受理 RFQ
+        |
+        v
+内部创建报价草稿 -> 内部审批发送
+        |
+        v
+客户门户接受或拒绝报价
+        |
+        v
+内部创建合同 -> 发起签署
+        |
+        +----------------------+
+        |                      |
+客户门户客户签署          内部公司签署
+        |                      |
+        +----------+-----------+
+                   |
+                   v
+              合同自动生效
+                   |
+                   v
+        客户门户幂等转换为订单
+                   |
+                   v
+        WMS 预占 -> 出库 -> TMS -> 应收
 ```
 
-### 5.3 关键交互
-
-- 未登录访问商品页 → 跳转登录（B2B 价格不公开）
-- 商品列表显示批发价（按登录代理商等级）、MOQ、库存
-- 购物车支持修改数量、MOQ 校验
-- 下单时显示信用额度占用、账期到期日
-- 订单详情显示物流跟踪号（如有）
-
 ---
 
-## 6. 安全与合规
+## 4. 数据模型映射
 
-1. **认证隔离**：代理商 JWT 与内部用户 JWT 使用不同的 token type claim（`token_type: "b2b_access"`），防止跨域越权。
-2. **数据隔离**：所有 B2B 门户 API 强制过滤 `agent_id = current_agent.id`，代理商只能看到自己的订单和数据。
-3. **价格保密**：批发价仅对已登录且状态为 active 的代理商可见。
-4. **PII 保护**：代理商地址、电话等字段加密存储（L4 级别），日志脱敏。
-5. **限流**：登录接口限流（5次/分钟/IP），防止暴力破解。
-6. **审批流**：新代理商注册需运营审批（status=pending → active），MVP 阶段由运营在后台手动创建账号。
+门户不新增一套重复主表，直接复用以下模型：
 
----
-
-## 7. 实施步骤
-
-| 步骤 | 内容 | 产出 |
+| 业务对象 | 数据模型 | 门户权限 |
 |---|---|---|
-| 1 | 数据模型 + Alembic 迁移 | `b2b_agent.py`、迁移文件 |
-| 2 | B2B 门户 API（认证、商品、订单、账户） | `b2b_portal.py` 端点 + `b2b_portal_service.py` |
-| 3 | 前端 B2B 门户 | `frontend-b2b/` 独立项目 |
-| 4 | 内部控制台 B2B 管理对接真实 API | 升级 `B2BAgents.tsx` |
-| 5 | Nginx 配置 + SSL + 部署 | 部署脚本、上线 |
-| 6 | 测试验证 | 单元测试 + 端到端验证 |
+| 门户账号 | `b2b_agents` | 只能读取和修改自己的登录资料 |
+| 客户账户 | `customer_accounts` | 只读自己的账期、信用和余额摘要 |
+| 价格 | `b2b_price_books`、`b2b_price_versions`、`b2b_price_tiers` | 只读当前已发布且客户可见的价格 |
+| RFQ | `b2b_rfqs`、`b2b_rfq_items` | 创建自己的 RFQ，只读自己的记录 |
+| 报价 | `b2b_quotes`、`b2b_quote_items` | 只读已发送及后续状态，不读取草稿和待审批报价 |
+| 合同 | `b2b_contracts` | 只读自己的合同，只能登记客户方签署 |
+| 订单 | `b2b_orders`、`b2b_order_items` | 只读自己的订单和物流状态 |
+| 审计 | `event_log` | 不直接暴露，内部审计使用 |
+
+迁移 `0042` 为报价补充 `accepted_by`、`rejected_by`，用于区分内部操作与客户门户决策人。
 
 ---
 
-## 8. 后续迭代（Backlog）
+## 5. 状态与可见性
 
-- 代理商自助注册 + 审批流
-- 在线支付（Stripe B2B / PayPal）
-- 退换货流程
-- 佣金报表与自动结算
-- B2B 开放 API（带 API Key + 配额）
-- 多语言（德语等）
-- 商品高级筛选与收藏
-- 文档下载中心（产品手册、认证文件）
+### 5.1 RFQ
+
+| 状态 | 门户可见 | 客户可操作 |
+|---|---|---|
+| `draft` | 否 | 无 |
+| `submitted` | 是 | 查看 |
+| `in_review` | 是 | 查看 |
+| `quoted` | 是 | 查看关联报价 |
+| `won` | 是 | 查看 |
+| `lost` | 是 | 查看 |
+| `cancelled` | 是 | 查看 |
+
+门户创建 RFQ 时在同一业务操作内进入 `submitted`，不向客户开放内部草稿。
+
+### 5.2 报价
+
+| 状态 | 门户可见 | 客户可操作 |
+|---|---|---|
+| `draft` | 否 | 无 |
+| `pending_approval` | 否 | 无 |
+| `sent` | 是 | 接受或拒绝 |
+| `accepted` | 是 | 查看 |
+| `rejected` | 是 | 查看 |
+| `expired` | 是 | 查看 |
+| `converted` | 是 | 查看关联订单 |
+| `cancelled` | 否 | 无 |
+
+只有 `sent` 且未过期的报价可以接受；接受和拒绝均记录操作人、时间和事件。
+
+### 5.3 合同
+
+| 状态 | 门户可见 | 客户可操作 |
+|---|---|---|
+| `draft` | 否 | 无 |
+| `pending_signature` | 是 | 客户签署 |
+| `active` | 是 | 查看并触发订单转换 |
+| `expired` | 是 | 查看 |
+| `terminated` | 是 | 查看 |
+| `cancelled` | 否 | 无 |
+
+客户签署只填写合同中的客户方签名；公司签署仍由内部管理端完成。双方签署后合同自动生效。
 
 ---
 
-## 9. 变更记录
+## 6. API 契约
+
+前缀：`/api/v1/b2b-portal`
+
+### 6.1 认证与账户
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/applications` | 公开提交代理商申请 |
+| `POST` | `/auth/login` | 代理商登录，返回 `b2b_access` 令牌 |
+| `GET` | `/auth/me` | 当前代理商资料 |
+| `POST` | `/auth/change-password` | 修改密码 |
+| `GET` | `/account/summary` | 信用、余额和订单摘要 |
+
+### 6.2 商品
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/products` | 客户可见商品、批发价、MOQ 和库存 |
+| `GET` | `/products/{id}` | 商品详情 |
+
+### 6.3 RFQ
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/rfqs` | 使用当前客户身份创建并提交 RFQ |
+| `GET` | `/rfqs` | 当前客户的 RFQ 列表 |
+| `GET` | `/rfqs/{id}` | 当前客户的 RFQ 详情 |
+
+创建 RFQ 时忽略客户端传入的 `agent_id`，服务端固定使用认证身份。
+
+### 6.4 报价
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/quotes` | 当前客户可见的报价列表 |
+| `GET` | `/quotes/{id}` | 报价详情及明细 |
+| `POST` | `/quotes/{id}/accept` | 客户接受报价 |
+| `POST` | `/quotes/{id}/reject` | 客户拒绝报价并记录原因 |
+
+### 6.5 合同
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/contracts` | 当前客户可见的合同列表 |
+| `GET` | `/contracts/{id}` | 合同详情及报价明细 |
+| `POST` | `/contracts/{id}/sign` | 登记客户方签署 |
+| `POST` | `/contracts/{id}/convert-to-order` | 幂等转换生效合同对应的已接受报价 |
+
+### 6.6 订单
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/orders` | 当前客户订单列表 |
+| `GET` | `/orders/{id}` | 当前客户订单详情 |
+
+---
+
+## 7. 安全与数据隔离
+
+1. **认证**：门户 JWT 使用 `token_type=b2b_access`，包含 `sub=agent_id` 和 `workspace_id`。
+2. **账号状态**：只有 `active` 代理商可以登录和调用受保护接口。
+3. **工作区**：工作区只来自令牌，`X-Workspace-Id` 只能用于一致性校验，不能切换租户。
+4. **客户范围**：报价、合同、RFQ 和订单查询必须包含 `agent_id=current_agent.id`。
+5. **价格保密**：只返回当前客户可解析的已发布价格，不公开内部成本价。
+6. **响应最小化**：不返回 `cost_snapshot`、内部 `created_by`、审批人和其他客户字段。
+7. **登录保护**：生产环境必须对登录接口增加 IP 和账号维度限流。
+8. **PII**：日志与事件记录不得写入密码、完整地址或支付凭证。
+
+---
+
+## 8. 并发、幂等与审计
+
+- 报价状态变更和合同签署使用数据库行锁，防止并发请求越过状态机。
+- 已接受或已拒绝的报价重复操作返回冲突，不得静默覆盖。
+- 同一客户重复签署合同返回冲突；另一方签署后合同自动生效。
+- 同一报价重复转换订单返回已有订单，不重复占用信用或增加客户余额。
+- 所有状态变更使用认证客户身份作为 actor 写入 `event_log`。
+- 内部端点和门户端点共享同一状态机，禁止前端自行推断状态。
+
+---
+
+## 9. 前端结构
+
+门户与内部管理控制台共享构建仓库，但使用独立入口和独立令牌：
+
+```text
+/portal/login        客户登录
+/portal              客户工作台
+/portal/rfqs         RFQ 提交与状态
+/portal/quotes       报价查看与决策
+/portal/contracts    合同查看与签署
+/portal/orders       订单与物流
+/portal/account      账户、信用与账期
+```
+
+门户令牌存储键为 `b2b_portal_token`，不得复用 `admin_token`。门户不能加载内部管理端导航，也不通过前端传入 `agent_id` 或 `workspace_id`。
+
+---
+
+## 10. 实施与验收
+
+### 10.1 实施顺序
+
+1. 更新门户架构与 ADR。
+2. 迁移 `0042`：报价客户决策人字段。
+3. 扩展 B2B Sales Service 的提交、行锁和审计。
+4. 增加门户 RFQ、报价、合同、订单自助 API。
+5. 增加门户前端入口、登录、工作台和四个业务视图。
+6. 增加服务测试、API 权限测试、PostgreSQL 迁移往返和 Playwright 验收。
+
+### 10.2 验收标准
+
+- 客户 A 无法读取、列表查询或操作客户 B 的 RFQ、报价、合同和订单。
+- 内部用户令牌不能访问任何门户受保护接口。
+- 门户不能通过请求头或请求体切换客户身份。
+- 草稿和待审批报价不出现在门户。
+- 过期或非 `sent` 报价不能接受。
+- 客户签署后合同只在公司也签署后生效。
+- 重复转订单返回同一订单，不重复占用信用。
+- 门户响应不包含成本快照和内部审批人。
+- 后端测试、迁移往返、前端类型检查、构建和浏览器验收全部通过。
+
+---
+
+## 11. 后续迭代
+
+- 代理商自助注册 + 邮件验证 + 审批通知。
+- 外部电子签平台和签署文件哈希。
+- 在线支付、账单下载和多币种对账。
+- 退换货、佣金、返利和年度协议。
+- 多语言门户与实时物流轨迹。
+- 开放 API、API Key 和调用配额。
+
+---
+
+## 12. 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v2.1 | 2026-09-13 | P2 首期完成：RFQ、报价决策、客户签署、合同转订单、独立令牌、范围隔离、迁移往返和 Chrome 端到端验收通过 |
+| v2.0 | 2026-09-13 | 从早期商品下单门户升级为 RFQ、报价、合同、订单自助闭环；增加范围隔离、并发、幂等和验收标准 |
 | v1.0 | 2026-09-09 | 初稿，B2B 端子 MVP 设计 |

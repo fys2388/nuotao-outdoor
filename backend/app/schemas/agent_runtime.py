@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 AGENT_DOMAINS: tuple[str, ...] = (
     "product",
     "marketing",
+    "sales",
     "customer",
+    "finance",
     "supply_chain",
     "operations",
 )
@@ -32,6 +34,7 @@ MEMORY_SOURCE_TYPES: tuple[str, ...] = (
     "event",
     "note",
 )
+BusinessScope = Literal["B2C", "B2B", "SHARED"]
 
 
 # --------------------------------------------------------------------------- #
@@ -44,14 +47,29 @@ class AgentRegisterRequest(BaseModel):
 
     agent_id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
-    domain: Literal["product", "marketing", "customer", "supply_chain", "operations"]
+    domain: Literal[
+        "product",
+        "marketing",
+        "sales",
+        "customer",
+        "finance",
+        "supply_chain",
+        "operations",
+    ]
     version: str = Field(default="v1", pattern=r"^v\d+$")
     status: Literal["active", "inactive", "draft"] = "active"
     model_provider: Literal["openai", "deepseek"] = "openai"
     model_name: str = Field(default="gpt-4o-mini", min_length=1, max_length=64)
     prompt_version: str = Field(default="v1", pattern=r"^v\d+$")
     permission_level: Literal["L0", "L1", "L2", "L3"] = "L1"
+    business_scope: BusinessScope = "SHARED"
     description: str | None = Field(default=None, max_length=500)
+
+
+class B2BAgentBootstrapRequest(BaseModel):
+    """Bootstrap the built-in B2B advisory agents in one workspace."""
+
+    actor: str = Field(min_length=1, max_length=64)
 
 
 class AgentOut(BaseModel):
@@ -70,6 +88,7 @@ class AgentOut(BaseModel):
     model_name: str
     prompt_version: str
     permission_level: str
+    business_scope: str
     description: str | None
     trace_id: str | None
     created_at: datetime
@@ -92,6 +111,7 @@ class TaskCreate(BaseModel):
     agent_id: UUID
     input: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=3, ge=1, le=5)
+    business_scope: BusinessScope | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)
 
 
@@ -106,6 +126,7 @@ class TaskOut(BaseModel):
     input: dict[str, Any]
     status: str
     priority: int
+    business_scope: str
     result: dict[str, Any]
     error_message: str | None
     trace_id: str | None
@@ -181,6 +202,7 @@ class ExecutionOut(BaseModel):
     workspace_id: UUID
     agent_id: UUID | None
     task_id: UUID | None
+    business_scope: str
     context_snapshot: dict[str, Any]
     input: dict[str, Any]
     output: dict[str, Any]
@@ -215,6 +237,7 @@ class ToolRegisterRequest(BaseModel):
     tool_name: str = Field(min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=500)
     permission_level: Literal["L0", "L1", "L2", "L3"] = "L1"
+    business_scope: BusinessScope = "SHARED"
     enabled: bool = True
     category: str | None = Field(default=None, max_length=32)
     handler_name: str | None = Field(default=None, max_length=64)
@@ -226,6 +249,7 @@ class ToolUpdateRequest(BaseModel):
 
     enabled: bool
     description: str | None = Field(default=None, max_length=500)
+    business_scope: BusinessScope | None = None
     handler_name: str | None = Field(default=None, max_length=64)
     args_schema: dict[str, Any] | None = Field(default=None)
 
@@ -240,6 +264,7 @@ class ToolOut(BaseModel):
     tool_name: str
     description: str | None
     permission_level: str
+    business_scope: str
     enabled: bool
     category: str | None
     handler_name: str | None
@@ -258,7 +283,15 @@ class MemoryCreate(BaseModel):
     """Store one agent memory entry (grounded in a knowledge domain)."""
 
     agent_id: UUID | None = None
-    domain: Literal["product", "marketing", "customer", "supply_chain", "operations"]
+    domain: Literal[
+        "product",
+        "marketing",
+        "sales",
+        "customer",
+        "finance",
+        "supply_chain",
+        "operations",
+    ]
     source_type: Literal[
         "product_knowledge",
         "marketing_knowledge",

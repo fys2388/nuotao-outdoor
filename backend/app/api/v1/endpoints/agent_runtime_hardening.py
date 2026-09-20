@@ -15,9 +15,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
-from app.core.workspace import get_workspace_id
 from app.schemas.agent_runtime_hardening import (
     AgentMetricOut,
     BudgetPolicyCreate,
@@ -46,10 +46,13 @@ from app.services import (
     task_queue,
 )
 
-router = APIRouter(tags=["agent-runtime-hardening"])
+router = APIRouter(
+    tags=["agent-runtime-hardening"],
+    dependencies=[Depends(get_current_user)],
+)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
-WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+WorkspaceId = Annotated[UUID, Depends(get_current_workspace_id)]
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +89,7 @@ async def set_execution_policy(
             approval_timeout_seconds=body.approval_timeout_seconds,
             max_context_size=body.max_context_size,
             retry_policy_id=body.retry_policy_id,
+            business_scope=body.business_scope,
             enabled=body.enabled,
             trace_id=get_trace_id(),
         )
@@ -103,10 +107,17 @@ async def get_execution_policy(
     db: DbSession,
     workspace_id: WorkspaceId,
     agent_id: Annotated[UUID, Query()],
+    business_scope: Annotated[
+        str, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = "SHARED",
 ) -> ExecutionPolicyOut:
     """Return the current (active) execution policy; seeds defaults if needed."""
     policy = await agent_policies.get_execution_policy(
-        db, workspace_id=workspace_id, agent_id=agent_id, trace_id=get_trace_id()
+        db,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        business_scope=business_scope,
+        trace_id=get_trace_id(),
     )
     return ExecutionPolicyOut.model_validate(policy)
 
@@ -137,6 +148,7 @@ async def set_budget_policy(
             max_cost_per_execution=body.max_cost_per_execution,
             alert_threshold=body.alert_threshold,
             currency=body.currency,
+            business_scope=body.business_scope,
             enabled=body.enabled,
             trace_id=get_trace_id(),
         )
@@ -154,10 +166,17 @@ async def get_budget_policy(
     db: DbSession,
     workspace_id: WorkspaceId,
     agent_id: Annotated[UUID, Query()],
+    business_scope: Annotated[
+        str, Query(pattern="^(B2C|B2B|SHARED)$")
+    ] = "SHARED",
 ) -> BudgetPolicyOut:
     """Return the current budget policy; seeds defaults if needed."""
     policy = await agent_policies.get_budget_policy(
-        db, workspace_id=workspace_id, agent_id=agent_id, trace_id=get_trace_id()
+        db,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        business_scope=business_scope,
+        trace_id=get_trace_id(),
     )
     return BudgetPolicyOut.model_validate(policy)
 

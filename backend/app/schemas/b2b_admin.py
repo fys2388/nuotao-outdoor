@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, PlainSerializer
+from pydantic import BaseModel, EmailStr, Field, PlainSerializer, model_validator
 
 DecimalFloat = Annotated[
     Decimal, PlainSerializer(lambda x: float(x), return_type=float, when_used="json")
@@ -143,9 +143,7 @@ class AdminB2BOrderListResponse(BaseModel):
 
 
 class AdminB2BOrderStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(pending|confirmed|processing|shipped|delivered|cancelled)$")
-    tracking_number: str | None = None
-    tracking_carrier: str | None = None
+    status: Literal["confirmed", "cancelled"]
 
 
 # ============================================
@@ -160,6 +158,12 @@ class AdminB2BPriceCreate(BaseModel):
     moq: int = Field(default=1, ge=1)
     currency: str = Field(default="USD", max_length=8)
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_price_scope(self) -> "AdminB2BPriceCreate":
+        if (self.tier is None) == (self.agent_id is None):
+            raise ValueError("exactly one of tier or agent_id must be provided")
+        return self
 
 
 class AdminB2BPriceUpdate(BaseModel):

@@ -61,8 +61,12 @@ class ImageGenerationTask(Base, TimestampMixin, WorkspaceMixin):
     )
     prompt: Mapped[str] = mapped_column(String(4000), nullable=False)
     negative_prompt: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Source image URL for image-to-image generation (Nuotao standard: the
+    # 1688 original is passed so generated images stay product-faithful).
+    # Null = text-to-image.
+    reference_image: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     use_case: Mapped[str] = mapped_column(String(32), nullable=False, default="main_image")
-    requested_model: Mapped[str] = mapped_column(String(64), nullable=False, default="wan2.7-image")
+    requested_model: Mapped[str] = mapped_column(String(64), nullable=False, default="doubao-seedream-5-0-pro-260628")
     actual_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     width: Mapped[int] = mapped_column(default=1024)
     height: Mapped[int] = mapped_column(default=1024)

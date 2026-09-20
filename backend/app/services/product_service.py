@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductCostSnapshot
 from app.models.supplier import Supplier
-from app.schemas.product import ImportRowError, ProductImportResult
+from app.schemas.product import (
+    ImportRowError,
+    ProductDeleteResult,
+    ProductImportResult,
+)
 from app.services import event_service
 
 # CSV -> model field mapping; only these columns are accepted.
@@ -173,6 +177,7 @@ async def import_products(
                 select(Product).where(
                     Product.workspace_id == workspace_id,
                     Product.sku == data["sku"],
+                    Product.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -306,8 +311,11 @@ async def list_products(
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[Sequence[Product], int]:
-    """List products with optional filters, newest first."""
-    filters = [Product.workspace_id == workspace_id]
+    """List products with optional filters, newest first. Soft-deleted rows are hidden."""
+    filters = [
+        Product.workspace_id == workspace_id,
+        Product.deleted_at.is_(None),
+    ]
     if status is not None:
         filters.append(Product.status == status)
     if category is not None:
@@ -330,3 +338,58 @@ async def list_products(
         .all()
     )
     return rows, total
+
+
+async def soft_delete_products(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_ids: Sequence[UUID],
+    trace_id: str | None = None,
+) -> ProductDeleteResult:
+    """Soft-delete products (single or batch), scoped to one workspace.
+
+    Only live rows (``deleted_at IS NULL``) belonging to ``workspace_id`` are
+    deleted; each deletion stamps ``deleted_at`` and emits a ``product.deleted``
+    audit event. IDs that are missing, already deleted, or owned by another
+    workspace are returned in ``not_found`` rather than silently ignored. The
+    transaction is committed by the request lifecycle, not here.
+    """
+    # De-duplicate while preserving order.
+    ids = list(dict.fromkeys(product_ids))
+    if not ids:
+        return ProductDeleteResult(deleted=0, not_found=[])
+
+    rows = (
+        (
+            await session.execute(
+                select(Product).where(
+                    Product.workspace_id == workspace_id,
+                    Product.id.in_(ids),
+                    Product.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    deleted_at = datetime.now(UTC)
+    found_ids: set[UUID] = set()
+    for product in rows:
+        found_ids.add(product.id)
+        product.deleted_at = deleted_at
+        session.add(product)
+        await event_service.create_event(
+            session,
+            workspace_id=workspace_id,
+            event_type="product.deleted",
+            entity_type="product",
+            entity_id=str(product.id),
+            payload={"sku": product.sku, "mode": "soft"},
+            trace_id=trace_id,
+        )
+
+    await session.flush()
+    not_found = [product_id for product_id in ids if product_id not in found_ids]
+    return ProductDeleteResult(deleted=len(rows), not_found=not_found)

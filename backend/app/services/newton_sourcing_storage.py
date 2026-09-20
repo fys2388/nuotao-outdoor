@@ -24,6 +24,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,8 @@ async def import_products_to_candidates(
         - errors: 错误列表
         - candidate_ids: 导入的候选ID列表
     """
+    from app.core.workspace import DEFAULT_WORKSPACE_ID
+    from app.models.product import Product
     from app.services.sourcing_service import create_product_candidate
 
     result = {
@@ -187,38 +190,62 @@ async def import_products_to_candidates(
         "candidate_ids": [],
     }
 
+    ws_id = workspace_id or DEFAULT_WORKSPACE_ID
+
     for i, product in enumerate(products):
+        # 转换牛顿商品格式为系统候选格式
+        product_name = product.get("subject") or product.get("name") or f"牛顿选品商品_{i+1}"
+        product_id_1688 = product.get("product_id") or product.get("ali1688_product_id", "")
+        price = product.get("price") or product.get("unit_cost", 0)
+        min_order = product.get("min_order_qty") or product.get("moq", 1)
+        supplier = product.get("supplier") or product.get("supplier_name", "")
+        detail_url = product.get("detail_url") or product.get("url", "")
+        score = product.get("score", 0)
+        reason = product.get("reason", "")
+
+        # 构建候选产品数据
+        candidate_data = {
+            "name": product_name[:200],
+            "sku": f"NEWTON_{product_id_1688 or int(time.time())}_{i}",
+            "description": f"牛顿AI选品推荐。{reason}"[:500],
+            "category": product.get("category", "户外用品"),
+            "brand": supplier[:100] if supplier else None,
+            "source_url": detail_url,
+            "target_market": "US",
+            "purchase_cost": float(price) if price else 0,
+            "currency": "CNY",
+            # 牛顿选品元数据
+            "newton_score": score,
+            "newton_reason": reason,
+            "newton_sourcing_id": sourcing_id,
+            "newton_query": source_query,
+            "ali1688_product_id": str(product_id_1688),
+            "min_order_qty": min_order,
+        }
+
+        # 幂等：同 SKU 已入库则复用既有候选，避免唯一约束冲突导致整批 500
         try:
-            # 转换牛顿商品格式为系统候选格式
-            product_name = product.get("subject") or product.get("name") or f"牛顿选品商品_{i+1}"
-            product_id_1688 = product.get("product_id") or product.get("ali1688_product_id", "")
-            price = product.get("price") or product.get("unit_cost", 0)
-            min_order = product.get("min_order_qty") or product.get("moq", 1)
-            supplier = product.get("supplier") or product.get("supplier_name", "")
-            detail_url = product.get("detail_url") or product.get("url", "")
-            score = product.get("score", 0)
-            reason = product.get("reason", "")
+            existing = (
+                await session.execute(
+                    select(Product).where(
+                        Product.sku == candidate_data["sku"],
+                        Product.workspace_id == ws_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                result["skipped"] += 1
+                result["candidate_ids"].append(str(existing.id))
+                logger.info(
+                    "商品已存在，复用既有候选: sku=%s, id=%s",
+                    candidate_data["sku"], existing.id,
+                )
+                continue
+        except Exception as e:
+            logger.warning("重复检查查询失败（不阻断导入）: sku=%s, error=%s",
+                           candidate_data["sku"], str(e))
 
-            # 构建候选产品数据
-            candidate_data = {
-                "name": product_name[:200],
-                "sku": f"NEWTON_{product_id_1688 or int(time.time())}_{i}",
-                "description": f"牛顿AI选品推荐。{reason}"[:500],
-                "category": product.get("category", "户外用品"),
-                "brand": supplier[:100] if supplier else None,
-                "source_url": detail_url,
-                "target_market": "US",
-                "purchase_cost": float(price) if price else 0,
-                "currency": "CNY",
-                # 牛顿选品元数据
-                "newton_score": score,
-                "newton_reason": reason,
-                "newton_sourcing_id": sourcing_id,
-                "newton_query": source_query,
-                "ali1688_product_id": str(product_id_1688),
-                "min_order_qty": min_order,
-            }
-
+        try:
             # 创建选品候选
             product_obj, source_obj = await create_product_candidate(
                 session=session,
@@ -236,14 +263,27 @@ async def import_products_to_candidates(
                 product_obj.id, product_name, score,
             )
 
+        except IntegrityError:
+            # 并发写入导致的重复：回滚本条并跳过，不影响其他条目
+            await session.rollback()
+            result["skipped"] += 1
+            logger.warning(
+                "商品已存在（唯一约束冲突），跳过: index=%d, sku=%s",
+                i, candidate_data["sku"],
+            )
         except Exception as e:
+            # 单条失败必须回滚：否则 Session 事务失效会拖垮后续全部条目
+            await session.rollback()
             result["errors"].append({
                 "index": i,
-                "product": product.get("subject", "unknown"),
-                "error": str(e),
+                "product": product_name,
+                "error": "商品导入失败，已回滚，不影响其他条目",
             })
             result["skipped"] += 1
-            logger.warning("商品导入失败: index=%d, error=%s", i, str(e))
+            logger.warning(
+                "商品导入失败: index=%d, sku=%s, error=%s",
+                i, candidate_data["sku"], str(e),
+            )
 
     await session.commit()
     logger.info(

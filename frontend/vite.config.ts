@@ -1,9 +1,19 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, '.', '')
+  const apiProxyTarget =
+    process.env.VITE_API_PROXY_TARGET || env.VITE_API_PROXY_TARGET || 'http://localhost:8000'
+  const buildId = (
+    process.env.VITE_BUILD_ID ||
+    env.VITE_BUILD_ID ||
+    new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+  ).replace(/[^a-zA-Z0-9_-]/g, '')
+
+  return {
   plugins: [
     react(),
     // Bundle 分析器（构建时生成 stats.html）
@@ -21,7 +31,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },
@@ -75,17 +85,17 @@ export default defineConfig({
           }
         },
 
-        // chunk 文件命名（不含哈希，避免Cloudflare缓存404问题）
-        chunkFileNames: 'assets/js/[name].js',
-        entryFileNames: 'assets/js/[name].js',
+        // 内容哈希之外再附加构建标识，避免 CDN 长期缓存旧地址或错误响应。
+        chunkFileNames: `assets/js/[name]-[hash]-${buildId}.js`,
+        entryFileNames: `assets/js/[name]-[hash]-${buildId}.js`,
         assetFileNames: (assetInfo) => {
           const ext = assetInfo.name?.split('.').pop() || ''
-          if (ext === 'css') return 'assets/css/[name].[ext]'
+          if (ext === 'css') return `assets/css/[name]-[hash]-${buildId}.[ext]`
           if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext))
-            return 'assets/images/[name].[ext]'
+            return 'assets/images/[name]-[hash].[ext]'
           if (['woff', 'woff2', 'ttf', 'eot'].includes(ext))
-            return 'assets/fonts/[name].[ext]'
-          return 'assets/[name].[ext]'
+            return 'assets/fonts/[name]-[hash].[ext]'
+          return 'assets/[name]-[hash].[ext]'
         },
       },
     },
@@ -100,4 +110,5 @@ export default defineConfig({
 
   // 环境变量前缀
   envPrefix: 'VITE_',
+  }
 })
