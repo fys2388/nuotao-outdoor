@@ -73,7 +73,7 @@ jobs:
             TMPLOG=/tmp/deploy-listing-gate.log
             LOG=/var/www/nuotao/deploy-listing-gate.log
             : > "$TMPLOG"
-            exec > >(tee -a "$TMPLOG") 2>&1
+            exec > "$TMPLOG" 2>&1
             mirror() { cp -f "$TMPLOG" "$LOG" 2>/dev/null || true; chown www-data:www-data "$LOG" 2>/dev/null || true; }
 
             echo "########## listing-gate hotfix started $(date -u +%FT%TZ) ##########"
