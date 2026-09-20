@@ -153,6 +153,71 @@
 | FIX-4 | 无准入闸门（零售价/candidate_status） | 实现 V3.0 闸门校验：零售价必须 > 0，否则 422 |
 | FIX-5 | 前端读 `n.bullets`，后端写 `bullet_points` | 字段名统一为 `bullet_points`（数据实际有 6 条，仅显示层丢失） |
 
+## 补充修复项（对照 `wc-product-upload` 字段规范发现）
+
+对照仓库内 WooCommerce 产品上传字段规范复核现有 payload 后，发现原实现（`push_product_to_woocommerce`）
+生成的 WC 商品是**空壳**，即使价格修好、成功创建，前台页也远达不到 A++：
+
+| ID | 缺陷 | 规范依据 | 修复 |
+|---|---|---|---|
+| FIX-6 | payload 缺 `type: "simple"` | P0 必填 | 显式写入 |
+| FIX-7 | payload 缺 `weight` / `dimensions` | P0，用于运费计算 | 读 `product.weight_kg` / `product.dimensions` |
+| FIX-8 | payload 缺 `manage_stock` / `stock_quantity` / `stock_status` | P0 | 从 `meta` 读，缺省 `instock` + 100 |
+| FIX-9 | payload 缺 `brand` / `attributes` | P1 推荐 | `brand` 非中文才写；`attributes` 仅多值项（单值非变体） |
+| FIX-10 | payload 缺 `images` | P1，前台主图 | 读 `meta.images` → `[{"src": url}]` |
+| FIX-11 | 中文分类名直接推送 → WC 建为 Uncategorized | 规范要求映射 term | 内置中文→英文分类映射表 |
+| FIX-12 | 无中文文案拦截 | 规范：无已审核英文文案 + 含 CJK → blocked | 含 CJK 且无已批准英文本地化 → **422 硬阻断**（不可 force 覆盖） |
+| FIX-13 | `candidate_status` 完全未参与上架准入 | M5.13 状态机 | `NULL`=已落地电商产品（放行）；非 `approved` → 409 |
+| FIX-14 | 无文案质量下限 | 前台完整度 | 已批准英文描述 < 600 字符 → 409（thin_copy） |
+
+### 闸门分级设计（最终实现）
+
+| 级别 | HTTP | 可否 `?force=true` 覆盖 | 触发条件 |
+|---|---|---|---|
+| blocked | 422 | ❌ 不可 | `missing_sku`、`cjk_without_localization` |
+| needs_review | 409 | ✅ 可（人工复核后放行） | `missing_price`、`unapproved_copy`、`unapproved_candidate`、`cjk_in_approved_copy`、`thin_copy` |
+| passed | 200 | — | 全部通过 |
+
+设计取舍：`missing_price` 归为 409 而非 422 —— 规范写的是"禁止以 0 元推送"，
+但闸门语义是"需人工复核确认后放行"，符合 AGENTS.md「AI 是提议者不是执行者」。
+真正的不可覆盖项只有 SKU 缺失（无渠道映射）与中文文案直推（合规红线）。
+
+## A++ 定义（WC 前台产品页内容完整度评分）
+
+| 维度 | 权重 | 满分标准 |
+|---|---|---|
+| 标题 | 10 | 英文标题存在、含核心关键词 |
+| 长描述 | 20 | ≥ 600 字符，HTML 结构 |
+| 短描述/卖点 | 10 | short_description + 卖点列表 |
+| 主图 | 15 | ≥ 1 张有效主图 |
+| 价格 | 10 | regular_price > 0，USD |
+| 分类 | 10 | 非 Uncategorized |
+| 品牌 | 5 | brand 已填 |
+| SEO/标签 | 5 | tags/seo_keywords |
+| 可购买性 | 10 | instock + 运费字段（weight/dimensions） |
+| 属性 | 5 | 关键属性存在 |
+
+映射：≥90 = A++，80-89 = A+，70-79 = A，60-69 = B+，<60 = B。
+**图片是最大单项权重（15 分）**：27 个草稿产品未经过工作台「主图」步骤，
+`meta.images` 预计为空 —— 这是 A++ 的主要风险点，需在测试中确认。
+
+## 修复实现说明
+
+采用**零覆盖精确补丁**（不 rsync、不全量替换任何生产文件），因为生产 checkout 含
+未入库的服务器端代码（localizations 端点等），全量部署会使其 404：
+
+1. **新增** `backend/app/services/listing_gate.py` —— 闸门 + 价格修复 + payload 构建
+2. **新增** `backend/app/api/v1/endpoints/listing_publish.py` —— 带闸门的推送端点
+3. **锚点插入** `backend/app/api/v1/router.py` —— 在 `products.router` **之前**注册
+   同 `/products` prefix 的新 router，只覆盖 `POST /{id}/push-woocommerce` 一个路径，
+   生产环境专属的 localizations/approve 端点保持原样
+4. **锚点替换** `frontend/src/pages/ProductPublish.tsx` —— `.bullets` → `.bullet_points`
+5. 全部改动先备份到 `/opt/nuotao/backups/listing-gate-<stamp>/`，锚点不匹配即中止
+
+部署 workflow：`.github/workflows/hotfix-listing-gate.yml`（分支 `hotfix/listing-gate`）。
+完整部署日志同时写入 `/var/www/nuotao/deploy-listing-gate.log`，
+可通过 `https://admin.nuotaooutdoor.com/deploy-listing-gate.log` 在浏览器中读取。
+
 ## 步骤记录
 
 （测试过程中追加）
