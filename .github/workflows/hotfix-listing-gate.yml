@@ -7,9 +7,10 @@ name: Hotfix - Listing Publish Gate (V3.0)
 #   1. price fracture  - pipeline writes meta.sale_price only; the WooCommerce
 #                        payload therefore carried a sale price with no regular
 #                        price, which WooCommerce rejects.
-#   2. swallowed error - push failures returned {"success": false} with HTTP 200,
-#                        and the frontend only checked the HTTP status, so the UI
-#                        reported "已推送" while nothing was created.
+#   2. swallowed error - the old endpoint raised HTTP 400 only when
+#                        push_product_to_woocommerce reported failure, and the
+#                        frontend still treated a rejected push as a soft error
+#                        instead of a gated decision.
 #   3. no gate         - the page advertises a V3.0 selection gate that did not
 #                        exist; any draft product with no price could be pushed.
 #   4. wrong copy      - the payload used the raw Chinese source text instead of
@@ -19,11 +20,19 @@ name: Hotfix - Listing Publish Gate (V3.0)
 #
 # Strategy: ADD modules (listing_gate.py, listing_publish.py), then anchor-assert
 # two surgical edits (router registration, frontend field name). Everything is
-# backed up to /opt/nuotao/backups/ first. Nothing is rsync'd with --delete.
+# backed up to /opt/nuotao/backups/ first. Nothing is rsync'd with --delete and
+# nothing is `git reset --hard`'d.
 #
-# Diagnostics: full output is also tee'd to
-# /var/www/nuotao/deploy-listing-gate.log, readable from the browser at
-# https://admin.nuotaooutdoor.com/deploy-listing-gate.log
+# Deliberately does NOT use appleboy/scp-action: deploy.yml (the workflow that
+# actually ships production) transfers files with rsync/tar over the ssh-action
+# session only. This one fetches the patch by cloning the public branch on the
+# server, so no file transfer step can fail.
+#
+# Diagnostics: script output is mirrored to
+# /var/www/nuotao/assets/deploy-listing-gate.log ->
+# https://admin.nuotaooutdoor.com/assets/deploy-listing-gate.log
+# (/assets is the only nginx location that serves real files; every other path
+# falls through to the SPA index.html, and /openapi.json is Cloudflare-cached.)
 #
 # Trigger: push to branch hotfix/listing-gate
 
@@ -42,24 +51,6 @@ jobs:
     name: Patch gate on production
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Package patch
-        run: |
-          tar -czf listing-gate.tgz hotfix-listing-gate
-          echo "--- package contents ---"
-          tar -tzf listing-gate.tgz
-
-      - name: Upload package to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          source: listing-gate.tgz
-          target: /tmp
-
       - name: Apply patch, restart backend, rebuild frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -77,9 +68,9 @@ jobs:
             BACKEND=/opt/nuotao/backend
             FRONTEND=/opt/nuotao/frontend
             PY="$BACKEND/.venv/bin/python"
+            REPO=https://github.com/fys2388/nuotao-outdoor.git
+            BRANCH=hotfix/listing-gate
             TMPLOG=/tmp/deploy-listing-gate.log
-            # /assets/ is the one nginx location that serves real files; every
-            # other path falls through to the SPA index.html.
             LOG=/var/www/nuotao/assets/deploy-listing-gate.log
             : > "$TMPLOG"
             exec > "$TMPLOG" 2>&1
@@ -89,26 +80,27 @@ jobs:
             }
 
             echo "########## listing-gate hotfix started $(date -u +%FT%TZ) ##########"
+            echo "shell=$0 user=$(id -un) cwd=$(cd /opt/nuotao && pwd)"
             cd /opt/nuotao
             mirror
 
-            echo "===== 0. unpack patch package ====="
-            rm -rf /tmp/listing-gate-patch && mkdir -p /tmp/listing-gate-patch
-            tar -xzf /tmp/listing-gate.tgz -C /tmp/listing-gate-patch
-            find /tmp/listing-gate-patch -type f | sort
-            test -f "$PY" || { echo "ERROR: $PY missing"; exit 1; }
+            echo "===== 0. fetch patch by cloning the public branch ====="
+            rm -rf /tmp/nuotao-hotfix
+            git clone --depth 1 --branch "$BRANCH" "$REPO" /tmp/nuotao-hotfix
+            find /tmp/nuotao-hotfix/hotfix-listing-gate -type f | sort
+            PATCHDIR=/tmp/nuotao-hotfix/hotfix-listing-gate
+            APPLY="$PATCHDIR/scripts/apply_patch.py"
+            test -f "$PY" || { echo "ERROR: $PY missing"; mirror; exit 1; }
+            test -f "$APPLY" || { echo "ERROR: apply script missing: $APPLY"; mirror; exit 1; }
             echo "python: $($PY --version 2>&1)"
-
-            echo "===== 0b. production layout probe ====="
-            echo "backend files:"; ls -la "$BACKEND/app/api/v1/router.py" "$BACKEND/app/services/woocommerce_sync_service.py" 2>&1
-            echo "frontend page candidates:"
-            ls -la "$FRONTEND/src/pages/" 2>&1 | grep -i -E "publish|product" || echo "  (no ProductPublish* under src/pages)"
-            find "$FRONTEND/src" -maxdepth 3 -iname "*ProductPublish*" 2>/dev/null || echo "  (find returned nothing)"
             mirror
 
-            PATCHDIR=/tmp/listing-gate-patch/hotfix-listing-gate
-            APPLY="$PATCHDIR/scripts/apply_patch.py"
-            test -f "$APPLY" || { echo "ERROR: apply script missing: $APPLY"; exit 1; }
+            echo "===== 0b. production layout probe ====="
+            echo "backend files:"
+            ls -la "$BACKEND/app/api/v1/router.py" "$BACKEND/app/services/woocommerce_sync_service.py" 2>&1
+            echo "frontend page candidates:"
+            find "$FRONTEND/src" -maxdepth 3 -iname "*ProductPublish*" 2>/dev/null || echo "  (none)"
+            mirror
 
             echo "===== 1. DRY RUN (preflight + anchor assertions) ====="
             if "$PY" "$APPLY" --patch-dir "$PATCHDIR" \
@@ -133,9 +125,13 @@ jobs:
             mirror
 
             echo "===== 3. confirm router registration ====="
-            grep -n "listing_publish\|listing-gate hotfix" "$BACKEND/app/api/v1/router.py" | head -8
+            grep -n "listing_publish" "$BACKEND/app/api/v1/router.py" | head -8
             test -f "$BACKEND/app/services/listing_gate.py" && echo "listing_gate.py present"
             test -f "$BACKEND/app/api/v1/endpoints/listing_publish.py" && echo "listing_publish.py present"
+            cd "$BACKEND"
+            "$PY" -m compileall -q app && echo "compile-ok"
+            cd /opt/nuotao
+            mirror
 
             echo "===== 4. restart backend and wait for ready ====="
             systemctl restart nuotao-backend
@@ -150,10 +146,16 @@ jobs:
             if [ "$ready" != "200" ]; then
               echo "ERROR: backend not ready after restart"
               journalctl -u nuotao-backend -n 60 --no-pager || true
+              mirror
               exit 1
             fi
+            mirror
 
             echo "===== 5. gate self-check ====="
+            NEWPATH=$(curl -s http://127.0.0.1:8000/openapi.json \
+              | grep -o '/api/v1/products/{product_id}/push-woocommerce' | head -1)
+            echo "openapi push-woocommerce path: $NEWPATH"
+            curl -s http://127.0.0.1:8000/openapi.json | grep -c 'listing_publish' || true
             ID=$(curl -s "http://127.0.0.1:8000/api/v1/products?limit=200&offset=0" \
                  | "$PY" -c "import json,sys; d=json.load(sys.stdin); print(d[0].get('id','') if isinstance(d,list) and d else '')" 2>/dev/null || true)
             echo "probe product id=$ID"
@@ -163,6 +165,7 @@ jobs:
               echo "probe POST push-woocommerce status=$CODE"
               head -c 800 /tmp/probe.json; echo
             fi
+            mirror
 
             echo "===== 6. build frontend ====="
             cd "$FRONTEND"
