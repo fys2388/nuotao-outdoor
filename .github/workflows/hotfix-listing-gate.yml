@@ -41,6 +41,13 @@ on:
   push:
     branches: [hotfix/listing-gate]
 
+# Mirrors deploy.yml exactly: secrets are lifted into workflow-level env and the
+# ssh-action reads ${{ env.* }}, not ${{ secrets.* }}.
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
 # A later push supersedes an earlier run of this one-off hotfix.
 concurrency:
   group: listing-gate-hotfix
@@ -51,14 +58,19 @@ jobs:
     name: Patch gate on production
     runs-on: ubuntu-latest
     steps:
+      - name: Deployment info
+        run: |
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deploying to: ${{ env.SERVER_HOST }}"
+
       - name: Apply patch, restart backend, rebuild frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
-          command_timeout: 25m
           script: |
             # NOTE: no `set -o pipefail` - dash 0.5.11 (Ubuntu 22.04) rejects it
             # with "Illegal option" and the whole script dies on line 1.
@@ -72,6 +84,12 @@ jobs:
             BRANCH=hotfix/listing-gate
             TMPLOG=/tmp/deploy-listing-gate.log
             LOG=/var/www/nuotao/assets/deploy-listing-gate.log
+            # Prove writability before stdout is redirected away: if this line
+            # never lands, the ssh step itself did not execute.
+            mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+            printf 'listing-gate hotfix reached the server at %s\nshell=%s user=%s\n' \
+              "$(date -u +%FT%TZ)" "$0" "$(id -un)" > "$LOG" 2>/dev/null || true
+            chown www-data:www-data "$LOG" 2>/dev/null || true
             : > "$TMPLOG"
             exec > "$TMPLOG" 2>&1
             mirror() {
