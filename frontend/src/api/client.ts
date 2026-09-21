@@ -435,6 +435,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ actor }),
     }),
+  previewListingGate: (productId: string) =>
+    request(`/products/${productId}/gate-preview`),
   getImageTasks: (productId?: string, limit = 50) => {
     const params = new URLSearchParams({ limit: String(limit) })
     if (productId) params.set('product_id', productId)

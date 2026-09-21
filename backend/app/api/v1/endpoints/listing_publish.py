@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.listing_gate import (
+    HARD_BLOCK,
     build_wc_payload,
     evaluate_gate,
     get_english_copy,
@@ -231,6 +232,42 @@ async def _load_product(product_id: str) -> tuple[Any, Any | None]:
     return session, product
 
 
+async def _load_purchase_cost(session: Any, product_id: Any) -> Any | None:
+    """Latest authoritative purchase cost for the gate, or ``None``.
+
+    Returns ``None`` when there is no cost row at all. The gate treats a missing
+    row as "not yet wired" (no cost check) rather than a failure, because
+    products created before cost capture would otherwise all turn red.
+
+    A row that exists but has a zero purchase_cost IS returned, so the gate can
+    report ``missing_cost`` - that is the actionable case.
+    """
+    from sqlalchemy import select
+    from app.models.product import ProductCost
+
+    try:
+        result = await session.execute(
+            select(ProductCost)
+            .where(ProductCost.product_id == product_id)
+            .order_by(ProductCost.valid_from.desc().nullslast(), ProductCost.version.desc())
+            .limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return row.purchase_cost if row is not None else None
+    except Exception as exc:  # column/table drift, malformed id, ...
+        logger.warning("Failed to load purchase cost for %s: %s", product_id, exc)
+        return None
+
+
+def _gate_verdict(product: Any, purchase_cost: Any | None) -> tuple[dict, dict, dict]:
+    """Run the gate and return ``(gate, prices, english_copy)``."""
+    meta = product.meta if isinstance(product.meta, dict) else {}
+    english_copy = get_english_copy(meta)
+    prices = resolve_prices(meta)
+    gate = evaluate_gate(product, prices, english_copy, purchase_cost=purchase_cost)
+    return gate, prices, english_copy
+
+
 @router.post(
     "/{product_id}/push-woocommerce",
     summary="推送商品到 WooCommerce（V3.0 闸门）",
@@ -245,9 +282,8 @@ async def push_product_to_woocommerce_gated(
             raise HTTPException(status_code=404, detail=f"产品不存在: {product_id}")
 
         meta = product.meta if isinstance(product.meta, dict) else {}
-        english_copy = get_english_copy(meta)
-        prices = resolve_prices(meta)
-        gate = evaluate_gate(product, prices, english_copy)
+        purchase_cost = await _load_purchase_cost(session, product.id)
+        gate, prices, english_copy = _gate_verdict(product, purchase_cost)
 
         if gate["status"] == "blocked":
             logger.warning(
@@ -431,6 +467,93 @@ async def push_product_to_woocommerce_gated(
             "regular_price": payload.get("regular_price"),
             "sale_price": payload.get("sale_price"),
             "verified": bool(verification),
+        }
+    finally:
+        await session.close()
+
+
+# Operator-facing next step per gate reason. Kept server-side so the frontend
+# cannot drift from the gate itself, and so the wording stays consistent between
+# the single and batch paths.
+_FIX_HINTS: dict[str, str] = {
+    "missing_sku": "填写 SKU 后再推送（渠道映射依赖它）",
+    "missing_price": "在「成本与利润」页填写零售价",
+    "missing_cost": "在「成本与利润」页填写采购成本，否则毛利无法核算",
+    "unapproved_candidate": "先在「候选产品」完成评审至 approved/testing/winner",
+    "cjk_without_localization": "生成并批准英文文案后再推送",
+    "cjk_in_approved_copy": "英文文案中仍有中文，请修改后重新批准",
+    "unapproved_copy": "生成英文文案，人工核对后批准",
+    "thin_copy": "英文描述偏短，建议补充到 600 字符以上",
+}
+
+
+@router.get(
+    "/{product_id}/gate-preview",
+    summary="预览 V3.0 选品闸门结果（不推送，无副作用）",
+)
+async def preview_listing_gate(product_id: str) -> dict[str, Any]:
+    """Return the gate verdict plus everything an operator needs to fix it.
+
+    The push endpoint only surfaces the gate when it fails, and only as an
+    HTTPException - so the frontend had no way to tell a product was blocked
+    until it pushed, which risks actually publishing. This route is read-only:
+    no WooCommerce call, no write, safe to poll while the operator is editing.
+    """
+    session, product = await _load_product(product_id)
+    try:
+        if product is None:
+            raise HTTPException(status_code=404, detail=f"产品不存在: {product_id}")
+
+        meta = product.meta if isinstance(product.meta, dict) else {}
+        purchase_cost = await _load_purchase_cost(session, product.id)
+        gate, prices, english_copy = _gate_verdict(product, purchase_cost)
+
+        reasons = [
+            {
+                "code": r["code"],
+                "message": r["message"],
+                "severity": "blocked" if r["code"] in HARD_BLOCK else "review",
+                "fix": _FIX_HINTS.get(r["code"], "查看商品数据后处理"),
+            }
+            for r in gate["reasons"]
+        ]
+
+        return {
+            "product": {
+                "id": str(product.id),
+                "sku": product.sku,
+                "name": product.name,
+                "status": getattr(product, "status", None),
+                "candidate_status": getattr(product, "candidate_status", None),
+                "category": getattr(product, "category", None),
+                "target_market": getattr(product, "target_market", None),
+            },
+            "gate": {
+                "status": gate["status"],
+                "hard_block_count": sum(1 for r in reasons if r["severity"] == "blocked"),
+                "reasons": reasons,
+            },
+            "prices": prices,
+            "copy": {
+                "present": bool(english_copy),
+                "status": str(english_copy.get("status") or "缺失"),
+                "title": english_copy.get("title", ""),
+                "description": english_copy.get("description", ""),
+                "short_description": english_copy.get("short_description", ""),
+                "description_chars": len(str(english_copy.get("description") or "")),
+                "approved_at": english_copy.get("approved_at"),
+                "approved_by": english_copy.get("approved_by"),
+                "generated_at": english_copy.get("generated_at"),
+            },
+            "cost": {
+                "present": purchase_cost is not None,
+                "purchase_cost": float(purchase_cost) if purchase_cost is not None else None,
+                "currency": (meta.get("cost_currency") or "CNY"),
+            },
+            "woocommerce": {
+                "product_id": meta.get("woocommerce_id"),
+                "slug": meta.get("woocommerce_slug", ""),
+            },
         }
     finally:
         await session.close()
