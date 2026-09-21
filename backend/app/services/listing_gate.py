@@ -138,21 +138,30 @@ def resolve_prices(meta: dict | None) -> dict:
     return {"regular_price": regular, "sale_price": sale}
 
 
+_COST_UNSET = object()
+
+
 def evaluate_gate(
     product: Any,
     prices: dict,
     en_copy: dict,
     *,
-    purchase_cost: Any = None,
+    purchase_cost: Any = _COST_UNSET,
 ) -> dict:
     """Evaluate the pre-publish gate.
 
     Returns ``{"status": "passed" | "needs_review" | "blocked", "reasons": [...]}``.
 
-    ``purchase_cost`` is optional: the gate is pure and has no database access, so
-    the caller loads the authoritative cost row and hands it in. Passing ``None``
-    leaves the cost check out entirely - that is what callers that have not wired
-    cost data yet do, and it keeps this signature backward compatible.
+    ``purchase_cost`` distinguishes three states, and they must not blur together:
+
+      * omitted   caller has not wired cost data - no cost check. Keeps the
+                  signature backward compatible for callers that predate cost
+                  capture.
+      * None      caller loaded the authoritative row and there is none. That is
+                  the actionable case and IS reported.
+      * a value   zero or blank -> missing_cost; a positive number passes.
+
+    The gate is pure and has no database access; the caller loads the row.
     """
     reasons: list[dict] = []
 
@@ -174,7 +183,11 @@ def evaluate_gate(
     # is needs_review, not a hard block. It is surfaced at the gate because selling
     # with no recorded cost breaks margin accounting, which is exactly the
     # "数据是资产" gap this gate exists to catch.
-    if purchase_cost is not None and _num(purchase_cost) is None:
+    # An explicit None (caller looked, there is no row) is treated the same as a
+    # zero row: both mean "we do not know the cost", which is the actionable state.
+    if purchase_cost is not _COST_UNSET and (
+        purchase_cost is None or _num(purchase_cost) is None
+    ):
         reasons.append({
             "code": "missing_cost",
             "message": "缺少采购成本（purchase_cost 为空或为 0），上架后毛利无法核算",
