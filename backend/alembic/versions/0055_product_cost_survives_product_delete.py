@@ -1,4 +1,4 @@
-"""0055_product_cost_survives_product_delete
+﻿"""0055_product_cost_survives_product_delete
 
 把 product_cost.product_id 的外键从 ondelete CASCADE 改为 SET NULL，并允许为空。
 
@@ -52,7 +52,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     name = _fk_name(bind, "product_cost", "product_id")
     if name:
-        op.drop_constraint(name, "product_cost", type_("foreignkey"))
+        op.drop_constraint(name, "product_cost", type_="foreignkey")
 
     op.alter_column("product_cost", "product_id", existing_type=sa.Uuid(), nullable=True)
 
@@ -67,7 +67,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_product_cost_product_id", "product_cost", type_("foreignkey"))
+    op.drop_constraint("fk_product_cost_product_id", "product_cost", type_="foreignkey")
 
     # 回填会破坏外键：先把失去归属的行移走，再恢复 NOT NULL。
     op.execute(
