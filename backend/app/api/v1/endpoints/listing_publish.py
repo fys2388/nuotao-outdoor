@@ -21,6 +21,7 @@ from uuid import UUID
 
 import requests
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.listing_gate import (
@@ -429,3 +430,115 @@ async def push_product_to_woocommerce_gated(
         }
     finally:
         await session.close()
+
+
+class BatchPushRequest(BaseModel):
+    """Body for the batch publish endpoint.
+
+    ``force`` is applied to every item, so a batch run never silently mixes
+    forceable and non-forceable items - the operator makes one explicit choice.
+    """
+
+    product_ids: list[str] = Field(default_factory=list)
+    force: bool = False
+
+
+# Hard cap: each item can spend up to _PUSH_BUDGET_SECONDS on WooCommerce calls
+# and the batch runs them sequentially (Cloudflare in front of the store makes
+# parallel pushes unreliable), so an unbounded list would hang the client.
+_BATCH_PUSH_MAX = 25
+
+
+@router.post(
+    "/push-woocommerce",
+    summary="批量推送商品到 WooCommerce（V3.0 闸门，逐个串行）",
+)
+async def push_products_to_woocommerce_gated(
+    req: BatchPushRequest,
+) -> dict[str, Any]:
+    """Push several products through the same gated path as the single endpoint.
+
+    The frontend's batch button (Products page) and the ``pushProductsToWooCommerce``
+    API client both post to this route with ``{product_ids}`` and expect a
+    ``{success, failed}`` summary. Neither worked before: no route existed at
+    ``POST /products/push-woocommerce``, so every batch sync answered 404 while
+    the single-product button - which calls ``/{product_id}/push-woocommerce`` -
+    did work. That is why the loop looked half-wired.
+
+    Each item is delegated to ``push_product_to_woocommerce_gated``, so the gate,
+    SKU idempotency recovery, retry budget, category resolution, meta write-back
+    and post-push verification are all shared rather than duplicated here. Its
+    HTTPException is caught and recorded as that item's failure, which keeps the
+    remaining items running instead of aborting the batch on the first block.
+    """
+    ids = [pid.strip() for pid in req.product_ids if str(pid).strip()]
+    if not ids:
+        return {
+            "success": 0,
+            "failed": 0,
+            "total": 0,
+            "results": [],
+            "message": "product_ids 为空，未推送任何商品",
+        }
+    if len(ids) > _BATCH_PUSH_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"一次最多推送 {_BATCH_PUSH_MAX} 个商品，本次 {len(ids)} 个；"
+                f"请分批提交（每个商品最多占用 {_PUSH_BUDGET_SECONDS:.0f}s 的"
+                f" WooCommerce 调用预算，批量串行执行）"
+            ),
+        )
+
+    results: list[dict[str, Any]] = []
+    for product_id in ids:
+        try:
+            pushed = await push_product_to_woocommerce_gated(
+                product_id, force=req.force
+            )
+            results.append({
+                "product_id": product_id,
+                "sku": pushed.get("sku"),
+                "status": "pushed",
+                "action": pushed.get("action"),
+                "gate": pushed.get("gate"),
+                "woocommerce_id": pushed.get("woocommerce_id"),
+                "woocommerce_url": pushed.get("woocommerce_url"),
+            })
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            gate = detail.get("status") if isinstance(detail, dict) else None
+            # blocked/needs_review are operator decisions, not transport errors;
+            # report them as "skipped" so the summary distinguishes "the store
+            # rejected it" from "the operator has to look at it".
+            status = (
+                "blocked" if gate == "blocked"
+                else "needs_review" if gate == "needs_review"
+                else "error"
+            )
+            results.append({
+                "product_id": product_id,
+                "sku": detail.get("sku") if isinstance(detail, dict) else None,
+                "status": status,
+                "http_status": exc.status_code,
+                "gate": gate,
+                "reasons": detail.get("reasons") if isinstance(detail, dict) else None,
+                "message": detail.get("message") if isinstance(detail, dict) else str(exc.detail),
+            })
+
+    pushed = sum(1 for r in results if r["status"] == "pushed")
+    logger.info(
+        "Batch WooCommerce push: %d/%d pushed, %d blocked, %d needs_review, %d error",
+        pushed, len(results),
+        sum(1 for r in results if r["status"] == "blocked"),
+        sum(1 for r in results if r["status"] == "needs_review"),
+        sum(1 for r in results if r["status"] == "error"),
+    )
+    return {
+        "success": pushed,
+        "failed": len(results) - pushed,
+        "total": len(results),
+        "blocked": sum(1 for r in results if r["status"] == "blocked"),
+        "needs_review": sum(1 for r in results if r["status"] == "needs_review"),
+        "results": results,
+    }
