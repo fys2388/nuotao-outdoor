@@ -90,7 +90,6 @@ export default function Products() {
   const [syncingStock, setSyncingStock] = useState(false)
   const [form] = Form.useForm()
   const [syncing, setSyncing] = useState(false)
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -212,42 +211,28 @@ export default function Products() {
   }
 
   // 批量同步WooCommerce（推送到店铺）
-  // 走 listing_publish 的批量闸门路由：逐个过 V3.0 选品闸门，触发一票否决的
-  // 被硬阻断（blocked），低分/数据缺失的需人工复核（needs_review）。两者都
-  // 不计入失败，否则会掩盖"运营需要处理"和"店铺拒绝了"的区别。
   const handleBatchSync = async () => {
-    if (selectedRowKeys.length === 0) {
-      message.warning('请先在列表中勾选要同步的商品')
-      return
-    }
     try {
       setSyncing(true)
-      message.loading({
-        content: `正在批量同步 ${selectedRowKeys.length} 个商品到WooCommerce...`,
-        key: 'batch-sync',
-      })
-
+      message.loading({ content: '正在批量同步到WooCommerce...', key: 'batch-sync' })
+      
       const resp = await fetch('/api/v1/products/push-woocommerce', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product_ids: selectedRowKeys }),
+        body: JSON.stringify({ product_ids: [] }),
       })
-
+      
       if (resp.ok) {
         const data = await resp.json()
-        const parts = [`成功${data.success || 0}个`, `失败${data.failed || 0}个`]
-        if (data.blocked) parts.push(`闸门阻断${data.blocked}个`)
-        if (data.needs_review) parts.push(`待人工复核${data.needs_review}个`)
-        message.success({ content: `批量同步完成: ${parts.join('，')}`, key: 'batch-sync' })
-        if (data.success) setSelectedRowKeys([])
-        loadProducts()
+        message.success({ 
+          content: `批量同步完成: 成功${data.success || 0}个，失败${data.failed || 0}个`, 
+          key: 'batch-sync' 
+        })
       } else {
         const err = await resp.json().catch(() => ({}))
-        message.error({
-          content: `批量同步失败: ${err.detail || resp.statusText}`,
-          key: 'batch-sync',
-        })
+        message.error({ content: `批量同步失败: ${err.detail || resp.statusText}`, key: 'batch-sync' })
       }
+      loadProducts()
     } catch (e: any) {
       message.error({ content: `批量同步失败: ${e.message}`, key: 'batch-sync' })
     } finally {
@@ -434,15 +419,7 @@ export default function Products() {
           <Button icon={<ReloadOutlined />} onClick={loadProducts} loading={loading}>刷新</Button>
           <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 CSV</Button>
           <Button icon={<UploadOutlined />}>导入 CSV</Button>
-          <Button
-            icon={<SyncOutlined />}
-            onClick={handleBatchSync}
-            loading={syncing}
-            disabled={selectedRowKeys.length === 0}
-            type="primary"
-          >
-            批量同步WC{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
-          </Button>
+          <Button icon={<SyncOutlined />} onClick={handleBatchSync} loading={syncing} type="primary">批量同步WC</Button>
           <Button icon={<PlusOutlined />} type="primary" onClick={() => openModal()}>新增产品</Button>
         </Space>
       </Card>
@@ -454,11 +431,6 @@ export default function Products() {
           dataSource={filteredProducts}
           rowKey="id"
           loading={loading}
-          rowSelection={{
-            selectedRowKeys,
-            onChange: (keys) => setSelectedRowKeys(keys as string[]),
-            preserveSelectedRowKeys: true,
-          }}
           pagination={{
             current: page,
             pageSize: pageSize,

@@ -243,14 +243,66 @@ export function ProductsPage() {
     }
     setPushing(true)
     try {
-      const result = (await api.pushProductsToWooCommerce(selectedKeys.map(String))) as Record<
-        string,
-        unknown
-      >
-      message.success(
-        `推送完成：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}`,
+      const result = (await api.pushProductsToWooCommerce(selectedKeys.map(String))) as {
+        success?: number
+        failed?: number
+        blocked?: number
+        needs_review?: number
+        results?: Array<{
+          product_id?: string
+          sku?: string | null
+          status?: string
+          message?: string
+        }>
+      }
+      const ok = Number(result.success || 0)
+      const blocked = Number(result.blocked || 0)
+      const review = Number(result.needs_review || 0)
+      const errored = Math.max(0, Number(result.failed || 0) - blocked - review)
+      const results = result.results || []
+      const problems = results.filter((r) => r.status && r.status !== 'pushed')
+
+      // 200 只表示批量请求处理完，不代表商品都进了 WooCommerce：闸门阻断和
+      // 待人工复核都不计入失败，但商品同样没推上去。按结果分级提示，否则
+      // 全绿的"成功"会掩盖需要运营补数据或复核的商品。
+      const parts = [
+        ok ? `成功 ${ok}` : null,
+        blocked ? `闸门阻断 ${blocked}` : null,
+        review ? `待人工复核 ${review}` : null,
+        errored ? `推送失败 ${errored}` : null,
+      ].filter(Boolean) as string[]
+
+      const summary = `推送完成：${parts.join('，')}`
+      if (problems.length) message.warning(summary)
+      else message.success(summary)
+
+      if (problems.length > 0) {
+        Modal.info({
+          title: '部分商品未完成推送',
+          width: 640,
+          content: (
+            <div>
+              <ul style={{ marginBottom: 0, paddingLeft: 20, maxHeight: 320, overflow: 'auto' }}>
+                {problems.map((r, i) => (
+                  <li key={i}>
+                    <strong>{r.sku || '(无 SKU)'}</strong>
+                    {` — ${r.message || r.status}`}
+                  </li>
+                ))}
+              </ul>
+              <p style={{ marginTop: 12, marginBottom: 0, color: '#888' }}>
+                闸门阻断需回候选库补全数据；待人工复核可在单个推送时确认强制放行。
+              </p>
+            </div>
+          ),
+        })
+      }
+
+      // 只清掉真正推上去的，剩下待处理的保留勾选，便于继续处理。
+      const pushed = new Set(
+        results.filter((r) => r.status === 'pushed' && r.product_id).map((r) => String(r.product_id)),
       )
-      setSelectedKeys([])
+      setSelectedKeys(selectedKeys.filter((k) => !pushed.has(String(k))))
       await load()
     } catch (pushError) {
       message.error(`推送失败：${apiErrorMessage(pushError)}`)
