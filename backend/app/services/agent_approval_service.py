@@ -34,6 +34,20 @@ DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 # 开关：Agent 自动审批是否启用
 AUTO_APPROVAL_ENABLED = os.getenv("AGENT_AUTO_APPROVAL_ENABLED", "true").lower() == "true"
 
+# 自动审批的风险等级白名单（逗号分隔，缺省仅 low）。
+# 中/高风险建议（restock_inventory、create_purchase_order 等写入类动作）不进自动审批，
+# 保持 pending_approval 等待人工确认 —— AGENTS.md §3.1「Agent 是提议者不是执行者」
+# 与 §3.3「任何自动化执行前检查审批状态」。
+#
+# 用白名单而非"排除 high"：将来新增 risk_level 取值时默认不放行，保守降级到人工。
+# 背景：此前该门禁缺失，prod 上 2174/2451 条已执行建议由 LLM 审核 Agent 自动批准
+# （含 1164 条 risk=medium 的补货动作），真正确认过的只有 20 条。
+AUTO_APPROVE_RISK_LEVELS = frozenset(
+    x.strip().lower()
+    for x in os.getenv("AGENT_AUTO_APPROVE_RISK_LEVELS", "low").split(",")
+    if x.strip()
+)
+
 # 审核 LLM 温度（低温度 = 更保守稳定的审批判断）
 APPROVAL_TEMPERATURE = float(os.getenv("AGENT_APPROVAL_TEMPERATURE", "0.2"))
 
@@ -175,6 +189,8 @@ async def auto_approve_suggestion(
     """对一条建议执行 Agent 自动审批。
 
     流程：
+    0. 风险等级不在 AUTO_APPROVE_RISK_LEVELS 白名单内 → 直接跳过，
+       保持 pending_approval 等人工审批
     1. 根据建议类型确定审核 Agent
     2. 调用 LLM 让审核 Agent 判断建议是否合理
     3. 根据 LLM 输出自动批准或拒绝
@@ -190,6 +206,26 @@ async def auto_approve_suggestion(
         suggestion.dispatch_fallback_reason = "自动审批开关已关闭，回退人工审批"
         await session.flush()
         return {"decision": "skipped", "reason": "auto_approval_disabled"}
+
+    # 风险等级门禁：白名单外的风险等级一律退回人工审批。
+    # 放在开关判断之后、任何 LLM 调用之前 —— 中高风险建议根本不该消耗一次
+    # 审核 LLM 的 token 预算，也不该让审核 Agent 有机会"判断通过"。
+    if suggestion.risk_level not in AUTO_APPROVE_RISK_LEVELS:
+        logger.info(
+            "Agent自动审批跳过: suggestion_id=%s risk_level=%s 不在白名单 %s，保持 pending_approval 等待人工",
+            suggestion.id, suggestion.risk_level, sorted(AUTO_APPROVE_RISK_LEVELS),
+        )
+        suggestion.dispatch_status = "fallback_manual"
+        suggestion.dispatch_fallback_reason = (
+            f"risk_level={suggestion.risk_level} 需人工审批"
+            f"（自动审批仅覆盖 {sorted(AUTO_APPROVE_RISK_LEVELS)}）"
+        )
+        await session.flush()
+        return {
+            "decision": "skipped",
+            "reason": "risk_level_requires_manual_approval",
+            "risk_level": suggestion.risk_level,
+        }
 
     # 1. 确定审核 Agent
     reviewer_id, reviewer_name = get_reviewer_for_suggestion(
