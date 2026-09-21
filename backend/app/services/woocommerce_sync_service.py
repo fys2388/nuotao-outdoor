@@ -455,6 +455,8 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
         "regular_price": wc_product.get("regular_price"),
         "sale_price": wc_product.get("sale_price"),
         "stock_quantity": wc_product.get("stock_quantity"),
+        "manage_stock": wc_product.get("manage_stock"),
+        "stock_status": wc_product.get("stock_status"),
         "in_stock": wc_product.get("in_stock"),
         "total_sales": wc_product.get("total_sales"),
         "average_rating": wc_product.get("average_rating"),
@@ -490,6 +492,77 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
     }
 
 
+async def _upsert_inventory_snapshot(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    meta: dict[str, Any],
+    location: str = "cn",
+) -> str:
+    """把 WooCommerce 的 stock_quantity 落到 inventory_snapshots（当前状态表）。
+
+    Returns:
+        "created" / "updated" / "skipped"
+
+    InventorySnapshot 的唯一约束是 (workspace_id, product_id, location)，
+    所以按 (product, location) upsert，反复同步不会产生重复行。
+
+    跳过条件：
+    - ``manage_stock`` 为 False：WooCommerce 对该产品不跟踪库存，
+      stock_quantity 无意义，写入 0 会让 agent 误报断货。
+    - 缺 ``stock_quantity``：变体产品或非实物商品不给库存字段。
+
+    位置固定写 "cn"：WooCommerce 是 storefront，它的库存即可售库存；
+    当前没有仓→location 的映射数据。daily_agents 的库存查询不按 location
+    过滤，所以这个默认值不会漏查。
+
+    此前 stock_quantity 只存在 Product.meta 里，从不进 inventory_snapshots，
+    那是 agent 拿不到任何产品级库存数据的直接原因（prod 上 19 行快照全部
+    product_id=NULL）。
+    """
+    from sqlalchemy import select
+
+    from app.models.supply_chain import InventorySnapshot
+
+    if not meta.get("manage_stock", True):
+        return "skipped"
+    stock_quantity = meta.get("stock_quantity")
+    if stock_quantity is None:
+        return "skipped"
+
+    quantity = max(int(stock_quantity), 0)
+
+    existing = (
+        await session.execute(
+            select(InventorySnapshot).where(
+                InventorySnapshot.workspace_id == workspace_id,
+                InventorySnapshot.product_id == product_id,
+                InventorySnapshot.location == location,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing is None:
+        session.add(
+            InventorySnapshot(
+                workspace_id=workspace_id,
+                product_id=product_id,
+                location=location,
+                quantity=quantity,
+                reserved=0,
+                available=quantity,
+                in_transit=0,
+            )
+        )
+        return "created"
+
+    existing.quantity = quantity
+    existing.available = quantity
+    existing.snapshot_time = datetime.utcnow()
+    return "updated"
+
+
 async def sync_products_to_db(
     session: AsyncSession,
     *,
@@ -515,6 +588,9 @@ async def sync_products_to_db(
     imported = 0
     updated = 0
     failed = 0
+    inventory_created = 0
+    inventory_updated = 0
+    inventory_failed = 0
     errors: list[str] = []
     page = 1
 
@@ -571,7 +647,10 @@ async def sync_products_to_db(
                         target_market=data["target_market"],
                     )
                     session.add(product)
+                    # flush 生成 id —— 库存 upsert 需要它
+                    await session.flush()
                     imported += 1
+                    inv_product = product
                 else:
                     # 更新产品
                     existing.name = data["name"]
@@ -585,6 +664,26 @@ async def sync_products_to_db(
                     existing.weight_kg = data["weight_kg"]
                     existing.dimensions = data["dimensions"]
                     updated += 1
+                    inv_product = existing
+
+                # 同步库存快照：agent 的低库存判断只读 inventory_snapshots，
+                # 不读 Product.meta，所以库存必须单独落表。
+                try:
+                    state = await _upsert_inventory_snapshot(
+                        session,
+                        workspace_id=workspace_id,
+                        product_id=inv_product.id,
+                        meta=data["meta"] or {},
+                    )
+                    if state == "created":
+                        inventory_created += 1
+                    elif state == "updated":
+                        inventory_updated += 1
+                except Exception as inv_err:
+                    inventory_failed += 1
+                    logger.warning(
+                        "同步产品库存失败 (sku=%s): %s", data["sku"], inv_err
+                    )
 
             except Exception as e:
                 failed += 1
@@ -602,8 +701,9 @@ async def sync_products_to_db(
         page += 1
 
     logger.info(
-        "WooCommerce 产品同步完成: 新增 %d, 更新 %d, 失败 %d",
+        "WooCommerce 产品同步完成: 新增 %d, 更新 %d, 失败 %d | 库存 新增 %d, 更新 %d, 失败 %d",
         imported, updated, failed,
+        inventory_created, inventory_updated, inventory_failed,
     )
 
     return {
@@ -611,6 +711,9 @@ async def sync_products_to_db(
         "imported": imported,
         "updated": updated,
         "failed": failed,
+        "inventory_created": inventory_created,
+        "inventory_updated": inventory_updated,
+        "inventory_failed": inventory_failed,
         "errors": errors,
         "total_processed": imported + updated + failed,
     }

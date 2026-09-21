@@ -29,10 +29,21 @@ class ExecutionError(Exception):
 
 
 async def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple[bool, Any]:
-    """安全调用外部服务函数（支持 async 函数自动 await）。
+    """安全调用外部服务函数，返回 (业务是否成功, 结果或错误信息)。
 
     Returns:
         (success, result_or_error)
+
+    ``success`` 表示**业务成功**，不是"函数调用没抛异常"。被调用方返回
+    ``{"success": False, "error": ...}`` 时 success=False。
+
+    此前的实现只捕获异常：service 层明确返回业务失败时，这里仍返回 True，
+    handler 因此把失败记成成功执行，``execution_result`` 审计日志虚报。
+    prod 上 1164 条 restock_inventory 记录 success=True，而 purchase_orders
+    表里一条都没有 —— 就是这个缺口。
+
+    注意：只识别 ``success is False`` 的显式失败。service 返回非 dict 或
+    不含 success 键时保持原有行为（视为成功），避免误伤未采用该约定的调用。
     """
     try:
         mod = importlib.import_module(module_path)
@@ -42,6 +53,8 @@ async def _safe_call(module_path: str, func_name: str, *args, **kwargs) -> tuple
         result = func(*args, **kwargs)
         if inspect.iscoroutine(result):
             result = await result
+        if isinstance(result, dict) and result.get("success") is False:
+            return False, result.get("error", f"{module_path}.{func_name} 返回 success=False")
         return True, result
     except Exception as e:
         return False, f"{type(e).__name__}: {str(e)}"
@@ -573,16 +586,36 @@ async def handle_create_purchase_order(session: AsyncSession, params: dict) -> d
         session, product_id, quantity, params,
     )
 
-    if ok:
-        return {"success": True, "action": "create_purchase_order", "result": result}
+    if not ok:
+        return {
+            "success": False,
+            "action": "create_purchase_order",
+            "error": f"创建采购单执行失败: {result}",
+        }
 
-    total_cost = float(unit_cost) * int(quantity) if unit_cost and quantity else None
+    # 落库回读：procurement_service 只 add + flush，不自己 commit，最终是否持久化
+    # 取决于上游事务。这里在事务内回读一次，至少能挡掉"返回 success 但根本没 add"
+    # 这类路径。读不到就判失败 —— 采购单是人审过后才执行的，静默丢失比报失败更糟。
+    po_id = result.get("purchase_order_id") if isinstance(result, dict) else None
+    if po_id:
+        from sqlalchemy import select
+        from app.models.supply_chain import PurchaseOrder
 
-    return {
-        "success": False,
-        "action": "create_purchase_order",
-        "error": f"创建采购单执行失败: {result}",
-    }
+        exists = (
+            await session.execute(
+                select(PurchaseOrder).where(PurchaseOrder.id == po_id)
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            po_number = result.get("po_number", "?")
+            logger.error("采购单 %s 返回成功但事务内查不到，执行判为失败", po_number)
+            return {
+                "success": False,
+                "action": "create_purchase_order",
+                "error": f"采购单 {po_number} 已生成但未落库，执行视为失败",
+            }
+
+    return {"success": True, "action": "create_purchase_order", "result": result}
 
 
 @register_handler("adjust_product_price")
