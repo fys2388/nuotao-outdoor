@@ -40,6 +40,12 @@ backend/app/data/
 !infra/**/*.sh
 
 # 根目录一次性 Python 脚本（含硬编码密钥）
+# 通配兜底：部署根目录的临时排障/一次性脚本一律不进版本库。
+# 曾误提交 142 个，其中 execute5_final.py 含
+#   DELETE FROM purchase_orders WHERE po_number LIKE 'PO-AGENT-%'
+# 在生产库上删掉了 1180 条采购单（pg_stat n_tup_del=1180）。
+# 正式脚本请放 infra/ 或 tests/，一次性排障放 C:\temp 或 /tmp。
+/*.py
 /import-woocommerce-orders*.py
 /woocommerce-solar-lantern.py
 /check-payment-gateways.py

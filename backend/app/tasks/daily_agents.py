@@ -134,9 +134,14 @@ async def run_product_analyst_daily(session: AsyncSession) -> dict[str, Any]:
     product_stats = await _get_product_stats(session)
 
     # 2. 生成库存预警建议（available 来自 inventory_snapshots 实测值）
-    if product_stats.get("low_stock_products"):
-        for product in product_stats["low_stock_products"]:
+    low_stock = product_stats.get("low_stock_products")
+    unit_costs = await _get_unit_costs(
+        session, [str(p["id"]) for p in low_stock]
+    ) if low_stock else {}
+    if low_stock:
+        for product in low_stock:
             threshold = product.get("stockout_threshold", 0)
+            unit_cost = unit_costs.get(str(product.get("id")), 0.0)
             suggestion = await agent_suggestion_service.create_suggestion(
                 session,
                 agent_id="product_analyst",
@@ -152,6 +157,7 @@ async def run_product_analyst_daily(session: AsyncSession) -> dict[str, Any]:
                 execution_params={
                     "product_id": product.get("id"),
                     "quantity": product.get("reorder_qty", 0),
+                    "unit_cost": unit_cost,
                     "current_available": product.get("available", 0),
                     "in_transit": product.get("in_transit", 0),
                     "locations": product.get("locations", []),
@@ -375,9 +381,14 @@ async def run_supply_chain_daily(session: AsyncSession) -> dict[str, Any]:
     supply_stats = await _get_supply_chain_stats(session)
 
     # 生成补货建议（available 来自 inventory_snapshots 实测值）
-    if supply_stats.get("need_reorder_products"):
-        for product in supply_stats["need_reorder_products"]:
+    need_reorder = supply_stats.get("need_reorder_products")
+    unit_costs = await _get_unit_costs(
+        session, [str(p["id"]) for p in need_reorder]
+    ) if need_reorder else {}
+    if need_reorder:
+        for product in need_reorder:
             threshold = product.get("stockout_threshold", 0)
+            unit_cost = unit_costs.get(str(product.get("id")), 0.0)
             suggestion = await agent_suggestion_service.create_suggestion(
                 session,
                 agent_id="supply_chain_manager",
@@ -390,10 +401,18 @@ async def run_supply_chain_daily(session: AsyncSession) -> dict[str, Any]:
                     f"建议采购 {product.get('reorder_qty', 0)} 件"
                     f"（目标库存 = 阈值 × {REORDER_TARGET_MULTIPLIER}）。"
                     f"供应商与到货周期需审批时指定（当前无供应商主数据）。"
+                    + (
+                        f"按采购单价 {unit_cost:.2f} 估算金额 "
+                        f"{unit_cost * product.get('reorder_qty', 0):.2f}。"
+                        if unit_cost > 0 else
+                        "产品缺少采购单价（product_cost.purchase_cost 为空），"
+                        "审批人需补充单价，否则生成的采购单金额为 0。"
+                    )
                 ),
                 execution_params={
                     "product_id": product.get("id"),
                     "quantity": product.get("reorder_qty", 0),
+                    "unit_cost": unit_cost,
                     "current_available": product.get("available", 0),
                     "in_transit": product.get("in_transit", 0),
                     "locations": product.get("locations", []),
@@ -765,6 +784,46 @@ async def _low_stock_from_inventory(
     return products, diagnostic
 
 
+async def _get_unit_costs(
+    session: AsyncSession, product_ids: list[str]
+) -> dict[str, float]:
+    """批量取采购单价，返回 {product_id: purchase_cost}。
+
+    采购单金额此前恒为 0：agent 的 execution_params 不带 unit_cost，
+    procurement_service 只能用默认值 0，产出 total=0.00 的采购单——这种单据
+    进不了真实采购流程（无法算账、无法比对报价）。
+
+    单价来源是 ProductCost.purchase_cost，即 PROFIT-001 落地成本模型里的采购
+    单价（total_landed_cost 含运费税费等，不是采购价，不能用来下采购单）。
+
+    没有成本行的产品返回缺失，调用方按 0 处理并在建议里标注需人工补价。
+    """
+    from app.models.product import ProductCost
+
+    if not product_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(ProductCost.product_id, ProductCost.purchase_cost).where(
+                ProductCost.product_id.in_([_uuid(pid) for pid in product_ids])
+            )
+        )
+    ).all()
+    return {str(r.product_id): float(r.purchase_cost) for r in rows}
+
+
+def _uuid(value: Any) -> Any:
+    """把 suggestion params 里的字符串 id 转成 UUID；已是 UUID 则原样返回。"""
+    from uuid import UUID as _UUID
+
+    if isinstance(value, str):
+        try:
+            return _UUID(value)
+        except ValueError:
+            return value
+    return value
+
+
 async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
     """产品分析师数据：产品取自 products 表，库存取自 inventory_snapshots。
 
@@ -780,11 +839,15 @@ async def _get_product_stats(session: AsyncSession) -> dict[str, Any]:
     workspace_id = DEFAULT_WORKSPACE_ID
 
     # 1. 获取选品候选池（draft + candidate）
+    # 必须排除软删产品：prod 上 37 个 1688/pipeline 历史导入产品已全部
+    # deleted_at 标记，不排除会把死数据当活候选池（诊断里 products_in_scope
+    # 会虚高 40 而实际在售只有 2 个）。
     product_rows = (
         await session.execute(
             select(Product).where(
                 Product.workspace_id == workspace_id,
                 Product.status.in_(ANALYST_PRODUCT_STATUSES),
+                Product.deleted_at.is_(None),
             )
         )
     ).scalars().all()
@@ -932,11 +995,13 @@ async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
     workspace_id = DEFAULT_WORKSPACE_ID
 
     # 1. 获取已立项产品（candidate + active）
+    # 同样排除软删产品，理由见 _get_product_stats。
     product_rows = (
         await session.execute(
             select(Product).where(
                 Product.workspace_id == workspace_id,
                 Product.status.in_(SUPPLY_CHAIN_PRODUCT_STATUSES),
+                Product.deleted_at.is_(None),
             )
         )
     ).scalars().all()
