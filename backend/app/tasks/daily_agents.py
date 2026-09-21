@@ -987,8 +987,10 @@ async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
     两者都没有真实来源，宁可不给也不编造。
 
     ``total_inventory_value`` / ``pending_purchase_orders`` / ``supplier_count``
-    仍是占位值：库存价值需要单品成本数据（inventory_snapshots 无单价字段），
-    采购单与供应商需要相应业务表。见 docs/agent_team_workflow_refactor.md §P2。
+    曾长期是硬编码占位值（15000 / 0 / 3），违反 AGENTS.md 1.2 第 5 条「禁止
+    硬编码业务经验值到业务逻辑」。现已全部改为真实查询：库存价值取
+    available × purchase_cost（缺成本数据时为 None 而非编数）、采购单与供应商
+    分别按未结状态与主数据条数统计。
     """
     from app.models.product import Product
 
@@ -1027,11 +1029,55 @@ async def _get_supply_chain_stats(session: AsyncSession) -> dict[str, Any]:
             "reorder_qty": max(threshold * REORDER_TARGET_MULTIPLIER - row["available"], 0),
         })
 
+    # 3. 库存价值 = 可发货库存 × 采购单价。
+    # 缺成本行的产品无法计价；全部缺价时返回 None 而不是编一个数字，
+    # 调用方文案会说明"数据暂缺"。15000 这个占位值曾让 agent 拿它做决策。
+    from app.models.product import ProductCost
+    from app.models.supply_chain import (
+        InventorySnapshot,
+        PurchaseOrder,
+        SupplierProfile,
+    )
+
+    valued = (
+        await session.execute(
+            select(func.sum(InventorySnapshot.available * ProductCost.purchase_cost))
+            .select_from(InventorySnapshot)
+            .join(ProductCost, ProductCost.product_id == InventorySnapshot.product_id)
+            .where(
+                InventorySnapshot.workspace_id == workspace_id,
+                InventorySnapshot.product_id.isnot(None),
+            )
+        )
+    ).scalar()
+    total_inventory_value: float | None = (
+        round(float(valued), 2) if valued is not None else None
+    )
+
+    # 4. 未结采购单：排除已收货与已取消
+    pending_purchase_orders = (
+        await session.execute(
+            select(func.count()).select_from(PurchaseOrder).where(
+                PurchaseOrder.workspace_id == workspace_id,
+                PurchaseOrder.status.notin_(("received", "cancelled")),
+            )
+        )
+    ).scalar() or 0
+
+    # 5. 供应商主数据条数（无表数据时为 0，不再是硬编码的 3）
+    supplier_count = (
+        await session.execute(
+            select(func.count()).select_from(SupplierProfile).where(
+                SupplierProfile.workspace_id == workspace_id
+            )
+        )
+    ).scalar() or 0
+
     return {
-        "total_inventory_value": 15000,  # 占位：需单品成本数据才能真实计算
+        "total_inventory_value": total_inventory_value,
         "need_reorder_products": need_reorder_products,
-        "pending_purchase_orders": 0,     # 占位：需采购单表
-        "supplier_count": 3,              # 占位：需供应商主数据
+        "pending_purchase_orders": int(pending_purchase_orders),
+        "supplier_count": int(supplier_count),
         "inventory_diagnostic": inventory_diagnostic,
     }
 
