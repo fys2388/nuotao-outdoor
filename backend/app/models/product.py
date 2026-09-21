@@ -80,7 +80,12 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     cost: Mapped["ProductCost | None"] = relationship(
         back_populates="product",
         uselist=False,
-        cascade="all, delete-orphan",
+        # 不带 delete-orphan：产品删除不得销毁成本数据。
+        # ProductCost 是 PROFIT-001 落地成本主数据，属于业务资产
+        # （AGENTS.md 1.2 第 4 条「数据是资产」），产品下线、替换、清理都
+        # 不该连带抹掉它的采购价与成本明细 —— 下一版产品或复盘分析还要用它。
+        # 外键已改为 ondelete="SET NULL"，product_id 保留以便溯源。
+        cascade="save-update, merge",
     )
 
 
@@ -93,10 +98,10 @@ class ProductCost(Base, WorkspaceMixin):
     __tablename__ = "product_cost"
 
     id: Mapped[Uuid] = mapped_column(Uuid, primary_key=True, default=lambda: uuid4())
-    product_id: Mapped[Uuid] = mapped_column(
+    product_id: Mapped[Uuid | None] = mapped_column(
         Uuid,
-        ForeignKey("products.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
@@ -127,4 +132,4 @@ class ProductCost(Base, WorkspaceMixin):
     )
     notes: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
 
-    product: Mapped[Product] = relationship(back_populates="cost")
+    product: Mapped[Product | None] = relationship(back_populates="cost")

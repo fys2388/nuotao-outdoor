@@ -105,19 +105,55 @@ async def create_product_candidate(
     )
     session.add(product_source)
 
-    # 如果提供了成本数据，创建成本记录
-    if any(key in product_data for key in ["cost_price", "purchase_cost", "domestic_shipping", "first_leg_shipping", "last_leg_shipping"]):
+    # 如果提供了成本数据，创建成本记录。
+    # 采购单价的来源字段按优先级取：purchase_cost > cost_price > price。
+    # sourcing_1688_service 的提取结果把 1688 报价放在 "price"（如 "25.80"），
+    # 而本函数原先只认 purchase_cost/cost_price —— 字段名不匹配导致 1688 选品
+    # 的价格被静默丢弃，永远不写 product_cost。
+    purchase_cost = _safe_decimal(
+        product_data.get("purchase_cost", product_data.get("cost_price", product_data.get("price", 0)))
+    )
+    domestic_shipping = _safe_decimal(product_data.get("domestic_shipping", 0))
+    first_leg_shipping = _safe_decimal(product_data.get("first_leg_shipping", 0))
+    last_leg_shipping = _safe_decimal(product_data.get("last_leg_shipping", 0))
+
+    if purchase_cost > 0 or any(
+        key in product_data
+        for key in ("domestic_shipping", "first_leg_shipping", "last_leg_shipping")
+    ):
         from app.models.product import ProductCost
+        from app.services.product_cost_service import landed_breakdown
+
+        # 复用 PROFIT-001 的落地成本口径，和人工录入/API upsert 保持一致。
+        # 原先这里只写四个分项、不算总额，导致 total_cost 与 total_landed_cost
+        # 恒为 0 —— 下游所有按总额取数的逻辑（利润、COGS、采购单确认）都失效。
+        _intl, total_landed_cost, total_cost = landed_breakdown(
+            purchase_cost=purchase_cost,
+            domestic_shipping=domestic_shipping,
+            first_leg_shipping=first_leg_shipping,
+            last_leg_shipping=last_leg_shipping,
+            international_shipping=None,
+            packaging=Decimal("0"),
+            tax_estimate=Decimal("0"),
+            handling=Decimal("0"),
+        )
         product_cost = ProductCost(
             workspace_id=workspace_id,
             product_id=product.id,
             currency=product_data.get("currency", "USD"),
-            purchase_cost=_safe_decimal(product_data.get("purchase_cost", product_data.get("cost_price", 0))),
-            domestic_shipping=_safe_decimal(product_data.get("domestic_shipping", 0)),
-            first_leg_shipping=_safe_decimal(product_data.get("first_leg_shipping", 0)),
-            last_leg_shipping=_safe_decimal(product_data.get("last_leg_shipping", 0)),
+            purchase_cost=purchase_cost,
+            domestic_shipping=domestic_shipping,
+            first_leg_shipping=first_leg_shipping,
+            last_leg_shipping=last_leg_shipping,
+            international_shipping=_intl,
+            total_landed_cost=total_landed_cost,
+            total_cost=total_cost,
         )
         session.add(product_cost)
+        logger.info(
+            "ProductCost created: product_id=%s purchase_cost=%s total_landed=%s",
+            product.id, purchase_cost, total_landed_cost,
+        )
 
     await session.flush()
 
