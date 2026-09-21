@@ -197,6 +197,44 @@ async def business_alerts_task(session: AsyncSession) -> dict[str, Any]:
     }
 
 
+@register_scheduled_task(
+    "woocommerce_product_sync",
+    interval_minutes=60,
+    description="从 WooCommerce 同步产品与库存快照（每小时）",
+)
+async def woocommerce_product_sync_task(session: AsyncSession) -> dict[str, Any]:
+    """同步 WooCommerce 产品及其 stock_quantity 到 inventory_snapshots。
+
+    此前库存只落在 Product.meta 里，从不进 inventory_snapshots，agent 因此
+    读不到任何产品级库存数据。sync_products_to_db 现在同时写库存快照。
+    """
+    from app.services import woocommerce_sync_service
+
+    if not woocommerce_sync_service.WC_CONSUMER_KEY:
+        logger.info("WooCommerce 凭证未配置，跳过产品同步")
+        return {"success": False, "reason": "woocommerce_not_configured"}
+
+    try:
+        return await woocommerce_sync_service.sync_products_to_db(
+            session, workspace_id=DEFAULT_WORKSPACE_ID
+        )
+    except Exception as exc:
+        logger.exception("WooCommerce 产品同步失败")
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_scheduled_task(
+    "approval_queue_alert",
+    interval_minutes=30,
+    description="审批队列积压/超SLA告警（每30分钟）",
+)
+async def approval_queue_alert_task(session: AsyncSession) -> dict[str, Any]:
+    """中高风险建议积压或超 SLA 时推送飞书，避免人审环节形同虚设。"""
+    from app.tasks.approval_queue_alert import run_approval_queue_alert
+
+    return await run_approval_queue_alert(session)
+
+
 def _parse_last_run(raw: str) -> datetime:
     """Parse a persisted last_run into an aware UTC datetime.
 
