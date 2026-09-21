@@ -171,9 +171,18 @@ def fetch_woocommerce_order_by_id(order_id: int) -> dict[str, Any]:
 def fetch_woocommerce_products(
     per_page: int = 100,
     page: int = 1,
-    status: str = "publish",
+    status: str = "any",
 ) -> dict[str, Any]:
-    """从 WooCommerce 获取产品列表"""
+    """从 WooCommerce 获取产品列表。
+
+    ``status`` 默认 "any"：WooCommerce 的 "any" 含 draft/publish/pending，
+    排除 trash 与 private。
+
+    早期默认 "publish"，但 prod 店铺所有在售产品都还是 draft 状态
+    （publish 计数为 0），导致该接口长期返回空列表 —— 产品同步和库存同步
+    实际从未同步过任何产品。按 sku 映射后的 status 由
+    convert_wc_product_to_internal 决定，不会把 draft 误提成 active。
+    """
     url = f"{WC_URL}/wp-json/wc/v3/products"
     params = {"per_page": min(per_page, 100), "page": page, "status": status}
 
