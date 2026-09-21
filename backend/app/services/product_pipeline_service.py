@@ -940,6 +940,16 @@ async def run_pipeline(
                 "Pipeline %s Step 7 (listing) blocked by V3.0 gate: %s",
                 pipeline_id, (gate or {}).get("veto_failed"),
             )
+        elif gate_needs_review:
+            # Needs-review is checked BEFORE auto_list: with auto_list ahead, this
+            # branch was unreachable and a flagged product would be pushed to
+            # WooCommerce anyway - the gate degraded to a footnote. Review is a
+            # business decision and must win over an automation flag.
+            steps_result["listing"] = {
+                "status": "pending_review",
+                "gate": gate,
+                "message": f"V3.0 闸门待人工复核：{(gate or {}).get('reason')}",
+            }
         elif auto_list:
             try:
                 listing_data = steps_result.get("listing_data", {}).get("data", {})
@@ -964,12 +974,6 @@ async def run_pipeline(
                 errors.append(f"Listing failed: {str(e)}")
                 steps_result["listing"] = {"status": "failed", "error": str(e)}
                 logger.error("Pipeline %s Step 7 (listing) failed: %s", pipeline_id, str(e))
-        elif gate_needs_review:
-            steps_result["listing"] = {
-                "status": "pending_review",
-                "gate": gate,
-                "message": f"V3.0 闸门待人工复核：{(gate or {}).get('reason')}",
-            }
         else:
             steps_result["listing"] = {
                 "status": "pending_confirmation",

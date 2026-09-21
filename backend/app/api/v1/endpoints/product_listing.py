@@ -71,6 +71,17 @@ async def api_single_list(product: ProductItem) -> dict[str, Any]:
     """单个产品上架到 WooCommerce"""
     result = list_to_woocommerce(product.model_dump())
     if not result.get("success"):
+        # A gate stop is an operator action, not a WooCommerce failure: report it
+        # as 422 so it is not mistaken for a broken integration (502).
+        if result.get("gate_status") == "blocked":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": result.get("error"),
+                    "gate_codes": result.get("gate_codes", []),
+                    "gate_reasons": result.get("gate_reasons", []),
+                },
+            )
         raise HTTPException(status_code=502, detail=result.get("error", "上架失败"))
     return result
 

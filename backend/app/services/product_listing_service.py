@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import requests
 
+from app.services.listing_gate import evaluate_gate_from_dict
+
 logger = logging.getLogger(__name__)
 
 # WooCommerce 配置（从环境变量读取）
@@ -267,6 +269,32 @@ def list_to_woocommerce(
     """
     if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
         return {"success": False, "error": "WooCommerce API 密钥未配置", "sku": product.get("sku")}
+
+    # V3.0 gate at the single choke point. Four callers reach this function and
+    # only the listing_publish endpoint ran a gate; the pipeline's confirm_and_list
+    # and Step 7 auto_list, plus the legacy /products/listing/single endpoint,
+    # pushed whatever dict they had. Checking here means no caller can bypass it.
+    # Blocked outcomes are reported as success=False with a distinct code so
+    # callers can tell "the store rejected it" from "our gate stopped it".
+    gate = evaluate_gate_from_dict(product)
+    if gate["status"] != "passed":
+        codes = [r["code"] for r in gate["reasons"]]
+        if gate["status"] == "blocked":
+            logger.warning(
+                "V3.0 gate BLOCKED publish for sku=%s: %s", product.get("sku"), codes,
+            )
+        else:
+            logger.info(
+                "V3.0 gate needs_review for sku=%s: %s", product.get("sku"), codes,
+            )
+        return {
+            "success": False,
+            "sku": product.get("sku"),
+            "error": "V3.0 选品闸门阻止上架",
+            "gate_status": gate["status"],
+            "gate_codes": codes,
+            "gate_reasons": gate["reasons"],
+        }
 
     try:
         url = f"{WC_URL}/wp-json/wc/v3/products"

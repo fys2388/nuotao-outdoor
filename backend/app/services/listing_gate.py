@@ -26,17 +26,28 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Reasons that can never be force-overridden (hard block -> 422).
-HARD_BLOCK: set[str] = {"missing_sku", "cjk_without_localization"}
+# missing_price and unapproved_candidate were previously REVIEW_REQUIRED, which
+# made "zero retail price" and "never reviewed" one-click overrideable - a hard
+# business precondition that should not sit behind a force flag.
+HARD_BLOCK: set[str] = {
+    "missing_sku",
+    "missing_price",
+    "unapproved_candidate",
+    "cjk_without_localization",
+}
 # Reasons that require human review but are overridable (-> 409).
 REVIEW_REQUIRED: set[str] = {
-    "missing_price",
     "unapproved_copy",
-    "unapproved_candidate",
     "thin_copy",
 }
 
 _COPY_STATUSES_PASSING = {"approved"}
-_CANDIDATE_STATUSES_PASSING = {"approved"}
+# Candidate lifecycle is candidate -> approved -> testing -> winner (see
+# product_intelligence._CANDIDATE_TRANSITIONS). Only ``approved`` used to pass,
+# so testing/winner - strictly further along the review - were refused with
+# "请先完成候选评审至 approved", and winner (the terminal best outcome) could
+# never be published at all.
+_CANDIDATE_STATUSES_PASSING = {"approved", "testing", "winner"}
 
 # WooCommerce rejects sale_price >= regular_price.
 _CJK_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]")
@@ -181,6 +192,72 @@ def evaluate_gate(product: Any, prices: dict, en_copy: dict) -> dict:
             "code": "thin_copy",
             "message": f"英文描述仅 {len(description.strip())} 字符（建议 ≥{_MIN_DESCRIPTION_CHARS}），"
                        "WC 前台内容完整度不足",
+        })
+
+    if any(reason["code"] in HARD_BLOCK for reason in reasons):
+        return {"status": "blocked", "reasons": reasons}
+    if reasons:
+        return {"status": "needs_review", "reasons": reasons}
+    return {"status": "passed", "reasons": []}
+
+
+def evaluate_gate_from_dict(listing_data: dict[str, Any]) -> dict[str, Any]:
+    """Gate the raw dict handed to ``list_to_woocommerce``.
+
+    ``evaluate_gate`` needs a ``Product`` row (``candidate_status``, approved
+    English copy in ``meta.localizations.en``), but the two pipeline call sites
+    and the legacy listing endpoint hand ``list_to_woocommerce`` a plain dict
+    built from ``_generate_listing_data`` - and none of them run a gate at all.
+    That left an ungated exit: the same product could be blocked on the
+    storefront route while sailing straight into WooCommerce from the pipeline.
+
+    This checks only what a dict can tell us, and makes each of them a hard
+    block so the ungated path cannot be weaker than the gated one:
+
+      missing_sku                  no channel mapping key
+      missing_price                zero/absent retail price
+      cjk_without_localization     Chinese copy into an overseas store
+
+    If the dict happens to carry a ``candidate_status`` (some callers forward
+    the Product attributes) it is checked with the same passing set as
+    ``evaluate_gate``. Approval status of English copy is intentionally NOT
+    asserted here: the pipeline localizes the copy itself, and a dict has no
+    approval signal to read, so requiring it would block legitimate output.
+    """
+    data = listing_data or {}
+    reasons: list[dict[str, str]] = []
+
+    sku = str(data.get("sku") or "").strip()
+    if not sku:
+        reasons.append({
+            "code": "missing_sku",
+            "message": "缺少 SKU，无法建立 WooCommerce 渠道映射",
+        })
+
+    price = _num(
+        data.get("regular_price", data.get("price", data.get("sale_price", "")))
+    )
+    if price is None:
+        reasons.append({
+            "code": "missing_price",
+            "message": "缺少有效零售价（regular_price/price/sale_price 均无正值）",
+        })
+
+    title = str(data.get("name") or data.get("title") or "").strip()
+    description = str(
+        data.get("description") or data.get("long_description") or ""
+    ).strip()
+    if has_cjk(title) or has_cjk(description):
+        reasons.append({
+            "code": "cjk_without_localization",
+            "message": "商品文案仍含中文字符，海外店铺禁止推送中文商品",
+        })
+
+    candidate_status = data.get("candidate_status")
+    if candidate_status and str(candidate_status).strip() not in _CANDIDATE_STATUSES_PASSING:
+        reasons.append({
+            "code": "unapproved_candidate",
+            "message": f"候选状态为 {candidate_status}，需先完成候选评审",
         })
 
     if any(reason["code"] in HARD_BLOCK for reason in reasons):
