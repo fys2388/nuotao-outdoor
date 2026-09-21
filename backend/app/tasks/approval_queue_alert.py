@@ -47,6 +47,14 @@ APPROVAL_SLA_HOURS: dict[str, float] = {
 # 同一告警签名的最短推送间隔（秒）。默认 1 小时。
 ALERT_THROTTLE_SECONDS = int(os.getenv("APPROVAL_ALERT_THROTTLE_SECONDS", "3600"))
 
+# 审批队列告警是否绕过飞书推送时段限制。默认 True。
+# 营销类推送需要守 6:00-23:00，但「审批积压」是运营中断：中高风险建议
+# 无人处理意味着人审环节失效，等到次日再提醒只是把积压拉长。
+# 设为 false 可回退到与营销推送一致的时段限制。
+APPROVAL_ALERT_IGNORE_PUSH_HOURS = (
+    os.getenv("APPROVAL_ALERT_IGNORE_PUSH_HOURS", "true").lower() == "true"
+)
+
 # 卡片上最多展示几条示例
 MAX_EXAMPLES = 5
 
@@ -166,7 +174,9 @@ def _build_card(stats: dict[str, Any]) -> dict[str, Any]:
 
     by_risk = stats["by_risk"]
     breaches = stats["sla_breaches"]
-    color = "red" if breaches else "orange"
+    # 颜色跟最严重的风险等级走：有 high 或超 SLA 就红，否则橙色。
+    has_high = by_risk.get("high", 0) > 0
+    color = RISK_COLORS["high"] if (has_high or breaches) else RISK_COLORS["medium"]
 
     risk_line = " / ".join(
         f"{lvl} {count}" for lvl, count in sorted(by_risk.items())
@@ -253,7 +263,10 @@ async def run_approval_queue_alert(session: AsyncSession) -> dict[str, Any]:
             "by_risk": stats["by_risk"],
         }
 
-    if not _is_within_push_hours():
+    if (
+        not APPROVAL_ALERT_IGNORE_PUSH_HOURS
+        and not _is_within_push_hours()
+    ):
         logger.info("不在推送时段，跳过审批队列告警（total=%d）", total)
         return {
             "notified": False,
