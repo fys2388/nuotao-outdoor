@@ -163,7 +163,8 @@ async def create_suggestion(
     # Agent 自动审批（替代飞书人工审批）
     # 流程：根据建议类型分发给对应审核 Agent（生成 Agent ≠ 审核 Agent），
     # 由审核 Agent 通过 LLM 判断建议是否合理，自动批准/拒绝。
-    # 低风险建议批准后自动执行；中高风险进入 approved 状态等待执行调度。
+    # 仅低风险建议进入自动审批；中/高风险在 auto_approve_suggestion 内被门禁拦下，
+    # 保持 pending_approval 等待人工确认（见 AGENTS.md 3.1 / 3.3）。
     try:
         from app.services.agent_approval_service import auto_approve_suggestion
         approval_result = await auto_approve_suggestion(
