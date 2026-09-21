@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react'
 import {
   Card, Tabs, Table, Button, Tag, Space, Typography, message,
   Row, Col, Statistic, Modal, Form, InputNumber, Divider, Alert, Badge,
-  Descriptions, Tooltip
+  Descriptions, Tooltip, Drawer, Spin, Popconfirm
 } from 'antd'
 import {
   ShopOutlined, RocketOutlined, SyncOutlined, PlusOutlined,
   DollarOutlined, TeamOutlined, CheckCircleOutlined,
-  FileTextOutlined, AuditOutlined
+  FileTextOutlined, AuditOutlined, SafetyOutlined
 } from '@ant-design/icons'
 import { request, api } from '../api/client'
 
@@ -91,6 +91,15 @@ export default function ProductPublish() {
   const [tiers, setTiers] = useState<WholesaleTier[]>([])
   const [form] = Form.useForm()
 
+  // 「上架就绪」抽屉：闸门结论在推送前就要可见，否则运营只能靠推送失败
+  // （409/422）倒推原因，而且预览必须只读——预览不该有副作用。
+  const [gateDrawerId, setGateDrawerId] = useState<string | null>(null)
+  const [gateView, setGateView] = useState<any>(null)
+  const [gateLoading, setGateLoading] = useState(false)
+  const [costModalOpen, setCostModalOpen] = useState(false)
+  const [costSaving, setCostSaving] = useState(false)
+  const [costForm] = Form.useForm()
+
   const loadProducts = async () => {
     try {
       setLoading(true)
@@ -104,6 +113,53 @@ export default function ProductPublish() {
   }
 
   useEffect(() => { loadProducts() }, [])
+
+  // 只读预览 V3.0 选品闸门：不推送、不写库，可安全轮询。
+  const openGatePreview = async (productId: string) => {
+    setGateDrawerId(productId)
+    setGateView(null)
+    try {
+      setGateLoading(true)
+      const data = await api.previewListingGate(productId)
+      setGateView(data)
+    } catch (e: any) {
+      message.error(e?.message || '闸门预览加载失败')
+    } finally {
+      setGateLoading(false)
+    }
+  }
+
+  const openCostModal = () => {
+    if (!gateDrawerId) return
+    costForm.setFieldsValue({
+      purchase_cost: gateView?.cost?.present ? gateView.cost.purchase_cost : undefined,
+      domestic_shipping: undefined,
+      first_leg_shipping: undefined,
+      last_leg_shipping: undefined,
+    })
+    setCostModalOpen(true)
+  }
+
+  const saveCost = async () => {
+    if (!gateDrawerId) return
+    try {
+      const values = await costForm.validateFields()
+      setCostSaving(true)
+      await api.saveProductCost(gateDrawerId, {
+        currency: gateView?.cost?.currency || 'CNY',
+        purchase_cost: values.purchase_cost,
+      })
+      message.success('采购成本已保存')
+      setCostModalOpen(false)
+      await openGatePreview(gateDrawerId)
+      await loadProducts()
+    } catch (e: any) {
+      if (e?.errorFields) return
+      message.error(e?.message || '成本保存失败')
+    } finally {
+      setCostSaving(false)
+    }
+  }
 
   const draftProducts = products.filter(p => p.status === 'draft')
   const activeProducts = products.filter(p => p.status === 'active')
@@ -329,6 +385,33 @@ export default function ProductPublish() {
       const id = getWcId(r)
       return id ? <Tag color="green">已同步 #{id}</Tag> : <Tag>未同步</Tag>
     }},
+    {
+      title: '上架就绪',
+      key: 'gate',
+      width: 150,
+      render: (_: any, r: Product) => {
+        const cs = getCopyState(r)
+        const price = getRetailPrice(r)
+        // 本地快速判定，避免每行发一次预览请求；点进去才拉全量闸门明细。
+        // 这里只提示「已知会拦」的项，不冒充后端结论。
+        const missing: string[] = []
+        if (!r.sku) missing.push('SKU')
+        if (price === null) missing.push('零售价')
+        if (cs !== 'approved') missing.push('英文文案')
+        if (missing.length > 0) {
+          return (
+            <a onClick={() => openGatePreview(r.id)} title="点击查看详情与处理方式">
+              <Badge status="warning" text={<span>{missing.length} 项待补</span>} />
+            </a>
+          )
+        }
+        return (
+          <a onClick={() => openGatePreview(r.id)} title="点击查看闸门明细">
+            <Badge status="processing" text={<span>查看闸门</span>} />
+          </a>
+        )
+      },
+    },
     { title: '操作', key: 'op', width: 220, render: (_: any, r: Product) => {
       const wcId = getWcId(r)
       const cs = getCopyState(r)
@@ -503,6 +586,184 @@ export default function ProductPublish() {
         <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={() => setTiers([...tiers, { moq: 500, price: 32, lead_days: 21 }])}>
           加一档
         </Button>
+      </Modal>
+
+      <Drawer
+        title={<span><SafetyOutlined /> 上架就绪 · {gateView?.product?.sku || ''}</span>}
+        open={!!gateDrawerId}
+        onClose={() => { setGateDrawerId(null); setGateView(null) }}
+        width={640}
+        footer={
+          gateDrawerId ? (
+            <div style={{ textAlign: 'right' }}>
+              <Space>
+                <Button
+                  type="primary"
+                  icon={<RocketOutlined />}
+                  loading={publishingId === gateDrawerId}
+                  disabled={!gateView || (gateView.gate.status !== 'passed' && gateView.gate.hard_block_count > 0)}
+                  onClick={() => {
+                    const pid = gateDrawerId
+                    setGateDrawerId(null)
+                    setGateView(null)
+                    confirmPush({ id: pid, name: gateView?.product?.name || '' } as Product)
+                  }}>
+                  推送到 WooCommerce
+                </Button>
+                {gateView?.gate.status === 'needs_review' && (
+                  <Popconfirm
+                    title="强制放行"
+                    description="已人工复核，跳过 needs_review 提示？硬阻断不会被绕过。"
+                    onConfirm={() => {
+                      const pid = gateDrawerId
+                      setGateDrawerId(null)
+                      setGateView(null)
+                      pushToWooCommerce(pid, true)
+                    }}>
+                    <Button danger>我已复核，强制放行</Button>
+                  </Popconfirm>
+                )}
+              </Space>
+            </div>
+          ) : null
+        }
+      >
+        <Spin spinning={gateLoading}>
+          {!gateView ? (
+            <Paragraph type="secondary">正在计算闸门…</Paragraph>
+          ) : (
+            <div>
+              <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}
+                items={[
+                  { key: 'name', label: '商品', children: decodeHtmlEntities(gateView.product.name) },
+                  { key: 'status', label: '商品状态', children: gateView.product.status },
+                  { key: 'cand', label: '候选状态', children: gateView.product.candidate_status || '—（下游商品，免评审）' },
+                  { key: 'market', label: '目标市场', children: gateView.product.target_market || '—' },
+                ]} />
+
+              {(() => {
+                const s = gateView.gate.status
+                const info = s === 'passed'
+                  ? { type: 'success', msg: '全部通过，可以直接推送' }
+                  : s === 'blocked'
+                    ? { type: 'error', msg: `硬阻断 ${gateView.gate.hard_block_count} 项，必须补全后才能上架` }
+                    : { type: 'warning', msg: '存在需人工复核的项，可修好后再推或强制放行' }
+                return (
+                  <Alert
+                    type={info.type as any}
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                    message={info.msg}
+                    description="强制放行只针对「需复核」，不会绕过硬阻断。"
+                  />
+                )
+              })()}
+
+              {gateView.gate.reasons.length === 0 ? (
+                <Paragraph type="secondary">无阻断项。</Paragraph>
+              ) : (
+                <div style={{ marginBottom: 16 }}>
+                  <Text strong>阻断原因与处理方式</Text>
+                  {gateView.gate.reasons.map((r: any) => (
+                    <div key={r.code} style={{ padding: 12, marginBottom: 8, borderRadius: 6, background: '#fafafa' }}>
+                      <Space wrap>
+                        <Tag color={r.severity === 'blocked' ? 'red' : 'orange'}>
+                          {r.severity === 'blocked' ? '硬阻断' : '需复核'}
+                        </Tag>
+                        <Text code style={{ fontSize: 11 }}>{r.code}</Text>
+                      </Space>
+                      <Paragraph style={{ margin: '8px 0 0' }}>{r.message}</Paragraph>
+                      <Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+                        处理：{r.fix}
+                      </Paragraph>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Divider plain style={{ margin: '8px 0' }}>关键数据</Divider>
+              <Descriptions column={1} size="small" style={{ marginBottom: 12 }}
+                items={[
+                  {
+                    key: 'retail', label: '零售价',
+                    children: gateView.prices?.regular_price
+                      ? <Text strong>${Number(gateView.prices.regular_price).toFixed(2)}</Text>
+                      : <Tag color="red">缺失</Tag>,
+                  },
+                  {
+                    key: 'cost', label: '采购成本',
+                    children: gateView.cost?.present
+                      ? <Space>
+                          <Text strong>{gateView.cost.currency} {Number(gateView.cost.purchase_cost).toFixed(2)}</Text>
+                          <a onClick={openCostModal}>修改</a>
+                        </Space>
+                      : <Tag color="orange">缺失</Tag>,
+                  },
+                  {
+                    key: 'copy', label: '英文文案',
+                    children: <Space>
+                      <Tag color={gateView.copy.status === 'approved' ? 'green' : 'orange'}>
+                        {gateView.copy.status}
+                      </Tag>
+                      {gateView.copy.description_chars !== undefined && (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          描述 {gateView.copy.description_chars} 字符（建议 ≥600）
+                        </Text>
+                      )}
+                    </Space>,
+                  },
+                  {
+                    key: 'wc', label: 'WooCommerce',
+                    children: gateView.woocommerce?.product_id
+                      ? <Text type="secondary">#{gateView.woocommerce.product_id} · {gateView.woocommerce.slug}</Text>
+                      : <Text type="secondary">未同步</Text>,
+                  },
+                ]} />
+
+              <Space wrap>
+                {getCopyState(gateView.product as Product) === 'none' && (
+                  <Button icon={<FileTextOutlined />} loading={copywritingId === gateDrawerId}
+                    onClick={() => generateCopywriting(gateView.product as Product)}>
+                    生成英文文案
+                  </Button>
+                )}
+                {getCopyState(gateView.product as Product) === 'generated' && (
+                  <Button type="primary" ghost icon={<AuditOutlined />} loading={copywritingId === gateDrawerId}
+                    onClick={() => approveCopywriting(gateView.product as Product)}>
+                    审核并批准文案
+                  </Button>
+                )}
+                {!gateView.cost.present && (
+                  <Button icon={<DollarOutlined />} onClick={openCostModal}>补录采购成本</Button>
+                )}
+                <Button icon={<SyncOutlined />} onClick={() => openGatePreview(gateDrawerId!)}>重新检测</Button>
+              </Space>
+            </div>
+          )}
+        </Spin>
+      </Drawer>
+
+      <Modal
+        title={`补录采购成本 — ${gateView?.product?.sku || ''}`}
+        open={costModalOpen}
+        onCancel={() => setCostModalOpen(false)}
+        onOk={saveCost}
+        confirmLoading={costSaving}
+        okText="保存成本"
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="采购成本只录你确认过的数据"
+          description="成本是资产，不是估算。宁可留空，也不要填猜的数字——留空会被闸门标为需复核，猜出来的数字会污染毛利核算。"
+        />
+        <Form form={costForm} layout="vertical">
+          <Form.Item name="purchase_cost" label="采购成本（元/件）"
+            rules={[{ required: true, message: '请填写采购成本' }]}>
+            <InputNumber min={0.01} precision={2} style={{ width: '100%' }} placeholder="例如 45.20" />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )

@@ -138,10 +138,21 @@ def resolve_prices(meta: dict | None) -> dict:
     return {"regular_price": regular, "sale_price": sale}
 
 
-def evaluate_gate(product: Any, prices: dict, en_copy: dict) -> dict:
+def evaluate_gate(
+    product: Any,
+    prices: dict,
+    en_copy: dict,
+    *,
+    purchase_cost: Any = None,
+) -> dict:
     """Evaluate the pre-publish gate.
 
     Returns ``{"status": "passed" | "needs_review" | "blocked", "reasons": [...]}``.
+
+    ``purchase_cost`` is optional: the gate is pure and has no database access, so
+    the caller loads the authoritative cost row and hands it in. Passing ``None``
+    leaves the cost check out entirely - that is what callers that have not wired
+    cost data yet do, and it keeps this signature backward compatible.
     """
     reasons: list[dict] = []
 
@@ -156,6 +167,17 @@ def evaluate_gate(product: Any, prices: dict, en_copy: dict) -> dict:
         reasons.append({
             "code": "missing_price",
             "message": "缺少有效零售价（meta 中 regular_price/price/sale_price 均无正值）",
+        })
+
+    # Purchase cost is a decision input rather than a publishing prerequisite - a
+    # product can legitimately go live before landed cost is confirmed - so this
+    # is needs_review, not a hard block. It is surfaced at the gate because selling
+    # with no recorded cost breaks margin accounting, which is exactly the
+    # "数据是资产" gap this gate exists to catch.
+    if purchase_cost is not None and _num(purchase_cost) is None:
+        reasons.append({
+            "code": "missing_cost",
+            "message": "缺少采购成本（purchase_cost 为空或为 0），上架后毛利无法核算",
         })
 
     # Candidate lifecycle (M5.13): NULL means the row is already a downstream
@@ -242,6 +264,17 @@ def evaluate_gate_from_dict(listing_data: dict[str, Any]) -> dict[str, Any]:
             "code": "missing_price",
             "message": "缺少有效零售价（regular_price/price/sale_price 均无正值）",
         })
+
+    # Only checked when the payload carries a cost field at all. Callers that do
+    # not forward one have no cost signal, and asserting absence from silence
+    # would turn every pipeline push into a needs_review.
+    if any(k in data for k in ("purchase_cost", "cost_price")):
+        cost_value = data.get("purchase_cost", data.get("cost_price"))
+        if _num(cost_value) is None:
+            reasons.append({
+                "code": "missing_cost",
+                "message": "缺少采购成本（purchase_cost 为空或为 0），上架后毛利无法核算",
+            })
 
     title = str(data.get("name") or data.get("title") or "").strip()
     description = str(
