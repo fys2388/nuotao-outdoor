@@ -259,6 +259,8 @@ async def push_product_to_woocommerce_gated(
                 detail={
                     "gate": "V3.0",
                     "status": "blocked",
+                    "product_id": str(product.id),
+                    "sku": product.sku,
                     "message": "V3.0 选品闸门阻断，禁止上架",
                     "reasons": gate["reasons"],
                 },
@@ -273,6 +275,8 @@ async def push_product_to_woocommerce_gated(
                 detail={
                     "gate": "V3.0",
                     "status": "needs_review",
+                    "product_id": str(product.id),
+                    "sku": product.sku,
                     "message": "未通过 V3.0 选品闸门，需要人工复核",
                     "reasons": gate["reasons"],
                 },
