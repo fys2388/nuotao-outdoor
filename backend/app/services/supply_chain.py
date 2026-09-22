@@ -815,6 +815,10 @@ async def delete_inventory(
     )
     await session.delete(snapshot)
     await session.flush()
+    # NB: create_event() commits the event row and ends its own transaction.
+    # The subsequent delete+flush needs its own commit, otherwise the row
+    # disappears at context-manager exit before the DELETE ever reaches the DB.
+    await session.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -1016,6 +1020,10 @@ async def delete_shipment(
     )
     await session.delete(shipment)
     await session.flush()
+    # Same pattern as delete_inventory: create_event() commits its own
+    # transaction, so the subsequent delete+flush needs its own commit or
+    # the DELETE is lost at session close.
+    await session.commit()
 
 
 # --------------------------------------------------------------------------- #
