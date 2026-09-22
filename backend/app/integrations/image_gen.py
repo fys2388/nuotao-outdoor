@@ -17,6 +17,7 @@ retry (idempotent generation), and fallback to a cheaper model on failure.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any

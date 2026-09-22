@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from app.services.nuotao_ai_signals import NormalizedAiSignals
 from app.services.nuotao_score_mapper import DEEP_CANDIDATE_OP_MIN, ScoreFacts
 from app.services.nuotao_score_v3 import (
     BRAND_FIT_VETO_BELOW,
