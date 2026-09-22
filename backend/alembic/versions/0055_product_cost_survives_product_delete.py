@@ -1,4 +1,4 @@
-﻿"""0055_product_cost_survives_product_delete
+"""0055_product_cost_survives_product_delete
 
 把 product_cost.product_id 的外键从 ondelete CASCADE 改为 SET NULL，并允许为空。
 
@@ -41,7 +41,14 @@ depends_on = None
 
 def _fk_name(bind, table: str, column: str) -> str | None:
     """按列反查外键约束名（不同环境的自动命名可能不同）。"""
-    insp = inspect(bind)
+    if bind is None:
+        return None
+    try:
+        insp = inspect(bind)
+    except Exception:
+        return None
+    if insp is None:
+        return None
     for fk in insp.get_foreign_keys(table):
         if column in fk.get("constrained_columns", []):
             return fk.get("name")
