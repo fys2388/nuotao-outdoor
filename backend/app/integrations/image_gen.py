@@ -178,6 +178,7 @@ async def generate_image(
     width: int = 1024,
     height: int = 1024,
     negative_prompt: str | None = None,
+    reference_image: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> ImageGenResult:
@@ -220,6 +221,7 @@ async def generate_image(
                     width=width,
                     height=height,
                     negative_prompt=negative_prompt,
+                    reference_image=reference_image,
                     timeout_seconds=timeout_seconds,
                 )
                 logger.info(
@@ -249,6 +251,7 @@ async def _dispatch_to_backend(
     width: int,
     height: int,
     negative_prompt: str | None,
+    reference_image: str | None = None,
     timeout_seconds: float,
 ) -> ImageGenResult:
     """Dispatch to the appropriate backend adapter."""
