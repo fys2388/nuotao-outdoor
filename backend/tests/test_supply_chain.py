@@ -282,6 +282,44 @@ async def test_inventory_invalid_location_422(db_session, api_client) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_inventory_delete_persists_and_is_audited(db_session, api_client) -> None:
+    """Regression: DELETE /inventory-snapshots/{id} must actually remove the row.
+
+    Prior implementation emitted the audit event (which commits its own
+    transaction) and then did ``session.delete + flush`` without a commit;
+    the DELETE never reached the DB and the endpoint returned 204 while
+    the row survived in a fresh session.
+    """
+    product_id = await _seed_product(db_session)
+    created = api_client.post(
+        "/api/v1/inventory-snapshots",
+        json={"product_id": str(product_id), "location": "cn", "quantity": 10},
+    )
+    assert created.status_code == 201, created.text
+    inventory_id = created.json()["id"]
+
+    deleted = api_client.delete(f"/api/v1/inventory-snapshots/{inventory_id}")
+    assert deleted.status_code == 204, deleted.text
+
+    # The row must be gone. Re-fetch from a fresh session to catch the
+    # "DELETE was issued but never committed" bug.
+    listed = api_client.get("/api/v1/inventory-snapshots")
+    assert listed.status_code == 200, listed.text
+    assert all(row["id"] != inventory_id for row in listed.json()), "row still present after DELETE"
+
+    # And the audit event is still recorded.
+    events = await _event_types(db_session)
+    assert "supply.inventory_deleted" in events
+
+
+@pytest.mark.asyncio
+async def test_inventory_delete_missing_404(db_session, api_client) -> None:
+    """DELETE on an unknown id returns 404, not a silent success."""
+    missing = api_client.delete("/api/v1/inventory-snapshots/00000000-0000-0000-0000-000000000001")
+    assert missing.status_code == 404
+
+
 # --------------------------------------------------------------------------- #
 # 4. Shipments + logistics events
 # --------------------------------------------------------------------------- #
