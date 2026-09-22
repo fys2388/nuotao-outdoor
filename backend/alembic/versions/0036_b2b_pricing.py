@@ -21,13 +21,16 @@ depends_on = None
 
 def _insert_legacy_price_backfill() -> None:
     bind = op.get_bind()
-    rows = bind.execute(
+    result = bind.execute(
         sa.text(
             "SELECT workspace_id, product_id, tier, agent_id, wholesale_price, "
             "moq, currency, is_active FROM b2b_product_prices "
             "ORDER BY workspace_id, product_id, tier NULLS FIRST, agent_id NULLS FIRST"
         )
-    ).mappings().all()
+    )
+    if result is None:
+        return
+    rows = result.mappings().all()
     if not rows:
         return
 
