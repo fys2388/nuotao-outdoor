@@ -75,12 +75,15 @@ def _customer_accounts_table() -> sa.TableClause:
 def _backfill_b2b_customer_accounts() -> None:
     bind = op.get_bind()
     accounts = _customer_accounts_table()
-    rows = bind.execute(
+    result = bind.execute(
         sa.text(
             "SELECT id, workspace_id, agent_number, company_name, country, currency "
             "FROM b2b_agents"
         )
-    ).mappings()
+    )
+    if result is None:
+        return
+    rows = result.mappings()
     for row in rows:
         account_id = uuid4()
         bind.execute(
@@ -108,12 +111,15 @@ def _backfill_b2b_customer_accounts() -> None:
 def _backfill_b2c_customer_accounts() -> None:
     bind = op.get_bind()
     accounts = _customer_accounts_table()
-    rows = bind.execute(
+    result = bind.execute(
         sa.text(
             "SELECT id, workspace_id, customer_reference_id, country "
             "FROM customer_profiles"
         )
-    ).mappings()
+    )
+    if result is None:
+        return
+    rows = result.mappings()
     for row in rows:
         reference = row["customer_reference_id"]
         digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()[:24]
