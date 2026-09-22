@@ -62,6 +62,13 @@ jobs:
             STAGE=/opt/nuotao/staging
             echo "=== [staging] syncing code to $STAGE ==="
             mkdir -p "$STAGE"
+
+            # Pull latest code from GitHub first (staging must validate new code, not old production)
+            cd /opt/nuotao
+            git fetch --prune origin ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }}
+            echo "[staging] pulled latest code: $(git log -1 --format='%h %s')"
+
             cd /opt/nuotao
             if command -v rsync >/dev/null 2>&1; then
               rsync -a --delete \
