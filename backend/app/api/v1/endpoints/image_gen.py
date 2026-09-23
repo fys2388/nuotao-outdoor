@@ -1,4 +1,4 @@
-﻿"""Image generation API endpoints (M6).
+"""Image generation API endpoints (M6).
 
 Routes:
 - GET  /api/v1/image-gen/status          — service status + available models
@@ -412,3 +412,63 @@ async def reject_generated_image(
         await db.rollback()
         logger.exception("Reject image failed")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Reject image failed: {e!s}") from None
+
+
+# ============================================
+# BUG #20: Local image download endpoint
+# ============================================
+# When OSS is not configured, generated images are stored locally under
+# IMAGE_STORAGE_DIR. This endpoint serves them as a static file so the
+# frontend and WooCommerce can reference a public URL instead of an
+# inaccessible local path.
+
+from fastapi.responses import FileResponse  # noqa: E402
+import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+
+@router.get("/download/{image_id}", summary="Download a locally-generated image")
+async def download_local_image(image_id: str):
+    """Serve a locally-generated image by task ID.
+
+    BUG #20: fallback when OSS/CDN is not configured. The frontend can
+    build a public URL like ``/api/v1/image-gen/download/{task_id}`` and
+    WooCommerce can consume it directly.
+
+    ``image_id`` is the task UUID (the filename on disk). The response is
+    streamed with the correct Content-Type based on the file extension.
+    """
+    # Resolve storage dir from settings (matches image_generation_service)
+    from app.core.config import get_settings
+    storage_dir = Path(get_settings().image_gen_storage_dir)
+
+    # Resolve the actual file path safely (no traversal)
+    safe_name = str(image_id).strip()
+    if not safe_name or ".." in safe_name or "/" in safe_name or "\\" in safe_name:
+        raise HTTPException(status_code=400, detail="Invalid image ID")
+
+    # Try common extensions (file on disk is stored as {task_id}{ext})
+    candidate = None
+    for ext in (".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"):
+        c = storage_dir / (safe_name + ext)
+        if c.is_file():
+            candidate = c
+            break
+
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_id}")
+
+    content_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".gif": "image/gif",
+    }.get(candidate.suffix.lower(), "application/octet-stream")
+
+    return FileResponse(
+        path=str(candidate),
+        media_type=content_type,
+        filename=candidate.name,
+    )

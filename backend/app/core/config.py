@@ -282,6 +282,18 @@ class Settings(BaseSettings):
     image_gen_timeout_seconds: float = 60.0
     image_gen_max_retries: int = 2
 
+    # --- BUG #20: Object Storage / CDN for generated images -----------------
+    # When OSS_ENABLED=true, generated images are uploaded to the configured
+    # bucket and image_url is replaced with the public CDN URL.
+    # Supports S3-compatible services (AWS S3, Alibaba OSS, Tencent COS, MinIO).
+    OSS_ENABLED: bool = False
+    OSS_ENDPOINT: str = ""
+    OSS_BUCKET: str = ""
+    OSS_ACCESS_KEY: str = ""
+    OSS_SECRET_KEY: str = ""
+    OSS_PUBLIC_BASE_URL: str = ""
+    OSS_IMAGE_PREFIX: str = "generated-images"
+
     # Image generation API keys (read from .env; never hardcode).
     dashscope_api_key: str = ""
     dashscope_workspace_id: str = ""
