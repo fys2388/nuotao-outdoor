@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
