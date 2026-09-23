@@ -1,4 +1,4 @@
-﻿# Nuotao Outdoor AI OS — 企业运营规则层（Operating Rules v1）
+# Nuotao Outdoor AI OS — 企业运营规则层（Operating Rules v1）
 
 > 版本：v1.0
 > 状态：草案（待审核与数据校准）
@@ -341,3 +341,129 @@ flowchart LR
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-08-11 | 建立运营规则层 v1：10 大规则域（PROD-SEL/PROD-SCORE/PRICE/PROFIT/SUPPLIER/SKU-LIFE/INV/ADS-TEST/CS/AGENT-PERM），定义规则模型、优先级、执行规格与版本升级机制 |
+| v1.1 | 2026-09-23 | SOP 闭环实跑复盘：新增 §15（SOP 闭环执行与漂移治理），覆盖 9 项 bug 修复记录、WC 漂移事件规则、ApiError 契约、WC publish 权限约束 |
+
+---
+
+## 15. SOP 闭环执行与漂移治理（NEW v1.1）
+
+> 本章节来源于 2026-09-23 前后连续两轮 SOP 闭环实跑（选品 → 编辑 → 上架 → 同步 WC → 反向同步）。
+> 定位：**运行期治理规则**，补充 §8 SKU-LIFE 的生命周期规则，聚焦「系统与 WooCommerce 之间的漂移」与「错误反馈契约」。
+
+### 15.1 SOP 闭环标准流程（v1）
+
+SOP 定义的唯一合规链路，任何人工或 Agent 干预必须落在此链路内：
+
+```
+选品池（Product Candidates）
+    │  ① 1688 一键导入 / 手动录入
+    ▼
+候选列表（V3 Selection Pipeline）
+    │  ② V3 智能评分 + Veto + 人工 promote/reject
+    │  ③ BUG#6 门禁：candidate → approved 前必须填价（售价 & 采购成本）
+    ▼
+产品编辑页（Product Publish）
+    │  ④ 补充详情、图片、属性、库存、类目
+    │  ⑤ V3 evidence 显示；被 veto 商品禁用按钮 + Tooltip 展示 rule_id
+    ▼
+上架队列（Listing Queue）
+    │  ⑥ 人工确认 → 执行上架
+    ▼
+同步到 WooCommerce
+    │  ⑦ publish 到 WC（当前阶段建议关闭 WC 直接 publish，只落 draft）
+    │  ⑧ BUG#5：反向同步不再覆盖本地 status（改用 meta.woocommerce_status 影子字段）
+    │  ⑨ BUG#9：检测到 WC status 与本地 status 漂移 → event_log 记录 product.wc_status_drift
+    ▼
+运营复盘
+    └─ 复盘数据回流评分模型校准集（§11 复盘与知识沉淀）
+```
+
+### 15.2 BUG 修复记录（v1.1 引入）
+
+| # | 症状 | 根因 | 修复位置 | PR / Commit |
+|---|---|---|---|---|
+| BUG #1 | `/api/v1/admin/b2b/receivables` 404 | `b2b_finance` 路由未注册 | `backend/app/api/v1/router.py` | PR #5 (merged, `d63e24c`) |
+| BUG #2 | 1688 一键导入 spinner 卡死 | 后端返回 HTTP 200 + `success:false`（gw.APIACLDecline），前端未翻译错误 | `product_pipeline_service.py` 加 `_translate_1688_error()` + `_1688_ERROR_TRANSLATIONS` | PR #6 |
+| BUG #3 | V3 evidence 显示「已否决」60.1 但 candidate 抽屉仍显示「已通过」 | V3 veto 未同步 `candidate_status` | `nuotao_selection_service.py` veto 分支同步 `candidate_status=jected` + `actor=system:v3-veto` | PR #6 |
+| BUG #4 | 5 个 POST endpoint 返回 422 empty body | FastAPI 默认 `{"detail": [...]}` 结构被前端拦截器吞掉 | `main.py` 全局 `RequestValidationError` handler 返回统一格式（见 §15.4） | PR #6 |
+| BUG #5 | WC 反向同步覆盖本地 status | `sync_products_to_db` 直接写 `existing.status = data["status"]` | 改为写入 `meta["woocommerce_status"]` 影子字段，`existing.status` 保持不变 | PR #6 |
+| BUG #6 | WC sync `success:true` 但 `items_failed:2`（语义模糊） | 返回值契约不清晰 | 与 §15.4 ApiError 契约配套；已加入 §15.4 讨论 | PR #6 |
+| BUG #7 | 5 个 422 empty body 端点（见 BUG #4 详情） | 见 BUG #4 | 见 BUG #4 | PR #6 |
+| BUG #8 | V3 evidence 与 candidate 抽屉不同步（=BUG #3 现象层） | 同 BUG #3 | 同 BUG #3 | PR #6 |
+| BUG #9 | WC 后台直接 publish 商品绕过本地审计门禁，运营无感知 | 反向同步无漂移检测 | `sync_products_to_db` 加漂移检测 + `event_log` 记录（见 §15.3） | PR #6 |
+
+### 15.3 WC 漂移事件规则（WC-DRIFT-001）
+
+**规则属性**：`type=flow`, `scope=woocommerce-sync`, `approval=L0（自动记录，不阻断）`, `audit=true`
+
+**触发条件**：`sync_products_to_db` 每次反向同步时，对每个已存在的商品做：
+- WC 端 `status` 归一化：`publish → published`（其余值 `draft`/`private` 同名）
+- 若归一化后 WC status ≠ 本地 `Product.status`，触发漂移
+
+**记录动作**：`event_log` 追加一条：
+
+```json
+{
+  "event_type": "product.wc_status_drift",
+  "entity_type": "product",
+  "entity_id": "<product_uuid>",
+  "payload": {
+    "sku": "NTO-xxxx",
+    "local_status": "published",
+    "wc_status": "draft",
+    "actor": "system:wc-sync"
+  }
+}
+```
+
+**返回值变化**：`sync_products_to_db` 返回值新增 `status_drift` 计数字段，便于监控看板告警。
+
+**运营解读**：
+- 漂移事件 ≠ 违规。可能是运营在 WC 后台手动改了 draft→publish（跳过本地审计门禁），可能是本地状态被误更新。
+- 出现漂移事件后：AI Product Agent 应在下一次复盘（§11）中高亮此 SKU，运营应判断是否需要在本地对齐 WC 端（走标准编辑流程），或回滚 WC 端状态。
+- 若漂移持续累积，考虑关闭 WC 后台 publish 权限（见 §15.5）。
+
+### 15.4 ApiError 契约（v1，NEW）
+
+所有后端返回给前端的错误响应必须遵循统一结构（除 5xx 内部错误外）：
+
+```json
+{
+  "code": "VALIDATION_ERROR | ACTOR_RESOLUTION | IDENTITY_AUTH | WORKSPACE_ACCESS | PERMISSION_DENIED | ...",
+  "message": "<人类可读的中文错误消息>",
+  "details": [ "...", "..." ]
+}
+```
+
+- **FastAPI 校验错误**（422）：全局 `RequestValidationError` handler 已把 Pydantic 错误翻译成中文（`字段「X」必填` / `字段「X」必须是整数` / `长度不足` / 等）。前端拦截器可安全读取 `message` 字段直接展示给用户。
+- **业务错误**（400/409）：`HTTPException` 携带 `detail` 时，前端应展示 `detail`；后端鼓励业务代码同时提供 `code` 字段（供前端做结构化分支）。
+- **认证/权限错误**：401/403 已定义固定 `code`（`IDENTITY_AUTH` / `WORKSPACE_ACCESS` / `PERMISSION_DENIED`），前端按 code 分派登录重定向或权限提示。
+
+**BUG #6 讨论（未完成）**：`sync_products_to_wc` 当前返回 `success:true` 但 `items_failed>0` 的语义模糊。目标：引入 `partial_success` 字段区分「全部成功 / 部分成功 / 全部失败」；本轮 PR #6 未实现，列入 P1 backlog。
+
+### 15.5 WC publish 权限约束（部署配置，非代码）
+
+**问题**：当前 WC 后台任何登录用户都可以直接把 draft 商品 publish，绕过本地审计门禁（SOP 闭环的第 ⑦ 步本应只落 draft，运营在本地手动触发 publish）。
+
+**建议配置**（在部署文档中记录，代码不改）：
+1. WC 后台仅授予运营 `edit_products` 权限，撤销 `publish_products` 权限（如果 WC 版本支持细粒度）。
+2. 所有 publish 动作必须从本地「产品编辑 → 上架」按钮触发，走本地审计 + WC 反向同步链路。
+3. 漂移事件（§15.3）作为兜底检测：即使权限配置生效，仍可能出现运营临时给他人授权后 publish 的场景。
+
+**未纳入本轮 PR**：这是部署配置，非代码变更，记录到本 SOP 供后续部署 PR 引用。
+
+### 15.6 P0/P1 backlog（本轮记录，未实现）
+
+| 优先级 | 项目 | 备注 |
+|---|---|---|
+| P0 | 状态机合并（`candidate_status` + `funnel_stage` 合并为单一 `lifecycle_stage`） | 大重构，涉及前端 6 处页面 + 后端 3 处 service，独立 PR |
+| P1 | BUG #6 partial_success 语义（§15.4 讨论） | 前端 UI 需同步适配 |
+| P1 | 全局 ApiError envelope 中间件（把 `HTTPException` 也翻译为统一 code/message/details） | 需要前端契约升级 |
+| P2 | 漂移事件看板告警（WC 状态漂移 > N 条/日） | 需要 ops-dashboard 支持 |
+
+### 15.7 变更记录
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v1.0 | 2026-08-11 | 建立运营规则层 v1（10 大规则域） |
+| v1.1 | 2026-09-23 | 新增 §15 SOP 闭环执行与漂移治理（BUG #1–#9 记录、WC-DRIFT-001、ApiError 契约、WC publish 权限约束、P0/P1 backlog） |
