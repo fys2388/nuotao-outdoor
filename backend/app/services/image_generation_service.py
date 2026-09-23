@@ -210,6 +210,13 @@ async def execute_generation_task(
         if gen_result.image_b64:
             saved_path = await _save_image_locally(task.id, gen_result.image_b64)
             task.image_path = saved_path
+            # BUG #20: attempt OSS upload; update image_url to CDN link
+            if saved_path:
+                from app.services.oss_storage_service import upload_image_to_oss
+                oss_url = upload_image_to_oss(saved_path)
+                if oss_url:
+                    task.image_url = oss_url
+                    logger.info("Image uploaded to OSS for task %s: %s", task.id, oss_url)
 
         task.status = "generated"
         task.error_message = None

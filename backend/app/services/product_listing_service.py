@@ -396,6 +396,19 @@ def list_to_woocommerce(
             "WooCommerce listing exhausted %d attempts for %s: %s",
             max_attempts, product.get("sku"), last_error,
         )
+        # BUG #19: notify Feishu when retries are exhausted
+        try:
+            from app.services.feishu_notification_service import FEISHU_WEBHOOK_URL, send_feishu_text_message
+            if FEISHU_WEBHOOK_URL:
+                send_feishu_text_message(
+                    f"⚠️ WC 上架失败 (重试耗尽)\n"
+                    f"SKU: {product.get('sku')}\n"
+                    f"尝试次数: {attempts}/{max_attempts}\n"
+                    f"错误: {last_error}",
+                    webhook_url=FEISHU_WEBHOOK_URL,
+                )
+        except Exception:
+            logger.debug("Feishu notification skipped for WC listing failure")
         return {
             "success": False,
             "sku": product.get("sku"),
