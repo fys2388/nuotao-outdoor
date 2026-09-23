@@ -83,7 +83,7 @@ def upgrade() -> None:
     op.create_index(
         'ix_listing_jobs_ws_product_created',
         'listing_jobs',
-        ['workspace_id', 'product_id', sa.text('(created_at DESC)')],
+        ['workspace_id', 'product_id', 'created_at'],
     )
     # Non-partial unique on (workspace_id, product_id, status).
     # Ensures a product cannot have two rows with the same status
