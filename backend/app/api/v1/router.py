@@ -86,6 +86,7 @@ from app.api.v1.endpoints import (
     system_settings,
     webhooks,
     webhooks_generic,
+    wc_clickback,
     weekly_report,
     woocommerce_sync,
 )
@@ -112,6 +113,7 @@ api_router.include_router(procurement_workbench.router)
 api_router.include_router(refunds.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(webhooks_generic.router)
+api_router.include_router(wc_clickback.router)
 api_router.include_router(weekly_report.router)
 api_router.include_router(woocommerce_sync.router)
 api_router.include_router(orders.router)
