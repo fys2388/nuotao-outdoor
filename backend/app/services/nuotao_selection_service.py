@@ -12,8 +12,11 @@ funnel is an independent axis (docs/nuotao_product_score_v3.0.md §4).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -56,6 +59,10 @@ from app.services.product_cost_service import (
     sale_price_from_meta,
 )
 from app.services.profit_engine import ProfitInput, calculate_contribution_margin
+from app.services.product_intelligence import (
+    ProductIntelligenceError,
+    update_candidate_status,
+)
 
 # Lower is better; used to pick the strongest supplier grade for a product.
 _SUPPLIER_RANK = {"A": 0, "B": 1, "C": 2, "D": 3}
@@ -321,6 +328,38 @@ async def evaluate_product(
         for rule_id in veto["failed"]
     ]
     await session.flush()
+
+    # BUG #3 修复：V3 硬否决（一票否决）后，把仍处于非终态的 candidate_status
+    # 同步推进到 rejected。V3 独立评分轴（funnel_stage / reject_reasons）保持不变，
+    # 但用户视角看到的"候选状态"抽屉此前仍显示"已通过"，造成 UX 断层。
+    # 只在 candidate_status ∈ {candidate, approved, testing} 时触发；
+    # winner / rejected 已经是终态，update_candidate_status 会拒绝重复写。
+    if veto["vetoed"]:
+        current_candidate = product.candidate_status
+        if current_candidate in ("candidate", "approved", "testing"):
+            try:
+                await update_candidate_status(
+                    session,
+                    workspace_id=workspace_id,
+                    product_id=product_id,
+                    new_status="rejected",
+                    actor="system:v3-veto",
+                    trace_id=record.trace_id,
+                )
+            except ProductIntelligenceError as exc:
+                # 状态机不允许此转移（例如并发推到了 winner），保留漏斗结论即可。
+                logger.warning(
+                    "V3 veto: could not sync candidate_status=%s to rejected for %s: %s",
+                    current_candidate,
+                    product_id,
+                    exc,
+                )
+            except Exception as exc:  # pragma: no cover - 防御式
+                logger.warning(
+                    "V3 veto: candidate_status sync raised for %s: %s",
+                    product_id,
+                    exc,
+                )
 
     handoff = await propose_selection_handoff(
         session,

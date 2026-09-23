@@ -25,6 +25,10 @@ class ProductIntakeRequest(BaseModel):
     source_url: str | None = Field(default=None, max_length=512)
     supplier_code: str | None = Field(default=None, max_length=64)
     purchase_cost: Decimal = Field(default=Decimal("0"), ge=0)
+    # BUG #6 fix: retail price on intake so the candidate→approved pricing gate
+    # has a real value to validate. Optional (backwards compatible) but expected
+    # by the manual intake flow; CSV intake can still derive it from 1688 offer.
+    retail_price: Decimal | None = Field(default=None, ge=0)
     domestic_shipping: Decimal = Field(default=Decimal("0"), ge=0)
     first_leg_shipping: Decimal = Field(default=Decimal("0"), ge=0)
     last_leg_shipping: Decimal = Field(default=Decimal("0"), ge=0)
@@ -449,3 +453,4 @@ class CandidateCsvIntakeResult(BaseModel):
     failed: int
     results: list[CandidateCsvRowResult] = Field(default_factory=list)
     trace_id: str | None = None
+
