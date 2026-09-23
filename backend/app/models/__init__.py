@@ -126,6 +126,7 @@ from app.models.supply_chain_learning import (
     SupplierPatternRun,
     SupplyChainCalibrationRun,
 )
+from app.models.wc_clickback import WcClickbackEvent
 from app.models.workspace import Workspace
 
 __all__ = [
@@ -241,6 +242,7 @@ __all__ = [
     "SupplierProfile",
     "SupplyChainCalibrationRun",
     "SupplyChainKnowledgeEntry",
+    "WcClickbackEvent",
     "WooCommerceDraft",
     "Workspace",
     "WorkspaceIdentityLink",
