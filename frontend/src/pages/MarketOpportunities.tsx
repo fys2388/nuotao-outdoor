@@ -34,7 +34,13 @@ export default function MarketOpportunities() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `你是 Nuotao 的市场情报 Agent。请分析户外品类「${category}」在美国市场的机会：\n1. 过去 90 天搜索/销量趋势\n2. Amazon 竞争度（Top10 品牌集中度）\n3. 预估毛利空间（成本 $15-25，售价 $60-90）\n4. 风险（侵权/季节性/物流）\n5. 推荐 3 个具体切入点\n用 JSON 返回，key: trend, competition, margin, risk, angles[3]`,
+          // BUG #16 fix: backend SearchRequest requires `query` (min_length=1).
+          // The market-intel prompt rides in `query` itself so the request passes
+          // validation; `category` narrows the sourcing, `message` is kept for
+          // legacy frontends that still read it.
+          query: `你是 Nuotao 的市场情报 Agent。请分析户外品类「${category}」在美国市场的机会：\n1. 过去 90 天搜索/销量趋势\n2. Amazon 竞争度（Top10 品牌集中度）\n3. 预估毛利空间（成本 $15-25，售价 $60-90）\n4. 风险（侵权/季节性/物流）\n5. 推荐 3 个具体切入点\n用 JSON 返回，key: trend, competition, margin, risk, angles[3]`,
+          category,
+          message: `市场情报分析请求：${category}`,
         }),
       })
       const data = await resp.json()

@@ -51,6 +51,7 @@ from app.api.v1.endpoints import (
     influencer,
     inventory,
     knowledge,
+    listing_jobs,
     llm_gateway,
     logistics,
     main_image,
@@ -121,6 +122,7 @@ api_router.include_router(product_intelligence.product_router)
 api_router.include_router(product_intelligence.decision_router)
 api_router.include_router(product_intelligence.candidate_router)
 api_router.include_router(product_listing.router)
+api_router.include_router(listing_jobs.router)
 api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
 api_router.include_router(nuotao_selection.router)

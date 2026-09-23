@@ -202,7 +202,7 @@ export default function ProductPublish() {
     } catch (e: any) {
       const status = e?.status
       if (status === 409 && !force) {
-        // V3.0 闸门 needs_review：需人工复核后显式放行
+        // V3.0 闸门 needs_review：需人工复核后显式放行（BUG #15：改文案去「强制放行」歧义）
         Modal.confirm({
           title: '未通过 V3.0 选品闸门，需要人工复核',
           content: (
@@ -211,11 +211,11 @@ export default function ProductPublish() {
               <Alert
                 type="warning"
                 showIcon
-                message="强制放行只针对「低分 / 数据缺失」，不会绕过一票否决硬阻断。"
+                message="仅对「低分 / 需复核」放行；硬阻断（422）不会被绕过。"
               />
             </div>
           ),
-          okText: '我已人工复核，强制放行',
+          okText: '我已复核，继续推送',
           cancelText: '取消',
           onOk: () => pushToWooCommerce(productId, true),
         })
@@ -637,7 +637,7 @@ export default function ProductPublish() {
                 </Button>
                 {gateView?.gate.status === 'needs_review' && (
                   <Popconfirm
-                    title="强制放行"
+                    title="复核后推送"
                     description="已人工复核，跳过 needs_review 提示？硬阻断不会被绕过。"
                     onConfirm={() => {
                       const pid = gateDrawerId
@@ -645,7 +645,7 @@ export default function ProductPublish() {
                       setGateView(null)
                       pushToWooCommerce(pid, true)
                     }}>
-                    <Button danger>我已复核，强制放行</Button>
+                    <Button danger>我已复核，继续推送</Button>
                   </Popconfirm>
                 )}
               </Space>
@@ -672,14 +672,14 @@ export default function ProductPublish() {
                   ? { type: 'success', msg: '全部通过，可以直接推送' }
                   : s === 'blocked'
                     ? { type: 'error', msg: `硬阻断 ${gateView.gate.hard_block_count} 项，必须补全后才能上架` }
-                    : { type: 'warning', msg: '存在需人工复核的项，可修好后再推或强制放行' }
+                    : { type: 'warning', msg: '存在需人工复核的项，可修好后再推或复核后推送' }
                 return (
                   <Alert
                     type={info.type as any}
                     showIcon
                     style={{ marginBottom: 16 }}
                     message={info.msg}
-                    description="强制放行只针对「需复核」，不会绕过硬阻断。"
+                    description="「复核后推送」只针对「需复核」；硬阻断（422）不会被绕过。"
                   />
                 )
               })()}
