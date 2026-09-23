@@ -1258,6 +1258,59 @@ def _is_sparse_fetch(result: dict[str, Any]) -> bool:
         and not str(info.get("dimensions") or "").strip()
     )
 
+# 1688 开放平台错误码 → 用户可读提示的翻译表。
+# 命中键（子串匹配，大小写不敏感）即返回 (用户可读中文, 稳定的 error_code 键)。
+# 未命中返回 (None, None) 让上层沿用原文。
+_1688_ERROR_TRANSLATIONS: list[tuple[str, str, str]] = [
+    # (匹配子串, 用户可读提示, error_code)
+    (
+        "APIACLDecline",
+        "1688 开放平台 AppKey 未加入白名单，无法拉取该商品。请让管理员在 1688 开放平台后台将当前 AppKey 授权访问该商品所属商家/类目后重试。",
+        "APPKEY_ACL_DECLINE",
+    ),
+    (
+        "UserNotLogin",
+        "1688 账户未登录或登录态已过期，请重新授权后重试。",
+        "USER_NOT_LOGIN",
+    ),
+    (
+        "AppKey is not allowed",
+        "1688 AppKey 无访问权限（ACL 拒绝）。请联系管理员在 1688 开放平台为当前 AppKey 授权对应商品商家/类目。",
+        "APPKEY_ACL_DECLINE",
+    ),
+    (
+        "forbidden",
+        "1688 拒绝访问该商品（可能是商品下架、商家关闭、或 AppKey 无权限）。请检查商品链接是否有效，或联系管理员确认 AppKey 授权范围。",
+        "FORBIDDEN",
+    ),
+    (
+        "timeout",
+        "1688 服务响应超时，请稍后重试。若持续出现请联系管理员检查上游服务状态。",
+        "UPSTREAM_TIMEOUT",
+    ),
+    (
+        "IllegalParam",
+        "1688 返回参数错误。请检查输入的商品 URL 是否为合法的 detail.1688.com/offer/xxx.html 格式。",
+        "ILLEGAL_PARAM",
+    ),
+]
+
+
+def _translate_1688_error(error: str | None) -> tuple[str | None, str | None]:
+    """把 1688 开放平台原始错误信息翻译成用户可读提示。
+
+    返回 (friendly_message, error_code)。未命中翻译表返回 (None, None)。
+    匹配采用子串包含，大小写不敏感，避免上游措辞细微差异漏掉。
+    """
+    if not error:
+        return None, None
+    lowered = error.lower()
+    for needle, friendly, code in _1688_ERROR_TRANSLATIONS:
+        if needle.lower() in lowered:
+            return friendly, code
+    return None, None
+
+
 async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
     """带 Redis 幂等缓存的 1688 商品抓取。命中时附带 from_cache 标记。"""
     import json  # 本模块未顶层导入 json
@@ -1559,21 +1612,36 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
                 )
 
         open_api_error = product_detail.get("error")
-        
+
         if (
             not product_detail.get("success")
             or product_detail.get("source") == "mock"
         ):
+            # 把 1688 开放平台的原始错误码翻译成用户可读、可自助修复的中文提示。
+            # 常见错误码：
+            #   gw.APIACLDecline: AppKey is not allowed(acl)  -> AppKey 未白名单
+            #   gw.UserNotLogin / 401 / 403                     -> 未授权 / 无权限
+            #   gw.Timeout / connect timeout / read timeout      -> 1688 服务超时
+            #   gw.IllegalParam / param error                   -> 参数错误
             error_msg = (
                 product_detail.get("error")
                 or "未获得真实 1688 商品数据，已拒绝使用示例数据"
             )
-            if open_api_error:
-                error_msg = f"{error_msg}（开放平台：{open_api_error}）"
-            logger.error("1688 import %s: get product detail failed: %s", import_id, error_msg)
+            friendly, error_code = _translate_1688_error(error_msg)
+            if friendly:
+                error_msg = friendly
+            if open_api_error and open_api_error != error_msg:
+                error_msg = f"{error_msg}（开放平台原始返回：{open_api_error}）"
+            logger.error(
+                "1688 import %s: get product detail failed (code=%s): %s",
+                import_id,
+                error_code or "unknown",
+                error_msg,
+            )
             return {
                 "success": False,
                 "error": error_msg,
+                "error_code": error_code,
                 "data": {
                     "import_id": import_id,
                     "product_id": product_id,

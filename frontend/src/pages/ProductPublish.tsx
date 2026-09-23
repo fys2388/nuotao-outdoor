@@ -7,7 +7,7 @@ import {
 import {
   ShopOutlined, RocketOutlined, SyncOutlined, PlusOutlined,
   DollarOutlined, TeamOutlined, CheckCircleOutlined,
-  FileTextOutlined, AuditOutlined, SafetyOutlined
+  FileTextOutlined, AuditOutlined, SafetyOutlined, StopOutlined
 } from '@ant-design/icons'
 import { request, api } from '../api/client'
 
@@ -26,6 +26,8 @@ interface Product {
   target_market?: string
   source?: string
   candidate_status?: string | null
+  funnel_stage?: string | null
+  reject_reasons?: Array<{ rule_id: string; detail: string }>
   meta?: Record<string, any>
   created_at: string
   updated_at: string
@@ -416,8 +418,31 @@ export default function ProductPublish() {
       const wcId = getWcId(r)
       const cs = getCopyState(r)
       const busy = copywritingId === r.id
+      // BUG #4 修复：V3.0 一票否决硬阻断。此前按钮只检查英文文案状态，
+      // 触发一票否决的商品仍能点推送，直到后端才 422 报错，UX 断层。
+      // candidate_status='rejected' 是 BUG #3 后 V3 否决的自动同步标志；
+      // funnel_stage='rejected' 是 V3 独立漏斗结论（作为兜底）。
+      const vetoed = r.candidate_status === 'rejected' || r.funnel_stage === 'rejected'
+      const vetoReasons = (r.reject_reasons || []).filter(
+        (f) => f?.rule_id,
+      )
       if (wcId) {
         return <Button size="small" icon={<CheckCircleOutlined />} disabled>已推送</Button>
+      }
+      if (vetoed) {
+        const reasonText =
+          vetoReasons.length > 0
+            ? vetoReasons.map((f) => f.rule_id).join('、')
+            : '未记录具体否决规则'
+        return (
+          <Tooltip
+            title={`V3.0 选品闸门已否决（触发规则：${reasonText}），禁止上架。请回候选库补数据或淘汰。`}
+          >
+            <Button size="small" icon={<StopOutlined />} disabled>
+              已被否决
+            </Button>
+          </Tooltip>
+        )
       }
       return (
         <Space wrap size={4}>

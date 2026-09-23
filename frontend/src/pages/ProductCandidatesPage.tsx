@@ -812,10 +812,43 @@ export default function ProductCandidatesPage() {
 
   const moveCandidate = (candidate: Candidate, status: CandidateStatus) => {
     const nextLabel = STATUS_META[status].label
+    // BUG #6 修复：候选通过前必须先完成定价（零售价 + 采购成本）。
+    // 前端软拦截给出友好提示，后端 update_candidate_status 也会硬性 400 拦截。
+    const needsPricingGate =
+      status === 'approved' && candidate.candidate_status === 'candidate'
+    let content = '该动作会写入候选状态机审计记录，且必须由人工操作。'
+    if (needsPricingGate) {
+      const meta = (candidate as any).meta || {}
+      const hasPrice =
+        meta.price ||
+        meta.regular_price ||
+        meta.retail_price ||
+        meta.sale_price ||
+        meta.localizations?.en?.price ||
+        meta.localizations?.en?.regular_price
+      const hasCost = !!(candidate as any).purchase_cost || meta.purchase_cost
+      if (!hasPrice || !hasCost) {
+        const missing: string[] = []
+        if (!hasPrice) missing.push('零售价')
+        if (!hasCost) missing.push('采购成本')
+        content = (
+          <div>
+            <p>候选通过前必须先完成定价：</p>
+            <ul style={{ paddingLeft: 20, margin: '4px 0 8px' }}>
+              {!hasPrice && <li>零售价（当前未填写）</li>}
+              {!hasCost && <li>采购成本（当前未填写）</li>}
+            </ul>
+            <p style={{ color: '#faad14', marginBottom: 0 }}>
+              请先前往「成本与利润」页补齐{missing.join('与')}，再回到此处提交通过。
+            </p>
+          </div>
+        )
+      }
+    }
     Modal.confirm({
       title: `${nextLabel}：${candidate.name}`,
-      content: '该动作会写入候选状态机审计记录，且必须由人工操作。',
-      okText: '确认',
+      content,
+      okText: needsPricingGate ? '仍要提交' : '确认',
       cancelText: '取消',
       onOk: async () => {
         setActionLoading(`status:${candidate.id}`)

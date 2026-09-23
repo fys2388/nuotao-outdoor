@@ -295,10 +295,26 @@ export default function Products() {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
-      render: (status: string) => (
-        <Tag color={statusColors[status] || 'default'}>{statusText[status] || status}</Tag>
-      ),
+      width: 140,
+      render: (status: string, record: Product) => {
+        // BUG #5 修复：WC 反向同步不再覆盖本地 status（本地审核流为准），
+        // 但把 WC 端当前 status 记进 meta.woocommerce_status。这里在本地
+        // status 与 WC status 不一致时展示漂移提示，让用户看到两边差异。
+        const wcStatus = record.meta?.woocommerce_status
+        const drift = wcStatus && status && wcStatus !== status
+        return (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <Tag color={statusColors[status] || 'default'}>{statusText[status] || status}</Tag>
+            {drift && (
+              <Tooltip title={`WooCommerce 端状态：${wcStatus}（本地以审核流为准，未同步）`}>
+                <Tag color="purple" icon={<SyncOutlined />} style={{ cursor: 'help' }}>
+                  WC: {wcStatus}
+                </Tag>
+              </Tooltip>
+            )}
+          </div>
+        )
+      },
     },
     {
       title: 'WooCommerce',
