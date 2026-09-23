@@ -532,8 +532,11 @@ def _write_score_evidences(
 def _raw_data_snapshot(data: ProductIntakeRequest) -> dict:
     """Serialize intake fields to a JSON-safe raw_data dict (Decimal -> str)."""
     snapshot = data.model_dump()
+    # BUG #6 fix: retail_price is also a Decimal that must be JSON-serialised
+    # into the raw_data column.
     cost_keys = (
         "purchase_cost",
+        "retail_price",
         "domestic_shipping",
         "first_leg_shipping",
         "last_leg_shipping",
