@@ -23,8 +23,14 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (emit SQL without a DB connection)."""
+    url = config.get_main_option("sqlalchemy.url")
+    # asyncpg driver only supports async connections. For offline (--sql)
+    # mode we only need the PG dialect to render SQL — no live connection.
+    # Strip "+asyncpg" so context.configure can build a sync dialect stub.
+    if "+asyncpg" in url:
+        url = url.replace("+asyncpg", "")
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
