@@ -1,4 +1,4 @@
-﻿# Nuotao Outdoor — 产品战略（Product Strategy v1）
+# Nuotao Outdoor — 产品战略（Product Strategy v1）
 
 > 版本：v1.0
 > 状态：草案（待审核与数据校准）
@@ -331,3 +331,4 @@ stateDiagram-v2
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-08-11 | 建立产品战略 v1：品牌定位、选品原则、品类战略、Hero 策略、价格体系、评分模型 v1、供应模式分层、生命周期规则 |
+| v1.1 | 2026-09-23 | SOP 闭环实跑复盘（详见 `docs/operating_rules.md` §6）：新增 6 项 bug 修复记录（BUG #1–#6）、漂移事件记录、ApiError 契约。产品战略不变，运营规则细化 |

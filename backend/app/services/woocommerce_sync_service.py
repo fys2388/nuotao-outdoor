@@ -605,6 +605,7 @@ async def sync_products_to_db(
     inventory_created = 0
     inventory_updated = 0
     inventory_failed = 0
+    status_drift = 0
     errors: list[str] = []
     page = 1
 
@@ -684,6 +685,38 @@ async def sync_products_to_db(
                     existing.meta = merged_meta
                     existing.weight_kg = data["weight_kg"]
                     existing.dimensions = data["dimensions"]
+                    # BUG #9 / SOP 漂移记录：如果 WC 端 status 与本地 status 不一致，
+                    # 记录一条漂移事件到 event_log，供运营追溯谁在 WC 后台改了状态。
+                    # WC 的 publish 对应本地 published；其余值（draft/private）同名。
+                    wc_status = data.get("woocommerce_status")
+                    wc_normalized = {
+                        "publish": "published",
+                    }.get(wc_status, wc_status)
+                    if wc_normalized and existing.status and wc_normalized != existing.status:
+                        status_drift += 1
+                        try:
+                            from app.services import event_service
+
+                            await event_service.create_event(
+                                session,
+                                workspace_id=workspace_id,
+                                event_type="product.wc_status_drift",
+                                entity_type="product",
+                                entity_id=str(existing.id),
+                                payload={
+                                    "sku": existing.sku,
+                                    "local_status": existing.status,
+                                    "wc_status": wc_normalized,
+                                    "actor": "system:wc-sync",
+                                },
+                                commit=False,
+                            )
+                        except Exception as drift_err:
+                            logger.warning(
+                                "记录 WC 状态漂移事件失败 (sku=%s): %s",
+                                existing.sku,
+                                drift_err,
+                            )
                     updated += 1
                     inv_product = existing
 
@@ -722,9 +755,10 @@ async def sync_products_to_db(
         page += 1
 
     logger.info(
-        "WooCommerce 产品同步完成: 新增 %d, 更新 %d, 失败 %d | 库存 新增 %d, 更新 %d, 失败 %d",
+        "WooCommerce 产品同步完成: 新增 %d, 更新 %d, 失败 %d | 库存 新增 %d, 更新 %d, 失败 %d | 状态漂移 %d",
         imported, updated, failed,
         inventory_created, inventory_updated, inventory_failed,
+        status_drift,
     )
 
     return {
@@ -735,6 +769,7 @@ async def sync_products_to_db(
         "inventory_created": inventory_created,
         "inventory_updated": inventory_updated,
         "inventory_failed": inventory_failed,
+        "status_drift": status_drift,
         "errors": errors,
         "total_processed": imported + updated + failed,
     }
