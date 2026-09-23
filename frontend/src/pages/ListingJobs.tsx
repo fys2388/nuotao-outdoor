@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Button,
   Card,
@@ -75,7 +75,7 @@ export default function ListingJobs() {
   const [activeStatus, setActiveStatus] = useState<string>('all')
   const [detailJob, setDetailJob] = useState<ListingJob | null>(null)
   const [reviewTarget, setReviewTarget] = useState<ListingJob | null>(null)
-  const [reviewForm] = Form.useForm()
+  const [reviewForm] = Form.useForm<{ note: string; reasons: string }>()
   const [pushingId, setPushingId] = useState<string | null>(null)
 
   const loadJobs = useCallback(async (status?: string) => {
@@ -107,12 +107,17 @@ export default function ListingJobs() {
     if (!reviewTarget) return
     try {
       const values = await reviewForm.validateFields()
+      const reasonsText = values.reasons ?? ''
+      const reasonList = reasonsText
+        .split(/\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
       await request(`/listing-jobs/${reviewTarget.id}/review`, {
         method: 'POST',
         body: JSON.stringify({
           decision,
           note: values.note ?? '',
-          reject_reasons: decision === 'reject' ? (values.reasons ?? []) : [],
+          reject_reasons: decision === 'reject' ? reasonList : [],
         }),
       })
       message.success(decision === 'approve' ? '已批准，可推送 WC' : '已驳回工单')
@@ -273,7 +278,7 @@ export default function ListingJobs() {
     [pushingId, handlePush, handleRetry, reviewForm],
   )
 
-  const tabItems = [
+  const tabItems: { key: string; label: ReactNode }[] = [
     { key: 'all', label: <span>全部 <Tag>{jobs.length}</Tag></span> },
     ...STATUS_ORDER.map((s) => ({
       key: s,
@@ -303,15 +308,17 @@ export default function ListingJobs() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 16 }}>
         {STATUS_ORDER.map((s) => (
           <Card size="small" key={s} style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
+              {STATUS_TAG[s].label}
+            </div>
             <Statistic
               value={stats[s] ?? 0}
               prefix={
                 s === 'published' ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
                   : s === 'failed' || s === 'rejected' ? <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
                   : s === 'processing' ? <SyncOutlined spin style={{ color: '#1677ff' }} />
-                  : <Tag color={STATUS_TAG[s].color} style={{ padding: 0 }}>{STATUS_TAG[s].label[0]}</Tag>
+                  : undefined
               }
-              title={STATUS_TAG[s].label}
             />
           </Card>
         ))}
