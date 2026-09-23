@@ -18,6 +18,7 @@ from app.api.v1.endpoints import (
     auth,
     b2b_admin,
     b2b_credit,
+    b2b_finance,
     b2b_fulfillment,
     b2b_portal,
     b2b_pricing,
@@ -176,6 +177,7 @@ api_router.include_router(ai_capability.router)
 api_router.include_router(b2b_portal.router)
 api_router.include_router(b2b_admin.router)
 api_router.include_router(b2b_credit.router)
+api_router.include_router(b2b_finance.router)
 api_router.include_router(b2b_fulfillment.router)
 api_router.include_router(b2b_pricing.router)
 api_router.include_router(consolidation.router)
