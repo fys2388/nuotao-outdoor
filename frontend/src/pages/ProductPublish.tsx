@@ -166,7 +166,8 @@ export default function ProductPublish() {
   const draftProducts = products.filter(p => p.status === 'draft')
   const activeProducts = products.filter(p => p.status === 'active')
   const pendingProducts = products.filter(p => p.status === 'pending')
-  const syncedCount = products.filter(p => getWcId(p)).length
+  const pushedCount = products.filter(p => getWcId(p) && p.source !== 'woocommerce').length
+  const syncedCount = products.filter(p => getWcId(p) && p.source === 'woocommerce').length
 
   // 推送前必须人工确认（AGENTS.md 3.1「关键动作人审」）：
   // 推送会写入外部 WooCommerce 系统，且受后端 V3.0 选品闸门约束。
@@ -385,7 +386,9 @@ export default function ProductPublish() {
     }},
     { title: 'WC同步', key: 'wc', render: (_: any, r: Product) => {
       const id = getWcId(r)
-      return id ? <Tag color="green">已同步 #{id}</Tag> : <Tag>未同步</Tag>
+      if (!id) return <Tag>未同步</Tag>
+      const isPull = r.source === 'woocommerce'
+      return <Tag color="green">{isPull ? '拉取' : '推送'} #{id}</Tag>
     }},
     {
       title: '上架就绪',
@@ -519,7 +522,7 @@ export default function ProductPublish() {
         <Col span={6}><Card size="small"><Statistic title="草稿商品" value={draftProducts.length} /></Card></Col>
         <Col span={6}><Card size="small"><Statistic title="待审" value={pendingProducts.length} /></Card></Col>
         <Col span={6}><Card size="small"><Statistic title="已发布" value={activeProducts.length} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={6}><Card size="small"><Statistic title="WC 已同步" value={syncedCount} valueStyle={{ color: '#1890ff' }} /></Card></Col>
+        <Col span={6}><Card size="small"><Statistic title="WC 已同步" value={pushedCount + syncedCount} suffix="条" valueStyle={{ color: '#1890ff' }} /><div style={{fontSize:12,color:'#999',marginTop:4}}>推送 {pushedCount} / 拉取 {syncedCount}</div></Card></Col>
       </Row>
 
       <Tabs
