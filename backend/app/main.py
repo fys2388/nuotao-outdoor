@@ -164,11 +164,16 @@ async def _request_validation_error_handler(
             cn = f"字段「{field}」：{msg}"
         messages.append(cn)
 
+    first_msg = messages[0] if messages else "请求参数校验失败"
     return JSONResponse(
         status_code=422,
         content={
             "code": "VALIDATION_ERROR",
-            "message": messages[0] if messages else "请求参数校验失败",
+            "message": first_msg,
+            # 兼容旧前端：`frontend/src/pages/*.tsx` 里 10 处仍在读 `err.detail`
+            # （例如 Products.tsx:203、PurchaseOrders.tsx:102）。等 P1 前端改造
+            # 完成后可移除，届时前端统一读 `message`。
+            "detail": first_msg,
             "details": messages,
         },
     )
