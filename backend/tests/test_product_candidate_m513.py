@@ -38,6 +38,10 @@ def _intake_payload(**overrides) -> dict:
         "source_url": "https://detail.1688.com/offer/123456789.html",
         "supplier_code": None,
         "purchase_cost": "10.00",
+        # BUG #6 fix: retail price is now required before candidate→approved.
+        # All lifecycle tests go candidate→approved→testing→winner, so we
+        # always include a sane retail price here.
+        "retail_price": "39.00",
         "domestic_shipping": "1.00",
         "first_leg_shipping": "2.00",
         "last_leg_shipping": "3.00",
@@ -515,3 +519,4 @@ async def test_woocommerce_synced_product_keeps_candidate_status_null(
     assert product.candidate_status == "candidate"
     # commerce status is preserved (decoupled from the candidate flow)
     assert product.status == "active"
+

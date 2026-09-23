@@ -12,8 +12,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
@@ -130,6 +131,52 @@ async def ops_dashboard() -> Response:
         except Exception:
             _ops_dashboard_html = "<html><body><h1>Ops Dashboard not found</h1></body></html>"
     return Response(content=_ops_dashboard_html, media_type="text/html; charset=utf-8")
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """BUG #7 修复：统一 validation error 响应格式。
+
+    FastAPI 默认的 RequestValidationError 返回 {"detail": [...]}，但前端
+    拦截器（axios / fetch）经常把这个格式误判为"empty body"（因为 detail
+    是嵌套数组而非字符串），导致用户看到"未知错误"或空白提示。
+
+    改为统一格式：{"code": "VALIDATION_ERROR", "message": <中文可读消息>,
+    "details": [...原始错误...]}。message 是第一个错误的用户可读中文翻译。
+    """
+    messages: list[str] = []
+    for err in exc.errors():
+        loc = err.get("loc", [])
+        field = ".".join(str(p) for p in loc[1:]) if len(loc) > 1 else "body"
+        msg = err.get("msg", "invalid")
+        # Pydantic 常见错误翻译
+        if msg == "field required":
+            cn = f"字段「{field}」必填"
+        elif msg == "value is not a valid list":
+            cn = f"字段「{field}」必须是数组"
+        elif msg == "value is not a valid integer":
+            cn = f"字段「{field}」必须是整数"
+        elif msg.startswith("String should have at least"):
+            cn = f"字段「{field}」长度不足：{msg}"
+        else:
+            cn = f"字段「{field}」：{msg}"
+        messages.append(cn)
+
+    first_msg = messages[0] if messages else "请求参数校验失败"
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": "VALIDATION_ERROR",
+            "message": first_msg,
+            # 兼容旧前端：`frontend/src/pages/*.tsx` 里 10 处仍在读 `err.detail`
+            # （例如 Products.tsx:203、PurchaseOrders.tsx:102）。等 P1 前端改造
+            # 完成后可移除，届时前端统一读 `message`。
+            "detail": first_msg,
+            "details": messages,
+        },
+    )
 
 
 @app.exception_handler(ActorResolutionError)
