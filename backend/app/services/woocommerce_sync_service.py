@@ -717,6 +717,38 @@ async def sync_products_to_db(
                                 existing.sku,
                                 drift_err,
                             )
+                        # BUG #13: WC 端已 publish 但本地仍是 draft —— 说明有人
+                        # 直接登录 WP 后台把商品置为 published，绕过了本地
+                        # ListingJob 人工审核闸门。记录授权审计事件供运营追溯。
+                        if wc_normalized == "published" and existing.status in ("draft", "candidate"):
+                            try:
+                                from app.services import event_service
+
+                                await event_service.create_event(
+                                    session,
+                                    workspace_id=workspace_id,
+                                    event_type="product.wc_unauthorized_publish",
+                                    entity_type="product",
+                                    entity_id=str(existing.id),
+                                    payload={
+                                        "sku": existing.sku,
+                                        "local_status": existing.status,
+                                        "wc_status": "published",
+                                        "actor": "system:wc-sync",
+                                        "note": (
+                                            "WC 端 status=published 但本地仍为 draft/candidate，"
+                                            "疑似绕过 ListingJob 人工审核闸门。运营需人工复核"
+                                            "该商品来源，考虑回滚 WC 状态或补录工单。"
+                                        ),
+                                    },
+                                    commit=False,
+                                )
+                            except Exception as authz_err:
+                                logger.warning(
+                                    "记录 WC 未授权发布事件失败 (sku=%s): %s",
+                                    existing.sku,
+                                    authz_err,
+                                )
                     updated += 1
                     inv_product = existing
 
