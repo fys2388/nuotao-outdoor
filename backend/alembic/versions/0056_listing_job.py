@@ -90,10 +90,11 @@ def upgrade() -> None:
     # simultaneously (e.g. two pending). The stricter "one active
     # regardless of status" invariant is enforced at the application
     # layer in backend/app/api/v1/endpoints/listing_jobs.py.
-    op.create_unique_index(
+    op.create_index(
         'uq_listing_jobs_ws_product_status',
         'listing_jobs',
         ['workspace_id', 'product_id', 'status'],
+        unique=True,
     )
 
 
