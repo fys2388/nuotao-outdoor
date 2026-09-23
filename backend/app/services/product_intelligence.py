@@ -554,6 +554,10 @@ def _intake_meta(data: ProductIntakeRequest) -> dict[str, Any]:
     """Build the durable content/media snapshot for a product candidate."""
     images = normalize_image_urls(data.images)
     meta: dict[str, Any] = {}
+    # BUG #6 fix: persist the intake retail_price into meta so the
+    # candidate→approved pricing gate can find it via resolve_prices().
+    if data.retail_price is not None:
+        meta["retail_price"] = float(data.retail_price)
     if images:
         meta["media"] = {
             "images": images,
@@ -1866,7 +1870,7 @@ async def update_candidate_status(
         raise ProductIntelligenceError(
             f"candidate_status transition '{current}' -> '{new_status}' is not allowed"
         )
-    # BUG #6 修复：候选通过后必须先完成定价再进入下一阶段。
+    # BUG #6 修复：候选通过后必须先完成定价再进入下一阶段。
     # candidate -> approved 之前校验：零售价 + 采购成本 都必须已录入，
     # 否则审批通过的候选没有定价基础，后续上架时（listing_gate）才 422 报错，
     # 用户体验断层（审批通过后才被告知"没定价"）。
@@ -2316,3 +2320,4 @@ async def intake_products_csv(
         results=results,
         trace_id=trace_id,
     )
+
