@@ -75,6 +75,7 @@ from app.models.growth_memory import GrowthMemory
 from app.models.identity import WorkspaceIdentityLink
 from app.models.image_gen import ImageGenerationTask
 from app.models.influencer import Influencer, InfluencerCollaboration
+from app.models.listing_job import ListingJob
 from app.models.marketing import (
     Campaign,
     CreativeAsset,
@@ -204,6 +205,7 @@ __all__ = [
     "InventorySnapshot",
     "LogisticsAiEvaluation",
     "LogisticsEvent",
+    "ListingJob",
     "LogisticsPatternRun",
     "MarketingCalibrationRun",
     "MarketingExperiment",

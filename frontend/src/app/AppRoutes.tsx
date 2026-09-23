@@ -46,6 +46,8 @@ const ChannelAnalyticsPage = lazy(() => import('../pages/ChannelAnalytics'))
 const ConsolidationPage = lazy(() => import('../pages/ConsolidationPage'))
 const ExchangeRatesPage = lazy(() => import('../pages/ExchangeRates'))
 const CustomerDataPage = lazy(() => import('../pages/CustomerDataPage'))
+const LogsPage = lazy(() => import('../pages/Logs'))
+const ListingJobsPage = lazy(() => import('../pages/ListingJobs'))
 
 function PageLoader() {
   return (
@@ -87,6 +89,7 @@ export default function AppRoutes() {
         <Route path="products/newton-sourcing" element={page(<NewtonSourcingPage />)} />
         <Route path="products/publish" element={page(<MarketOpportunitiesPage />)} />
         <Route path="products/pipeline" element={page(<ProductPipelinePage />)} />
+        <Route path="products/listing-jobs" element={page(<ListingJobsPage />)} />
 
         <Route path="b2c/overview" element={page(<B2COverviewPage />)} />
         <Route path="b2c/products" element={page(<ProductsPage />)} />
@@ -308,25 +311,15 @@ export default function AppRoutes() {
           path="logs"
           element={
             <Protected>
-              <CapabilityPage
-                title="操作日志与审计"
-                description="查询关键业务写操作、审批、连接器调用和权限变更记录。"
-                requiredApis={[
-                  'GET /api/v1/operation-logs',
-                  'GET /api/v1/operation-logs/stats',
-                  'GET /api/v1/audit-trails',
-                ]}
-                requiredModels={[
-                  'Operation Log：操作者、模块、动作、目标、结果、trace_id',
-                  'Audit Trail：变更前后值、审批与版本',
-                  'Security Event：登录、权限变更、密钥轮换和异常访问',
-                ]}
-                blockers={[
-                  '后端必须统一写入认证主体，禁止前端传入操作者',
-                  '日志必须脱敏并设置保留期限',
-                  '不得用演示日志替代真实审计数据',
-                ]}
-              />
+              <LogsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="audit/events"
+          element={
+            <Protected>
+              <LogsPage />
             </Protected>
           }
         />
