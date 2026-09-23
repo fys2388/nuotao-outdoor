@@ -644,6 +644,16 @@ async def sync_products_to_db(
 
                 if existing is None:
                     # 新建产品
+                    #
+                    # BUG #11 (P1): WC 反向同步创建的 product 不能跳过人工审核。
+                    # 原本 WC 直推会在 WC 端直接 publish，回到本地是 status='active'，
+                    # candidate_status=None 表示"这不是候选"，导致整个 candidate
+                    # 生命周期（draft → candidate → approved → testing → winner）
+                    # 被绕过。修复：反向同步插入时，把 candidate_status 设为
+                    # 'candidate'，funnel_stage 设为 'new'，让运营在"候选产品与选品"
+                    # 页面能看到这条来源是 WC 的候选，决定是否纳入本地审核流。
+                    # 已有的 source 字段（'woocommerce'）不变，前端按 source 过滤。
+                    is_reverse_sync = data.get("source") == "woocommerce"
                     product = Product(
                         workspace_id=workspace_id,
                         sku=data["sku"],
@@ -660,6 +670,8 @@ async def sync_products_to_db(
                         weight_kg=data["weight_kg"],
                         dimensions=data["dimensions"],
                         target_market=data["target_market"],
+                        candidate_status="candidate" if is_reverse_sync else None,
+                        funnel_stage="new" if is_reverse_sync else None,
                     )
                     session.add(product)
                     # flush 生成 id —— 库存 upsert 需要它
@@ -717,6 +729,38 @@ async def sync_products_to_db(
                                 existing.sku,
                                 drift_err,
                             )
+                        # BUG #13: WC 端已 publish 但本地仍是 draft —— 说明有人
+                        # 直接登录 WP 后台把商品置为 published，绕过了本地
+                        # ListingJob 人工审核闸门。记录授权审计事件供运营追溯。
+                        if wc_normalized == "published" and existing.status in ("draft", "candidate"):
+                            try:
+                                from app.services import event_service
+
+                                await event_service.create_event(
+                                    session,
+                                    workspace_id=workspace_id,
+                                    event_type="product.wc_unauthorized_publish",
+                                    entity_type="product",
+                                    entity_id=str(existing.id),
+                                    payload={
+                                        "sku": existing.sku,
+                                        "local_status": existing.status,
+                                        "wc_status": "published",
+                                        "actor": "system:wc-sync",
+                                        "note": (
+                                            "WC 端 status=published 但本地仍为 draft/candidate，"
+                                            "疑似绕过 ListingJob 人工审核闸门。运营需人工复核"
+                                            "该商品来源，考虑回滚 WC 状态或补录工单。"
+                                        ),
+                                    },
+                                    commit=False,
+                                )
+                            except Exception as authz_err:
+                                logger.warning(
+                                    "记录 WC 未授权发布事件失败 (sku=%s): %s",
+                                    existing.sku,
+                                    authz_err,
+                                )
                     updated += 1
                     inv_product = existing
 

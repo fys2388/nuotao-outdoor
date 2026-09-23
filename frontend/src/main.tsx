@@ -4,7 +4,12 @@ import { App as AntApp, ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+import { installInjectionDefense } from './security/injectionGuard'
 import './index.css'
+
+// BUG #10: CSP 已经挡了 iframe 加载，这里做双保险 —— 主动拦截任何
+// chrome-extension / 第三方 iframe / 未知 inline script 的注入。
+installInjectionDefense()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

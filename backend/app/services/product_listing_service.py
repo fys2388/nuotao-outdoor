@@ -316,33 +316,95 @@ def list_to_woocommerce(
         if product.get("images"):
             data["images"] = product["images"]
 
-        resp = requests.post(
-            url,
-            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-            json=data,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        result = resp.json()
+        # BUG #19: 自动重试。原实现在 429 / 5xx / 网络抖动时直接返回 success=False，
+        # 导致 SOP 阶段④ WC 同步失败即终止、运营必须手工重跑。这里包一层指数
+        # 退避重试（1s / 3s / 9s），只对可恢复的 RequestException（超时、连接
+        # 错误、HTTPError）重试；业务级 400/422 不重试，直接把错误回给调用方。
+        import time as _time
+        max_attempts = 3
+        retry_delays = (1.0, 3.0, 9.0)
+        last_error = None
+        result = None
+        attempts = 0
+        for attempt in range(1, max_attempts + 1):
+            attempts = attempt
+            try:
+                resp = requests.post(
+                    url,
+                    auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                    json=data,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                if attempts > 1:
+                    logger.warning(
+                        "WooCommerce listing succeeded on attempt %d/%d for sku=%s",
+                        attempts, max_attempts, product.get("sku"),
+                    )
+                break
+            except requests.exceptions.HTTPError as e:
+                error_detail = ""
+                try:
+                    error_detail = e.response.json().get("message", str(e))
+                except Exception:
+                    error_detail = str(e)
+                # 400/422 属于业务错，重试不会成功；429/5xx 才重试
+                status_code = e.response.status_code if e.response is not None else 0
+                if status_code in (400, 422):
+                    logger.error(
+                        "WooCommerce listing rejected (non-retryable %d) for %s: %s",
+                        status_code, product.get("sku"), error_detail,
+                    )
+                    return {
+                        "success": False,
+                        "sku": product.get("sku"),
+                        "error": error_detail,
+                        "attempt": attempts,
+                        "retryable": False,
+                    }
+                last_error = error_detail
+                if attempt < max_attempts:
+                    delay = retry_delays[attempt - 1]
+                    logger.warning(
+                        "WooCommerce listing attempt %d/%d failed for sku=%s (%s); retrying in %.1fs",
+                        attempt, max_attempts, product.get("sku"), error_detail, delay,
+                    )
+                    _time.sleep(delay)
+            except requests.exceptions.RequestException as e:
+                # ConnectionError / Timeout / TooManyRedirects 等 — 均可重试
+                last_error = str(e)
+                logger.warning(
+                    "WooCommerce listing network error attempt %d/%d for sku=%s: %s",
+                    attempt, max_attempts, product.get("sku"), last_error,
+                )
+                if attempt < max_attempts:
+                    delay = retry_delays[attempt - 1]
+                    _time.sleep(delay)
 
+        if result is not None:
+            return {
+                "success": True,
+                "sku": product.get("sku"),
+                "woocommerce_id": result.get("id"),
+                "name": result.get("name"),
+                "status": result.get("status"),
+                "permalink": result.get("permalink"),
+                "attempts": attempts,
+            }
+        logger.error(
+            "WooCommerce listing exhausted %d attempts for %s: %s",
+            max_attempts, product.get("sku"), last_error,
+        )
         return {
-            "success": True,
+            "success": False,
             "sku": product.get("sku"),
-            "woocommerce_id": result.get("id"),
-            "name": result.get("name"),
-            "status": result.get("status"),
-            "permalink": result.get("permalink"),
+            "error": last_error or "unknown error after retries",
+            "attempts": attempts,
+            "retryable": True,
         }
-    except requests.exceptions.HTTPError as e:
-        error_detail = ""
-        try:
-            error_detail = e.response.json().get("message", str(e))
-        except Exception:
-            error_detail = str(e)
-        logger.error("WooCommerce listing failed for %s: %s", product.get("sku"), error_detail)
-        return {"success": False, "sku": product.get("sku"), "error": error_detail}
     except Exception as e:
-        logger.error("WooCommerce listing error for %s: %s", product.get("sku"), str(e))
+        logger.error("WooCommerce listing unexpected error for %s: %s", product.get("sku"), str(e))
         return {"success": False, "sku": product.get("sku"), "error": str(e)}
 
 

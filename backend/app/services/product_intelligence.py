@@ -1874,6 +1874,7 @@ async def update_candidate_status(
             f"candidate_status transition '{current}' -> '{new_status}' is not allowed"
         )
     # BUG #6 修复：候选通过后必须先完成定价再进入下一阶段。
+
     # candidate -> approved 之前校验：零售价 + 采购成本 都必须已录入，
     # 否则审批通过的候选没有定价基础，后续上架时（listing_gate）才 422 报错，
     # 用户体验断层（审批通过后才被告知"没定价"）。
