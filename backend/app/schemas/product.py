@@ -38,6 +38,10 @@ class ProductOut(BaseModel):
     brand: str | None
     status: str
     candidate_status: str | None = None
+    # V3.0 独立评分漏斗阶段（rejected/test_candidate/testing/hero 等），
+    # 以及一票否决时的失败规则快照，供前端在推送前做本地硬阻断展示。
+    funnel_stage: str | None = None
+    reject_reasons: list[Any] = Field(default_factory=list)
     source: str
     source_url: str | None
     tags: list[Any]

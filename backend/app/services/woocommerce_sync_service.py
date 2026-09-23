@@ -448,6 +448,9 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
 
     # 状态映射
     wc_status = wc_product.get("status", "draft")
+    # 只用于新建产品的初始 status；本地已存在产品的 status 由本地审核流维护，
+    # 反向同步不应把 WC 端 status 覆盖过去（否则人工在 WP 端改状态会冲掉本地
+    # V3 审核结果）。WC 端的原始状态另存入 meta["woocommerce_status"] 供追溯。
     status_map = {
         "publish": "active",
         "draft": "draft",
@@ -455,6 +458,7 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
         "private": "draft",
     }
     status = status_map.get(wc_status, "draft")
+    wc_status_raw = wc_status
 
     # 元数据（价格、库存等）
     meta = {
@@ -498,6 +502,7 @@ def convert_wc_product_to_internal(wc_product: dict[str, Any]) -> dict[str, Any]
         "weight_kg": weight_kg,
         "dimensions": dim_dict if dim_dict else None,
         "target_market": "US",
+        "woocommerce_status": wc_status_raw,
     }
 
 
@@ -661,15 +666,22 @@ async def sync_products_to_db(
                     imported += 1
                     inv_product = product
                 else:
-                    # 更新产品
+                    # 更新产品。关键约束：本地 status 由本地审核流维护（V3 闸门、
+                    # M5.13 candidate 生命周期），反向同步**不覆盖** status，
+                    # 只把 WC 端当前 status 记进 meta["woocommerce_status"] 供
+                    # 前端提示状态漂移（例如"本地 draft，WC 端已 publish"）。
+                    # 其余非生命周期字段（名称/描述/标签/元数据）继续同步。
                     existing.name = data["name"]
                     existing.description = data["description"]
                     existing.category = data["category"]
-                    existing.status = data["status"]
                     existing.source_url = data["source_url"]
                     existing.tags = data["tags"]
                     existing.attributes = data["attributes"]
-                    existing.meta = data["meta"]
+                    # meta 里合并 WC 端当前状态，保留原有其他键
+                    merged_meta = dict(existing.meta or {})
+                    merged_meta.update(data["meta"])
+                    merged_meta["woocommerce_status"] = data.get("woocommerce_status")
+                    existing.meta = merged_meta
                     existing.weight_kg = data["weight_kg"]
                     existing.dimensions = data["dimensions"]
                     updated += 1

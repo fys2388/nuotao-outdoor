@@ -1796,6 +1796,43 @@ _CANDIDATE_TRANSITIONS: dict[str | None, set[str]] = {
 }
 
 
+async def _pricing_missing(session: AsyncSession, product: Product) -> list[str]:
+    """BUG #6 前置定价检查：candidate -> approved 前零售价与采购成本都必须已录入。
+    返回缺失项列表（"零售价" / "采购成本"）；空列表表示可以推进。
+    零售价从 Product.meta 里多个可能的字段找（listing_gate.resolve_prices 同源），
+    采购成本从 ProductCost 里最新一行的 purchase_cost 找。
+    """
+    from decimal import Decimal as _Decimal
+
+    from app.services.listing_gate import resolve_prices
+    from app.services.product_cost_service import latest_cost_for_product
+
+    missing: list[str] = []
+
+    meta = product.meta if isinstance(product.meta, dict) else {}
+    prices = resolve_prices(meta)
+    if not prices.get("regular_price"):
+        missing.append("零售价")
+
+    cost = await latest_cost_for_product(
+        session,
+        workspace_id=product.workspace_id,
+        product_id=product.id,
+    )
+    if cost is None:
+        missing.append("采购成本")
+    else:
+        pc = getattr(cost, "purchase_cost", None)
+        try:
+            pc_val = _Decimal(str(pc or 0))
+        except (ValueError, TypeError):
+            pc_val = _Decimal("0")
+        if pc is None or pc_val <= 0:
+            missing.append("采购成本")
+
+    return missing
+
+
 async def update_candidate_status(
     session: AsyncSession,
     *,
@@ -1829,6 +1866,19 @@ async def update_candidate_status(
         raise ProductIntelligenceError(
             f"candidate_status transition '{current}' -> '{new_status}' is not allowed"
         )
+    # BUG #6 修复：候选通过后必须先完成定价再进入下一阶段。
+    # candidate -> approved 之前校验：零售价 + 采购成本 都必须已录入，
+    # 否则审批通过的候选没有定价基础，后续上架时（listing_gate）才 422 报错，
+    # 用户体验断层（审批通过后才被告知"没定价"）。
+    # 这是硬性前置条件（HARD），不是软警告——因为已通过候选会立即出现在
+    # 上架队列，定价空白意味着上架闸门也会 fail，不如在候选推进时立即阻断。
+    if new_status == "approved" and current == "candidate":
+        missing = await _pricing_missing(session, product)
+        if missing:
+            raise ProductIntelligenceError(
+                "候选通过前必须完成定价：" + "、".join(missing)
+                + "。请先到「成本与利润」页填写零售价与采购成本。"
+            )
     product.candidate_status = new_status
     product.updated_at = datetime.now(UTC)  # keep the attribute current
     await session.flush()
