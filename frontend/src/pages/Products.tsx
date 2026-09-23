@@ -132,11 +132,13 @@ export default function Products() {
     return matchSearch
   })
 
-  // 统计数据
+  // 统计数据 — BUG #12 修复：区分「主动推送」与「反向同步」
   const stats = {
     total: products.length,
     active: products.filter((p) => p.status === 'active').length,
     draft: products.filter((p) => p.status === 'draft').length,
+    pushed: products.filter((p) => p.woocommerce_id && p.source !== 'woocommerce').length,
+    pulled: products.filter((p) => p.woocommerce_id && p.source === 'woocommerce').length,
     synced: products.filter((p) => p.woocommerce_id).length,
   }
 
@@ -321,10 +323,10 @@ export default function Products() {
       dataIndex: 'woocommerce_id',
       key: 'woocommerce_id',
       width: 120,
-      render: (id: number) => id ? (
-        <Tooltip title="已同步到WooCommerce">
-          <Tag color="blue" icon={<ShopOutlined />}>#{id}</Tag>
-        </Tooltip>
+      render: (_: number, r: Product) => r.woocommerce_id ? (
+        <Tag color="blue" icon={<ShopOutlined />}>
+          {r.source === 'woocommerce' ? '拉取' : '推送'} #{r.woocommerce_id}
+        </Tag>
       ) : (
         <Text type="secondary">未同步</Text>
       ),
@@ -405,7 +407,8 @@ export default function Products() {
         </Col>
         <Col span={6}>
           <Card size="small">
-            <Statistic title="已同步WC" value={stats.synced} valueStyle={{ color: '#1890ff' }} />
+            <Statistic title="已同步WC" value={stats.synced} suffix="条" valueStyle={{ color: '#1890ff' }} />
+              <div style={{fontSize:12,color:'#999',marginTop:4}}>推送 {stats.pushed} / 拉取 {stats.pulled}</div>
           </Card>
         </Col>
       </Row>
