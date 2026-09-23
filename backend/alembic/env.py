@@ -3,10 +3,8 @@
 import asyncio
 from logging.config import fileConfig
 
-import app.models  # noqa: F401  - registers models on Base.metadata
 from alembic import context
 from app.core.config import get_settings
-from app.core.database import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -17,8 +15,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
-
-target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
@@ -31,7 +27,7 @@ def run_migrations_offline() -> None:
         url = url.replace("+asyncpg", "")
     context.configure(
         url=url,
-        target_metadata=target_metadata,
+        target_metadata=None,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -41,9 +37,15 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Configure and run migrations against a live connection."""
+    # Import models lazily here — offline mode never calls this function,
+    # so create_async_engine() in database.py is never triggered during
+    # --sql runs, avoiding a psycopg2 dependency in the staging venv.
+    import app.models  # noqa: F401  - registers models on Base.metadata
+    from app.core.database import Base
+
     context.configure(
         connection=connection,
-        target_metadata=target_metadata,
+        target_metadata=Base.metadata,
         compare_type=True,
     )
     with context.begin_transaction():
