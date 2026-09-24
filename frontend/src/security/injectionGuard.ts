@@ -1,16 +1,18 @@
 /**
  * BUG #10: 前端运行时防御
  *
- * 目标：拦截第三方浏览器扩展（1688/选品通）在页面上注入的 iframe / 未知 script /
+ * 目标：彻底拦截第三方浏览器扩展（1688/选品通）在页面上注入的 iframe / 未知 script /
  *      隐藏元素。CSP 是主防线，这里是双保险。
  *
+ * 核心策略：admin 页面不需要任何 iframe，全部移除。
  * 检测策略：
- * 1. MutationObserver 监听 <head> 和 <body> 的直接子元素插入
- * 2. 检测 chrome-extension: 源 iframe → 立即移除 + 上报
+ * 1. MutationObserver 监听 <head> 和 <body> 的子元素插入
+ * 2. 检测所有 iframe → 立即移除 + 上报（不区分来源）
  * 3. 检测外部 src 的 script 且 src 不是同源 → 立即移除 + 上报
- * 4. 每 3 秒定时扫描（兜底 MutationObserver 漏过的场景）
+ * 4. 检测 chrome-extension: 源的 link 元素 → 立即移除 + 上报
+ * 5. 每 2 秒定时扫描（兜底 MutationObserver 漏过的场景）
  *
- * 上报：console.error + window.onerror 通道（后端可通过审计表收集，如已接入）
+ * 上报：console.error + window.onerror 通道
  */
 
 const ALLOWED_ORIGIN = location.origin
@@ -28,7 +30,6 @@ const reports: InjectionReport[] = []
 function report(evt: InjectionReport) {
   reports.push(evt)
   console.error('[injection-defense] removed foreign element:', evt)
-  // 保留最近 100 条，防止内存膨胀
   if (reports.length > 100) reports.shift()
 }
 
@@ -44,18 +45,24 @@ function isForeignUrl(href: string | null | undefined): boolean {
   }
 }
 
+/**
+ * 递归清理 DOM 子树中的所有非法元素。
+ * iframe：全部移除（admin 页面不需要 iframe）。
+ * script：只移除外部 src 的。
+ * link：只移除 chrome-extension 源的。
+ */
 function scrubNode(root: ParentNode) {
-  // iframe with foreign src
+  // 1. iframe — 全部移除
   root.querySelectorAll('iframe').forEach((iframe) => {
     const src = iframe.getAttribute('src') || iframe.src || ''
     const srcdoc = iframe.getAttribute('srcdoc') || ''
-    if (isForeignUrl(src) || src.startsWith('javascript:') || (srcdoc && srcdoc.length > 0)) {
-      report({ kind: 'iframe-foreign', tag: 'iframe', src: src || '[srcdoc]', parentTag: iframe.parentElement?.tagName || 'BODY' })
-      iframe.remove()
-    }
+    const name = iframe.getAttribute('name') || ''
+    const desc = src || (srcdoc ? '[srcdoc]' : name ? `[name=${name}]` : '[no-src]')
+    report({ kind: 'iframe-foreign', tag: 'iframe', src: desc, parentTag: iframe.parentElement?.tagName || 'BODY' })
+    iframe.remove()
   })
 
-  // script with foreign src (not inlined)
+  // 2. script — 移除外部 src
   root.querySelectorAll('script').forEach((script) => {
     const src = script.getAttribute('src')
     if (src && isForeignUrl(src)) {
@@ -64,7 +71,7 @@ function scrubNode(root: ParentNode) {
     }
   })
 
-  // Link with foreign href that has rel=prefetch/stylesheet pointing to chrome-extension
+  // 3. link — 移除 chrome-extension 源
   root.querySelectorAll('link[href]').forEach((link) => {
     const href = link.getAttribute('href')
     if (href && href.startsWith('chrome-extension:')) {
@@ -91,21 +98,24 @@ export function installInjectionDefense() {
         const el = node as Element
         const tag = el.tagName.toLowerCase()
 
-        // 直接在 head 里插入的 iframe/script 是最可疑的
         if (tag === 'iframe') {
+          // Admin 页面不需要任何 iframe，全部移除
           const src = el.getAttribute('src') || ''
           const srcdoc = el.getAttribute('srcdoc') || ''
-          if (isForeignUrl(src) || srcdoc) {
-            report({ kind: 'iframe-foreign', tag, src: src || '[srcdoc]', parentTag: el.parentElement?.tagName || 'UNKNOWN' })
-            el.remove()
-          }
+          const name = el.getAttribute('name') || ''
+          const desc = src || (srcdoc ? '[srcdoc]' : name ? `[name=${name}]` : '[no-src]')
+          report({ kind: 'iframe-foreign', tag, src: desc, parentTag: el.parentElement?.tagName || 'UNKNOWN' })
+          el.remove()
         } else if (tag === 'script') {
           const src = el.getAttribute('src')
           if (src && isForeignUrl(src)) {
             report({ kind: 'script-foreign', tag, src, parentTag: el.parentElement?.tagName || 'UNKNOWN' })
             el.remove()
           }
-        } else if (el.getAttribute?.('src')?.startsWith('chrome-extension:') || el.getAttribute?.('href')?.startsWith('chrome-extension:')) {
+        } else if (
+          el.getAttribute?.('src')?.startsWith('chrome-extension:') ||
+          el.getAttribute?.('href')?.startsWith('chrome-extension:')
+        ) {
           report({ kind: 'element-unknown', tag, src: el.getAttribute('src') || el.getAttribute('href') || '', parentTag: el.parentElement?.tagName || 'UNKNOWN' })
           el.remove()
         }
@@ -121,11 +131,11 @@ export function installInjectionDefense() {
   obs.observe(document.head, { childList: true, subtree: true })
   obs.observe(document.body, { childList: true, subtree: true })
 
-  // 定时兜底（每 3 秒扫一次）
+  // 定时兜底（每 2 秒扫一次）
   window.setInterval(() => {
     scrubNode(document.head)
     scrubNode(document.body)
-  }, 3000)
+  }, 2000)
 
   // 通过 window 暴露最近报告，供审计工具读取
   Object.defineProperty(window, '__injectionDefenseReports', {

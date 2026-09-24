@@ -130,6 +130,7 @@ interface ProductRecord {
   candidate_status: string | null
   source: string
   source_url: string | null
+  woocommerce_id?: number
   attributes: Record<string, unknown>
   meta: Record<string, any>
   weight_kg: number | string | null
@@ -211,6 +212,9 @@ export function ProductsPage() {
       sellable: products.filter((product) => product.status === 'active').length,
       candidate: products.filter((product) => Boolean(product.candidate_status)).length,
       missingSource: products.filter((product) => !product.source_url).length,
+      pushed: products.filter((p: any) => p.woocommerce_id && p.source !== 'woocommerce').length,
+      pulled: products.filter((p: any) => p.woocommerce_id && p.source === 'woocommerce').length,
+      synced: products.filter((p: any) => p.woocommerce_id).length,
     }),
     [products],
   )
@@ -397,7 +401,14 @@ export function ProductsPage() {
       width: 110,
       render: (value: string | null) => (value ? <Tag>{value}</Tag> : <Text type="secondary">商品主数据</Text>),
     },
-    { title: '来源', dataIndex: 'source', width: 100 },
+    {
+      title: '来源', dataIndex: 'source', width: 100,
+      render: (v: string, r: ProductRecord) => {
+        const wcId = r.woocommerce_id ?? (r.meta as any)?.woocommerce_id
+        if (wcId) return <Tag color="blue">{r.source === 'woocommerce' ? '拉取' : '推送'} #{wcId}</Tag>
+        return <span>{v}</span>
+      },
+    },
     { title: '目标市场', dataIndex: 'target_market', width: 100 },
     {
       title: '更新时间',
@@ -481,7 +492,7 @@ export function ProductsPage() {
         <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="商品主数据" value={stats.total} prefix={<ShopOutlined />} /></Card></Col>
         <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="可销售" value={stats.sellable} styles={{ content: { color: '#2f8b64' } }} /></Card></Col>
         <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="候选商品" value={stats.candidate} /></Card></Col>
-        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="缺少来源链接" value={stats.missingSource} styles={{ content: { color: '#c27622' } }} /></Card></Col>
+        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="WC 已同步" value={stats.synced} suffix="条" styles={{ content: { color: '#1890ff' } }} /><div style={{fontSize:12,color:'#999',marginTop:4}}>推送 {stats.pushed} / 拉取 {stats.pulled}</div></Card></Col>
       </Row>
 
       <Card variant="borderless" className="resource-panel">
