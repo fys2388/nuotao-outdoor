@@ -212,9 +212,9 @@ export function ProductsPage() {
       sellable: products.filter((product) => product.status === 'active').length,
       candidate: products.filter((product) => Boolean(product.candidate_status)).length,
       missingSource: products.filter((product) => !product.source_url).length,
-      pushed: products.filter((p: any) => p.woocommerce_id && p.source !== 'woocommerce').length,
-      pulled: products.filter((p: any) => p.woocommerce_id && p.source === 'woocommerce').length,
-      synced: products.filter((p: any) => p.woocommerce_id).length,
+      pushed: products.filter((p: any) => (p.woocommerce_id ?? p.meta?.woocommerce_id) && p.source !== 'woocommerce').length,
+      pulled: products.filter((p: any) => (p.woocommerce_id ?? p.meta?.woocommerce_id) && p.source === 'woocommerce').length,
+      synced: products.filter((p: any) => (p.woocommerce_id ?? p.meta?.woocommerce_id)).length,
     }),
     [products],
   )
