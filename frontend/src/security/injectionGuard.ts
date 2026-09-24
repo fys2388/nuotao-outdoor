@@ -131,11 +131,11 @@ export function installInjectionDefense() {
   obs.observe(document.head, { childList: true, subtree: true })
   obs.observe(document.body, { childList: true, subtree: true })
 
-  // 定时兜底（每 2 秒扫一次）
+  // 定时兜底（每 1 秒扫一次，1688 扩展会持续注入 iframe）
   window.setInterval(() => {
     scrubNode(document.head)
     scrubNode(document.body)
-  }, 2000)
+  }, 1000)
 
   // 通过 window 暴露最近报告，供审计工具读取
   Object.defineProperty(window, '__injectionDefenseReports', {
