@@ -54,7 +54,7 @@ def _build_common_params(method: str) -> dict[str, Any]:
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "format": "json",
         "v": "2.0",
-        "sign_method": "md5",
+        "sign_method": "hmac-sha1",  # 1688 官方标准：HMAC-SHA1
     }
     if ALI1688_ACCESS_TOKEN:
         params["access_token"] = ALI1688_ACCESS_TOKEN
