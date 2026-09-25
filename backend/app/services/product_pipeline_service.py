@@ -403,6 +403,7 @@ def confirm_and_list(
     pipeline_result: dict[str, Any],
     *,
     status: str = "publish",
+    force: bool = False,
 ) -> dict[str, Any]:
     """
     人工确认后执行上架
@@ -410,6 +411,7 @@ def confirm_and_list(
     Args:
         pipeline_result: 工作流结果（包含listing_data）
         status: 上架状态（publish/draft/pending）
+        force: 是否强制上架（跳过 gate 的 needs_review 检查）
 
     Returns:
         上架结果
@@ -423,6 +425,46 @@ def confirm_and_list(
         restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
         if restricted:
             return {"success": False, "error": f"Product is restricted: {reason}"}
+
+        # 发布前闸门验证（listing_gate）
+        # 简化版：检查 SKU 和中文文案
+        sku = listing_data.get("sku", "")
+        title = listing_data.get("title", "")
+        description = listing_data.get("description", "")
+
+        gate_issues = []
+
+        # 硬阻断：缺少 SKU
+        if not sku or not str(sku).strip():
+            gate_issues.append({
+                "code": "missing_sku",
+                "message": "缺少 SKU，无法建立 WooCommerce 渠道映射",
+                "severity": "hard_block",
+            })
+
+        # 硬阻断：中文文案未本地化
+        import re
+        cjk_pattern = re.compile(r'[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]')
+        if cjk_pattern.search(str(title)) or cjk_pattern.search(str(description)):
+            # 检查是否有已批准的英文本地化
+            en_title = listing_data.get("en_title", "")
+            en_description = listing_data.get("en_description", "")
+            copy_status = listing_data.get("copy_status", "")
+            if not (en_title and en_description and copy_status == "approved"):
+                gate_issues.append({
+                    "code": "cjk_without_localization",
+                    "message": "商品仍为中文文案且无已批准的英文本地化，禁止推送中文商品",
+                    "severity": "hard_block",
+                })
+
+        # 检查 gate issues
+        hard_blocks = [i for i in gate_issues if i["severity"] == "hard_block"]
+        if hard_blocks:
+            return {
+                "success": False,
+                "error": "发布前闸门阻断",
+                "data": {"gate_issues": hard_blocks},
+            }
 
         listing_result = list_to_woocommerce(listing_data, status=status)
         return listing_result
