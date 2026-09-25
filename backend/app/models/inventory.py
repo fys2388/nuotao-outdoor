@@ -31,3 +31,22 @@ class InventoryItem(Base):
 
     def __repr__(self) -> str:
         return f"<InventoryItem(id={self.id}, sku={self.sku}, qty={self.quantity_available})>"
+
+
+class InventorySnapshot(Base):
+    """Historical snapshot of inventory levels for reporting."""
+
+    __tablename__ = "inventory_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True, nullable=False)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    sku: Mapped[Optional[String(100)]] = mapped_column(String(100), nullable=True)
+    quantity_available: Mapped[BigInteger] = mapped_column(BigInteger, default=0)
+    snapshot_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<InventorySnapshot(id={self.id}, sku={self.sku}, qty={self.quantity_available})>"

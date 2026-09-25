@@ -18,6 +18,29 @@ from typing import Any
 CNY_TO_USD_RATE = Decimal("0.14")
 USD_BASE_EXCHANGE = Decimal("7.2")
 
+
+def _volumetric_weight_kg(dimensions: dict[str, Any]) -> Decimal:
+    """Calculate volumetric weight from dimensions (L/W/H in cm).
+
+    Formula: (length_cm * width_cm * height_cm) / 5000 = kg
+    This is the standard IATA dimensional weight divisor for air freight.
+
+    Args:
+        dimensions: Dict with keys 'length', 'width', 'height' (in cm)
+
+    Returns:
+        Volumetric weight in kg as Decimal
+    """
+    length = Decimal(str(dimensions.get("length", 0) or 0))
+    width = Decimal(str(dimensions.get("width", 0) or 0))
+    height = Decimal(str(dimensions.get("height", 0) or 0))
+
+    if length <= 0 or width <= 0 or height <= 0:
+        return Decimal("0")
+
+    volumetric_cm3 = length * width * height
+    return (volumetric_cm3 / Decimal("5000")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
 # ---------------------------------------------------------------------------
 # Industry baseline tables (v1, hard-coded for MVP, replaceable via config)
 # ---------------------------------------------------------------------------
