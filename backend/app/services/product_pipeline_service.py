@@ -316,14 +316,17 @@ def _generate_listing_data(
         # 从卖点和功能拼接描述
         selling_points = _safe_get_list(product_report, "core_selling_points", [])
         features = _safe_get_list(product_report, "product_features", [])
+        usage_scenarios = _safe_get_list(product_report, "usage_scenarios", [])
         desc_parts = []
         if selling_points:
             desc_parts.append("【核心卖点】\n" + "\n".join(f"• {sp}" for sp in selling_points))
         if features:
             desc_parts.append("【产品功能】\n" + "\n".join(f"• {f}" for f in features))
+        if usage_scenarios:
+            desc_parts.append("【使用场景】\n" + "\n".join(f"• {s}" for s in usage_scenarios))
         product_description_cn = "\n\n".join(desc_parts)
     
-    # 产品描述（英文）
+    # 产品描述（英文）- 完整翻译
     product_description_en = _translate_to_english(product_description_cn, "description")
     
     # 短描述（中文）
@@ -376,16 +379,24 @@ def _generate_listing_data(
         if tag_en:
             tags.append({"name": tag_en[:50]})
     
-    # 图片（从1688商品信息提取）
+    # 图片（从1688商品信息提取，支持多种字段名）
     images = []
-    image_urls = product_info.get("image_urls", []) or product_info.get("images", []) or []
+    image_urls = (
+        product_info.get("image_urls", []) 
+        or product_info.get("images", []) 
+        or product_info.get("image_url", []) 
+        or []
+    )
+    # 如果是单个字符串，转换为列表
+    if isinstance(image_urls, str):
+        image_urls = [image_urls]
     if isinstance(image_urls, list):
         for url in image_urls[:5]:
             if isinstance(url, str) and url.startswith("http"):
                 images.append({"src": url, "alt": product_name_en})
     
-    # 品牌（从产品名提取或默认）
-    brand = "FreshWild" if "鲜野" in product_name_cn else "Nuotao Outdoor"
+    # 品牌（默认 "Nuotao"）
+    brand = "Nuotao"
     
     return {
         # 中文文案（保留）
@@ -419,6 +430,10 @@ def _generate_listing_data(
                 {"key": "pipeline_id", "value": str(uuid.uuid4())},
                 {"key": "name_cn", "value": product_name_cn},
                 {"key": "description_cn", "value": product_description_cn[:500]},
+                # SEO 元数据
+                {"key": "seo_title", "value": f"{product_name_en} - Best Price for Outdoor Use"},
+                {"key": "seo_description", "value": product_description_en[:150] + "..."},
+                {"key": "focus_keyword", "value": product_name_en.split()[0].lower() if product_name_en else "outdoor product"},
             ],
         },
     }
