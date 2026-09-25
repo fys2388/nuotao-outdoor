@@ -19,18 +19,20 @@ from __future__ import annotations
 import hmac
 import hashlib
 import logging
-import os
 import time
 from typing import Any
 
 import requests
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-# 牛顿云配置（从环境变量读取，未配置时降级）
-NEWTON_APP_KEY = os.getenv("ALI1688_APP_KEY", "")
-NEWTON_APP_SECRET = os.getenv("ALI1688_APP_SECRET", "")
-NEWTON_ACCESS_TOKEN = os.getenv("ALI1688_ACCESS_TOKEN", "")
+# 牛顿云配置（从 .env 文件读取，通过 config 对象）
+settings = get_settings()
+NEWTON_APP_KEY = settings.newton_app_key
+NEWTON_APP_SECRET = settings.newton_app_secret
+NEWTON_ACCESS_TOKEN = settings.newton_access_token
 NEWTON_BASE_URL = "https://gw.open.1688.com/openapi"
 
 # 请求超时

@@ -3,6 +3,7 @@
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +88,13 @@ class Settings(BaseSettings):
     alibaba_app_key: str = ""  # Alias for backward compatibility
     alibaba_app_secret: str = ""
     alibaba_access_token: str = ""
+    
+    # --- Newton Cloud AI Agent configuration -----------------------------------
+    # 阿里牛顿（Newton Cloud）AI Agent，通过1688开放平台网关调用
+    # 使用 ALI1688_* 环境变量（与1688 API共享配置）
+    newton_app_key: str = Field(default="", alias="ALI1688_APP_KEY")
+    newton_app_secret: str = Field(default="", alias="ALI1688_APP_SECRET")
+    newton_access_token: str = Field(default="", alias="ALI1688_ACCESS_TOKEN")
 
     # --- Email / SMTP -------------------------------------------------------
     smtp_host: str | None = None
