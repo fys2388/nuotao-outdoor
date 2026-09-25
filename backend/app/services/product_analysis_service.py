@@ -30,7 +30,7 @@ AGENT_ID = "product_analyst"
 AGENT_NAME = "Product Analyst"
 TRIGGER = "api:product_analysis:analyze"
 DEFAULT_TEMPERATURE = 0.3
-DEFAULT_MAX_TOKENS = 2000
+DEFAULT_MAX_TOKENS = 8000  # Increased from 2000 to prevent JSON truncation
 
 # AI识别结果输出Schema（10字段）
 AI_RECOGNITION_SCHEMA: dict[str, Any] = {
