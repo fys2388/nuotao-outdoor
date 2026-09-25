@@ -735,7 +735,6 @@ async def get_purchase_order_stats(
     workspace_id: WorkspaceId,
 ) -> dict:
     """Return purchase order statistics grouped by supplier."""
-    from app.models.supplier import Supplier
     from sqlalchemy import select, func
     
     # 查询所有供应商
@@ -788,8 +787,9 @@ async def get_purchase_order_stats(
 @router.post(
     "/purchase-orders",
     summary="Create a new purchase order",
+    include_in_schema=False,  # Legacy duplicate, use the main create_purchase_order above
 )
-async def create_purchase_order(
+async def _create_purchase_order_legacy(
     db: DbSession,
     workspace_id: WorkspaceId,
     body: dict = Body(...),

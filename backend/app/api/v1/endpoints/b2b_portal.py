@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import validate_token
-from app.models.b2b import B2BAgent
+from app.models.b2b import B2BAgent, B2BOrder, B2BOrderItem
 from app.schemas.b2b_portal import (
     B2BAccountSummary,
     B2BAgentProfile,
