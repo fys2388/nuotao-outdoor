@@ -417,13 +417,18 @@ def confirm_and_list(
         上架结果
     """
     try:
+        logger.info("Confirm and list called: status=%s, force=%s", status, force)
         listing_data = pipeline_result.get("data", {}).get("steps", {}).get("listing_data", {}).get("data", {})
         if not listing_data:
+            logger.warning("Confirm and list: No listing data found")
             return {"success": False, "error": "No listing data found in pipeline result"}
-
+        
+        logger.info("Confirm and list: listing_data keys=%s", list(listing_data.keys()))
+        
         # 检查是否管制物品
         restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
         if restricted:
+            logger.warning("Confirm and list: Product is restricted: %s", reason)
             return {"success": False, "error": f"Product is restricted: {reason}"}
 
         # 发布前闸门验证（listing_gate）
@@ -460,13 +465,16 @@ def confirm_and_list(
         # 检查 gate issues
         hard_blocks = [i for i in gate_issues if i["severity"] == "hard_block"]
         if hard_blocks:
+            logger.warning("Confirm and list: Gate issues found: %s", [i["code"] for i in hard_blocks])
             return {
                 "success": False,
                 "error": "发布前闸门阻断",
                 "data": {"gate_issues": hard_blocks},
             }
 
+        logger.info("Confirm and list: Proceeding to WooCommerce listing")
         listing_result = list_to_woocommerce(listing_data, status=status)
+        logger.info("Confirm and list: Result success=%s", listing_result.get("success"))
         return listing_result
 
     except Exception as e:
