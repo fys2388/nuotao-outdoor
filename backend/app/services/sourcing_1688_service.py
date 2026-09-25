@@ -30,10 +30,20 @@ DEFAULT_TIMEOUT = 15
 
 
 def _sign(params: dict[str, Any], secret: str) -> str:
-    """1688 API 签名（MD5）"""
+    """1688 API 签名（HMAC-SHA1，官方标准算法）"""
+    # 按 key 字母顺序排序参数
     sorted_params = sorted(params.items())
+    # 拼接字符串：key1value1key2value2...
     sign_str = secret + "".join(f"{k}{v}" for k, v in sorted_params) + secret
-    return hashlib.md5(sign_str.encode("utf-8")).hexdigest().upper()
+    # HMAC-SHA1 签名
+    import hmac
+    import hashlib
+    signature = hmac.new(
+        secret.encode('utf-8'),
+        sign_str.encode('utf-8'),
+        hashlib.sha1
+    ).hexdigest().upper()
+    return signature
 
 
 def _build_common_params(method: str) -> dict[str, Any]:
