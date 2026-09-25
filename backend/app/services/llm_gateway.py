@@ -124,6 +124,13 @@ def _provider_config(provider: str) -> tuple[str, str, str]:
             settings.deepseek_base_url,
             settings.deepseek_default_model,
         )
+    # 商汤大模型（SenseNova）
+    if provider == "sensenova":
+        return (
+            settings.sensenova_api_key,
+            settings.sensenova_base_url,
+            settings.sensenova_default_model,
+        )
     raise LLMError(f"unsupported provider '{provider}'", kind="invalid_response")
 
 

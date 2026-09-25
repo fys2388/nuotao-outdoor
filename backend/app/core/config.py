@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # --- LLM Gateway (M2.2): multi-provider, vendor lock-in avoided ---------
     # Primary provider drives default routing; the fallback is used when the
     # primary is unreachable (network / 5xx / rate limit), never on auth errors.
-    llm_provider: str = "openai"  # openai | deepseek
+    llm_provider: str = "openai"  # openai | deepseek | sensenova
     llm_fallback_provider: str = "deepseek"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_default_model: str = "deepseek-chat"
+    # 商汤大模型（SenseNova）配置
+    sensenova_api_key: str = ""
+    sensenova_base_url: str = "https://api.sensenova.cn/v1"
+    sensenova_default_model: str = "sensechat"
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 1500
 
