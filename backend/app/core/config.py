@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     sensenova_base_url: str = "https://api.sensenova.cn/v1"
     sensenova_default_model: str = "sensechat"
     llm_timeout_seconds: float = 60.0
-    llm_max_tokens: int = 1500
+    llm_max_tokens: int = 8000  # Increased from 1500 to prevent JSON truncation
 
     # --- Email / SMTP -------------------------------------------------------
     smtp_host: str | None = None
