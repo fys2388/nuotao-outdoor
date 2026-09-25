@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # WooCommerce REST API credentials (read-only consumer). Kept as Settings
     # fields so gates/readiness checks read the SAME .env-backed config as the
     # rest of the app instead of only process environment variables.
-    woocommerce_base_url: str = ""
+    woocommerce_url: str = Field(default="", alias="WOOCOMMERCE_URL")
     woocommerce_consumer_key: str = ""
     woocommerce_consumer_secret: str = ""
 

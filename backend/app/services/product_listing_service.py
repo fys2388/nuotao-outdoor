@@ -6,19 +6,21 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 import requests
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-# WooCommerce 配置（从环境变量读取）
-WC_URL = os.getenv("WOOCOMMERCE_URL", "https://nuotaooutdoor.com")
-WC_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "")
-WC_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "")
+# WooCommerce 配置（从 .env 文件读取，通过 config 对象）
+settings = get_settings()
+WC_URL = settings.woocommerce_url
+WC_CONSUMER_KEY = settings.woocommerce_consumer_key
+WC_CONSUMER_SECRET = settings.woocommerce_consumer_secret
 
 # 管制物品关键词（自动过滤，不上架）
 RESTRICTED_KEYWORDS = [
