@@ -25,6 +25,7 @@ from app.api.v1.endpoints import (
     content_generation,
     content_marketing,
     cost_model,
+    cost_prefill,
     customer,
     customer_learning,
     customer_service,
@@ -78,6 +79,7 @@ from app.api.v1.endpoints import (
     webhooks_generic,
     weekly_report,
     woocommerce_sync,
+    workflow,
 )
 
 api_router = APIRouter()
@@ -110,6 +112,7 @@ api_router.include_router(selection.router)
 api_router.include_router(seo.router)
 api_router.include_router(sourcing.router)
 api_router.include_router(sourcing_enhanced.router)
+api_router.include_router(cost_prefill.router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(agents_generic.router)
@@ -159,3 +162,4 @@ api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
 api_router.include_router(b2b_portal.router)
 api_router.include_router(b2b_admin.router)
+api_router.include_router(workflow.router)

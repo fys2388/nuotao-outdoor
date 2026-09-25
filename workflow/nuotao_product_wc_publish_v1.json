@@ -1,0 +1,328 @@
+{
+  "workflowId": "nuotao_product_wc_publish_v1",
+  "version": "1.0.0",
+  "name": "Nuotao商品上架全链路",
+  "description": "选品→上架→WooCommerce同步流水线，选品AI由牛顿大模型提供支撑",
+  "createdAt": "2026-09-24T16:00:00Z",
+  "updatedAt": "2026-09-24T16:00:00Z",
+  
+  "imageConstraints": {
+    "locked": true,
+    "mainImages": {
+      "count": 5,
+      "ratio": "1:1",
+      "width": 2048,
+      "height": 2048,
+      "format": "PNG",
+      "quality": 95
+    },
+    "detailImages": {
+      "count": 6,
+      "ratio": "3:4",
+      "width": 1536,
+      "height": 2048,
+      "format": "PNG",
+      "quality": 95
+    },
+    "referenceSource": "1688_original",
+    "promptLanguage": "en",
+    "watermark": false,
+    "background": "diverse",
+    "subjectPreservation": true
+  },
+  
+  "nodes": [
+    {
+      "id": "selection",
+      "module": 1,
+      "name": "选品中心",
+      "description": "牛顿AI驱动的商品采集、评分、预审",
+      "trigger": "manual",
+      "subModules": [
+        {
+          "id": "collection",
+          "name": "商品采集",
+          "description": "1688爬虫批量链接导入/手动单品录入",
+          "dataSource": ["1688_scraper", "manual_input"]
+        },
+        {
+          "id": "newton_scoring",
+          "name": "牛顿AI选品评分",
+          "description": "调用牛顿AI接口计算毛利、竞品销量、搜索热度、侵权初筛、禁品过滤",
+          "aiProvider": "newton",
+          "output": ["score", "risk_tags"]
+        },
+        {
+          "id": "manual_review",
+          "name": "人工预审复核",
+          "description": "运营复核牛顿AI输出，状态：通过/淘汰/待定",
+          "statusOptions": ["approved", "rejected", "pending"]
+        },
+        {
+          "id": "archive_pool",
+          "name": "候选归档池",
+          "description": "存储淘汰商品快照，支持后续召回复盘"
+        },
+        {
+          "id": "collection_log",
+          "name": "采集日志",
+          "description": "持久保存爬虫请求、链接失效、抓取失败、牛顿AI调用日志"
+        }
+      ],
+      "transitions": {
+        "approved": "product_mgmt",
+        "rejected": "archive_pool",
+        "pending": "manual_review"
+      }
+    },
+    {
+      "id": "product_mgmt",
+      "module": 2,
+      "name": "商品管理",
+      "description": "商品元数据清洗、翻译、SKU定价、人工校对",
+      "trigger": "auto",
+      "subModules": [
+        {
+          "id": "metadata_cleaning",
+          "name": "商品元数据清洗",
+          "description": "自动清洗脏数据、剔除无效规格、预映射WC类目",
+          "output": ["cleaned_metadata", "wc_category"]
+        },
+        {
+          "id": "translation",
+          "name": "多语言翻译",
+          "description": "中文标题/描述/属性自动翻译英文",
+          "sourceLanguage": "zh",
+          "targetLanguage": "en",
+          "fallback": "manual_review"
+        },
+        {
+          "id": "sku_pricing",
+          "name": "SKU & 定价配置",
+          "description": "SKU创建、规格绑定、售价/成本/库存/折扣配置",
+          "conflictDetection": true
+        },
+        {
+          "id": "manual_proofread",
+          "name": "商品人工校对",
+          "description": "运营核对英文文案、属性、类目"
+        }
+      ],
+      "transitions": {
+        "proofread_complete": "vision"
+      }
+    },
+    {
+      "id": "vision",
+      "module": 3,
+      "name": "AI视觉中心",
+      "description": "火山引擎I2I生图、质检、重试、素材库",
+      "trigger": "manualTrigger",
+      "subModules": [
+        {
+          "id": "i2i_scheduler",
+          "name": "I2I任务调度",
+          "description": "人工触发发起AI生图，读取1688参考原图，组装英文Prompt，调用火山引擎API",
+          "provider": "volcengine"
+        },
+        {
+          "id": "param_template",
+          "name": "参数模板",
+          "description": "固化图片规则，不允许业务侧修改",
+          "locked": true,
+          "config": "$ref:#/imageConstraints"
+        },
+        {
+          "id": "auto_qc",
+          "name": "图片自动质检",
+          "description": "分辨率、比例、水印检测、商品主体还原度校验",
+          "checks": ["resolution", "ratio", "watermark", "subject_integrity"]
+        },
+        {
+          "id": "retry_scheduler",
+          "name": "重试调度",
+          "description": "图片质检失败自动重试，最大重试次数=2次",
+          "maxRetries": 2
+        },
+        {
+          "id": "asset_library",
+          "name": "素材库",
+          "description": "存储合格AI图片，生成CDN链接并绑定SKU",
+          "cdnProvider": "aliyun_oss"
+        },
+        {
+          "id": "vision_ticket",
+          "name": "视觉工单推送",
+          "description": "生图重试耗尽后生成人工修图工单，流程挂起",
+          "suspendWorkflow": true
+        }
+      ],
+      "transitions": {
+        "qc_passed": "listing",
+        "qc_failed_retries_exhausted": "vision_ticket"
+      }
+    },
+    {
+      "id": "listing",
+      "module": 4,
+      "name": "上架管理",
+      "description": "预上架校验、WC数据包打包、上架草稿池",
+      "trigger": "auto",
+      "subModules": [
+        {
+          "id": "pre_listing_validation",
+          "name": "预上架校验",
+          "description": "必填字段、SKU合法性、图片CDN链接可用性、WC类目匹配校验",
+          "checks": ["required_fields", "sku_validity", "image_cdn_url", "wc_category_match"]
+        },
+        {
+          "id": "payload_packaging",
+          "name": "WC数据包打包",
+          "description": "组装WooCommerce REST API标准JSON Payload",
+          "format": "woocommerce_rest_v3"
+        },
+        {
+          "id": "draft_pool",
+          "name": "上架草稿池",
+          "description": "存储打包完成待推送商品，支持批量管理待上架队列"
+        }
+      ],
+      "transitions": {
+        "validation_passed": "payload_packaging",
+        "validation_failed": "product_mgmt",
+        "packaging_complete": "sync"
+      }
+    },
+    {
+      "id": "sync",
+      "module": 5,
+      "name": "同步中心",
+      "description": "WC API网关、推送队列、回调监听、双向同步",
+      "trigger": "auto",
+      "subModules": [
+        {
+          "id": "api_gateway",
+          "name": "WC API网关",
+          "description": "管理WC站点API密钥、鉴权、限流、请求封装",
+          "provider": "woocommerce"
+        },
+        {
+          "id": "push_queue",
+          "name": "推送队列",
+          "description": "异步队列控制并发，最大重试次数=3次，指数退避",
+          "maxRetries": 3,
+          "strategy": "exponential_backoff"
+        },
+        {
+          "id": "callback_listener",
+          "name": "WC回调监听",
+          "description": "接收WooCommerce返回结果，回写同步状态到Nuotao数据库",
+          "trigger": "autoCallback"
+        },
+        {
+          "id": "sync_exception",
+          "name": "同步异常",
+          "description": "记录API错误码、返回报文，生成WC同步工单，流程挂起",
+          "suspendWorkflow": true
+        },
+        {
+          "id": "bidirectional_sync",
+          "name": "双向定时同步",
+          "description": "后台守护进程定时轮询，拉取WC库存、价格，反向推送",
+          "trigger": "cronDaemon",
+          "cron": "0 */6 * * *"
+        },
+        {
+          "id": "sync_log",
+          "name": "同步日志",
+          "description": "记录全部推送、回调、定时同步日志，持久化存储"
+        }
+      ],
+      "transitions": {
+        "sync_success": "plm",
+        "sync_failed_retries_exhausted": "sync_exception"
+      }
+    },
+    {
+      "id": "plm",
+      "module": 6,
+      "name": "PLM商品生命周期管理",
+      "description": "WC数据采集、健康评分、数据回流",
+      "trigger": "cronDaemon",
+      "subModules": [
+        {
+          "id": "wc_data_collection",
+          "name": "WC数据采集",
+          "description": "定时拉取WC商品访客、订单、转化、库存消耗指标",
+          "cron": "0 0 * * *"
+        },
+        {
+          "id": "health_scoring",
+          "name": "商品健康评分",
+          "description": "基于运营指标自动计算商品健康分，打上运营标签"
+        },
+        {
+          "id": "data_feedback",
+          "name": "PLM数据回流",
+          "description": "商品健康评分数据回传给牛顿AI，用于迭代选品模型",
+          "target": "newton_ai",
+          "nonBlocking": true
+        }
+      ],
+      "transitions": {
+        "low_score": "selection"
+      }
+    }
+  ],
+  
+  "retryPolicies": {
+    "newton_ai": {
+      "maxRetries": 2,
+      "strategy": "immediate",
+      "onExhausted": "archive_high_risk"
+    },
+    "vision_i2i": {
+      "maxRetries": 2,
+      "strategy": "immediate",
+      "onExhausted": "create_ticket"
+    },
+    "sync_wc_push": {
+      "maxRetries": 3,
+      "strategy": "exponential_backoff",
+      "initialDelaySeconds": 5,
+      "backoffMultiplier": 2,
+      "onExhausted": "create_ticket"
+    }
+  },
+  
+  "ticketRules": {
+    "vision_failed": {
+      "type": "image_generation",
+      "moduleName": "AI视觉中心",
+      "suspendWorkflow": true,
+      "resumeFrom": "vision"
+    },
+    "sync_failed": {
+      "type": "wc_sync",
+      "moduleName": "同步中心",
+      "suspendWorkflow": true,
+      "resumeFrom": "sync"
+    }
+  },
+  
+  "triggerTypes": {
+    "manual": "运营手动后台操作触发",
+    "auto": "上一节点完成自动流转下一节点",
+    "manualTrigger": "人工主动点击按钮启动任务（发起AI生图）",
+    "autoCallback": "外部API回调触发",
+    "cronDaemon": "后台常驻定时守护进程"
+  },
+  
+  "prohibitions": [
+    "禁止降低图片规格要求",
+    "禁止删除子模块、截断流程分支",
+    "禁止硬编码业务参数，所有流程配置统一在JSON管理",
+    "禁止异常直接终止流程，必须走工单挂起机制",
+    "禁止替换选品AI源，选品推理固定调用牛顿AI"
+  ]
+}
