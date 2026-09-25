@@ -183,12 +183,23 @@ def list_to_woocommerce(
                     })
             if wc_images:
                 data["images"] = wc_images
+        else:
+            # 使用默认占位图
+            data["images"] = [
+                {
+                    "id": 0,
+                    "src": "https://via.placeholder.com/600x600?text=Product+Image",
+                    "alt": wc_data.get("name", "Product"),
+                    "title": wc_data.get("name", "Product"),
+                }
+            ]
         
         # 品牌（通过产品属性设置）
         brand = wc_data.get("brand", "Nuotao")
         if brand:
             data["attributes"] = [
                 {
+                    "id": 0,
                     "name": "Brand",
                     "value": brand,
                     "visible": True,

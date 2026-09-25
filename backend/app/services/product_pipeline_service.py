@@ -328,6 +328,9 @@ def _generate_listing_data(
     
     # 产品描述（英文）- 完整翻译
     product_description_en = _translate_to_english(product_description_cn, "description")
+    # 如果描述为空，使用默认英文描述
+    if not product_description_en or len(product_description_en) < 50:
+        product_description_en = f"{product_name_en} - High quality outdoor product with premium features. Perfect for camping, hiking, and outdoor activities. Made with durable materials for long-lasting performance."
     
     # 短描述（中文）
     short_description_cn = _safe_get(product_info, "description", "")
