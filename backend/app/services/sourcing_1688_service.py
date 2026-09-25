@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import time
 from datetime import datetime
 from typing import Any
@@ -15,13 +14,15 @@ from urllib.parse import urlencode
 
 import requests
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-# 1688 开放平台配置（从环境变量读取，未配置时降级）
-# 同时支持 ALI1688_ 和 ALIBABA_ 两种前缀
-ALI1688_APP_KEY = os.getenv("ALI1688_APP_KEY", "") or os.getenv("ALIBABA_APP_KEY", "")
-ALI1688_APP_SECRET = os.getenv("ALI1688_APP_SECRET", "") or os.getenv("ALIBABA_APP_SECRET", "")
-ALI1688_ACCESS_TOKEN = os.getenv("ALI1688_ACCESS_TOKEN", "") or os.getenv("ALIBABA_ACCESS_TOKEN", "")
+# 1688 开放平台配置（从 .env 文件读取，通过 config 对象）
+settings = get_settings()
+ALI1688_APP_KEY = settings.ali1688_app_key or settings.alibaba_app_key
+ALI1688_APP_SECRET = settings.ali1688_app_secret or settings.alibaba_app_secret
+ALI1688_ACCESS_TOKEN = settings.ali1688_access_token or settings.alibaba_access_token
 ALI1688_BASE_URL = "https://gw.open.1688.com/openapi"
 
 # 请求超时

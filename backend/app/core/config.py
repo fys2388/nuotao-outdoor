@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     sensenova_default_model: str = "sensechat"
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 8000  # Increased from 1500 to prevent JSON truncation
+    
+    # --- 1688 API (Ali1688) configuration ---------------------------------------
+    ali1688_app_key: str = ""
+    ali1688_app_secret: str = ""
+    ali1688_access_token: str = ""
+    alibaba_app_key: str = ""  # Alias for backward compatibility
+    alibaba_app_secret: str = ""
+    alibaba_access_token: str = ""
 
     # --- Email / SMTP -------------------------------------------------------
     smtp_host: str | None = None
