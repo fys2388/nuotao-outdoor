@@ -665,13 +665,20 @@ def import_from_1688(
         product_id = parse_1688_url(url_or_id)
         logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
 
-        # Step 2: 调用1688 API获取商品详情
-        from app.services.sourcing_1688_service import get_product_detail
-        product_detail = get_product_detail(product_id)
-
-        if not product_detail.get("success"):
-            error_msg = product_detail.get("error", "获取1688商品详情失败")
-            logger.error("1688 import %s: get product detail failed: %s", import_id, error_msg)
+        # Step 2: 使用牛顿Agent搜索商品（替代1688开放平台API）
+        from app.services.newton_agent_service import newton_agent_search
+        
+        # 使用商品ID或名称搜索
+        search_query = f"查找商品ID {product_id}" if product_id else "户外榨汁杯"
+        
+        logger.info("1688 import %s: using Newton Agent to search: %s", import_id, search_query)
+        
+        # 调用牛顿Agent搜索商品
+        newton_result = newton_agent_search(search_query)
+        
+        if not newton_result.get("success"):
+            error_msg = newton_result.get("error", "牛顿Agent搜索失败")
+            logger.error("1688 import %s: Newton Agent search failed: %s", import_id, error_msg)
             return {
                 "success": False,
                 "error": error_msg,
@@ -679,14 +686,37 @@ def import_from_1688(
                     "import_id": import_id,
                     "product_id": product_id,
                     "source_url": url_or_id,
+                    "source": "newton_agent",
                 },
             }
-
+        
+        # 从牛顿Agent返回的商品列表中提取第一个商品
+        products = newton_result.get("products", [])
+        if not products:
+            error_msg = "牛顿Agent未返回商品数据"
+            logger.error("1688 import %s: Newton Agent returned no products", import_id)
+            return {
+                "success": False,
+                "error": error_msg,
+                "data": {
+                    "import_id": import_id,
+                    "product_id": product_id,
+                    "source_url": url_or_id,
+                    "source": "newton_agent",
+                },
+            }
+        
+        # 获取第一个商品的详情
+        product_data = products[0]
+        logger.info("1688 import %s: got product from Newton Agent: %s", 
+                    import_id, product_data.get("subject", "N/A"))
+        
         # Step 3: 转换为产品工作流输入格式
         product_info = convert_1688_to_pipeline_input(
-            product_detail,
+            product_data,
             source_url=url_or_id,
             source_id=product_id,
+            source="newton_agent",
         )
 
         logger.info("1688 import %s: converted product info: name=%s, sku=%s, images=%d",
@@ -699,8 +729,11 @@ def import_from_1688(
                 "import_id": import_id,
                 "product_id": product_id,
                 "source_url": url_or_id,
+                "source": "newton_agent",
                 "product_info": product_info,
                 "elapsed_time_seconds": round(time.time() - start_time, 2),
+                "newton_task_id": newton_result.get("task_id", ""),
+                "total_products_found": len(products),
             },
             "error": None,
         }
