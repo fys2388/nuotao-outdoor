@@ -393,10 +393,11 @@ def await_result(
     content = final_raw.get("content", "") if final_raw else ""
     chunks = final_raw.get("chunks", "") if final_raw else ""
     
-    # 尝试从raw中提取products（牛顿API可能在content或chunks中返回）
-    products = []
-    if final_raw:
-        # 直接检查顶层字段
+    # 从summary提取products（markdown product-card格式）
+    products = _extract_products_from_summary(content)
+    
+    # 如果从raw中直接找到products，优先使用
+    if not products and final_raw:
         products = final_raw.get("products", final_raw.get("items", []))
     
     return {
@@ -510,6 +511,60 @@ def batch_inquiry(
 # ============================================
 # 内部工具函数
 # ============================================
+
+def _extract_products_from_summary(summary: str) -> list[dict[str, Any]]:
+    """
+    从summary文本中提取product-card代码块中的产品数据
+    
+    牛顿Agent返回的summary包含markdown格式的产品卡片：
+    ```product-card
+    [{"variant":"product_domestic","id":"xxx","title":"...","price":"..."}]
+    ```
+    
+    Args:
+        summary: Agent返回的summary文本
+    
+    Returns:
+        产品列表
+    """
+    import re
+    import json
+    
+    if not summary:
+        return []
+    
+    products = []
+    
+    # 匹配 product-card 代码块
+    pattern = r'```product-card\s*([\s\S]*?)```'
+    matches = re.findall(pattern, summary)
+    
+    for match in matches:
+        try:
+            # 尝试解析JSON
+            data = json.loads(match.strip())
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        products.append(item)
+            elif isinstance(data, dict):
+                products.append(data)
+        except json.JSONDecodeError:
+            # 如果不是标准JSON，尝试提取关键信息
+            # 格式可能是: [{"variant":"product_domestic","id":"xxx","title":"..."}]
+            # 尝试用正则提取单个产品
+            item_pattern = r'\{[^}]+\}'
+            items = re.findall(item_pattern, match)
+            for item_str in items:
+                try:
+                    item = json.loads(item_str)
+                    if isinstance(item, dict):
+                        products.append(item)
+                except json.JSONDecodeError:
+                    pass
+    
+    return products
+
 
 def _normalize_newton_products(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """标准化牛顿Agent返回的商品列表"""
