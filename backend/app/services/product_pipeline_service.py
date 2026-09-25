@@ -354,17 +354,19 @@ def _generate_listing_data(
     # SKU（使用英文产品名生成）
     sku = _generate_sku(product_name_en if product_name_en else product_name_cn)
     
-    # 分类（默认户外用品分类）
+    # 分类（使用正确的 WooCommerce 分类 ID）
     category = _safe_get(product_info, "category", "")
-    categories = [{"id": 15, "name": "Backpacks & Hiking Gear"}]  # 默认户外用品
-    if "露营" in category or "帐篷" in category:
-        categories = [{"id": 16, "name": "Camping Equipment"}]
-    elif "照明" in category or "灯具" in category or "头灯" in category:
-        categories = [{"id": 17, "name": "Lighting & Power"}]
-    elif "厨房" in category or "餐具" in category:
-        categories = [{"id": 18, "name": "Outdoor Kitchen"}]
-    elif "榨汁" in product_name_cn or "juicer" in product_name_en.lower():
-        categories = [{"id": 18, "name": "Outdoor Kitchen"}]
+    categories = [{"id": 57, "name": "Backpacks & Hiking Gear"}]  # 默认户外用品
+    if "露营" in category or "帐篷" in category or "camp" in category.lower():
+        categories = [{"id": 55, "name": "Camping Furniture"}]
+    elif "照明" in category or "灯具" in category or "头灯" in category or "light" in category.lower():
+        categories = [{"id": 22, "name": "Lighting & Power"}]
+    elif "厨房" in category or "餐具" in category or "kitchen" in category.lower():
+        categories = [{"id": 104, "name": "Kitchen & Cookware"}]
+    elif "榨汁" in product_name_cn or "juicer" in product_name_en.lower() or "榨汁杯" in product_name_cn:
+        categories = [{"id": 104, "name": "Kitchen & Cookware"}]
+    elif "水壶" in product_name_cn or "瓶" in product_name_cn or "bottle" in product_name_en.lower():
+        categories = [{"id": 57, "name": "Backpacks & Hiking Gear"}]
     
     # 标签（英文）
     tags = []
