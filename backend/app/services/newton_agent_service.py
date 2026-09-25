@@ -389,9 +389,32 @@ def await_result(
         time.sleep(poll_interval)
         elapsed += poll_interval
 
-    # 从get_task_status的raw中提取内容（牛顿API返回content字段）
-    content = final_raw.get("content", "") if final_raw else ""
-    chunks = final_raw.get("chunks", "") if final_raw else ""
+    # 任务完成后，调用fetch_task_result获取完整结果（包含products）
+    if final_status in ("END", "COMPLETED", "SUCCESS"):
+        try:
+            fetch_resp = fetch_task_result(task_id)
+            if fetch_resp.get("success"):
+                final_raw = fetch_resp.get("raw", {})
+                content = fetch_resp.get("summary", "")
+                chunks = fetch_resp.get("chunks", "")
+                products = fetch_resp.get("products", [])
+                comparison = fetch_resp.get("comparison", None)
+            else:
+                content = ""
+                chunks = ""
+                products = []
+                comparison = None
+        except Exception as e:
+            logger.error("Newton fetch result failed: %s", str(e))
+            content = ""
+            chunks = ""
+            products = []
+            comparison = None
+    else:
+        content = final_raw.get("content", "") if final_raw else ""
+        chunks = final_raw.get("chunks", "") if final_raw else ""
+        products = []
+        comparison = None
 
     return {
         "success": final_status in ("END", "COMPLETED", "SUCCESS"),
@@ -401,7 +424,8 @@ def await_result(
         "summary": content,
         "content": content,
         "chunks": chunks,
-        "products": final_raw.get("products", final_raw.get("items", [])) if final_raw else [],
+        "products": products,
+        "comparison": comparison,
         "raw": final_raw,
         "elapsed_seconds": elapsed,
     }
