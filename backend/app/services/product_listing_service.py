@@ -131,7 +131,7 @@ def list_to_woocommerce(
     单个产品上架到 WooCommerce
 
     Args:
-        product: 产品数据
+        product: 产品数据（可能包含 woocommerce_data 字段）
         status: 上架状态（publish/draft/pending）
 
     Returns:
@@ -142,23 +142,34 @@ def list_to_woocommerce(
 
     try:
         url = f"{WC_URL}/wp-json/wc/v3/products"
+        
+        # 优先使用 woocommerce_data 字段（包含英文本地化）
+        wc_data = product.get("woocommerce_data", product)
+        
         data = {
-            "name": product["name"],
+            "name": wc_data.get("name", product.get("name", "")),
             "type": "simple",
-            "regular_price": str(product.get("regular_price", "")),
-            "description": product.get("description", ""),
-            "short_description": product.get("short_description", ""),
-            "sku": product.get("sku", ""),
+            "regular_price": str(wc_data.get("regular_price", product.get("regular_price", ""))),
+            "description": wc_data.get("description", product.get("description", "")),
+            "short_description": wc_data.get("short_description", product.get("short_description", "")),
+            "sku": wc_data.get("sku", product.get("sku", "")),
             "manage_stock": True,
-            "stock_quantity": product.get("stock_quantity", 0),
+            "stock_quantity": wc_data.get("stock_quantity", product.get("stock_quantity", 0)),
             "status": status,
-            "categories": product.get("categories", [{"id": 15}]),
-            "tags": product.get("tags", []),
+            "categories": wc_data.get("categories", product.get("categories", [{"id": 15}])),
+            "tags": wc_data.get("tags", product.get("tags", [])),
         }
-        if product.get("sale_price"):
-            data["sale_price"] = str(product["sale_price"])
-        if product.get("images"):
-            data["images"] = product["images"]
+        if wc_data.get("sale_price"):
+            data["sale_price"] = str(wc_data["sale_price"])
+        if wc_data.get("images"):
+            data["images"] = wc_data["images"]
+        if wc_data.get("meta_data"):
+            data["meta_data"] = wc_data["meta_data"]
+        
+        # 处理品牌（WooCommerce 需要全局属性，这里通过 meta_data 存储）
+        brand = wc_data.get("brand", "")
+        if brand:
+            data.setdefault("meta_data", []).append({"key": "brand", "value": brand})
 
         resp = requests.post(
             url,
@@ -171,7 +182,7 @@ def list_to_woocommerce(
 
         return {
             "success": True,
-            "sku": product.get("sku"),
+            "sku": wc_data.get("sku", product.get("sku")),
             "woocommerce_id": result.get("id"),
             "name": result.get("name"),
             "status": result.get("status"),
