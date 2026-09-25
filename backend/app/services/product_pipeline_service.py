@@ -368,18 +368,48 @@ def _generate_listing_data(
     elif "水壶" in product_name_cn or "瓶" in product_name_cn or "bottle" in product_name_en.lower():
         categories = [{"id": 57, "name": "Backpacks & Hiking Gear"}]
     
-    # 标签（英文）
+    # 标签（英文关键词，简短）
     tags = []
-    selling_points = _safe_get_list(product_report, "core_selling_points", [])
-    for sp in selling_points[:5]:
-        tag_en = _translate_to_english(sp, "tag")
-        if tag_en:
-            tags.append({"name": tag_en[:50]})
+    
+    # 固定英文标签（根据产品类型）
+    if "榨汁" in product_name_cn or "juicer" in product_name_en.lower():
+        tags = [
+            {"name": "Portable"},
+            {"name": "USB Charging"},
+            {"name": "Food-grade"},
+            {"name": "Outdoor"},
+            {"name": "Juicer"},
+        ]
+    elif "水壶" in product_name_cn or "bottle" in product_name_en.lower():
+        tags = [
+            {"name": "Portable"},
+            {"name": "Insulated"},
+            {"name": "Outdoor"},
+            {"name": "BPA Free"},
+            {"name": "Stainless Steel"},
+        ]
+    elif "帐篷" in product_name_cn or "tent" in product_name_en.lower():
+        tags = [
+            {"name": "Camping"},
+            {"name": "Outdoor"},
+            {"name": "Waterproof"},
+            {"name": "Lightweight"},
+        ]
+    else:
+        # 默认户外标签
+        tags = [
+            {"name": "Outdoor"},
+            {"name": "Portable"},
+            {"name": "Camping"},
+        ]
+    
+    # 添加使用场景标签（英文）
     usage_scenarios = _safe_get_list(product_report, "usage_scenarios", [])
-    for scenario in usage_scenarios[:3]:
-        tag_en = _translate_to_english(scenario, "tag")
-        if tag_en:
-            tags.append({"name": tag_en[:50]})
+    for scenario in usage_scenarios[:2]:
+        scenario_en = _translate_to_english(scenario, "tag")
+        if scenario_en and scenario_en not in [t["name"] for t in tags]:
+            if len(scenario_en) <= 30:  # 只添加短标签
+                tags.append({"name": scenario_en})
     
     # 图片（从1688商品信息提取，支持多种字段名）
     images = []
