@@ -750,7 +750,11 @@ def convert_1688_to_pipeline_input(
     Returns:
         产品工作流输入格式的商品信息
     """
-    product = product_detail.get("product", {}) if product_detail.get("success") else {}
+    # 兼容两种格式：1688 API 格式（嵌套）和 Newton Agent 格式（直接）
+    if product_detail.get("success") and "product" in product_detail:
+        product = product_detail["product"]
+    else:
+        product = product_detail  # Newton Agent 格式，直接就是产品字典
 
     # 提取商品名称
     name = product.get("subject", product.get("title", "未命名商品"))
@@ -766,6 +770,8 @@ def convert_1688_to_pipeline_input(
     description = product.get("description", "")
     if not description:
         description = product.get("detail", "")
+    if not description:
+        description = product.get("summary", "")  # Newton Agent 格式
 
     # 提取核心卖点（从标题和属性中提取）
     core_selling_points = []
@@ -777,6 +783,12 @@ def convert_1688_to_pipeline_input(
                 attr_value = attr.get("value", "")
                 if attr_name and attr_value:
                     core_selling_points.append(f"{attr_name}: {attr_value}")
+
+    # 从标题提取核心卖点（Newton Agent 格式）
+    if not core_selling_points and name:
+        # 从标题中提取关键词
+        keywords = re.split(r'[\/\s\-\|]+', name)
+        core_selling_points = [kw for kw in keywords if len(kw) > 2][:5]
 
     # 提取材质
     materials = []
@@ -812,6 +824,12 @@ def convert_1688_to_pipeline_input(
         image_urls = [img.get("url", "") if isinstance(img, dict) else str(img) for img in images if img]
     else:
         image_urls = []
+    
+    # Newton Agent 格式：单个 image_url
+    if not image_urls:
+        image_url = product.get("image_url", "") or product.get("imageUrl", "")
+        if image_url:
+            image_urls = [image_url]
 
     # 提取类目
     category = product.get("categoryName", product.get("category", ""))
