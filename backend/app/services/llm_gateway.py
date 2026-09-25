@@ -375,14 +375,31 @@ async def _post(
 def parse_json_content(content: str) -> dict[str, Any]:
     """Parse JSON content returned by a model (with code-fence tolerance)."""
     cleaned = content.strip()
+    
+    # Log the content for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"parse_json_content input (first 500 chars): {cleaned[:500]}")
+    
     if cleaned.startswith("```"):
         # Strip a ```json ... ``` fence if the model wrapped the payload.
         lines = cleaned.splitlines()
         lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
+    
+    # Try to find JSON object in the content (in case model wraps it with text)
+    if not cleaned.startswith("{"):
+        # Find first { and last }
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end+1]
+            logger.debug(f"Extracted JSON from text, new content: {cleaned[:500]}")
+    
     try:
         parsed = json.loads(cleaned)
     except ValueError as exc:
+        logger.error(f"Failed to parse JSON: {exc}. Content: {cleaned[:1000]}")
         raise LLMError("model returned invalid JSON", kind="invalid_response") from exc
     if not isinstance(parsed, dict):
         raise LLMError("model JSON must be an object", kind="invalid_response")
