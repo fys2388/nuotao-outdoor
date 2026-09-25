@@ -879,15 +879,22 @@ def import_from_1688(
                 import_id, url_or_id, auto_run_pipeline, auto_list)
 
     try:
-        # Step 1: 解析URL提取商品ID
-        product_id = parse_1688_url(url_or_id)
-        logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
-
-        # Step 2: 使用牛顿Agent搜索商品（替代1688开放平台API）
+        # Step 1: 解析URL提取商品ID，或直接使用产品名称搜索
+        product_id = ""
+        if url_or_id.isdigit() or "1688.com" in url_or_id:
+            try:
+                product_id = parse_1688_url(url_or_id)
+                logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
+            except ValueError:
+                pass
+        
+        # Step 2: 使用牛顿Agent搜索商品
         from app.services.newton_agent_service import newton_agent_search
         
-        # 使用商品ID或名称搜索
-        search_query = f"查找商品ID {product_id}" if product_id else "户外榨汁杯"
+        if product_id:
+            search_query = f"查找商品ID {product_id}"
+        else:
+            search_query = url_or_id
         
         logger.info("1688 import %s: using Newton Agent to search: %s", import_id, search_query)
         
@@ -934,7 +941,6 @@ def import_from_1688(
             product_data,
             source_url=url_or_id,
             source_id=product_id,
-            source="newton_agent",
         )
 
         logger.info("1688 import %s: converted product info: name=%s, sku=%s, images=%d",
