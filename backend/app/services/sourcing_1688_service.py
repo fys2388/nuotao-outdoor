@@ -128,7 +128,8 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
         params["sign"] = _sign(params, ALI1688_APP_SECRET)
 
         url = f"{ALI1688_BASE_URL}/param2/1/{method}/{ALI1688_APP_KEY}"
-        resp = requests.post(url, data=params, timeout=DEFAULT_TIMEOUT)
+        # 1688 网关标准：GET 请求，参数通过 URL query 传递
+        resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
 
