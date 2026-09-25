@@ -161,15 +161,64 @@ def list_to_woocommerce(
         }
         if wc_data.get("sale_price"):
             data["sale_price"] = str(wc_data["sale_price"])
-        if wc_data.get("images"):
-            data["images"] = wc_data["images"]
-        if wc_data.get("meta_data"):
-            data["meta_data"] = wc_data["meta_data"]
         
-        # 处理品牌（WooCommerce 需要全局属性，这里通过 meta_data 存储）
-        brand = wc_data.get("brand", "")
+        # 图片（WooCommerce API 格式）
+        images = wc_data.get("images", [])
+        if images:
+            wc_images = []
+            for img in images:
+                if isinstance(img, dict):
+                    wc_images.append({
+                        "id": 0,
+                        "src": img.get("src", ""),
+                        "alt": img.get("alt", ""),
+                        "title": img.get("title", img.get("alt", "")),
+                    })
+                elif isinstance(img, str):
+                    wc_images.append({
+                        "id": 0,
+                        "src": img,
+                        "alt": wc_data.get("name", ""),
+                        "title": wc_data.get("name", ""),
+                    })
+            if wc_images:
+                data["images"] = wc_images
+        
+        # 品牌（通过产品属性设置）
+        brand = wc_data.get("brand", "Nuotao")
         if brand:
-            data.setdefault("meta_data", []).append({"key": "brand", "value": brand})
+            data["attributes"] = [
+                {
+                    "name": "Brand",
+                    "value": brand,
+                    "visible": True,
+                    "variation": False,
+                    "position": 0,
+                }
+            ]
+        
+        # Meta data（包含 SEO 元数据）
+        meta_data = wc_data.get("meta_data", [])
+        if meta_data:
+            data["meta_data"] = meta_data
+        
+        # RankMath SEO 特定字段
+        seo_title = next((m["value"] for m in meta_data if m.get("key") == "seo_title"), wc_data.get("name", ""))
+        seo_description = next((m["value"] for m in meta_data if m.get("key") == "seo_description"), wc_data.get("short_description", ""))
+        focus_keyword = next((m["value"] for m in meta_data if m.get("key") == "focus_keyword"), "")
+        
+        if seo_title:
+            data["meta_data"].append({"key": "_rank_math_seo_title", "value": seo_title})
+        if seo_description:
+            data["meta_data"].append({"key": "_rank_math_seo_description", "value": seo_description})
+        if focus_keyword:
+            data["meta_data"].append({"key": "_rank_math_focus_keyword", "value": focus_keyword})
+        
+        # 确保 meta_data 存在
+        if "meta_data" not in data:
+            data["meta_data"] = []
+        # 添加品牌到 meta_data
+        data["meta_data"].append({"key": "brand", "value": brand})
 
         resp = requests.post(
             url,
