@@ -165,15 +165,22 @@ def list_to_woocommerce(
         if wc_data.get("sale_price"):
             data["sale_price"] = str(wc_data["sale_price"])
         
-        # 图片（通过 WordPress Media API 上传 - 需要 WordPress Application Passwords）
-        # 当前使用 WooCommerce Consumer Key/Secret，无法调用 WordPress API
-        # 解决方案：配置 WordPress Application Passwords 后启用
+        # 图片（使用 WooCommerce API 直接上传外部图片 URL）
+        # WooCommerce 会自动将外部图片导入到 WordPress 媒体库
         images = wc_data.get("images", [])
         if images:
-            logger.info("Product has %d images, but WordPress Media API requires Application Passwords", len(images))
-            # 暂时跳过图片上传，让 WooCommerce 使用默认占位图
-            # TODO: 配置 WordPress Application Passwords 后启用图片上传
-            pass
+            wc_images = []
+            for img in images[:5]:  # 最多上传 5 张
+                if isinstance(img, dict):
+                    img_url = img.get("src") or img.get("url") or img.get("source_url")
+                else:
+                    img_url = img
+                if img_url and img_url.startswith("http"):
+                    wc_images.append({"src": img_url})
+            if wc_images:
+                data["images"] = wc_images
+            else:
+                logger.warning("No valid image URLs found for product %s", product.get("sku"))
         
         # 品牌（通过产品属性设置）
         brand = wc_data.get("brand", "Nuotao")
@@ -182,10 +189,9 @@ def list_to_woocommerce(
                 {
                     "id": 0,
                     "name": "Brand",
-                    "value": brand,
+                    "options": [brand],
                     "visible": True,
                     "variation": False,
-                    "position": 0,
                 }
             ]
         
@@ -221,44 +227,6 @@ def list_to_woocommerce(
         resp.raise_for_status()
         result = resp.json()
         product_id = result.get("id")
-
-        # 设置产品品牌（使用产品属性，因为 product_brand 分类法需要 Brands 插件）
-        brand = wc_data.get("brand", "Nuotao")
-        if brand and product_id:
-            try:
-                # 使用产品属性设置品牌（不依赖 product_brand 分类法）
-                wc_url = f"{WC_URL}/wp-json/wc/v3/products/{product_id}"
-                headers = {
-                    "Authorization": f"Basic {WC_CONSUMER_KEY}:{WC_CONSUMER_SECRET}",
-                }
-                
-                # 获取产品信息
-                resp = requests.get(wc_url, headers=headers, timeout=30)
-                if resp.status_code == 200:
-                    product = resp.json()
-                    # 更新产品属性，添加品牌
-                    attributes = product.get("attributes", [])
-                    # 检查是否已有品牌属性
-                    brand_attr = next((a for a in attributes if a.get("name") == "Brand"), None)
-                    if not brand_attr:
-                        attributes.append({
-                            "id": 0,
-                            "name": "Brand",
-                            "value": brand,
-                            "visible": True,
-                            "variation": False,
-                            "position": 0,
-                        })
-                        update_resp = requests.put(
-                            wc_url,
-                            headers=headers,
-                            json={"attributes": attributes},
-                            timeout=30,
-                        )
-                        if update_resp.status_code == 200:
-                            logger.info("Brand '%s' set as attribute for product %d", brand, product_id)
-            except Exception as e:
-                logger.warning("Failed to set brand for product %d: %s", product_id, str(e))
 
         return {
             "success": True,
