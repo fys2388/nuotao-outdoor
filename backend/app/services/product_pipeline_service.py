@@ -162,10 +162,13 @@ def generate_ai_images_sync(
         """在独立线程中运行async图片生成"""
         import asyncio
         
+        logger.info("AI image generation: starting in thread with new event loop")
+        
         async def _generate_all():
             results = []
             for i, prompt in enumerate(prompts[:max_images]):
                 try:
+                    logger.info("AI image generation: generating prompt %d...", i)
                     result = await image_gen_gateway.generate_image(
                         prompt=prompt,
                         model=model,
@@ -174,6 +177,7 @@ def generate_ai_images_sync(
                         timeout_seconds=120.0,
                     )
                     results.append(result)
+                    logger.info("AI image generation: prompt %d succeeded", i)
                 except Exception as e:
                     logger.warning("AI image generation failed for prompt %d: %s", i, str(e))
                     continue
@@ -181,19 +185,24 @@ def generate_ai_images_sync(
         
         # 创建新的event loop运行async函数
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
+            logger.info("AI image generation: running async generation")
             return loop.run_until_complete(_generate_all())
         finally:
             loop.close()
+            logger.info("AI image generation: event loop closed")
     
     try:
         # 使用线程池运行async生成
+        logger.info("AI image generation: submitting to thread pool")
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_run_async_generation)
             results = future.result(timeout=600)  # 10分钟超时
+        logger.info("AI image generation: got %d results", len(results))
     except Exception as e:
-        logger.error("AI image generation failed: %s", str(e))
-        return {"success": False, "images": [], "cost_cny": 0.0, "model": "", "error": str(e)}
+        logger.error("AI image generation failed: %s", str(e), exc_info=True)
+        return {"success": False, "images": [], "cost_cny": 0.0, "model": model, "error": str(e)}
     
     # 保存图片到本地
     for result in results:
