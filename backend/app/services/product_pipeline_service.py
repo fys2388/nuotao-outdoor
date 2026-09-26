@@ -740,8 +740,8 @@ async def run_pipeline(
                     image_plan = image_workflow_result["data"]["plan"]
                     image_tasks = image_workflow_result["data"]["tasks"]
                     
-                    # 限制生成数量（成本控制）
-                    max_images = int(os.getenv("MAX_AI_IMAGES_PER_PIPELINE", "3"))
+                    # 限制生成数量（成本控制，默认5张）
+                    max_images = int(os.getenv("MAX_AI_IMAGES_PER_PIPELINE", "5"))
                     tasks_to_generate = image_tasks[:max_images]
                     
                     # 生成多张AI图片

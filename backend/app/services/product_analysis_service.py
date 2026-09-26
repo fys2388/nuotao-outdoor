@@ -188,8 +188,8 @@ def _build_analysis_prompt(product_info: dict[str, Any]) -> str:
 
 
 def _build_report_prompt(product_info: dict[str, Any], ai_recognition: dict[str, Any] | None = None) -> str:
-    """构建产品信息报告Prompt"""
-    product_name = product_info.get("name", "未知产品")
+    """构建产品信息报告Prompt - 要求英文输出"""
+    product_name = product_info.get("name", "Unknown Product")
     product_desc = product_info.get("description", "")
     product_price = product_info.get("price", "")
     product_category = product_info.get("category", "")
@@ -198,47 +198,49 @@ def _build_report_prompt(product_info: dict[str, Any], ai_recognition: dict[str,
     recognition_context = ""
     if ai_recognition:
         recognition_context = f"""
-## AI初步识别结果（供参考，请在此基础上深化和完善）
+## AI Initial Recognition Results (for reference, please deepen and improve based on this)
 {json.dumps(ai_recognition, ensure_ascii=False, indent=2)}
 """
 
-    prompt = f"""你是一位专业的电商产品策划师。请根据以下1688商品信息和AI初步识别结果，生成一份完整的产品信息报告，用于后续的电商详情页设计和生图提示词生成。
+    prompt = f"""You are a professional e-commerce product planner. Based on the following 1688 product information and AI recognition results, generate a complete product information report for e-commerce detail page design and image generation prompt creation.
 
-## 产品信息
-- 产品名称: {product_name}
-- 产品类目: {product_category or '未知'}
-- 产品价格: {product_price or '未知'}
-- 供应商: {supplier_name or '未知'}
-- 产品描述: {product_desc or '无'}
+## Product Information
+- Product Name: {product_name}
+- Product Category: {product_category or 'Unknown'}
+- Product Price: {product_price or 'Unknown'}
+- Supplier: {supplier_name or 'Unknown'}
+- Product Description: {product_desc or 'None'}
 {recognition_context}
 
-## 报告要求
-请生成包含以下17个字段的产品信息报告，输出JSON：
+## Report Requirements
+Generate a product information report with the following 17 fields, output as JSON:
 
-1. brand_name: 品牌名称（如果没有明确品牌，根据产品风格和定位起一个合适的品牌名）
-2. product_name: 产品名称（优化后的电商产品名，包含核心关键词）
-3. product_category: 产品类别（具体到细分品类）
-4. product_dimensions: 产品尺寸（推测合理尺寸，格式如"约Xcm×Ycm×Zcm"）
-5. material_craft: 材质工艺（主要材质和工艺特点）
-6. product_color: 产品颜色（主色调描述）
-7. product_capacity: 产品容量/规格（如容量、重量、功率等规格参数）
-8. applicable_target: 适用对象（适用人群/对象描述）
-9. core_selling_points: 核心卖点列表（5-7个，每个一句话，要有吸引力）
-10. product_features: 产品功能列表（5-7个具体功能点）
-11. target_audience: 目标人群（具体人群画像，包括年龄、性别、消费能力、生活方式等）
-12. usage_scenarios: 使用场景列表（4-6个具体使用场景）
-13. visual_style: 视觉风格（详细描述视觉风格定位）
-14. primary_colors: 主色调列表（3-4个颜色，用于详情页设计）
-15. extendable_pages: 可延展页面列表（5-7个详情页板块类型，如品牌主视觉、核心卖点、结构展示、场景展示、细节特写、品质保障、FAQ等）
-16. product_description: 产品详细描述（200字以内，吸引人的产品介绍）
-17. quality_assurance: 品质保障说明（材质安全、耐用性、售后服务等）
+1. brand_name: Brand name (if no clear brand, create a suitable brand name based on product style and positioning)
+2. product_name: Product name (optimized e-commerce product name with core keywords, in ENGLISH)
+3. product_name_en: English product name (MUST be in English, optimized for US market)
+4. product_category: Product category (specific sub-category, in ENGLISH)
+5. product_dimensions: Product dimensions (estimate reasonable dimensions, format like "Approx Xcm x Ycm x Zcm", in ENGLISH)
+6. material_craft: Material and craftsmanship (main materials and craftsmanship features, in ENGLISH)
+7. product_color: Product color (main color description, in ENGLISH)
+8. product_capacity: Product capacity/specifications (capacity, weight, power, etc., in ENGLISH)
+9. applicable_target: Applicable target (target audience/object description, in ENGLISH)
+10. core_selling_points: Core selling points list (5-7 items, each one sentence, attractive, in ENGLISH)
+11. product_features: Product features list (5-7 specific features, in ENGLISH)
+12. target_audience: Target audience (specific audience profile including age, gender, spending power, lifestyle, in ENGLISH)
+13. usage_scenarios: Usage scenarios list (4-6 specific usage scenarios, in ENGLISH)
+14. visual_style: Visual style (detailed visual style positioning, in ENGLISH)
+15. primary_colors: Primary colors list (3-4 colors for detail page design, in ENGLISH)
+16. extendable_pages: Extendable pages list (5-7 detail page section types like brand main visual, core selling points, structure showcase, scene showcase, detail close-up, quality assurance, FAQ, in ENGLISH)
+17. product_description: Product detailed description (within 200 words, attractive product introduction, in ENGLISH)
+18. quality_assurance: Quality assurance description (material safety, durability, after-sales service, in ENGLISH)
 
-## 输出要求
-- 只输出JSON对象，不要输出任何其他文字
-- 所有字段必须填写，不要留空
-- 数组字段使用数组格式
-- 报告要专业、具体、有商业价值，可直接用于电商详情页设计
-- 尺寸、容量等参数如果无法确定，根据同类产品推测合理值
+## Output Requirements
+- Output ONLY JSON object, no other text
+- All fields must be filled, no empty fields
+- Array fields use array format
+- Report must be professional, specific, and commercially valuable
+- Dimensions, capacity and other parameters should be estimated based on similar products if unknown
+- IMPORTANT: ALL values MUST be in ENGLISH (not Chinese) for US market e-commerce
 """
     return prompt
 
