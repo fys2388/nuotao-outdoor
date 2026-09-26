@@ -216,6 +216,7 @@ def generate_ai_images_sync(
     
     # 保存图片到本地
     for result in results:
+        print(f"DEBUG: result has image_url={result.image_url is not None}, image_b64={result.image_b64 is not None}", flush=True)
         if result.image_b64:
             # 生成文件名
             filename = f"{uuid.uuid4().hex[:8]}_{abs(hash(product_name)) % 10000}.png"
@@ -228,7 +229,6 @@ def generate_ai_images_sync(
                     f.write(image_data)
                 
                 # 生成可访问的URL
-                # 假设图片目录可以通过 /static/ai_images/ 访问
                 image_url = f"/static/ai_images/{filename}"
                 generated_images.append(image_url)
                 
@@ -238,6 +238,33 @@ def generate_ai_images_sync(
                 logger.info("AI image saved: %s (cost: %.4f CNY)", filepath, result.cost_cny)
             except Exception as e:
                 logger.error("Failed to save AI image: %s", str(e))
+        elif result.image_url:
+            # 下载远程图片并保存
+            import httpx
+            try:
+                # 下载图片
+                print(f"DEBUG: downloading image from {result.image_url[:100]}...", flush=True)
+                resp = httpx.get(result.image_url, timeout=60.0)
+                if resp.status_code == 200:
+                    # 生成文件名
+                    filename = f"{uuid.uuid4().hex[:8]}_{abs(hash(product_name)) % 10000}.png"
+                    filepath = os.path.join(AI_IMAGE_DIR, filename)
+                    
+                    with open(filepath, 'wb') as f:
+                        f.write(resp.content)
+                    
+                    # 生成可访问的URL
+                    image_url = f"/static/ai_images/{filename}"
+                    generated_images.append(image_url)
+                    
+                    total_cost += result.cost_cny
+                    used_model = result.model
+                    
+                    logger.info("AI image downloaded and saved: %s (cost: %.4f CNY)", filepath, result.cost_cny)
+                else:
+                    logger.error("Failed to download AI image: %d", resp.status_code)
+            except Exception as e:
+                logger.error("Failed to download AI image: %s", str(e))
     
     return {
         "success": len(generated_images) > 0,
