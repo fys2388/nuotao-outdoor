@@ -162,15 +162,12 @@ def generate_ai_images_sync(
         """在独立线程中运行async图片生成"""
         import asyncio
         
-        print(f"DEBUG: _run_async_generation starting in thread", flush=True)
         logger.info("AI image generation: starting in thread with new event loop")
         
         async def _generate_all():
             results = []
-            print(f"DEBUG: _generate_all starting with {len(prompts[:max_images])} prompts", flush=True)
             for i, prompt in enumerate(prompts[:max_images]):
                 try:
-                    print(f"DEBUG: generating prompt {i}...", flush=True)
                     logger.info("AI image generation: generating prompt %d...", i)
                     result = await image_gen_gateway.generate_image(
                         prompt=prompt,
@@ -180,35 +177,28 @@ def generate_ai_images_sync(
                         timeout_seconds=120.0,
                     )
                     results.append(result)
-                    print(f"DEBUG: prompt {i} succeeded", flush=True)
                     logger.info("AI image generation: prompt %d succeeded", i)
                 except Exception as e:
-                    print(f"DEBUG: prompt {i} failed: {str(e)}", flush=True)
                     logger.warning("AI image generation failed for prompt %d: %s", i, str(e))
                     continue
-            print(f"DEBUG: _generate_all finished with {len(results)} results", flush=True)
             return results
         
         # 创建新的event loop运行async函数
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            print(f"DEBUG: running async generation", flush=True)
             logger.info("AI image generation: running async generation")
             return loop.run_until_complete(_generate_all())
         finally:
             loop.close()
-            print(f"DEBUG: event loop closed", flush=True)
             logger.info("AI image generation: event loop closed")
     
-    print(f"DEBUG: generate_ai_images_sync called with {len(prompts)} prompts, model={model}", flush=True)
     try:
         # 使用线程池运行async生成
         logger.info("AI image generation: submitting to thread pool")
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_run_async_generation)
             results = future.result(timeout=600)  # 10分钟超时
-        print(f"DEBUG: generate_ai_images_sync got {len(results)} results", flush=True)
         logger.info("AI image generation: got %d results", len(results))
     except Exception as e:
         logger.error("AI image generation failed: %s", str(e), exc_info=True)
@@ -216,7 +206,6 @@ def generate_ai_images_sync(
     
     # 保存图片到本地
     for result in results:
-        print(f"DEBUG: result has image_url={result.image_url is not None}, image_b64={result.image_b64 is not None}", flush=True)
         if result.image_b64:
             # 生成文件名
             filename = f"{uuid.uuid4().hex[:8]}_{abs(hash(product_name)) % 10000}.png"
@@ -243,7 +232,6 @@ def generate_ai_images_sync(
             import httpx
             try:
                 # 下载图片
-                print(f"DEBUG: downloading image from {result.image_url[:100]}...", flush=True)
                 resp = httpx.get(result.image_url, timeout=60.0)
                 if resp.status_code == 200:
                     # 生成文件名
