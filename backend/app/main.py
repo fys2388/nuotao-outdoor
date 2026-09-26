@@ -117,7 +117,7 @@ app.mount(
 )
 
 # AI generated images (served under /static/ai_images/)
-_ai_images_dir = Path(__file__).resolve().parents[2] / "data" / "ai_generated_images"
+_ai_images_dir = Path(__file__).resolve().parents[1] / "data" / "ai_generated_images"
 _ai_images_dir.mkdir(parents=True, exist_ok=True)
 app.mount(
     "/static/ai_images",
