@@ -162,31 +162,11 @@ def list_to_woocommerce(
         if wc_data.get("sale_price"):
             data["sale_price"] = str(wc_data["sale_price"])
         
-        # 图片（WooCommerce API 格式）
+        # 图片（暂不上传，WooCommerce 不允许从外部 URL 上传图片）
+        # 后续需要通过 WordPress 媒体库 API 上传本地图片
         images = wc_data.get("images", [])
-        if images:
-            wc_images = []
-            for img in images:
-                if isinstance(img, dict):
-                    wc_images.append({
-                        "id": 0,
-                        "src": img.get("src", ""),
-                        "alt": img.get("alt", ""),
-                        "title": img.get("title", img.get("alt", "")),
-                    })
-                elif isinstance(img, str):
-                    wc_images.append({
-                        "id": 0,
-                        "src": img,
-                        "alt": wc_data.get("name", ""),
-                        "title": wc_data.get("name", ""),
-                    })
-            if wc_images:
-                data["images"] = wc_images
-        else:
-            # 不设置图片，让 WooCommerce 使用默认占位图
-            # 注意：WooCommerce 不允许从外部 URL 上传图片，或者对文件类型有严格限制
-            pass
+        # 如果图片是本地 URL 或已上传到 WordPress，可以设置
+        # 目前跳过，让 WooCommerce 使用默认占位图
         
         # 品牌（通过产品属性设置）
         brand = wc_data.get("brand", "Nuotao")
