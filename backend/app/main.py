@@ -116,6 +116,15 @@ app.mount(
     name="runtime-console",
 )
 
+# AI generated images (served under /static/ai_images/)
+_ai_images_dir = Path(__file__).resolve().parents[2] / "data" / "ai_generated_images"
+_ai_images_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/static/ai_images",
+    StaticFiles(directory=str(_ai_images_dir), check_dir=False),
+    name="ai-images",
+)
+
 # Ops Dashboard 运营监控中心（直接返回 HTML 内容，不依赖静态文件目录）
 _ops_dashboard_html = None
 _ops_dashboard_file = Path(__file__).resolve().parent.parent / "frontend" / "ops-dashboard" / "index.html"
