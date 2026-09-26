@@ -60,6 +60,54 @@ def is_restricted(product_name: str, sku: str = "") -> tuple[bool, str]:
     return False, ""
 
 
+def upload_image_to_woocommerce(image_path: str, alt_text: str = "") -> dict[str, Any]:
+    """
+    上传本地图片到 WooCommerce 媒体库
+    
+    Args:
+        image_path: 本地图片路径
+        alt_text: 图片替代文本
+    
+    Returns:
+        {"success": bool, "url": str, "id": int} 或 {"success": False, "error": str}
+    """
+    if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
+        return {"success": False, "error": "WooCommerce API 密钥未配置"}
+    
+    try:
+        # WordPress Media API
+        url = f"{WC_URL}/wp-json/wp/v2/media"
+        
+        with open(image_path, 'rb') as f:
+            files = {
+                'file': (image_path.split('/')[-1], f, 'image/png'),
+            }
+            data = {
+                'title': alt_text or image_path.split('/')[-1],
+                'alt_text': alt_text,
+            }
+            
+            resp = requests.post(
+                url,
+                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                files=files,
+                data=data,
+                timeout=60,
+            )
+        
+        if resp.status_code not in [200, 201]:
+            return {"success": False, "error": f"Upload failed: {resp.status_code} {resp.text[:200]}"}
+        
+        result = resp.json()
+        return {
+            "success": True,
+            "url": result.get("source_url", ""),
+            "id": result.get("id"),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def create_listing_queue(
     products: list[dict[str, Any]],
     auto_filter_restricted: bool = True,
@@ -165,8 +213,7 @@ def list_to_woocommerce(
         if wc_data.get("sale_price"):
             data["sale_price"] = str(wc_data["sale_price"])
         
-        # 图片（使用 WooCommerce API 直接上传外部图片 URL）
-        # WooCommerce 会自动将外部图片导入到 WordPress 媒体库
+        # 图片处理：优先上传本地图片到 WooCommerce 媒体库
         images = wc_data.get("images", [])
         if images:
             wc_images = []
@@ -175,8 +222,28 @@ def list_to_woocommerce(
                     img_url = img.get("src") or img.get("url") or img.get("source_url")
                 else:
                     img_url = img
+                
                 if img_url and img_url.startswith("http"):
+                    # 外部 URL 直接使用
                     wc_images.append({"src": img_url})
+                elif img_url and img_url.startswith("/static/"):
+                    # 本地静态文件，上传到 WooCommerce
+                    from pathlib import Path
+                    backend_dir = Path(__file__).resolve().parents[2]
+                    local_path = backend_dir / img_url.replace("/static/ai_images/", "data/ai_generated_images/")
+                    
+                    if local_path.exists():
+                        upload_result = upload_image_to_woocommerce(str(local_path), alt_text=wc_data.get("name", ""))
+                        if upload_result["success"]:
+                            wc_images.append({"src": upload_result["url"]})
+                        else:
+                            logger.warning("Failed to upload local image %s: %s", img_url, upload_result.get("error"))
+                    else:
+                        logger.warning("Local image not found: %s", local_path)
+                elif img_url:
+                    # 其他 URL 直接使用
+                    wc_images.append({"src": img_url})
+            
             if wc_images:
                 data["images"] = wc_images
             else:
