@@ -22,6 +22,9 @@ WC_URL = settings.woocommerce_url
 WC_CONSUMER_KEY = settings.woocommerce_consumer_key
 WC_CONSUMER_SECRET = settings.woocommerce_consumer_secret
 
+import io
+import hashlib
+
 # 管制物品关键词（自动过滤，不上架）
 RESTRICTED_KEYWORDS = [
     "knife", "刀", "weapon", "武器", "firearm", "枪支",
@@ -162,11 +165,24 @@ def list_to_woocommerce(
         if wc_data.get("sale_price"):
             data["sale_price"] = str(wc_data["sale_price"])
         
-        # 图片（暂不上传，WooCommerce 不允许从外部 URL 上传图片）
-        # 后续需要通过 WordPress 媒体库 API 上传本地图片
+        # 图片（通过 WordPress Media API 上传）
         images = wc_data.get("images", [])
-        # 如果图片是本地 URL 或已上传到 WordPress，可以设置
-        # 目前跳过，让 WooCommerce 使用默认占位图
+        if images:
+            wc_images = []
+            for img in images[:5]:  # 最多上传 5 张
+                img_url = img.get("src") if isinstance(img, dict) else img
+                if img_url and img_url.startswith("http"):
+                    # 尝试上传图片到 WordPress
+                    upload_result = upload_image_to_wordpress(img_url, alt_text=wc_data.get("name", "Product"))
+                    if upload_result.get("success"):
+                        wc_images.append({
+                            "id": upload_result.get("attachment_id"),
+                            "src": upload_result.get("url"),
+                            "alt": wc_data.get("name", ""),
+                            "title": wc_data.get("name", ""),
+                        })
+            if wc_images:
+                data["images"] = wc_images
         
         # 品牌（通过产品属性设置）
         brand = wc_data.get("brand", "Nuotao")
@@ -213,11 +229,25 @@ def list_to_woocommerce(
         )
         resp.raise_for_status()
         result = resp.json()
+        product_id = result.get("id")
+
+        # 设置产品品牌分类法
+        brand = wc_data.get("brand", "Nuotao")
+        if brand and product_id:
+            try:
+                # 获取或创建品牌
+                brand_result = get_or_create_brand(brand)
+                if brand_result.get("success") and brand_result.get("brand_id"):
+                    # 设置产品品牌
+                    set_product_brand(product_id, brand_result.get("brand_id"))
+                    logger.info("Brand '%s' set for product %d", brand, product_id)
+            except Exception as e:
+                logger.warning("Failed to set brand for product %d: %s", product_id, str(e))
 
         return {
             "success": True,
             "sku": wc_data.get("sku", product.get("sku")),
-            "woocommerce_id": result.get("id"),
+            "woocommerce_id": product_id,
             "name": result.get("name"),
             "status": result.get("status"),
             "permalink": result.get("permalink"),
@@ -276,6 +306,154 @@ def batch_list_to_woocommerce(
         "results": results,
         "filtered_items": queue["filtered"],
     }
+
+
+def upload_image_to_wordpress(image_url: str, alt_text: str = "") -> dict[str, Any]:
+    """
+    上传图片到 WordPress 媒体库
+    
+    Args:
+        image_url: 图片 URL
+        alt_text: 图片替代文本
+    
+    Returns:
+        {"success": True, "attachment_id": id, "url": url} 或 {"success": False, "error": msg}
+    """
+    try:
+        # 下载图片
+        resp = requests.get(image_url, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        resp.raise_for_status()
+        
+        # 获取图片内容
+        image_data = resp.content
+        
+        # 获取文件名
+        url_path = image_url.split("?")[0]
+        filename = url_path.split("/")[-1] if url_path.split("/")[-1] else "product_image.jpg"
+        
+        # 通过 WordPress Media API 上传
+        wp_url = f"{WC_URL}/wp-json/wp/v2/media"
+        headers = {
+            "Authorization": f"Basic {WC_CONSUMER_KEY}:{WC_CONSUMER_SECRET}",
+        }
+        files = {
+            "file": (filename, image_data, "image/jpeg"),
+        }
+        data = {
+            "title": alt_text or "Product Image",
+            "alt": alt_text or "Product Image",
+        }
+        
+        upload_resp = requests.post(
+            wp_url,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=60,
+        )
+        
+        if upload_resp.status_code in (200, 201):
+            result = upload_resp.json()
+            return {
+                "success": True,
+                "attachment_id": result.get("id"),
+                "url": result.get("source_url"),
+            }
+        else:
+            return {"success": False, "error": f"Upload failed: {upload_resp.text[:200]}"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_or_create_brand(brand_name: str) -> dict[str, Any]:
+    """
+    获取或创建品牌术语
+    
+    Args:
+        brand_name: 品牌名称
+    
+    Returns:
+        {"success": True, "brand_id": id} 或 {"success": False, "error": msg}
+    """
+    try:
+        # 尝试获取现有品牌
+        wp_url = f"{WC_URL}/wp-json/wp/v2/product_brand"
+        headers = {
+            "Authorization": f"Basic {WC_CONSUMER_KEY}:{WC_CONSUMER_SECRET}",
+        }
+        
+        # 获取品牌列表
+        resp = requests.get(wp_url, headers=headers, params={"slug": brand_name.lower().replace(" ", "-")}, timeout=30)
+        
+        if resp.status_code == 200:
+            brands = resp.json()
+            if brands:
+                return {"success": True, "brand_id": brands[0].get("id")}
+        
+        # 创建新品牌
+        create_resp = requests.post(
+            wp_url,
+            headers=headers,
+            json={"name": brand_name},
+            timeout=30,
+        )
+        
+        if create_resp.status_code in (200, 201):
+            brand = create_resp.json()
+            return {"success": True, "brand_id": brand.get("id")}
+        else:
+            return {"success": False, "error": f"Create brand failed: {create_resp.text[:200]}"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def set_product_brand(product_id: int, brand_id: int) -> dict[str, Any]:
+    """
+    设置产品品牌
+    
+    Args:
+        product_id: 产品 ID
+        brand_id: 品牌 ID
+    
+    Returns:
+        {"success": True} 或 {"success": False, "error": msg}
+    """
+    try:
+        wc_url = f"{WC_URL}/wp-json/wc/v3/products/{product_id}"
+        headers = {
+            "Authorization": f"Basic {WC_CONSUMER_KEY}:{WC_CONSUMER_SECRET}",
+        }
+        
+        # 获取产品信息
+        resp = requests.get(wc_url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            return {"success": False, "error": f"Get product failed: {resp.text[:200]}"}
+        
+        product = resp.json()
+        
+        # 更新产品品牌
+        data = {
+            "product_brands": [brand_id],
+        }
+        
+        update_resp = requests.put(
+            wc_url,
+            headers=headers,
+            json=data,
+            timeout=30,
+        )
+        
+        if update_resp.status_code == 200:
+            return {"success": True}
+        else:
+            return {"success": False, "error": f"Update brand failed: {update_resp.text[:200]}"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def check_experiment_status() -> dict[str, Any]:
