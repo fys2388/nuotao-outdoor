@@ -730,15 +730,29 @@ async def run_pipeline(
         # Step 4: AI图片生成（新增）
         try:
             if product_report:
-                # 生成AI图片提示词
-                ai_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
-                ai_prompt = ai_prompt_result["data"]["full_prompt"] if ai_prompt_result["success"] else ""
+                # 生成多个AI图片提示词（不同场景）
+                ai_prompts = []
                 
-                if ai_prompt:
-                    # 生成3张AI图片
+                # 1. 品牌场景主图
+                ai_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
+                if ai_prompt_result["success"]:
+                    ai_prompts.append(ai_prompt_result["data"]["full_prompt"])
+                
+                # 2. 卖点展示图
+                ai_prompt_result2 = generate_full_prompt(product_report, page_type="feature_selling")
+                if ai_prompt_result2["success"]:
+                    ai_prompts.append(ai_prompt_result2["data"]["full_prompt"])
+                
+                # 3. 使用场景图
+                ai_prompt_result3 = generate_full_prompt(product_report, page_type="usage_scenario")
+                if ai_prompt_result3["success"]:
+                    ai_prompts.append(ai_prompt_result3["data"]["full_prompt"])
+                
+                if ai_prompts:
+                    # 生成多张AI图片
                     product_name = product_info.get("name", "Product")
                     ai_image_result = generate_ai_images_sync(
-                        prompts=[ai_prompt],
+                        prompts=ai_prompts,
                         product_name=product_name,
                         max_images=3,
                     )
