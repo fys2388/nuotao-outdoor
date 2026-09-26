@@ -43,6 +43,11 @@ from app.services.main_image_service import (
     generate_variants,
     run_complete_workflow as run_main_image_workflow,
 )
+from app.services.image_prompt_rules_service import (
+    generate_image_plan,
+    generate_generation_tasks,
+    run_complete_image_workflow,
+)
 from app.services.product_listing_service import (
     is_restricted,
     list_to_woocommerce,
@@ -725,45 +730,64 @@ async def run_pipeline(
             steps_result["main_image"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 3 (main_image) failed: %s", pipeline_id, str(e))
 
-        # Step 4: AI图片生成（新增）
+        # Step 4: AI图片生成（使用新的提示词规则）
         try:
             if product_report:
-                # 生成多个AI图片提示词（不同场景）
-                ai_prompts = []
+                # 使用新的图片生产计划
+                image_workflow_result = run_complete_image_workflow(product_report)
                 
-                # 1. 品牌场景主图
-                ai_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
-                if ai_prompt_result["success"]:
-                    ai_prompts.append(ai_prompt_result["data"]["full_prompt"])
-                
-                # 2. 卖点展示图
-                ai_prompt_result2 = generate_full_prompt(product_report, page_type="feature_selling")
-                if ai_prompt_result2["success"]:
-                    ai_prompts.append(ai_prompt_result2["data"]["full_prompt"])
-                
-                # 3. 使用场景图
-                ai_prompt_result3 = generate_full_prompt(product_report, page_type="usage_scenario")
-                if ai_prompt_result3["success"]:
-                    ai_prompts.append(ai_prompt_result3["data"]["full_prompt"])
-                
-                if ai_prompts:
+                if image_workflow_result["success"]:
+                    image_plan = image_workflow_result["data"]["plan"]
+                    image_tasks = image_workflow_result["data"]["tasks"]
+                    
+                    # 限制生成数量（成本控制）
+                    max_images = int(os.getenv("MAX_AI_IMAGES_PER_PIPELINE", "3"))
+                    tasks_to_generate = image_tasks[:max_images]
+                    
                     # 生成多张AI图片
+                    prompts = [task["prompt"] for task in tasks_to_generate]
                     product_name = product_info.get("name", "Product")
+                    
                     ai_image_result = generate_ai_images_sync(
-                        prompts=ai_prompts,
+                        prompts=prompts,
                         product_name=product_name,
-                        max_images=3,
+                        max_images=max_images,
                     )
                     
                     steps_result["ai_images"] = {
                         "status": "completed" if ai_image_result["success"] else "failed",
-                        "data": ai_image_result,
+                        "data": {
+                            **ai_image_result,
+                            "image_plan": image_plan,
+                            "image_tasks": tasks_to_generate,
+                            "generated_count": len(tasks_to_generate),
+                        },
                         "timestamp": datetime.now().isoformat(),
                     }
                     logger.info("Pipeline %s Step 4 (ai_images) completed: %d images, cost=%.4f CNY",
                                 pipeline_id, len(ai_image_result.get("images", [])), ai_image_result.get("cost_cny", 0))
                 else:
-                    steps_result["ai_images"] = {"status": "skipped", "reason": "No AI prompt available"}
+                    # 降级到旧的 Prompt 生成方式
+                    logger.warning("Pipeline %s Step 4: Image workflow failed, falling back to old method", pipeline_id)
+                    ai_prompts = []
+                    ai_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
+                    if ai_prompt_result["success"]:
+                        ai_prompts.append(ai_prompt_result["data"]["full_prompt"])
+                    
+                    if ai_prompts:
+                        product_name = product_info.get("name", "Product")
+                        ai_image_result = generate_ai_images_sync(
+                            prompts=ai_prompts,
+                            product_name=product_name,
+                            max_images=1,
+                        )
+                        steps_result["ai_images"] = {
+                            "status": "completed" if ai_image_result["success"] else "failed",
+                            "data": ai_image_result,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    else:
+                        steps_result["ai_images"] = {"status": "skipped", "reason": "No AI prompt available"}
             else:
                 steps_result["ai_images"] = {"status": "skipped", "reason": "No product report available"}
         except Exception as e:
