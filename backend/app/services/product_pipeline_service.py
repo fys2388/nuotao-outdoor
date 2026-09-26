@@ -433,6 +433,12 @@ def _generate_listing_data(
     # 品牌（默认 "Nuotao"）
     brand = "Nuotao"
     
+    # 产品简述（英文）- 使用更详细的描述
+    short_description_en = f"{product_name_en} - High quality outdoor product with premium features. Perfect for camping, hiking, and outdoor activities. Made with durable materials for long-lasting performance."
+    
+    # SEO 描述（英文）- 使用更完整的内容
+    seo_description = product_description_en[:300] + "..." if len(product_description_en) > 300 else product_description_en
+    
     return {
         # 中文文案（保留）
         "name": product_name_cn,
@@ -467,7 +473,7 @@ def _generate_listing_data(
                 {"key": "description_cn", "value": product_description_cn[:500]},
                 # SEO 元数据
                 {"key": "seo_title", "value": f"{product_name_en} - Best Price for Outdoor Use"},
-                {"key": "seo_description", "value": product_description_en[:150] + "..."},
+                {"key": "seo_description", "value": seo_description},
                 {"key": "focus_keyword", "value": product_name_en.split()[0].lower() if product_name_en else "outdoor product"},
             ],
         },
