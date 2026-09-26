@@ -38,7 +38,7 @@ print("=" * 60)
 pipeline_url = "http://127.0.0.1:8000/api/v1/product-pipeline/run"
 pipeline_data = {
     "product_info": product_info,
-    "auto_list": False,
+    "auto_list": True,  # Enable auto-upload to WooCommerce
 }
 
 print("Running pipeline... (this may take a few minutes due to AI image generation)")
@@ -77,6 +77,18 @@ if result.get("success"):
         print(f"  WooCommerce images: {len(images)}")
         for i, img in enumerate(images):
             print(f"    Image {i+1}: {img.get('src', 'N/A')[:80]}...")
+    
+    # Check WooCommerce listing (Step 7)
+    listing_step = pipeline_result.get("steps", {}).get("listing", {})
+    print(f"\nWooCommerce Listing (Step 7): {listing_step.get('status')}")
+    if listing_step.get("data"):
+        listing_data_wc = listing_step["data"]
+        print(f"  WooCommerce ID: {listing_data_wc.get('woocommerce_id', 'N/A')}")
+        print(f"  Success: {listing_data_wc.get('success', 'N/A')}")
+        if listing_data_wc.get('error'):
+            print(f"  Error: {listing_data_wc.get('error')}")
+    elif listing_step.get("message"):
+        print(f"  Message: {listing_step.get('message')}")
 else:
     print(f"Pipeline failed: {result.get('error')}")
     print(json.dumps(result, indent=2, ensure_ascii=False)[:2000])
