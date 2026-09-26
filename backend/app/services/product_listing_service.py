@@ -184,15 +184,9 @@ def list_to_woocommerce(
             if wc_images:
                 data["images"] = wc_images
         else:
-            # 使用默认占位图（placehold.co 支持 HTTPS）
-            data["images"] = [
-                {
-                    "id": 0,
-                    "src": "https://placehold.co/600x600/png?text=Product+Image",
-                    "alt": wc_data.get("name", "Product"),
-                    "title": wc_data.get("name", "Product"),
-                }
-            ]
+            # 不设置图片，让 WooCommerce 使用默认占位图
+            # 注意：WooCommerce 不允许从外部 URL 上传图片，或者对文件类型有严格限制
+            pass
         
         # 品牌（通过产品属性设置）
         brand = wc_data.get("brand", "Nuotao")
