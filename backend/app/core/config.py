@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
     # MUST be overridden in staging/production environments.
     woocommerce_webhook_secret: str = "dev-webhook-secret-change-me"
+    
+    # WordPress Application Password for Media API (image upload)
+    # Used for WordPress REST API authentication (not WooCommerce API keys)
+    wordpress_user: str = ""
+    wordpress_app_password: str = ""
 
     # --- M5.16 Scrapling scraping capability (compliance-gated) --------------
     # Compliance review (docs/M5.16) approved a low-frequency, robots.txt-

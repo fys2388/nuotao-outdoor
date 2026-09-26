@@ -62,7 +62,7 @@ def is_restricted(product_name: str, sku: str = "") -> tuple[bool, str]:
 
 def upload_image_to_woocommerce(image_path: str, alt_text: str = "") -> dict[str, Any]:
     """
-    上传本地图片到 WooCommerce 媒体库
+    上传本地图片到 WooCommerce 媒体库（使用 WordPress Application Password）
     
     Args:
         image_path: 本地图片路径
@@ -71,8 +71,12 @@ def upload_image_to_woocommerce(image_path: str, alt_text: str = "") -> dict[str
     Returns:
         {"success": bool, "url": str, "id": int} 或 {"success": False, "error": str}
     """
-    if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
-        return {"success": False, "error": "WooCommerce API 密钥未配置"}
+    # 使用 WordPress Application Password（不是 WooCommerce API keys）
+    wp_user = settings.wordpress_user
+    wp_app_password = settings.wordpress_app_password
+    
+    if not wp_user or not wp_app_password:
+        return {"success": False, "error": "WordPress Application Password 未配置"}
     
     try:
         # WordPress Media API
@@ -89,7 +93,7 @@ def upload_image_to_woocommerce(image_path: str, alt_text: str = "") -> dict[str
             
             resp = requests.post(
                 url,
-                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                auth=(wp_user, wp_app_password),  # Application Password 认证
                 files=files,
                 data=data,
                 timeout=60,
