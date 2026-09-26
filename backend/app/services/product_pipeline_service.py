@@ -568,14 +568,12 @@ def _generate_listing_data(
     # 图片（优先使用AI生成的图片，其次使用1688商品信息）
     images = []
     
-    # 1. 优先使用AI生成的图片
+    # 1. 优先使用AI生成的图片（保持相对路径，WooCommerce上传时会处理）
     if ai_image_result and ai_image_result.get("success"):
         ai_images = ai_image_result.get("images", [])
         for url in ai_images[:5]:
             if isinstance(url, str) and url:
-                # 如果是相对路径，转换为绝对URL
-                if url.startswith("/"):
-                    url = f"https://nuotaooutdoor.com{url}"
+                # 保持相对路径（/static/ai_images/xxx.png），WooCommerce上传函数会处理
                 images.append({"src": url, "alt": product_name_en})
     
     # 2. 其次从 main_image_data 获取AI生成的图片
