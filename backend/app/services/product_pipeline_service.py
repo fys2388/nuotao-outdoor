@@ -414,21 +414,33 @@ def _generate_listing_data(
             if len(scenario_en) <= 30:  # 只添加短标签
                 tags.append({"name": scenario_en})
     
-    # 图片（从1688商品信息提取，支持多种字段名）
+    # 图片（优先使用AI生成的主图，其次使用1688商品信息）
     images = []
-    image_urls = (
-        product_info.get("image_urls", []) 
-        or product_info.get("images", []) 
-        or product_info.get("image_url", []) 
-        or []
-    )
-    # 如果是单个字符串，转换为列表
-    if isinstance(image_urls, str):
-        image_urls = [image_urls]
-    if isinstance(image_urls, list):
-        for url in image_urls[:5]:
+    
+    # 1. 优先从 main_image_data 获取AI生成的图片
+    ai_images = main_image_data.get("images", []) or main_image_data.get("image_urls", []) or []
+    if isinstance(ai_images, str):
+        ai_images = [ai_images]
+    if isinstance(ai_images, list):
+        for url in ai_images[:5]:
             if isinstance(url, str) and url.startswith("http"):
                 images.append({"src": url, "alt": product_name_en})
+    
+    # 2. 如果没有AI图片，从1688商品信息提取
+    if not images:
+        image_urls = (
+            product_info.get("image_urls", []) 
+            or product_info.get("images", []) 
+            or product_info.get("image_url", []) 
+            or []
+        )
+        # 如果是单个字符串，转换为列表
+        if isinstance(image_urls, str):
+            image_urls = [image_urls]
+        if isinstance(image_urls, list):
+            for url in image_urls[:5]:
+                if isinstance(url, str) and url.startswith("http"):
+                    images.append({"src": url, "alt": product_name_en})
     
     # 品牌（默认 "Nuotao"）
     brand = "Nuotao"
