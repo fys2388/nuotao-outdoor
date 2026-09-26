@@ -184,11 +184,11 @@ def list_to_woocommerce(
             if wc_images:
                 data["images"] = wc_images
         else:
-            # 使用默认占位图
+            # 使用默认占位图（placehold.co 支持 HTTPS）
             data["images"] = [
                 {
                     "id": 0,
-                    "src": "https://via.placeholder.com/600x600?text=Product+Image",
+                    "src": "https://placehold.co/600x600/png?text=Product+Image",
                     "alt": wc_data.get("name", "Product"),
                     "title": wc_data.get("name", "Product"),
                 }
