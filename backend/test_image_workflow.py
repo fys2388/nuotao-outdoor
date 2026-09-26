@@ -1,10 +1,10 @@
-"""测试新的图片生成工作流"""
+"""Test the new image generation workflow - English only"""
 
-from app.services.image_prompt_rules_service import run_complete_image_workflow
+import re
+from app.services.image_prompt_rules_service import run_complete_image_workflow, IMAGE_TYPES
 
-# 测试数据
+# Test data with English product name
 product_info = {
-    'product_name': 'Portable USB Juicer Cup',
     'product_name_en': 'Portable USB Juicer Cup',
     'product_category': 'Kitchen',
     'product_color': 'white',
@@ -26,17 +26,22 @@ if result['success']:
     print()
     
     print('Image Plan:')
-    from app.services.image_prompt_rules_service import IMAGE_TYPES
     for image_type, type_data in result['data']['plan']['image_types'].items():
         type_name = IMAGE_TYPES[image_type]['name']
         print(f"  {type_name}: {type_data['count']} images")
     
     print()
-    print('First 3 tasks:')
-    for task in result['data']['tasks'][:3]:
+    print('First 5 tasks (checking for English only):')
+    for task in result['data']['tasks'][:5]:
         print(f"  [{task['id']}] {task['image_type_name']}")
-        print(f"  Prompt: {task['prompt'][:80]}...")
+        print(f"  Prompt: {task['prompt'][:100]}...")
         print(f"  Filename: {task['filename']}")
+        
+        # Check for Chinese characters in prompt
+        if re.search(r'[\u4e00-\u9fff]', task['prompt']):
+            print(f"  WARNING: Chinese characters found in prompt!")
+        else:
+            print(f"  Status: English only [OK]")
         print()
 else:
     print(f"FAILED: {result['error']}")
