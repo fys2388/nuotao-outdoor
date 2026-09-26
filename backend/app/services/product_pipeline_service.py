@@ -1,15 +1,16 @@
 """
 产品端到端工作流服务（P2-2）
 
-串联选品→产品分析→主图生产→生图Prompt→上架WooCommerce的一键流转。
+串联选品→产品分析→主图生产→AI生图→生图Prompt→上架WooCommerce的一键流转。
 
 工作流步骤：
 Step 1: 商品信息输入（从牛顿选品结果导入或手动输入）
 Step 2: AI产品分析（10字段识别 + 17字段产品报告）
 Step 3: 主图生产（3套方向 + 短文案 + 10个变体）
-Step 4: 生图Prompt生成（主图Prompt + 详情页Prompt）
-Step 5: 上架数据生成（名称/描述/价格/SKU/分类/标签）
-Step 6: 上架WooCommerce（可选，人工确认后执行）
+Step 4: AI图片生成（调用AI绘图API生成实际图片）
+Step 5: 生图Prompt生成（主图Prompt + 详情页Prompt）
+Step 6: 上架数据生成（名称/描述/价格/SKU/分类/标签）
+Step 7: 上架WooCommerce（可选，人工确认后执行）
 
 遵循AGENTS.md规范：
 - 业务规则集中在服务层
@@ -20,8 +21,11 @@ Step 6: 上架WooCommerce（可选，人工确认后执行）
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -43,11 +47,17 @@ from app.services.product_listing_service import (
     is_restricted,
     list_to_woocommerce,
 )
+from app.integrations import image_gen as image_gen_gateway
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 # 服务配置
 SERVICE_NAME = "product_pipeline"
+
+# AI图片存储目录
+AI_IMAGE_DIR = os.getenv("AI_IMAGE_DIR", "data/ai_generated_images")
+os.makedirs(AI_IMAGE_DIR, exist_ok=True)
 SERVICE_VERSION = "1.0.0"
 
 # 工作流状态
@@ -64,6 +74,7 @@ PIPELINE_STEPS = [
     {"id": "input", "name": "商品信息输入", "description": "从牛顿选品结果导入或手动输入商品信息"},
     {"id": "analysis", "name": "AI产品分析", "description": "10字段AI识别 + 17字段产品信息报告"},
     {"id": "main_image", "name": "主图生产", "description": "3套主图方向 + 短文案 + 10个变体"},
+    {"id": "ai_images", "name": "AI图片生成", "description": "调用AI绘图API生成优化图片"},
     {"id": "prompt", "name": "生图Prompt生成", "description": "主图Prompt + 详情页Prompt"},
     {"id": "listing_data", "name": "上架数据生成", "description": "名称/描述/价格/SKU/分类/标签"},
     {"id": "listing", "name": "上架WooCommerce", "description": "人工确认后上架到WooCommerce"},
@@ -111,6 +122,93 @@ def _generate_sku(product_name: str) -> str:
     # 添加时间戳后缀
     timestamp = datetime.now().strftime('%m%d%H%M')
     return f"NT-{clean}-{timestamp}"
+
+
+def generate_ai_images_sync(
+    prompts: list[str],
+    product_name: str,
+    *,
+    max_images: int = 3,
+) -> dict[str, Any]:
+    """
+    同步生成AI图片（包装async函数）
+    
+    Args:
+        prompts: 图片提示词列表
+        product_name: 产品名称（用于文件命名）
+        max_images: 最多生成图片数量
+    
+    Returns:
+        {
+            "success": bool,
+            "images": [url1, url2, ...],
+            "cost_cny": float,
+            "model": str,
+        }
+    """
+    settings = get_settings()
+    model = settings.image_gen_default_model or "doubao-seedream-4-0-250828"
+    
+    generated_images = []
+    total_cost = 0.0
+    used_model = model
+    
+    # 运行async图片生成
+    async def _generate_all():
+        results = []
+        for i, prompt in enumerate(prompts[:max_images]):
+            try:
+                result = await image_gen_gateway.generate_image(
+                    prompt=prompt,
+                    model=model,
+                    width=1024,
+                    height=1024,
+                    timeout_seconds=120.0,
+                )
+                results.append(result)
+            except Exception as e:
+                logger.warning("AI image generation failed for prompt %d: %s", i, str(e))
+                continue
+        return results
+    
+    try:
+        # 使用asyncio.run运行async函数
+        results = asyncio.run(_generate_all())
+    except Exception as e:
+        logger.error("AI image generation failed: %s", str(e))
+        return {"success": False, "images": [], "cost_cny": 0.0, "model": "", "error": str(e)}
+    
+    # 保存图片到本地
+    for result in results:
+        if result.image_b64:
+            # 生成文件名
+            filename = f"{uuid.uuid4().hex[:8]}_{abs(hash(product_name)) % 10000}.png"
+            filepath = os.path.join(AI_IMAGE_DIR, filename)
+            
+            try:
+                # 保存base64图片
+                image_data = base64.b64decode(result.image_b64)
+                with open(filepath, 'wb') as f:
+                    f.write(image_data)
+                
+                # 生成可访问的URL
+                # 假设图片目录可以通过 /static/ai_images/ 访问
+                image_url = f"/static/ai_images/{filename}"
+                generated_images.append(image_url)
+                
+                total_cost += result.cost_cny
+                used_model = result.model
+                
+                logger.info("AI image saved: %s (cost: %.4f CNY)", filepath, result.cost_cny)
+            except Exception as e:
+                logger.error("Failed to save AI image: %s", str(e))
+    
+    return {
+        "success": len(generated_images) > 0,
+        "images": generated_images,
+        "cost_cny": total_cost,
+        "model": used_model,
+    }
 
 
 def _translate_to_english(text: str, context: str = "") -> str:
@@ -292,6 +390,7 @@ def _generate_listing_data(
     product_info: dict[str, Any],
     product_report: dict[str, Any],
     main_image_result: dict[str, Any],
+    ai_image_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     生成上架数据（包含英文本地化）
@@ -300,6 +399,7 @@ def _generate_listing_data(
         product_info: 商品信息
         product_report: 产品报告
         main_image_result: 主图生产结果
+        ai_image_result: AI图片生成结果（可选）
 
     Returns:
         上架数据（包含中英文）
@@ -414,19 +514,30 @@ def _generate_listing_data(
             if len(scenario_en) <= 30:  # 只添加短标签
                 tags.append({"name": scenario_en})
     
-    # 图片（优先使用AI生成的主图，其次使用1688商品信息）
+    # 图片（优先使用AI生成的图片，其次使用1688商品信息）
     images = []
     
-    # 1. 优先从 main_image_data 获取AI生成的图片
-    ai_images = main_image_data.get("images", []) or main_image_data.get("image_urls", []) or []
-    if isinstance(ai_images, str):
-        ai_images = [ai_images]
-    if isinstance(ai_images, list):
+    # 1. 优先使用AI生成的图片
+    if ai_image_result and ai_image_result.get("success"):
+        ai_images = ai_image_result.get("images", [])
         for url in ai_images[:5]:
-            if isinstance(url, str) and url.startswith("http"):
+            if isinstance(url, str) and url:
+                # 如果是相对路径，转换为绝对URL
+                if url.startswith("/"):
+                    url = f"https://nuotaooutdoor.com{url}"
                 images.append({"src": url, "alt": product_name_en})
     
-    # 2. 如果没有AI图片，从1688商品信息提取
+    # 2. 其次从 main_image_data 获取AI生成的图片
+    if not images:
+        ai_images = main_image_data.get("images", []) or main_image_data.get("image_urls", []) or []
+        if isinstance(ai_images, str):
+            ai_images = [ai_images]
+        if isinstance(ai_images, list):
+            for url in ai_images[:5]:
+                if isinstance(url, str) and url.startswith("http"):
+                    images.append({"src": url, "alt": product_name_en})
+    
+    # 3. 如果没有AI图片，从1688商品信息提取
     if not images:
         image_urls = (
             product_info.get("image_urls", []) 
@@ -565,7 +676,39 @@ async def run_pipeline(
             steps_result["main_image"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 3 (main_image) failed: %s", pipeline_id, str(e))
 
-        # Step 4: 生图Prompt生成
+        # Step 4: AI图片生成（新增）
+        try:
+            if product_report:
+                # 生成AI图片提示词
+                ai_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
+                ai_prompt = ai_prompt_result["data"]["full_prompt"] if ai_prompt_result["success"] else ""
+                
+                if ai_prompt:
+                    # 生成3张AI图片
+                    product_name = product_info.get("name", "Product")
+                    ai_image_result = generate_ai_images_sync(
+                        prompts=[ai_prompt],
+                        product_name=product_name,
+                        max_images=3,
+                    )
+                    
+                    steps_result["ai_images"] = {
+                        "status": "completed" if ai_image_result["success"] else "failed",
+                        "data": ai_image_result,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    logger.info("Pipeline %s Step 4 (ai_images) completed: %d images, cost=%.4f CNY",
+                                pipeline_id, len(ai_image_result.get("images", [])), ai_image_result.get("cost_cny", 0))
+                else:
+                    steps_result["ai_images"] = {"status": "skipped", "reason": "No AI prompt available"}
+            else:
+                steps_result["ai_images"] = {"status": "skipped", "reason": "No product report available"}
+        except Exception as e:
+            errors.append(f"AI image generation failed: {str(e)}")
+            steps_result["ai_images"] = {"status": "failed", "error": str(e)}
+            logger.error("Pipeline %s Step 4 (ai_images) failed: %s", pipeline_id, str(e))
+
+        # Step 5: 生图Prompt生成
         try:
             if product_report:
                 # 生成主图Prompt（白底清爽方向）
@@ -582,30 +725,31 @@ async def run_pipeline(
                     },
                     "timestamp": datetime.now().isoformat(),
                 }
-                logger.info("Pipeline %s Step 4 (prompt) completed", pipeline_id)
+                logger.info("Pipeline %s Step 5 (prompt) completed", pipeline_id)
             else:
                 steps_result["prompt"] = {"status": "skipped", "reason": "No product report available"}
         except Exception as e:
             errors.append(f"Prompt generation failed: {str(e)}")
             steps_result["prompt"] = {"status": "failed", "error": str(e)}
-            logger.error("Pipeline %s Step 4 (prompt) failed: %s", pipeline_id, str(e))
+            logger.error("Pipeline %s Step 5 (prompt) failed: %s", pipeline_id, str(e))
 
-        # Step 5: 上架数据生成
+        # Step 6: 上架数据生成
         try:
             main_image_data = steps_result.get("main_image", {}).get("data", {})
-            listing_data = _generate_listing_data(product_info, product_report, main_image_data)
+            ai_image_data = steps_result.get("ai_images", {}).get("data", {})
+            listing_data = _generate_listing_data(product_info, product_report, main_image_data, ai_image_data)
             steps_result["listing_data"] = {
                 "status": "completed",
                 "data": listing_data,
                 "timestamp": datetime.now().isoformat(),
             }
-            logger.info("Pipeline %s Step 5 (listing_data) completed", pipeline_id)
+            logger.info("Pipeline %s Step 6 (listing_data) completed", pipeline_id)
         except Exception as e:
             errors.append(f"Listing data generation failed: {str(e)}")
             steps_result["listing_data"] = {"status": "failed", "error": str(e)}
-            logger.error("Pipeline %s Step 5 (listing_data) failed: %s", pipeline_id, str(e))
+            logger.error("Pipeline %s Step 6 (listing_data) failed: %s", pipeline_id, str(e))
 
-        # Step 6: 上架WooCommerce（可选，需要人工确认）
+        # Step 7: 上架WooCommerce（可选，需要人工确认）
         if auto_list:
             try:
                 listing_data = steps_result.get("listing_data", {}).get("data", {})
