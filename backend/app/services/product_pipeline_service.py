@@ -133,6 +133,9 @@ def generate_ai_images_sync(
     """
     同步生成AI图片（包装async函数）
     
+    注意：此函数从同步上下文调用异步图片生成服务。
+    使用线程池运行异步代码，避免event loop冲突。
+    
     Args:
         prompts: 图片提示词列表
         product_name: 产品名称（用于文件命名）
@@ -146,6 +149,7 @@ def generate_ai_images_sync(
             "model": str,
         }
     """
+    import concurrent.futures
     settings = get_settings()
     model = settings.image_gen_default_model or "doubao-seedream-4-0-250828"
     
@@ -153,27 +157,40 @@ def generate_ai_images_sync(
     total_cost = 0.0
     used_model = model
     
-    # 运行async图片生成
-    async def _generate_all():
-        results = []
-        for i, prompt in enumerate(prompts[:max_images]):
-            try:
-                result = await image_gen_gateway.generate_image(
-                    prompt=prompt,
-                    model=model,
-                    width=1024,
-                    height=1024,
-                    timeout_seconds=120.0,
-                )
-                results.append(result)
-            except Exception as e:
-                logger.warning("AI image generation failed for prompt %d: %s", i, str(e))
-                continue
-        return results
+    # 使用线程运行async函数（避免event loop冲突）
+    def _run_async_generation():
+        """在独立线程中运行async图片生成"""
+        import asyncio
+        
+        async def _generate_all():
+            results = []
+            for i, prompt in enumerate(prompts[:max_images]):
+                try:
+                    result = await image_gen_gateway.generate_image(
+                        prompt=prompt,
+                        model=model,
+                        width=1024,
+                        height=1024,
+                        timeout_seconds=120.0,
+                    )
+                    results.append(result)
+                except Exception as e:
+                    logger.warning("AI image generation failed for prompt %d: %s", i, str(e))
+                    continue
+            return results
+        
+        # 创建新的event loop运行async函数
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_generate_all())
+        finally:
+            loop.close()
     
     try:
-        # 使用asyncio.run运行async函数
-        results = asyncio.run(_generate_all())
+        # 使用线程池运行async生成
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_async_generation)
+            results = future.result(timeout=600)  # 10分钟超时
     except Exception as e:
         logger.error("AI image generation failed: %s", str(e))
         return {"success": False, "images": [], "cost_cny": 0.0, "model": "", "error": str(e)}
@@ -389,7 +406,7 @@ def _translate_to_english(text: str, context: str = "") -> str:
 def _generate_listing_data(
     product_info: dict[str, Any],
     product_report: dict[str, Any],
-    main_image_result: dict[str, Any],
+    main_image_data: dict[str, Any],
     ai_image_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
@@ -398,7 +415,7 @@ def _generate_listing_data(
     Args:
         product_info: 商品信息
         product_report: 产品报告
-        main_image_result: 主图生产结果
+        main_image_data: 主图生产结果
         ai_image_result: AI图片生成结果（可选）
 
     Returns:
