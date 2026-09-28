@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Nuotao AI OS"
-    app_version: str = "0.1.0"
     # Accept both ENVIRONMENT and APP_ENV. Production's .env uses APP_ENV;
     # without the alias pydantic-settings matched only the field name, so
     # `environment` silently fell back to "development" and is_production was
