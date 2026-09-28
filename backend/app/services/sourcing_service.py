@@ -91,6 +91,20 @@ async def create_product_candidate(
     if "weight" in product_data or "weight_kg" in product_data:
         product.weight_kg = _safe_decimal(product_data.get("weight_kg", product_data.get("weight", 0)))
 
+    # 将 1688 源图片写入 product.meta["images"]，供前端商品列表/详情展示。
+    # 前端读路径：meta.media.images → meta.images → attributes.images
+    images = product_data.get("images") or product_data.get("image_urls") or []
+    if isinstance(images, str):
+        images = [images]
+    valid_images = [
+        str(u).strip()
+        for u in images
+        if str(u).strip().startswith(("http://", "https://"))
+    ]
+    if valid_images:
+        product.meta = dict(product.meta) if product.meta else {}
+        product.meta["images"] = valid_images
+
     session.add(product)
     await session.flush()
 

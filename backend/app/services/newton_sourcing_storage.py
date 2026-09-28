@@ -202,6 +202,11 @@ async def import_products_to_candidates(
         detail_url = product.get("detail_url") or product.get("url", "")
         score = product.get("score", 0)
         reason = product.get("reason", "")
+        images = [
+            str(u).strip()
+            for u in (product.get("images") or product.get("image_urls") or [])
+            if str(u).strip().startswith(("http://", "https://"))
+        ]
 
         # 构建候选产品数据
         candidate_data = {
@@ -221,6 +226,7 @@ async def import_products_to_candidates(
             "newton_query": source_query,
             "ali1688_product_id": str(product_id_1688),
             "min_order_qty": min_order,
+            "images": images,
         }
 
         # 幂等：同 SKU 已入库则复用既有候选，避免唯一约束冲突导致整批 500
