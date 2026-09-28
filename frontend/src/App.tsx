@@ -30,6 +30,7 @@ import {
   ThunderboltOutlined,
   SafetyCertificateOutlined,
   AccountBookOutlined,
+  LinkOutlined,
 } from '@ant-design/icons'
 // 懒加载页面组件（减少初始 bundle 体积）
 const DashboardPage = lazy(() => import('./pages/Dashboard'))
@@ -76,6 +77,7 @@ const AgentMonitorPage = lazy(() => import('./pages/AgentMonitor'))
 const MemoryReviewPage = lazy(() => import('./pages/MemoryReview'))
 const SettlementsPage = lazy(() => import('./pages/Settlements'))
 const PurchaseOrdersPage = lazy(() => import('./pages/PurchaseOrders'))
+const ProductMappingPage = lazy(() => import('./pages/ProductMapping'))
 import { moduleConfigs } from './pages/moduleConfigs'
 
 // 加载占位组件
@@ -133,6 +135,7 @@ type MenuKey =
   | 'memory-review'
   | 'settlements'
   | 'purchase-orders'
+  | 'product-mapping'
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: '经营看板' },
@@ -153,6 +156,7 @@ const menuItems = [
       { key: 'product-pipeline', icon: <RocketOutlined />, label: '产品工作流' },
       { key: 'product-listing', icon: <ShoppingOutlined />, label: '商品上架' },
       { key: 'products', icon: <FileTextOutlined />, label: '产品管理' },
+      { key: 'product-mapping', icon: <LinkOutlined />, label: '产品映射' },
       { key: 'orders', icon: <ShoppingCartOutlined />, label: '订单管理' },
       { key: 'customers', icon: <UserOutlined />, label: '客户管理' },
       { key: 'cost', icon: <DollarOutlined />, label: '成本模型' },
@@ -215,6 +219,7 @@ const pageTitles: Record<MenuKey, string> = {
   'product-analysis': 'AI产品分析与Prompt生成',
   'product-pipeline': '产品端到端工作流',
   'products': '产品管理',
+  'product-mapping': '产品 ID 映射查询',
   'orders': '订单管理',
   'customers': '客户管理',
   'marketing': '营销活动',
@@ -331,6 +336,8 @@ function App() {
           return <ProductPipelinePage />
         case 'products':
           return <ProductsPage />
+        case 'product-mapping':
+          return <ProductMappingPage />
         case 'orders':
           return <OrdersPage />
         case 'customers':

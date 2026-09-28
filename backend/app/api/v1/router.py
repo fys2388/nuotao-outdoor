@@ -79,7 +79,6 @@ from app.api.v1.endpoints import (
     webhooks_generic,
     weekly_report,
     woocommerce_sync,
-    workflow,
 )
 
 api_router = APIRouter()
@@ -162,4 +161,3 @@ api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
 api_router.include_router(b2b_portal.router)
 api_router.include_router(b2b_admin.router)
-api_router.include_router(workflow.router)
