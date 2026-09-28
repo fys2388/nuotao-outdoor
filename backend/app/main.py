@@ -69,9 +69,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.redis.aclose()
 
 
+# Bump on each release; not read from .env to avoid drift between dev and prod.
+APP_VERSION = "1.0.0"
+
 app = FastAPI(
     title=settings.app_name,
-    version=settings.app_version,
+    version=APP_VERSION,
     description="Nuotao AI OS - 户外电商智能运营系统 API 接口文档",
     lifespan=lifespan,
     docs_url="/docs" if not settings.is_production else None,
@@ -248,7 +251,7 @@ async def root() -> dict[str, str]:
     """Return basic service metadata for operators."""
     return {
         "service": settings.app_name,
-        "version": settings.app_version,
+        "version": APP_VERSION,
         "environment": settings.environment,
         "docs": "/docs",
     }
