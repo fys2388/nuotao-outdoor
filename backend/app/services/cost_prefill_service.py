@@ -95,11 +95,17 @@ REF_SELLING_MULTIPLIER = Decimal("3.5")
 PAYMENT_RATE = Decimal("0.029")
 PAYMENT_FIXED = Decimal("0.30")
 
-# Marketing amortization rate on selling price
-MARKETING_RATE = Decimal("0.15")
+# Marketing amortization rate on selling price (CAC 20-40%, use 30% midpoint)
+MARKETING_RATE = Decimal("0.30")
 
-# After-sales loss rate on selling price
+# After-sales loss rate on selling price (1-5%, use 3%)
 RETURN_RATE = Decimal("0.03")
+
+# Fixed amortization per unit (¥5 = ~$0.70): ERP/tools/customer service
+FIXED_AMORTIZATION = Decimal("0.70")
+
+# Domestic handling fee per unit (¥4 = ~$0.56): 中转仓/集运仓打包操作费
+DOMESTIC_HANDLING = Decimal("0.56")
 
 
 def _effective_weight_kg(weight_kg: Decimal | None, dimensions: dict[str, Any] | None) -> Decimal:
@@ -144,16 +150,21 @@ class CostPrefillResult:
     last_leg_shipping: Decimal   # USD
     tax_estimate: Decimal        # USD (tariff)
     packaging: Decimal           # USD
-    handling: Decimal            # USD
+    handling: Decimal            # USD (操作费)
+    fixed_amortization: Decimal  # USD (固定分摊)
     payment_fee: Decimal         # USD
-    marketing_amortization: Decimal  # USD
+    marketing_amortization: Decimal  # USD (CAC)
     after_sales_loss: Decimal    # USD
     total_landed_cost: Decimal   # USD (authoritative per PROFIT-001)
+    total_cost_full: Decimal     # USD (all costs including marketing/returns)
     suggested_selling_price: Decimal  # USD
     contribution_margin: Decimal      # USD
     contribution_margin_rate: Decimal # 0-1
+    gross_margin: Decimal             # USD (售价 - 货品 - 物流 - 平台支付费)
+    net_margin: Decimal               # USD (毛利 - CAC - 售后损耗 - 固定分摊)
+    break_even_price: Decimal         # USD (保本售价)
     weight_kg_effective: Decimal
-    model_version: str = "cost-prefill-v1"
+    model_version: str = "cost-prefill-v2"
     rule_version: str = "PROFIT-001"
 
 
@@ -198,7 +209,7 @@ def prefill_landed_cost(
 
     # Fixed overheads (defaults if not provided)
     packaging_val = packaging if packaging is not None else Decimal("0.50")
-    handling_val = handling if handling is not None else Decimal("0.30")
+    handling_val = handling if handling is not None else DOMESTIC_HANDLING
 
     total_landed = _r2(
         purchase_cost_usd
@@ -208,6 +219,7 @@ def prefill_landed_cost(
         + packaging_val
         + tax_estimate
         + handling_val
+        + FIXED_AMORTIZATION
     )
 
     # Suggested selling price = landed / (1 - 35% target margin)
@@ -227,6 +239,24 @@ def prefill_landed_cost(
     contribution = _r2(suggested_price - total_cost_full)
     rate = contribution / suggested_price if suggested_price > 0 else Decimal("0")
 
+    # Gross margin = 售价 - 货品 - 物流 - 平台支付费
+    gross_margin = _r2(
+        suggested_price - purchase_cost_usd - last_leg_shipping - payment_fee
+    )
+
+    # Net margin = 毛利 - CAC - 售后损耗 - 固定分摊
+    net_margin = _r2(
+        gross_margin - marketing - returns - FIXED_AMORTIZATION
+    )
+
+    # Break-even price = 单件可变成本 ÷ (1 - 平台及支付费率)
+    variable_cost = _r2(
+        total_landed + payment_fee + marketing + returns
+    )
+    break_even = _r2(
+        variable_cost / (Decimal("1") - PAYMENT_RATE)
+    )
+
     return CostPrefillResult(
         purchase_cost=purchase_cost_usd,
         domestic_shipping=domestic_shipping,
@@ -235,12 +265,17 @@ def prefill_landed_cost(
         tax_estimate=tax_estimate,
         packaging=packaging_val,
         handling=handling_val,
+        fixed_amortization=FIXED_AMORTIZATION,
         payment_fee=payment_fee,
         marketing_amortization=marketing,
         after_sales_loss=returns,
         total_landed_cost=total_landed,
+        total_cost_full=total_cost_full,
         suggested_selling_price=suggested_price,
         contribution_margin=contribution,
         contribution_margin_rate=rate,
+        gross_margin=gross_margin,
+        net_margin=net_margin,
+        break_even_price=break_even,
         weight_kg_effective=eff_weight,
     )
