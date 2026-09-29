@@ -722,3 +722,442 @@ async def get_product_decision_view(
         # Traceability
         trace_id=trace_id,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3C-3: Decision Write Model
+# --------------------------------------------------------------------------- #
+
+from datetime import UTC, datetime
+
+from sqlalchemy import func
+
+from app.schemas.product_intelligence import (
+    ProductDecisionRequest,
+    ProductDecisionResult,
+)
+
+
+class DecisionWriteError(Exception):
+    """Raised when a decision cannot be applied."""
+
+    def __init__(self, message: str, decision: str | None = None, previous_status: str | None = None,
+                 current_status: str | None = None, idempotency_key: str | None = None,
+                 trace_id: str | None = None):
+        super().__init__(message)
+        self.message = message
+        self.decision = decision
+        self.previous_status = previous_status
+        self.current_status = current_status
+        self.idempotency_key = idempotency_key
+        self.trace_id = trace_id
+
+
+# Candidate lifecycle transitions (mirrors _CANDIDATE_TRANSITIONS in product_intelligence.py)
+_CANDIDATE_TRANSITIONS: dict[str | None, set[str]] = {
+    None: {"candidate"},
+    "candidate": {"approved", "rejected"},
+    "approved": {"testing", "rejected"},
+    "testing": {"winner", "rejected"},
+    "winner": set(),
+    "rejected": set(),
+}
+
+# Mapping from Human Decision to target candidate_status
+_DECISION_TO_STATUS: dict[str, str] = {
+    "CONTINUE": "",  # Dynamic based on current status
+    "REJECT": "rejected",
+    "SUPPLEMENT_DATA": "",  # No state change
+    "APPROVE": "",  # Dynamic based on current status
+}
+
+
+def _get_next_candidate_status(current: str | None) -> str | None:
+    """Get the next legal candidate_status for CONTINUE/APPROVE."""
+    if current is None:
+        return "candidate"
+    if current == "candidate":
+        return "approved"
+    if current == "approved":
+        return "testing"
+    if current == "testing":
+        return "winner"
+    return None  # Terminal state
+
+
+def _check_hard_rules(results: list[DecisionRuleResult]) -> list[str]:
+    """Check if any hard rules failed or are unknown."""
+    failures = []
+    for r in results:
+        if r.result == "FAIL":
+            failures.append(f"RULE_FAIL: {r.rule_id}")
+        elif r.result == "UNKNOWN":
+            failures.append(f"RULE_UNKNOWN: {r.rule_id}")
+    return failures
+
+
+async def _check_pricing_available(session: AsyncSession, product: Product) -> bool:
+    """Check if pricing is available for candidate -> approved transition."""
+    from app.services.listing_gate import resolve_prices
+    from app.services.product_cost_service import latest_cost_for_product
+    from decimal import Decimal
+
+    meta = product.meta if isinstance(product.meta, dict) else {}
+    prices = resolve_prices(meta)
+    if not prices.get("regular_price"):
+        return False
+
+    cost = await latest_cost_for_product(
+        session,
+        workspace_id=product.workspace_id,
+        product_id=product.id,
+    )
+    if cost is None:
+        return False
+
+    pc = getattr(cost, "purchase_cost", None)
+    try:
+        pc_val = Decimal(str(pc or 0))
+    except (ValueError, TypeError):
+        pc_val = Decimal("0")
+
+    return pc is not None and pc_val > 0
+
+
+async def _find_existing_decision_event(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    idempotency_key: str,
+) -> EventLog | None:
+    """Find an existing decision event by idempotency key."""
+    events = (
+        await session.execute(
+            select(EventLog)
+            .where(
+                EventLog.workspace_id == workspace_id,
+                EventLog.entity_type == "product",
+                EventLog.entity_id == str(product_id),
+                EventLog.event_type.in_(
+                    [
+                        "product.decision.continue",
+                        "product.decision.reject",
+                        "product.decision.supplement_data_requested",
+                        "product.decision.approve",
+                        "product.decision.failed",
+                    ]
+                ),
+            )
+            .order_by(EventLog.created_at.desc())
+        )
+    ).scalars().all()
+    # Search for a matching idempotency key in the payload
+    for event in events:
+        payload = event.payload or {}
+        if payload.get("idempotency_key") == idempotency_key:
+            return event
+    return None
+
+
+async def apply_product_decision(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    request: ProductDecisionRequest,
+    actor: str,
+    trace_id: str | None = None,
+) -> ProductDecisionResult:
+    """Apply a human decision to a product.
+
+    Reuses existing services:
+    - update_candidate_status() for lifecycle changes
+    - event_service.create_event() for audit
+
+    Idempotency: same idempotency_key returns stable result.
+    Permissions: checked by caller (API layer).
+    """
+    from app.services import event_service, product_intelligence as pi
+
+    # Generate or validate idempotency key
+    idempotency_key = request.idempotency_key or (
+        f"decision-{product_id.hex[:8]}-{request.decision}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+    )
+
+    # Check for existing decision with same idempotency key
+    existing_event = await _find_existing_decision_event(
+        session,
+        workspace_id=workspace_id,
+        product_id=product_id,
+        idempotency_key=idempotency_key,
+    )
+
+    if existing_event:
+        # Return stable result (idempotent)
+        payload = existing_event.payload or {}
+        return ProductDecisionResult(
+            success=payload.get("success", True),
+            decision=request.decision,
+            previous_status=payload.get("from_status"),
+            current_status=payload.get("to_status"),
+            stage=payload.get("stage", "UNKNOWN"),
+            reason=payload.get("reason"),
+            error=payload.get("error"),
+            next_action=payload.get("next_action", "NONE"),
+            blockers=[],
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+            timestamp=existing_event.created_at,
+            event_id=existing_event.id,
+        )
+
+    # Load product
+    # Expire all objects to ensure we get the latest status from the database
+    session.expire_all()
+    product = (
+        await session.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == product_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if product:
+        await session.refresh(product)
+
+    if product is None:
+        raise DecisionWriteError(
+            "Product not found",
+            decision=request.decision,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+        )
+
+    previous_status = product.candidate_status
+    previous_stage = _derive_stage(product, None, None, None, None, None)
+
+    # Load decision view for blockers/rules check
+    view = await get_product_decision_view(
+        session,
+        workspace_id=workspace_id,
+        product_id=product_id,
+        trace_id=trace_id,
+    )
+    rule_failures = _check_hard_rules(view.hard_rules if view else [])
+
+    # Validate decision based on current state
+    error_message = None
+    success = True
+    current_status = previous_status
+    current_stage = previous_stage
+    next_action = "NONE"
+    event_type = None
+    event_payload = {}
+
+    # Check if product is in terminal state
+    if previous_status in ("winner", "rejected"):
+        if request.decision not in ("SUPPLEMENT_DATA",):
+            error_message = (
+                f"Product is in terminal state '{previous_status}'. "
+                f"Only SUPPLEMENT_DATA is allowed."
+            )
+            success = False
+            next_action = "NONE"
+            event_type = "product.decision.failed"
+    elif request.decision == "SUPPLEMENT_DATA":
+        # SUPPLEMENT_DATA: no state change, just record the request
+        if not request.supplement_fields:
+            error_message = "SUPPLEMENT_DATA requires supplement_fields"
+            success = False
+            event_type = "product.decision.failed"
+        else:
+            event_type = "product.decision.supplement_data_requested"
+            event_payload = {
+                "decision": request.decision,
+                "reason": request.reason,
+                "supplement_fields": request.supplement_fields,
+                "actor": actor,
+                "idempotency_key": idempotency_key,
+                "success": True,
+                "from_status": previous_status,
+                "to_status": previous_status,
+                "stage": previous_stage,
+                "next_action": "SUPPLEMENT_DATA",
+            }
+            next_action = "SUPPLEMENT_DATA"
+            success = True
+    elif request.decision in ("CONTINUE", "APPROVE"):
+        # Check hard rules before advancing
+        rule_fail_blockers = [f for f in rule_failures if "RULE_FAIL" in f]
+        if rule_fail_blockers and request.decision == "APPROVE":
+            error_message = (
+                f"Cannot APPROVE with failed hard rules: {', '.join(rule_fail_blockers)}. "
+                f"Rule UNKNOWN cannot auto-PASS."
+            )
+            success = False
+            next_action = "SUPPLEMENT_DATA"
+            event_type = "product.decision.failed"
+        else:
+            # Determine target status
+            target_status = _get_next_candidate_status(previous_status)
+            if target_status is None:
+                error_message = f"Cannot advance from terminal state '{previous_status}'"
+                success = False
+                next_action = "NONE"
+                event_type = "product.decision.failed"
+            else:
+                # Check pricing for candidate -> approved
+                if previous_status == "candidate" and target_status == "approved":
+                    if not await _check_pricing_available(session, product):
+                        error_message = (
+                            "Cannot advance from candidate to approved: "
+                            "pricing (retail price + purchase cost) is required."
+                        )
+                        success = False
+                        next_action = "SUPPLEMENT_DATA"
+                        event_type = "product.decision.failed"
+                    else:
+                        # Call existing service to update candidate status
+                        try:
+                            await pi.update_candidate_status(
+                                session,
+                                workspace_id=workspace_id,
+                                product_id=product_id,
+                                new_status=target_status,
+                                actor=actor,
+                                trace_id=trace_id,
+                            )
+                            current_status = target_status
+                        except pi.ProductIntelligenceError as exc:
+                            error_message = str(exc)
+                            success = False
+                            next_action = "SUPPLEMENT_DATA" if "pricing" in str(exc).lower() else "NONE"
+                            event_type = "product.decision.failed"
+                else:
+                    # Call existing service to update candidate status for other transitions
+                    try:
+                        await pi.update_candidate_status(
+                            session,
+                            workspace_id=workspace_id,
+                            product_id=product_id,
+                            new_status=target_status,
+                            actor=actor,
+                            trace_id=trace_id,
+                        )
+                        current_status = target_status
+                    except pi.ProductIntelligenceError as exc:
+                        error_message = str(exc)
+                        success = False
+                        next_action = "NONE"
+                        event_type = "product.decision.failed"
+                # Continue with event creation after status update
+                if success and current_status != previous_status:
+                    # Re-derive stage after status change
+                    product = (
+                        await session.execute(
+                            select(Product).where(
+                                Product.workspace_id == workspace_id,
+                                Product.id == product_id,
+                            )
+                        )
+                    ).scalar_one()
+                    current_stage = _derive_stage(
+                        product, None, None, None, None, None
+                    )
+                    event_type = (
+                        "product.decision.approve" if request.decision == "APPROVE"
+                        else "product.decision.continue"
+                    )
+                    event_payload = {
+                        "decision": request.decision,
+                        "reason": request.reason,
+                        "actor": actor,
+                        "idempotency_key": idempotency_key,
+                        "success": True,
+                        "from_status": previous_status,
+                        "to_status": current_status,
+                        "stage": current_stage,
+                        "next_action": "CREATE_LISTING" if current_status == "approved" else "NONE",
+                    }
+                    next_action = "CREATE_LISTING" if current_status == "approved" else "NONE"
+    elif request.decision == "REJECT":
+        # Check hard rules - reject is always allowed (terminal state)
+        if previous_status in ("winner", "rejected"):
+            error_message = f"Product is already in terminal state '{previous_status}'"
+            success = False
+            next_action = "NONE"
+            event_type = "product.decision.failed"
+        else:
+            # Call existing service to update candidate status
+            try:
+                await pi.update_candidate_status(
+                    session,
+                    workspace_id=workspace_id,
+                    product_id=product_id,
+                    new_status="rejected",
+                    actor=actor,
+                    trace_id=trace_id,
+                )
+                current_status = "rejected"
+                current_stage = "Rejected"
+                event_type = "product.decision.reject"
+                event_payload = {
+                    "decision": request.decision,
+                    "reason": request.reason,
+                    "actor": actor,
+                    "idempotency_key": idempotency_key,
+                    "success": True,
+                    "from_status": previous_status,
+                    "to_status": current_status,
+                    "stage": current_stage,
+                    "next_action": "NONE",
+                }
+                next_action = "NONE"
+            except pi.ProductIntelligenceError as exc:
+                error_message = str(exc)
+                success = False
+                next_action = "NONE"
+                event_type = "product.decision.failed"
+    else:
+        error_message = f"Unknown decision type: {request.decision}"
+        success = False
+        next_action = "NONE"
+        event_type = "product.decision.failed"
+
+    # Create event for audit
+    event_id = None
+    if event_type:
+        event_payload.update({
+            "trace_id": trace_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+        })
+        event = await event_service.create_event(
+            session,
+            workspace_id=workspace_id,
+            event_type=event_type,
+            entity_type="product",
+            entity_id=str(product_id),
+            payload=event_payload,
+            trace_id=trace_id,
+            commit=False,  # Let caller commit
+        )
+        event_id = event.id
+        await session.flush()
+
+    # Return result
+    return ProductDecisionResult(
+        success=success,
+        decision=request.decision,
+        previous_status=previous_status,
+        current_status=current_status,
+        stage=current_stage,
+        reason=request.reason,
+        error=error_message,
+        next_action=next_action,
+        blockers=view.blockers if view and not success else [],
+        idempotency_key=idempotency_key,
+        trace_id=trace_id,
+        timestamp=datetime.now(UTC),
+        event_id=event_id,
+    )

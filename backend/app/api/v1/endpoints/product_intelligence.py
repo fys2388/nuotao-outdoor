@@ -49,7 +49,7 @@ from app.schemas.product_intelligence import (
     SourcingCandidateOut,
     WooCommerceDraftOut,
 )
-from app.schemas.product_intelligence import ProductDecisionView
+from app.schemas.product_intelligence import ProductDecisionView, ProductDecisionRequest, ProductDecisionResult
 from app.services import (
     approval_service,
     decision_service,
@@ -197,6 +197,62 @@ async def get_product_decision(
     if view is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return view
+
+
+@product_router.post(
+    "/{product_id}/decision",
+    response_model=ProductDecisionResult,
+    summary="Apply a human decision to a product",
+)
+async def apply_product_decision(
+    product_id: UUID,
+    body: ProductDecisionRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductDecisionResult:
+    """Apply a human decision to a product.
+
+    Supports four decision types:
+    - CONTINUE: Advance to next legal lifecycle stage
+    - REJECT: Enter rejected state (terminal)
+    - SUPPLEMENT_DATA: Request additional data (no state change)
+    - APPROVE: Human approval (advances lifecycle or approves pending decision)
+
+    Security: JWT + Workspace Authorization required.
+    Idempotency: same idempotency_key returns stable result.
+
+    Errors:
+    - 400: Invalid state transition, pricing missing, hard rules failed
+    - 403: Permission denied (if RBAC enabled)
+    - 404: Product not found
+    """
+    try:
+        result = await decision_service.apply_product_decision(
+            db,
+            workspace_id=workspace_id,
+            product_id=product_id,
+            request=body,
+            actor="authenticated_user",  # In production, extract from JWT
+            trace_id=get_trace_id(),
+        )
+        await db.commit()
+        # Check if result indicates a not-found error
+        if result.error and "not found" in result.error.lower():
+            raise HTTPException(status_code=404, detail=result.error)
+        return result
+    except decision_service.DecisionWriteError as exc:
+        # Return error result instead of raising
+        if "not found" in exc.message.lower():
+            raise HTTPException(status_code=404, detail=exc.message)
+        return ProductDecisionResult(
+            success=False,
+            decision=body.decision,
+            error=exc.message,
+            idempotency_key=exc.idempotency_key or "",
+            trace_id=get_trace_id(),
+        )
+    except pi.ProductIntelligenceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @product_router.post(
