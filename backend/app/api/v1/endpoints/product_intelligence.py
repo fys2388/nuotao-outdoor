@@ -1,4 +1,4 @@
-﻿"""Product intelligence API endpoints (M2.1).
+"""Product intelligence API endpoints (M2.1).
 
 Routes under ``/products`` extend the existing product domain; routes under
 ``/product-decisions`` manage the human approval workflow. No AI agent is
@@ -49,8 +49,10 @@ from app.schemas.product_intelligence import (
     SourcingCandidateOut,
     WooCommerceDraftOut,
 )
+from app.schemas.product_intelligence import ProductDecisionView
 from app.services import (
     approval_service,
+    decision_service,
     product_copy_service,
     product_cost_service as pcs,
     product_intelligence as pi,
@@ -157,6 +159,44 @@ def _http_error(exc: Exception) -> HTTPException:
     if "not found" in str(exc):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3C-2: Decision Cockpit Read Model
+# --------------------------------------------------------------------------- #
+
+
+@product_router.get(
+    "/{product_id}/decision",
+    response_model=ProductDecisionView,
+    summary="Decision Cockpit view for a product",
+)
+async def get_product_decision(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductDecisionView:
+    """Get the unified Decision Cockpit view for a product.
+
+    Aggregates data from Product, ProductAnalysisRun, ProductNuotaoScore,
+    ProductCost, Supplier, SourcingCandidate, RuleExecutionLog, AgentApproval,
+    ListingJob, WooCommerceDraft, and EventLog into a single DecisionView.
+
+    UNKNOWN semantics: any missing real data is reported as UNKNOWN, never
+    coerced to 0, PASS, or APPROVE.
+
+    Security: requires JWT + Workspace Authorization + existing RBAC.
+    Cross-workspace queries are not allowed.
+    """
+    view = await decision_service.get_product_decision_view(
+        db,
+        workspace_id=workspace_id,
+        product_id=product_id,
+        trace_id=get_trace_id(),
+    )
+    if view is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return view
 
 
 @product_router.post(
