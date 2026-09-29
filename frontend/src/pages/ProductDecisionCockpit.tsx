@@ -176,6 +176,7 @@ export default function ProductDecisionCockpit() {
     try {
       const body: ProductDecisionRequest = {
         decision: decisionModalType,
+        actor: 'test-admin', // TODO: Get from auth context
       }
 
       if (decisionReason.trim()) {

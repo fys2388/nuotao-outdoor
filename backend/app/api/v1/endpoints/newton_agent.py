@@ -17,11 +17,15 @@ from app.services.newton_agent_service import (
     create_agent_task,
     fetch_task_result,
     get_task_status,
+    has_credentials,
     is_configured,
     list_models,
     list_tasks,
     newton_agent_search,
     query_points,
+    _get_newton_app_key,
+    _get_newton_app_secret,
+    _get_newton_access_token,
 )
 from app.services.newton_cost_monitor import (
     check_alerts,
@@ -95,12 +99,18 @@ class StandardResponse(BaseModel):
 @router.get("/status", summary="检查牛顿Agent配置状态")
 async def get_config_status() -> StandardResponse:
     """检查牛顿API是否已配置（appKey+appSecret+accessToken）"""
+    import os
     configured = is_configured()
     return StandardResponse(
         success=True,
         data={
             "configured": configured,
-            "app_key_present": bool(is_configured()),
+            "app_key_present": bool(_get_newton_app_key()),
+            "app_secret_present": bool(_get_newton_app_secret()),
+            "access_token_present": bool(_get_newton_access_token()),
+            "env_key": os.getenv("ALI1688_APP_KEY", "")[:10] + "..." if os.getenv("ALI1688_APP_KEY") else "",
+            "env_secret": "SET" if os.getenv("ALI1688_APP_SECRET") else "",
+            "env_token": "SET" if os.getenv("ALI1688_ACCESS_TOKEN") else "",
             "daily_limit": 5000,
             "description": "阿里牛顿云端Agent解决方案" if configured else "未配置API凭证",
         },

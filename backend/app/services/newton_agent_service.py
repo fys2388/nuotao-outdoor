@@ -30,10 +30,42 @@ import requests
 logger = logging.getLogger(__name__)
 
 # 牛顿云配置（从环境变量读取，未配置时降级）
-NEWTON_APP_KEY = os.getenv("ALI1688_APP_KEY", "")
-NEWTON_APP_SECRET = os.getenv("ALI1688_APP_SECRET", "")
-NEWTON_ACCESS_TOKEN = os.getenv("ALI1688_ACCESS_TOKEN", "")
+# 注意：在运行时动态读取，以支持热更新配置
 NEWTON_BASE_URL = "https://gw.open.1688.com/openapi"
+
+
+def _load_env_file():
+    """手动加载 .env 文件（如果 python-dotenv 可用）"""
+    try:
+        from dotenv import load_dotenv
+        import os
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env.development")
+        if os.path.exists(env_file):
+            load_dotenv(env_file)
+    except ImportError:
+        pass
+
+
+# 尝试加载 .env 文件
+_load_env_file()
+
+
+def _get_newton_app_key() -> str:
+    return os.getenv("ALI1688_APP_KEY", "")
+
+
+def _get_newton_app_secret() -> str:
+    return os.getenv("ALI1688_APP_SECRET", "")
+
+
+def _get_newton_access_token() -> str:
+    return os.getenv("ALI1688_ACCESS_TOKEN", "")
+
+
+# 向后兼容的模块级变量（用于调试）
+NEWTON_APP_KEY = _get_newton_app_key()
+NEWTON_APP_SECRET = _get_newton_app_secret()
+NEWTON_ACCESS_TOKEN = _get_newton_access_token()
 
 # 请求超时
 DEFAULT_TIMEOUT = 30
@@ -73,12 +105,12 @@ def _sign(url_path: str, params: dict[str, Any], secret: str) -> str:
 
 def is_configured() -> bool:
     """检查牛顿API是否已完整配置（appKey+appSecret+accessToken）"""
-    return bool(NEWTON_APP_KEY and NEWTON_APP_SECRET and NEWTON_ACCESS_TOKEN)
+    return bool(_get_newton_app_key() and _get_newton_app_secret() and _get_newton_access_token())
 
 
 def has_credentials() -> bool:
     """检查是否有基础凭证（appKey+appSecret，accessToken可选）"""
-    return bool(NEWTON_APP_KEY and NEWTON_APP_SECRET)
+    return bool(_get_newton_app_key() and _get_newton_app_secret())
 
 
 def _deep_find(node: Any, keys: tuple[str, ...]) -> str:
@@ -142,15 +174,16 @@ def _call_newton_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
     # 构造参数：业务参数 + access_token + _aop_timestamp
     params: dict[str, Any] = {}
     params.update(biz_params)
-    if NEWTON_ACCESS_TOKEN:
-        params["access_token"] = NEWTON_ACCESS_TOKEN
+    access_token = _get_newton_access_token()
+    if access_token:
+        params["access_token"] = access_token
     params["_aop_timestamp"] = str(int(time.time() * 1000))
 
     # 构造urlPath：从param2开始到?为止
-    url_path = f"param2/1/{namespace}/{api_name}/{NEWTON_APP_KEY}"
+    url_path = f"param2/1/{namespace}/{api_name}/{_get_newton_app_key()}"
 
     # 计算签名
-    params["_aop_signature"] = _sign(url_path, params, NEWTON_APP_SECRET)
+    params["_aop_signature"] = _sign(url_path, params, _get_newton_app_secret())
 
     # 构造完整URL
     url = f"{NEWTON_BASE_URL}/{url_path}"
