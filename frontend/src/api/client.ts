@@ -58,6 +58,39 @@ export interface WcStatusResponse {
   wc_verify_status: string | null
 }
 
+// ── Product Decision Write types (Phase 3C-3) ───────────────────────
+export type DecisionType = 'CONTINUE' | 'REJECT' | 'SUPPLEMENT_DATA' | 'APPROVE'
+
+export interface ProductDecisionRequest {
+  decision: DecisionType
+  reason?: string
+  actor?: string
+  supplement_fields?: string[]
+  idempotency_key?: string
+}
+
+export interface DecisionBlocker {
+  code: string
+  severity: string
+  message: string
+}
+
+export interface ProductDecisionResult {
+  success: boolean
+  decision: DecisionType
+  previous_status: string
+  current_status: string
+  stage: string
+  reason: string | null
+  error: string | null
+  next_action: string
+  blockers: DecisionBlocker[]
+  idempotency_key: string
+  trace_id: string
+  timestamp: string
+  event_id: number | null
+}
+
 export interface ImportAndAnalyzeData {
   import_id: string
   product_id: string
@@ -463,6 +496,11 @@ export const api = {
     }),
   analyzeProduct: (productId: string) =>
     request(`/products/${productId}/analyze`, { method: 'POST' }),
+  applyProductDecision: (productId: string, body: ProductDecisionRequest) =>
+    request<ProductDecisionResult>(`/products/${productId}/decision`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getProductById: (productId: string) =>
     request(`/products/${productId}`),
   getProductIntelligence: (productId: string) =>

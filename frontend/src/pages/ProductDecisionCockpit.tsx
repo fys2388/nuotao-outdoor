@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   Card, Row, Col, Tag, Button, Space, Typography, Spin, Empty, Alert,
   Descriptions, Tabs, Table, Badge, Divider, Tooltip, Progress, Statistic,
-  Timeline, List, message,
+  Timeline, List, message, Modal, Input, Checkbox, Form,
 } from 'antd'
 import {
   ArrowLeftOutlined, ReloadOutlined, CheckCircleOutlined,
@@ -11,12 +11,16 @@ import {
   WarningOutlined, RightOutlined, SyncOutlined,
   ThunderboltOutlined, RobotOutlined, CalculatorOutlined,
   AuditOutlined, DatabaseOutlined, ShoppingCartOutlined,
-  GlobalOutlined, ClockCircleOutlined,
+  GlobalOutlined, ClockCircleOutlined, ExclamationCircleOutlined,
+  PlusOutlined,
 } from '@ant-design/icons'
 import {
   api,
   type RuleResultsResponse,
   type WcStatusResponse,
+  type ProductDecisionRequest,
+  type ProductDecisionResult,
+  type DecisionType,
 } from '../api/client'
 
 const { Title, Text, Paragraph } = Typography
@@ -97,6 +101,27 @@ export default function ProductDecisionCockpit() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState('facts')
 
+  // Decision state
+  const [decisionModalOpen, setDecisionModalOpen] = useState(false)
+  const [decisionModalType, setDecisionModalType] = useState<DecisionType | null>(null)
+  const [decisionSubmitting, setDecisionSubmitting] = useState(false)
+  const [decisionReason, setDecisionReason] = useState('')
+  const [supplementFields, setSupplementFields] = useState<string[]>([])
+  const [decisionResult, setDecisionResult] = useState<ProductDecisionResult | null>(null)
+  const [decisionResultModalOpen, setDecisionResultModalOpen] = useState(false)
+
+  // Supplement data options
+  const SUPPLEMENT_OPTIONS = [
+    { label: '零售价 (Retail Price)', value: 'retail_price' },
+    { label: '采购成本 (Purchase Cost)', value: 'purchase_cost' },
+    { label: '重量 (Weight)', value: 'weight' },
+    { label: '尺寸 (Dimensions)', value: 'dimensions' },
+    { label: '品牌 (Brand)', value: 'brand' },
+    { label: '供应商信息 (Supplier)', value: 'supplier' },
+    { label: '库存信息 (Inventory)', value: 'inventory' },
+    { label: '物流信息 (Shipping)', value: 'shipping' },
+  ]
+
   const loadData = useCallback(async () => {
     if (!productId) return
     setLoading(true)
@@ -130,6 +155,84 @@ export default function ProductDecisionCockpit() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Decision handlers
+  const openDecisionModal = useCallback((decisionType: DecisionType) => {
+    setDecisionModalType(decisionType)
+    setDecisionReason('')
+    setSupplementFields([])
+    setDecisionModalOpen(true)
+  }, [])
+
+  const closeDecisionModal = useCallback(() => {
+    setDecisionModalOpen(false)
+    setDecisionModalType(null)
+  }, [])
+
+  const handleDecisionSubmit = useCallback(async () => {
+    if (!productId || !decisionModalType) return
+
+    setDecisionSubmitting(true)
+    try {
+      const body: ProductDecisionRequest = {
+        decision: decisionModalType,
+      }
+
+      if (decisionReason.trim()) {
+        body.reason = decisionReason.trim()
+      }
+
+      if (decisionModalType === 'SUPPLEMENT_DATA') {
+        if (supplementFields.length === 0) {
+          message.warning('请至少选择一个需要补充的字段')
+          return
+        }
+        body.supplement_fields = supplementFields
+      }
+
+      const result = await api.applyProductDecision(productId, body)
+      setDecisionResult(result)
+      setDecisionResultModalOpen(true)
+      closeDecisionModal()
+
+      if (result.success) {
+        message.success(`决策成功：${result.current_status}`)
+        // Refresh product data
+        setTimeout(() => loadData(), 500)
+      } else {
+        message.error(`决策失败：${result.error || '未知错误'}`)
+      }
+    } catch (err: any) {
+      message.error(err?.message || '决策提交失败')
+    } finally {
+      setDecisionSubmitting(false)
+    }
+  }, [productId, decisionModalType, decisionReason, supplementFields, closeDecisionModal, loadData])
+
+  // Determine which decision buttons to show based on current stage
+  const getAvailableDecisions = (): DecisionType[] => {
+    if (!product) return []
+
+    const status = product.candidate_status
+
+    // Terminal states: no decisions available
+    if (status === 'winner' || status === 'rejected') return []
+
+    // Available decisions for all non-terminal states
+    const decisions: DecisionType[] = ['SUPPLEMENT_DATA']
+
+    // CONTINUE and APPROVE for non-terminal states
+    if (status !== 'winner') {
+      decisions.push('CONTINUE', 'APPROVE')
+    }
+
+    // REJECT for non-terminal states
+    if (status !== 'rejected') {
+      decisions.push('REJECT')
+    }
+
+    return decisions
+  }
 
   if (loading && !product) {
     return (
@@ -242,6 +345,46 @@ export default function ProductDecisionCockpit() {
             </div>
           </Col>
         </Row>
+
+        {/* Decision Actions */}
+        {getAvailableDecisions().length > 0 && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
+            <Text strong style={{ display: 'block', marginBottom: 12 }}>
+              <ThunderboltOutlined style={{ color: '#faad14' }} /> 决策操作
+            </Text>
+            <Space wrap>
+              <Button
+                type="primary"
+                icon={<RightOutlined />}
+                onClick={() => openDecisionModal('CONTINUE')}
+              >
+                继续推进 (CONTINUE)
+              </Button>
+              <Button
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                onClick={() => openDecisionModal('APPROVE')}
+                style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
+              >
+                批准 (APPROVE)
+              </Button>
+              <Button
+                icon={<QuestionCircleOutlined />}
+                onClick={() => openDecisionModal('SUPPLEMENT_DATA')}
+                style={{ borderColor: '#faad14', color: '#faad14' }}
+              >
+                请求补充数据 (SUPPLEMENT_DATA)
+              </Button>
+              <Button
+                danger
+                icon={<CloseCircleOutlined />}
+                onClick={() => openDecisionModal('REJECT')}
+              >
+                拒绝 (REJECT)
+              </Button>
+            </Space>
+          </div>
+        )}
       </Card>
 
       {/* Main Tabs */}
@@ -491,6 +634,154 @@ export default function ProductDecisionCockpit() {
           ]}
         />
       </Card>
+
+      {/* Decision Modal */}
+      <Modal
+        title={
+          <Space>
+            <ThunderboltOutlined style={{ color: '#faad14' }} />
+            <span>
+              {decisionModalType === 'CONTINUE' && '继续推进'}
+              {decisionModalType === 'APPROVE' && '批准产品'}
+              {decisionModalType === 'SUPPLEMENT_DATA' && '请求补充数据'}
+              {decisionModalType === 'REJECT' && '拒绝产品'}
+            </span>
+          </Space>
+        }
+        open={decisionModalOpen}
+        onOk={handleDecisionSubmit}
+        onCancel={closeDecisionModal}
+        confirmLoading={decisionSubmitting}
+        okText="确认"
+        cancelText="取消"
+        width={500}
+      >
+        <div style={{ marginTop: 16 }}>
+          {decisionModalType && (
+            <Alert
+              type={decisionModalType === 'REJECT' ? 'error' : decisionModalType === 'SUPPLEMENT_DATA' ? 'warning' : 'info'}
+              message={
+                decisionModalType === 'CONTINUE' && '将推进产品到下一个生命周期阶段'
+              }
+              description={
+                decisionModalType === 'REJECT'
+                  ? '拒绝后产品将进入终态，无法继续推进。请确认是否继续。'
+                  : decisionModalType === 'SUPPLEMENT_DATA'
+                  ? '请选择需要补充的数据字段。产品状态不会变更。'
+                  : '请确认决策理由（可选）。'
+              }
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
+          )}
+
+          {decisionModalType === 'SUPPLEMENT_DATA' && (
+            <div style={{ marginBottom: 16 }}>
+              <Text strong>需要补充的字段：</Text>
+              <div style={{ marginTop: 8 }}>
+                <Checkbox.Group
+                  value={supplementFields}
+                  onChange={(values) => setSupplementFields(values as string[])}
+                >
+                  <Row gutter={[16, 8]}>
+                    {SUPPLEMENT_OPTIONS.map(opt => (
+                      <Col key={opt.value} span={12}>
+                        <Checkbox value={opt.value}>{opt.label}</Checkbox>
+                      </Col>
+                    ))}
+                  </Row>
+                </Checkbox.Group>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <Text strong>决策理由（可选）：</Text>
+            <div style={{ marginTop: 8 }}>
+              <Input.TextArea
+                rows={3}
+                value={decisionReason}
+                onChange={(e) => setDecisionReason(e.target.value)}
+                placeholder="输入决策理由..."
+                maxLength={500}
+                showCount
+              />
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Decision Result Modal */}
+      <Modal
+        title={
+          <Space>
+            {decisionResult?.success ? (
+              <CheckCircleOutlined style={{ color: '#52c41a' }} />
+            ) : (
+              <ExclamationCircleOutlined style={{ color: '#faad14' }} />
+            )}
+            <span>决策结果</span>
+          </Space>
+        }
+        open={decisionResultModalOpen}
+        onOk={() => setDecisionResultModalOpen(false)}
+        onCancel={() => setDecisionResultModalOpen(false)}
+        footer={[
+          <Button key="ok" type="primary" onClick={() => setDecisionResultModalOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={600}
+      >
+        {decisionResult && (
+          <div>
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="决策类型">
+                <Tag>{decisionResult.decision}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="结果">
+                <Tag color={decisionResult.success ? 'success' : 'warning'}>
+                  {decisionResult.success ? '成功' : '失败'}
+                </Tag>
+              </Descriptions.Item>
+              {decisionResult.success ? (
+                <>
+                  <Descriptions.Item label="状态变更">
+                    {decisionResult.previous_status} → {decisionResult.current_status}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="下一步">
+                    {decisionResult.next_action}
+                  </Descriptions.Item>
+                </>
+              ) : (
+                <Descriptions.Item label="错误信息">
+                  <Text type="danger">{decisionResult.error}</Text>
+                </Descriptions.Item>
+              )}
+              {decisionResult.reason && (
+                <Descriptions.Item label="理由">
+                  {decisionResult.reason}
+                </Descriptions.Item>
+              )}
+              {decisionResult.blockers && decisionResult.blockers.length > 0 && (
+                <Descriptions.Item label="阻塞项">
+                  {decisionResult.blockers.map((blocker, idx) => (
+                    <div key={idx} style={{ marginBottom: 4 }}>
+                      <Tag color={blocker.severity === 'high' ? 'red' : blocker.severity === 'medium' ? 'orange' : 'blue'}>
+                        {blocker.code}
+                      </Tag>
+                      <Text>{blocker.message}</Text>
+                    </div>
+                  ))}
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="Trace ID">
+                <Text code>{decisionResult.trace_id}</Text>
+              </Descriptions.Item>
+            </Descriptions>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
