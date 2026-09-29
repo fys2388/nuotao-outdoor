@@ -454,3 +454,132 @@ class CandidateCsvIntakeResult(BaseModel):
     results: list[CandidateCsvRowResult] = Field(default_factory=list)
     trace_id: str | None = None
 
+
+# --------------------------------------------------------------------------- #
+# Phase 3C-2: Product Decision View (Decision Cockpit unified read model)
+# --------------------------------------------------------------------------- #
+
+
+class DecisionRuleResult(BaseModel):
+    """One hard-rule evaluation result (PASS / FAIL / UNKNOWN)."""
+
+    rule_id: str
+    rule_version: str
+    name: str
+    result: Literal["PASS", "FAIL", "UNKNOWN"]
+    reason: str | None = None
+    trace_id: str | None = None
+
+
+class DecisionBlocker(BaseModel):
+    """A blocker preventing progress in the product lifecycle."""
+
+    code: str  # e.g. MISSING_COST, RULE_FAIL, RULE_UNKNOWN, MISSING_SUPPLY_DATA
+    severity: Literal["high", "medium", "low"]
+    message: str
+    source: str
+    action: str | None = None
+
+
+class DecisionNextAction(BaseModel):
+    """The recommended next action for the product."""
+
+    action: str  # ANALYZE, SUPPLEMENT_DATA, SUBMIT_APPROVAL, APPROVE, REJECT, etc.
+    reason: str
+    blockers: list[str] = Field(default_factory=list)
+
+
+class ProductDecisionView(BaseModel):
+    """Unified Decision Cockpit read model for a single product.
+
+    Aggregates data from Product, ProductAnalysisRun, ProductNuotaoScore,
+    ProductCost, Supplier, RuleExecutionLog, AgentApproval, EventLog,
+    WooCommerceDraft, ListingJob, and Product.mastered_* fields.
+
+    UNKNOWN semantics: any missing real data is reported as UNKNOWN, never
+    coerced to 0, PASS, or APPROVE.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # --- Product identity ---
+    product: ProductOut
+    stage: str  # Opportunity, Candidate, Analysis, Pending Approval, Product Master, B2C Listing, WooCommerce
+    status: str  # commerce status from Product.status
+
+    # --- AI Recommendation (from ProductAnalysisRun + ProductNuotaoScore) ---
+    ai_recommendation: Literal["RECOMMEND", "REVIEW", "REJECT", "UNKNOWN"] = "UNKNOWN"
+    ai_score: Decimal | None = None  # Nuotao Score total (0-100)
+    ai_grade: str | None = None  # hero, core, long_tail, reject
+    ai_reasons: list[str] = Field(default_factory=list)
+    ai_risks: list[str] = Field(default_factory=list)
+    ai_trace_id: str | None = None
+    ai_analysis_version: str | None = None
+    ai_rule_version: str | None = None
+
+    # --- Market Analysis (from ProductAnalysisRun.output) ---
+    market_size: Decimal | None = None
+    market_growth: Decimal | None = None
+    competition_level: str | None = None  # low, medium, high
+    seasonality: str | None = None
+    target_customer: dict[str, Any] | None = None
+
+    # --- Cost / Landed Cost (from ProductCost) ---
+    currency: str | None = None
+    purchase_cost: Decimal | None = None
+    landed_cost: Decimal | None = None
+    total_cost: Decimal | None = None
+    margin_percent: Decimal | None = None  # calculated
+    return_rate: Decimal | None = None  # always None until field exists (UNKNOWN)
+    freight_share: Decimal | None = None  # international_shipping / landed_cost
+
+    # --- Supply Chain (from Supplier + SourcingCandidate) ---
+    supplier_code: str | None = None
+    supplier_name: str | None = None
+    supplier_rating: str | None = None
+    supplier_status: str | None = None
+    lead_time_days: int | None = None  # from SourcingCandidate
+    moq: int | None = None  # from SourcingCandidate
+    qc_rate: Decimal | None = None  # always None until field exists (UNKNOWN)
+
+    # --- Hard Rules (from RuleExecutionLog) ---
+    hard_rules: list[DecisionRuleResult] = Field(default_factory=list)
+    hard_rules_summary: dict[str, int] = Field(
+        default_factory=lambda: {"PASS": 0, "FAIL": 0, "UNKNOWN": 0}
+    )
+
+    # --- Approval (from AgentApproval) ---
+    approval_status: str | None = None  # pending, approved, rejected, expired
+    approval_type: str | None = None
+    approval_actor: str | None = None
+    approval_action: str | None = None
+    approval_note: str | None = None
+    approval_decided_at: datetime | None = None
+    approval_trace_id: str | None = None
+
+    # --- Product Master ---
+    is_mastered: bool = False
+    mastered_at: datetime | None = None
+    mastered_by: str | None = None
+    mastered_trace_id: str | None = None
+
+    # --- Listing / WooCommerce ---
+    listing_status: str | None = None  # pending, approved, processing, published, failed
+    listing_submitted_by: str | None = None
+    listing_reviewed_by: str | None = None
+    listing_published_at: datetime | None = None
+    wc_product_id: int | None = None
+    wc_draft_status: str | None = None  # generated, pushed, synced
+
+    # --- Blockers ---
+    blockers: list[DecisionBlocker] = Field(default_factory=list)
+
+    # --- Next Action ---
+    next_action: DecisionNextAction
+
+    # --- Timeline (recent events) ---
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
+
+    # --- Traceability ---
+    trace_id: str | None = None
+

@@ -393,3 +393,225 @@ Phase 3B (Frontend Implementation) 可以开始的条件:
 - `backend/app/api/v1/endpoints/product_workbench.py` — Workbench API endpoints
 - `backend/tests/test_phase3a_backend_foundation.py` — 25 tests
 - `docs/design/PRODUCT_AI_SELECTION_API_CONTRACT.md` — API Contract 文档
+
+---
+
+## 9. Phase 3C-2: Decision Cockpit Read Model
+
+> 阶段: Phase 3C-2 — Decision Read Model
+> 基于: docs/design/PHASE_3C_DECISION_DATA_SOURCES.md
+> 状态: 已实施
+
+### 9.1 GET /api/v1/products/{product_id}/decision
+
+**Description**: 获取产品的统一 Decision Cockpit 视图
+
+**Authentication**: JWT + Workspace Authorization + 现有 RBAC
+
+**Path Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| product_id | UUID | 是 | 产品 ID |
+
+**Response Schema**:
+
+```json
+{
+  "product": {
+    "id": "uuid",
+    "workspace_id": "uuid",
+    "sku": "string",
+    "name": "string",
+    "status": "string",
+    "candidate_status": "string|null",
+    "source": "string",
+    "source_url": "string|null",
+    "created_at": "datetime",
+    "updated_at": "datetime"
+  },
+  "stage": "Opportunity|Candidate|Analysis|Pending Approval|Product Master|B2C Listing|WooCommerce",
+  "status": "string",
+
+  "ai_recommendation": "RECOMMEND|REVIEW|REJECT|UNKNOWN",
+  "ai_score": "number|null",
+  "ai_grade": "string|null",
+  "ai_reasons": ["string"],
+  "ai_risks": ["string"],
+  "ai_trace_id": "string|null",
+  "ai_analysis_version": "string|null",
+  "ai_rule_version": "string|null",
+
+  "market_size": "number|null",
+  "market_growth": "number|null",
+  "competition_level": "string|null",
+  "seasonality": "string|null",
+  "target_customer": "object|null",
+
+  "currency": "string|null",
+  "purchase_cost": "number|null",
+  "landed_cost": "number|null",
+  "total_cost": "number|null",
+  "margin_percent": "number|null",
+  "return_rate": "number|null",
+  "freight_share": "number|null",
+
+  "supplier_code": "string|null",
+  "supplier_name": "string|null",
+  "supplier_rating": "string|null",
+  "supplier_status": "string|null",
+  "lead_time_days": "number|null",
+  "moq": "number|null",
+  "qc_rate": "number|null",
+
+  "hard_rules": [
+    {
+      "rule_id": "string",
+      "rule_version": "string",
+      "name": "string",
+      "result": "PASS|FAIL|UNKNOWN",
+      "reason": "string|null",
+      "trace_id": "string|null"
+    }
+  ],
+  "hard_rules_summary": {
+    "PASS": "number",
+    "FAIL": "number",
+    "UNKNOWN": "number"
+  },
+
+  "approval_status": "string|null",
+  "approval_type": "string|null",
+  "approval_actor": "string|null",
+  "approval_action": "string|null",
+  "approval_note": "string|null",
+  "approval_decided_at": "datetime|null",
+  "approval_trace_id": "string|null",
+
+  "is_mastered": "boolean",
+  "mastered_at": "datetime|null",
+  "mastered_by": "string|null",
+  "mastered_trace_id": "string|null",
+
+  "listing_status": "string|null",
+  "listing_submitted_by": "string|null",
+  "listing_reviewed_by": "string|null",
+  "listing_published_at": "datetime|null",
+  "wc_product_id": "number|null",
+  "wc_draft_status": "string|null",
+
+  "blockers": [
+    {
+      "code": "string",
+      "severity": "high|medium|low",
+      "message": "string",
+      "source": "string",
+      "action": "string|null"
+    }
+  ],
+
+  "next_action": {
+    "action": "string",
+    "reason": "string",
+    "blockers": ["string"]
+  },
+
+  "timeline": [
+    {
+      "event_type": "string",
+      "timestamp": "datetime",
+      "payload": "object",
+      "trace_id": "string|null"
+    }
+  ],
+
+  "trace_id": "string|null"
+}
+```
+
+### 9.2 Stage Derivation Logic
+
+Stage 由以下真实状态轴派生（优先级从上到下）：
+
+| 优先级 | Stage | 条件 |
+|--------|-------|------|
+| 1 | WooCommerce | wc_draft.status in (pushed, synced) OR listing.status == published |
+| 2 | B2C Listing | listing.status in (pending, approved, processing) |
+| 3 | Product Master | product.mastered_at is not None |
+| 4 | Pending Approval | candidate_status == approved (waiting for human approval) |
+| 5 | Analysis | analysis_run exists OR score exists |
+| 6 | Candidate | candidate_status == candidate |
+| 7 | Opportunity | 默认（无数据） |
+
+### 9.3 Blocker Codes
+
+| Code | Severity | 说明 |
+|------|----------|------|
+| MISSING_COST | high | 产品没有成本数据 |
+| MISSING_SUPPLY_DATA | medium | 没有供应商或 sourcing 数据 |
+| RULE_FAIL | high | Hard rule 评估失败 |
+| RULE_UNKNOWN | medium | Hard rule 评估结果为 UNKNOWN |
+| PENDING_APPROVAL | medium | 审批等待中 |
+| LISTING_NOT_APPROVED | medium | Listing 等待审批 |
+| WC_SYNC_FAILED | high | WooCommerce 同步失败 |
+
+### 9.4 Next Action Values
+
+| Action | 说明 |
+|--------|------|
+| ANALYZE | 运行 AI 分析 |
+| SUPPLEMENT_DATA | 补充缺失数据 |
+| SUBMIT_APPROVAL | 提交审批 |
+| APPROVE | 批准 |
+| REJECT | 拒绝 |
+| CREATE_MASTER | 创建 Product Master |
+| CREATE_LISTING | 创建 Listing |
+| VALIDATE_LISTING | 验证 Listing |
+| SYNC_WC | 同步到 WooCommerce |
+| NONE | 无需操作 |
+
+### 9.5 UNKNOWN Semantics
+
+**禁止**:
+- NULL → 0
+- NULL → PASS
+- NULL → APPROVE
+
+**必须**:
+- 真实数据缺失 → UNKNOWN
+- return_rate → 始终为 null（UNKNOWN）
+- qc_rate → 始终为 null（UNKNOWN）
+- lead_time_days → 从 SourcingCandidate 读取，无数据则 null
+- moq → 从 SourcingCandidate 读取，无数据则 null
+
+### 9.6 Security Requirements
+
+- JWT + Workspace Authorization + 现有 RBAC
+- 不能：X-Workspace-Id alone
+- 不能：body actor force bypass
+- 不存在 product → 404
+- 存在 product 但无授权 → 403
+- 禁止跨 workspace 查询
+
+### 9.7 Data Sources
+
+| Data Point | Source Model | Table |
+|------------|--------------|-------|
+| Product | Product | products |
+| AI Analysis | ProductAnalysisRun | product_analysis_runs |
+| AI Score | ProductNuotaoScore | product_nuotao_scores |
+| Cost | ProductCost | product_costs |
+| Supplier | Supplier | suppliers |
+| Sourcing | SourcingCandidate | product_sourcing_candidates |
+| Rules | RuleExecutionLog | rule_execution_logs |
+| Approval | AgentApproval | agent_approvals |
+| Listing | ListingJob | listing_jobs |
+| WC Draft | WooCommerceDraft | woocommerce_drafts |
+| Events | EventLog | event_logs |
+| Mastered | Product | products (mastered_at, mastered_by, mastered_trace_id) |
+
+### 9.8 新增文件
+
+- `backend/app/services/decision_service.py` — Decision aggregation service
+- `backend/app/schemas/product_intelligence.py` — ProductDecisionView schema (added)
+- `backend/app/api/v1/endpoints/product_intelligence.py` — GET endpoint (added)
+- `backend/tests/test_decision_read_model.py` — 15 tests
