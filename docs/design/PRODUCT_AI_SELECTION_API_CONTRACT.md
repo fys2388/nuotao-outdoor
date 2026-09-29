@@ -615,3 +615,130 @@ Stage 由以下真实状态轴派生（优先级从上到下）：
 - `backend/app/schemas/product_intelligence.py` — ProductDecisionView schema (added)
 - `backend/app/api/v1/endpoints/product_intelligence.py` — GET endpoint (added)
 - `backend/tests/test_decision_read_model.py` — 15 tests
+
+---
+
+## 10. Phase 3C-3: Decision Write Model
+
+> 阶段: Phase 3C-3 — Decision Write Model
+> 基于: docs/design/PHASE_3C_DECISION_WRITE_MAPPING.md
+> 状态: 已实施
+
+### 10.1 POST /api/v1/products/{product_id}/decision
+
+**Description**: 对候选产品应用人工决策（推进/拒绝/请求补充数据/批准）
+
+**Authentication**: JWT + Workspace Authorization + RBAC
+
+**Path Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| product_id | UUID | 是 | 产品 ID |
+
+**Request Body**:
+```json
+{
+  "decision": "CONTINUE|REJECT|SUPPLEMENT_DATA|APPROVE",
+  "reason": "string (optional, max 500 chars)",
+  "actor": "string (optional, max 64 chars, staging mode)",
+  "supplement_fields": ["string"] (required for SUPPLEMENT_DATA),
+  "idempotency_key": "string (optional, max 128 chars)"
+}
+```
+
+**Decision Types**:
+| Decision | 说明 | 权限要求 |
+|----------|------|----------|
+| CONTINUE | 推进候选生命周期到下一阶段 | `product.candidate.approve` |
+| REJECT | 拒绝产品（终态） | `product.candidate.reject` |
+| SUPPLEMENT_DATA | 请求补充数据（无状态变更） | 无（任何已认证用户） |
+| APPROVE | 人工批准（推进生命周期） | `product.candidate.approve` |
+
+**Response Schema**:
+```json
+{
+  "success": true|false,
+  "decision": "CONTINUE|REJECT|SUPPLEMENT_DATA|APPROVE",
+  "previous_status": "candidate|approved|testing|winner|rejected",
+  "current_status": "candidate|approved|testing|winner|rejected",
+  "stage": "string",
+  "reason": "string|null",
+  "error": "string|null",
+  "next_action": "string",
+  "blockers": [{"code": "string", "severity": "string", "message": "string"}],
+  "idempotency_key": "string",
+  "trace_id": "string",
+  "timestamp": "datetime",
+  "event_id": "number|null"
+}
+```
+
+**Error Responses**:
+| Status | 说明 |
+|--------|------|
+| 200 | 成功（包含业务错误信息） |
+| 400 | 无效状态转换、定价缺失、硬规则失败 |
+| 403 | 权限不足（RBAC 拒绝） |
+| 404 | 产品不存在 |
+
+### 10.2 状态转换矩阵
+
+| 当前状态 | CONTINUE | REJECT | SUPPLEMENT_DATA | APPROVE |
+|----------|----------|--------|-----------------|---------|
+| candidate | → approved | → rejected | 无状态变更 | → approved |
+| approved | → testing | → rejected | 无状态变更 | → testing |
+| testing | → winner | → rejected | 无状态变更 | → winner |
+| winner | ❌ | ❌ | 无状态变更 | ❌ |
+| rejected | ❌ | ❌ | 无状态变更 | ❌ |
+
+### 10.3 前置条件检查
+
+| 转换 | 前置条件 |
+|------|----------|
+| candidate → approved | 定价已录入（零售价 + 采购成本） |
+| approved → testing | 无额外检查 |
+| testing → winner | 无额外检查 |
+| 任意 → rejected | 无额外检查 |
+
+### 10.4 幂等性
+
+- 同一 `idempotency_key` 的重复请求返回稳定的结果
+- 不重复创建事件
+- 不重复执行状态变更
+
+### 10.5 RBAC 权限模型
+
+| 权限 | 说明 |
+|------|------|
+| `product.candidate.approve` | 允许 CONTINUE/APPROVE 决策 |
+| `product.candidate.reject` | 允许 REJECT 决策 |
+| (无权限要求) | SUPPLEMENT_DATA 任何已认证用户均可执行 |
+
+**Legacy Open Mode**: 当 workspace 没有启用任何角色时，所有操作被允许（向后兼容）。
+
+### 10.6 事件审计
+
+每次决策都会创建 `event_log` 记录：
+
+| 事件类型 | 说明 |
+|----------|------|
+| `product.decision.continue` | CONTINUE 决策 |
+| `product.decision.reject` | REJECT 决策 |
+| `product.decision.supplement_data` | SUPPLEMENT_DATA 决策 |
+| `product.decision.approve` | APPROVE 决策 |
+
+### 10.7 安全要求
+
+- JWT + Workspace Authorization + RBAC
+- 不能：X-Workspace-Id alone
+- 不能：body actor force bypass（RBAC 始终检查）
+- 不存在 product → 404
+- 存在 product 但无授权 → 403
+- 禁止跨 workspace 操作
+
+### 10.8 新增文件
+
+- `backend/app/services/decision_service.py` — `apply_product_decision()` 函数
+- `backend/app/schemas/product_intelligence.py` — `ProductDecisionRequest`, `ProductDecisionResult` schema
+- `backend/app/api/v1/endpoints/product_intelligence.py` — POST endpoint (added)
+- `backend/tests/test_decision_write_model.py` — 22 tests (17 core + 5 RBAC)
