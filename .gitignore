@@ -104,6 +104,11 @@ admin_token*.txt
 /backend/*.json
 !/backend/pyproject.toml
 !/backend/alembic.ini
+/backend/_local_dev.db
+backend/test_results.txt
+_local_dev.db
+/frontend/test-results/
+wb_fulfill.mmd
 
 # 备份目录与文件
 /backups/

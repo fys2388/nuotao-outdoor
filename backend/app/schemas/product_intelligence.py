@@ -1,6 +1,6 @@
 """Product intelligence request/response schemas (M2.1)."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -582,4 +582,55 @@ class ProductDecisionView(BaseModel):
 
     # --- Traceability ---
     trace_id: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3C-3: Product Decision Write Model
+# --------------------------------------------------------------------------- #
+
+
+class ProductDecisionRequest(BaseModel):
+    """Request to apply a human decision to a product.
+
+    Supports four decision types:
+    - CONTINUE: Advance to next legal lifecycle stage
+    - REJECT: Enter rejected state (terminal)
+    - SUPPLEMENT_DATA: Request additional data (no state change)
+    - APPROVE: Human approval (advances lifecycle or approves pending decision)
+
+    Security: JWT + Workspace Authorization + RBAC required.
+    Idempotency: same idempotency_key returns stable result.
+    """
+
+    decision: Literal["CONTINUE", "REJECT", "SUPPLEMENT_DATA", "APPROVE"]
+    reason: str | None = Field(default=None, max_length=500)
+    supplement_fields: list[str] | None = Field(
+        default=None,
+        description="Required for SUPPLEMENT_DATA: which fields are needed",
+    )
+    idempotency_key: str | None = Field(
+        default=None, max_length=128, description="Client-provided idempotency key"
+    )
+
+
+class ProductDecisionResult(BaseModel):
+    """Result of applying a human decision.
+
+    Returns the same structure for successful and failed decisions,
+    with `success` boolean to distinguish.
+    """
+
+    success: bool
+    decision: str
+    previous_status: str | None = None
+    current_status: str | None = None
+    stage: str = "UNKNOWN"
+    reason: str | None = None
+    error: str | None = None
+    next_action: str = "NONE"
+    blockers: list[DecisionBlocker] = Field(default_factory=list)
+    idempotency_key: str
+    trace_id: str | None = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    event_id: int | None = None
 
