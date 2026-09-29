@@ -340,6 +340,25 @@ async def list_products(
     return rows, total
 
 
+async def get_product(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+) -> Product | None:
+    """Get a single product by id. Returns None if not found or soft-deleted."""
+    row = (
+        await session.execute(
+            select(Product).where(
+                Product.id == product_id,
+                Product.workspace_id == workspace_id,
+                Product.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    return row
+
+
 async def soft_delete_products(
     session: AsyncSession,
     *,

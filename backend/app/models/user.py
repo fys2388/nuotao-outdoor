@@ -2,9 +2,7 @@
 用户认证模型
 本地用户名/密码认证系统（P0-1）
 """
-from __future__ import annotations
-
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, DateTime, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
@@ -17,7 +15,7 @@ class User(Base, TimestampMixin):
 
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
     full_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

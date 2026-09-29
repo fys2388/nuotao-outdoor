@@ -1,15 +1,14 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', '')
-  const apiProxyTarget =
-    process.env.VITE_API_PROXY_TARGET || env.VITE_API_PROXY_TARGET || 'http://localhost:8000'
+  // Hardcoded for local development - backend runs on port 8011
+  const apiProxyTarget = 'http://127.0.0.1:8011'
+  console.log('[Vite] API Proxy Target:', apiProxyTarget)
   const buildId = (
     process.env.VITE_BUILD_ID ||
-    env.VITE_BUILD_ID ||
     new Date().toISOString().replace(/\D/g, '').slice(0, 14)
   ).replace(/[^a-zA-Z0-9_-]/g, '')
 

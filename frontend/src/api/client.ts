@@ -1,6 +1,62 @@
 export const ADMIN_TOKEN_KEY = 'admin_token'
 export const ADMIN_REFRESH_TOKEN_KEY = 'admin_refresh_token'
-export const API_BASE = '/api/v1'
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
+
+// ── Product Workbench types (Phase 3B) ──────────────────────────────
+export interface WorkbenchSummaryItem {
+  stage: string
+  label: string
+  count: number
+  next_action: string | null
+  blocked_count: number
+}
+
+export interface WorkbenchSummary {
+  stages: WorkbenchSummaryItem[]
+  generated_at: string
+}
+
+export interface WorkbenchTask {
+  id: string
+  product_id: string
+  sku: string
+  name: string
+  stage: string
+  reason: string
+  priority: string
+  next_action: string
+  created_at: string | null
+}
+
+export interface RuleResult {
+  rule_id: string
+  rule_version: string
+  result: string // "PASS" | "FAIL" | "UNKNOWN"
+  reason: string
+  trace_id: string | null
+}
+
+export interface RuleResultsResponse {
+  product_id: string
+  sku: string
+  overall: string
+  results: RuleResult[]
+  evaluated_at: string | null
+  trace_id: string | null
+}
+
+export interface WcStatusResponse {
+  product_id: string
+  sku: string
+  is_legacy_mapping: boolean
+  wc_product_id: number | null
+  wc_slug: string | null
+  sync_status: string
+  last_synced_at: string | null
+  last_error: string | null
+  retry_count: number
+  wc_verify_status: string | null
+}
 
 export interface ImportAndAnalyzeData {
   import_id: string
@@ -323,6 +379,16 @@ export const api = {
     request('/inventory/warehouses', { method: 'POST', body: JSON.stringify(data) }),
   getWarehouseStatus: (id: string) => request(`/inventory/warehouses/${id}`),
 
+  // ── Product Workbench (Phase 3B) ──────────────────────────────────
+  getWorkbenchSummary: () =>
+    request<WorkbenchSummary>('/products/workbench/summary'),
+  getWorkbenchTasks: (limit = 50) =>
+    request<WorkbenchTask[]>(`/products/workbench/tasks?limit=${limit}`),
+  getRuleResults: (productId: string) =>
+    request<RuleResultsResponse>(`/products/${productId}/rule-results`),
+  getWcStatus: (productId: string) =>
+    request<WcStatusResponse>(`/products/${productId}/wc-status`),
+
   getProducts: (limit = 100, offset = 0, status?: string, category?: string) => {
     const params = new URLSearchParams({
       limit: String(limit),
@@ -397,6 +463,8 @@ export const api = {
     }),
   analyzeProduct: (productId: string) =>
     request(`/products/${productId}/analyze`, { method: 'POST' }),
+  getProductById: (productId: string) =>
+    request(`/products/${productId}`),
   getProductIntelligence: (productId: string) =>
     request(`/products/${productId}/intelligence`),
   getProductScoreEvidence: (scoreId: string) =>

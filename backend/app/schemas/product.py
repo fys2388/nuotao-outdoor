@@ -50,6 +50,10 @@ class ProductOut(BaseModel):
     weight_kg: Decimal | None
     dimensions: dict[str, Any] | None
     target_market: str
+    # Product Master creation info (Phase 3A).
+    mastered_at: datetime | None = None
+    mastered_by: str | None = None
+    mastered_trace_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

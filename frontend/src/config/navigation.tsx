@@ -64,7 +64,9 @@ export const navigationGroups: NavigationGroup[] = [
     icon: <ProductOutlined />,
     scope: 'all',
     children: [
-      // 流程顺序：发现 → 选品 → 审批 → 分析 → 成本(闸门前置) → 工作台(含闸门) → 上架 → 数据管理
+      // 产品工作台为默认入口
+      { key: 'product-workbench', label: '产品工作台', path: '/products/workbench', icon: <DeploymentUnitOutlined /> },
+      // 流程顺序：发现 → 选品 → 审批 → 分析 → 成本(闸门前置) → 上架 → 数据管理
       { key: 'product-market-opportunities', label: '市场机会', path: '/products/publish', icon: <ThunderboltOutlined /> },
       { key: 'product-newton', label: '牛顿 AI 对话选品', path: '/products/newton-sourcing', icon: <CompassOutlined /> },
       { key: 'product-candidates', label: '候选产品与选品', path: '/products/candidates', icon: <FileSearchOutlined /> },

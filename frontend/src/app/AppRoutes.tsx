@@ -30,6 +30,8 @@ const ProductCostsPage = lazy(() => import('../pages/ProductCostsPage'))
 const NewtonSourcingPage = lazy(() => import('../pages/NewtonSourcing'))
 const ProductPipelinePage = lazy(() => import('../pages/ProductPipeline'))
 const ProductPublishPage = lazy(() => import('../pages/ProductPublish'))
+const ProductWorkbenchPage = lazy(() => import('../pages/ProductWorkbench'))
+const ProductDecisionCockpitPage = lazy(() => import('../pages/ProductDecisionCockpit'))
 const MarketOpportunitiesPage = lazy(() => import('../pages/MarketOpportunities'))
 const AgentSuggestionsPage = lazy(() => import('../pages/AgentSuggestions'))
 const AgentMonitorPage = lazy(() => import('../pages/AgentMonitor'))
@@ -82,6 +84,8 @@ export default function AppRoutes() {
         <Route path="alerts" element={page(<AlertsPage />)} />
 
         <Route path="products" element={page(<ProductsPage />)} />
+        <Route path="products/workbench" element={page(<ProductWorkbenchPage />)} />
+        <Route path="products/workbench/:productId" element={page(<ProductDecisionCockpitPage />)} />
         <Route path="products/candidates" element={page(<ProductCandidatesPage />)} />
         <Route path="products/analysis" element={page(<ProductAnalysisPage />)} />
         <Route path="products/listing" element={page(<ProductPublishPage />)} />

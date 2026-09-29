@@ -1063,6 +1063,12 @@ async def approve_decision(
         if product is not None:
             product.status = "test"
             product.candidate_status = "approved"
+            # Phase 3A: decision approval = Product Master Created.
+            # mastered_at is set ONCE and never overwritten on repeated calls.
+            if not product.mastered_at:
+                product.mastered_at = datetime.now(UTC)
+                product.mastered_by = actor
+                product.mastered_trace_id = trace_id
 
     await session.flush()
     await event_service.create_event(
@@ -1889,6 +1895,12 @@ async def update_candidate_status(
             )
     product.candidate_status = new_status
     product.updated_at = datetime.now(UTC)  # keep the attribute current
+    # Phase 3A: candidate -> approved means Product Master Created.
+    # mastered_at is set ONCE and never overwritten on repeated calls.
+    if new_status == "approved" and current == "candidate" and not product.mastered_at:
+        product.mastered_at = datetime.now(UTC)
+        product.mastered_by = actor
+        product.mastered_trace_id = trace_id
     await session.flush()
     await event_service.create_event(
         session,

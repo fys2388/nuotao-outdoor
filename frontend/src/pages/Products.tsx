@@ -261,12 +261,27 @@ export default function Products() {
       title: '产品信息',
       dataIndex: 'name',
       key: 'name',
-      render: (text: string, record: Product) => (
-        <div>
-          <div style={{ fontWeight: 500 }}>{text}</div>
-          <div style={{ color: '#999', fontSize: 12 }}>SKU: {record.sku}</div>
-        </div>
-      ),
+      render: (text: string, record: Product) => {
+        const images = getProductImages(record)
+        const thumb = images[0]
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {thumb ? (
+              <img
+                src={thumb}
+                alt=""
+                style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, flexShrink: 0, border: '1px solid #eee' }}
+              />
+            ) : (
+              <div style={{ width: 48, height: 48, borderRadius: 4, background: '#f5f5f5', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 18 }}>📷</div>
+            )}
+            <div>
+              <div style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.3 }}>{text}</div>
+              <div style={{ color: '#999', fontSize: 11 }}>SKU: {record.sku}</div>
+            </div>
+          </div>
+        )
+      },
     },
     {
       title: '分类',

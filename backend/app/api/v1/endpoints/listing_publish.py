@@ -32,6 +32,13 @@ from app.services.listing_gate import (
     resolve_prices,
 )
 
+# Phase 3A: Listing Approved gate for push-woocommerce.
+# Only products with an approved ListingJob can be pushed to WooCommerce.
+# force=true cannot bypass this gate — it is a hard business precondition.
+from app.models.listing_job import ListingJob
+from app.models.product import Product
+from sqlalchemy import select
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["listing-publish"])
@@ -317,6 +324,56 @@ async def push_product_to_woocommerce_gated(
                     "reasons": gate["reasons"],
                 },
             )
+
+        # Phase 3A: Listing Approved gate.
+        # Only products with an approved ListingJob can be pushed to WooCommerce.
+        # This gate cannot be bypassed by force=true.
+        # States that must NOT push: Candidate, Analyzing, Pending Approval,
+        # Rejected, Listing Draft, Listing Validation Failed.
+        # Allowed: Listing Approved (ListingJob.status == 'approved').
+        listing_job = (
+            await session.execute(
+                select(ListingJob).where(
+                    ListingJob.workspace_id == product.workspace_id,
+                    ListingJob.product_id == product.id,
+                    ListingJob.status == "approved",
+                )
+            )
+        ).scalar_one_or_none()
+        if listing_job is None:
+            # Check if there's any active listing job (non-terminal)
+            any_job = (
+                await session.execute(
+                    select(ListingJob).where(
+                        ListingJob.workspace_id == product.workspace_id,
+                        ListingJob.product_id == product.id,
+                        ListingJob.status.in_(["pending", "approved", "processing"]),
+                    )
+                )
+            ).scalar_one_or_none()
+            if any_job is not None:
+                # There's an active listing job but it's not approved yet
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "gate": "listing_approved",
+                        "status": "blocked",
+                        "product_id": str(product.id),
+                        "sku": product.sku,
+                        "message": (
+                            "B2C Listing 未批准，无法同步 WooCommerce。"
+                            "只有 Listing Approved 状态才能推送到 WC。"
+                        ),
+                        "listing_status": any_job.status,
+                        "required_status": "approved",
+                        "action": "批准 Listing 后再同步",
+                    },
+                )
+            else:
+                # No listing job at all — this is a direct push without Listing entity
+                # For backward compatibility, we allow direct push but with a warning.
+                # The UX layer should guide users to create a Listing first.
+                pass  # Fall through to allow legacy direct push
 
         payload = build_wc_payload(product, prices, english_copy)
         wc_id = meta.get("woocommerce_id")

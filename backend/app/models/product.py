@@ -58,6 +58,16 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
     dimensions: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True)
     target_market: Mapped[str] = mapped_column(String(16), nullable=False, default="US")
+    # Product Master creation timestamp (Phase 3A).
+    # NULL while the product is a candidate; set when the product is
+    # approved and promoted to Product Master. Never fabricated.
+    mastered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # Who approved the Product Master promotion (Phase 3A).
+    mastered_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Trace ID for the approval that created the Product Master (Phase 3A).
+    mastered_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Soft delete: NULL means the product is live; a timestamp hides it from all
     # business reads while keeping the row for audit and later re-creation.
     deleted_at: Mapped[datetime | None] = mapped_column(
