@@ -90,6 +90,23 @@ async def list_products(
     return [ProductOut.model_validate(row) for row in rows]
 
 
+@router.get("/{product_id}", response_model=ProductOut, summary="产品详情 / Get product by ID")
+async def get_product(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> ProductOut:
+    """Get a single product by ID. 404 if not found."""
+    row = await product_service.get_product(
+        db,
+        workspace_id=workspace_id,
+        product_id=product_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return ProductOut.model_validate(row)
+
+
 @router.post(
     "/batch-delete",
     response_model=ProductDeleteResult,

@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     activity_planner,
+    product_workbench,
     agent_analysis,
     ai_capability,
     agent_operations,
@@ -105,6 +106,7 @@ import importlib as _listing_gate_il
 api_router.include_router(
     _listing_gate_il.import_module('app.api.v1.endpoints.listing_publish').router
 )
+api_router.include_router(product_workbench.router)
 api_router.include_router(products.router)
 api_router.include_router(product_analysis.router)
 api_router.include_router(product_pipeline.router)

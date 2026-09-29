@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,7 +47,7 @@ async def create_user_db(db: AsyncSession, user_create: UserCreate) -> UserRespo
             raise ValueError(f"邮箱 '{user_create.email}' 已被注册")
 
     user = User(
-        id=str(uuid4()),
+        id=uuid4(),
         username=user_create.username,
         email=user_create.email,
         full_name=user_create.full_name,
@@ -66,7 +66,7 @@ async def create_user_db(db: AsyncSession, user_create: UserCreate) -> UserRespo
 
 async def get_user_by_id_db(db: AsyncSession, user_id: str) -> UserResponse | None:
     """根据 ID 获取用户（数据库）"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         return None
@@ -99,7 +99,7 @@ async def authenticate_user_db(db: AsyncSession, username: str, password: str) -
 
 async def update_user_last_login_db(db: AsyncSession, user_id: str) -> None:
     """更新用户最后登录时间（数据库）"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if user:
         user.last_login_at = datetime.now(timezone.utc)
@@ -108,7 +108,7 @@ async def update_user_last_login_db(db: AsyncSession, user_id: str) -> None:
 
 async def update_user_db(db: AsyncSession, user_id: str, user_update: UserUpdate) -> UserResponse | None:
     """更新用户（数据库）"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         return None
@@ -132,7 +132,7 @@ async def update_user_db(db: AsyncSession, user_id: str, user_update: UserUpdate
 
 async def delete_user_db(db: AsyncSession, user_id: str) -> bool:
     """删除用户（数据库）"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         return False
@@ -162,7 +162,7 @@ async def list_users_db(db: AsyncSession, page: int = 1, page_size: int = 20) ->
 
 async def change_password_db(db: AsyncSession, user_id: str, old_password: str, new_password: str) -> bool:
     """修改密码（数据库）"""
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         return False

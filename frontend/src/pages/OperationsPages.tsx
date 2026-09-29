@@ -377,12 +377,27 @@ export function ProductsPage() {
     {
       title: '商品',
       dataIndex: 'name',
-      render: (value: string, record) => (
-        <div className="primary-cell">
-          <strong>{value}</strong>
-          <span>SKU: {record.sku}</span>
-        </div>
-      ),
+      render: (value: string, record) => {
+        const images = productImages(record)
+        const thumb = images[0]
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {thumb ? (
+              <img
+                src={thumb}
+                alt=""
+                style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, flexShrink: 0, border: '1px solid #eee' }}
+              />
+            ) : (
+              <div style={{ width: 44, height: 44, borderRadius: 4, background: '#f5f5f5', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ccc', fontSize: 16 }}>📷</div>
+            )}
+            <div className="primary-cell">
+              <strong>{value}</strong>
+              <span>SKU: {record.sku}</span>
+            </div>
+          </div>
+        )
+      },
     },
     { title: '分类', dataIndex: 'category', width: 130, render: (value) => value || '-' },
     { title: '品牌', dataIndex: 'brand', width: 130, render: (value) => value || '-' },

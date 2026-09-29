@@ -231,6 +231,11 @@ async def trace_middleware(request: Request, call_next) -> Response:
     token = set_trace_id(trace_id)
     try:
         response = await call_next(request)
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger("app")
+        logger.error(f"Middleware caught exception: {type(exc).__name__}: {exc}", exc_info=True)
+        raise
     finally:
         reset_trace_id(token)
     response.headers[TRACE_ID_HEADER] = trace_id
