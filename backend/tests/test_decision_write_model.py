@@ -45,7 +45,7 @@ async def test_decision_not_found(api_client) -> None:
     fake_id = str(uuid4())
     response = api_client.post(
         DECISION_URL.format(product_id=fake_id),
-        json={"decision": "CONTINUE"},
+        json={"actor": "test-admin", "decision": "CONTINUE"},
     )
     assert response.status_code == 404
 
@@ -94,7 +94,7 @@ async def test_continue_candidate_to_approved(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Ready to approve"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Ready to approve"},
     )
     assert response.status_code == 200
 
@@ -133,7 +133,7 @@ async def test_continue_approved_to_testing(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Ready for testing"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Ready for testing"},
     )
     assert response.status_code == 200
 
@@ -159,7 +159,7 @@ async def test_continue_testing_to_winner(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Testing successful"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Testing successful"},
     )
     assert response.status_code == 200
 
@@ -185,7 +185,7 @@ async def test_continue_from_terminal_rejected(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Trying to continue"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Trying to continue"},
     )
     assert response.status_code == 200
 
@@ -212,7 +212,7 @@ async def test_continue_from_terminal_winner(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Trying to continue"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Trying to continue"},
     )
     assert response.status_code == 200
 
@@ -237,7 +237,7 @@ async def test_continue_candidate_without_pricing(db_session, api_client) -> Non
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Trying to continue"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Trying to continue"},
     )
     assert response.status_code == 200
 
@@ -263,7 +263,7 @@ async def test_reject_candidate(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "REJECT", "reason": "Not viable"},
+        json={"actor": "test-admin", "decision": "REJECT", "reason": "Not viable"},
     )
     assert response.status_code == 200
 
@@ -299,7 +299,7 @@ async def test_reject_from_terminal(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "REJECT", "reason": "Trying to reject again"},
+        json={"actor": "test-admin", "decision": "REJECT", "reason": "Trying to reject again"},
     )
     assert response.status_code == 200
 
@@ -324,7 +324,7 @@ async def test_supplement_data_no_fields(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "SUPPLEMENT_DATA", "reason": "Need data"},
+        json={"actor": "test-admin", "decision": "SUPPLEMENT_DATA", "reason": "Need data"},
     )
     assert response.status_code == 200
 
@@ -350,6 +350,7 @@ async def test_supplement_data_with_fields(db_session, api_client) -> None:
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
         json={
+            "actor": "test-admin",
             "decision": "SUPPLEMENT_DATA",
             "reason": "Need cost and supplier data",
             "supplement_fields": ["cost", "supplier"],
@@ -416,7 +417,7 @@ async def test_approve_candidate_to_approved(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "APPROVE", "reason": "Human approved"},
+        json={"actor": "test-admin", "decision": "APPROVE", "reason": "Human approved"},
     )
     assert response.status_code == 200
 
@@ -488,7 +489,7 @@ async def test_approve_with_rule_fail(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "APPROVE", "reason": "Trying to approve with rule fail"},
+        json={"actor": "test-admin", "decision": "APPROVE", "reason": "Trying to approve with rule fail"},
     )
     assert response.status_code == 200
 
@@ -545,6 +546,7 @@ async def test_idempotency_same_key(db_session, api_client) -> None:
     response1 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
         json={
+            "actor": "test-admin",
             "decision": "CONTINUE",
             "reason": "First request",
             "idempotency_key": idempotency_key,
@@ -559,6 +561,7 @@ async def test_idempotency_same_key(db_session, api_client) -> None:
     response2 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
         json={
+            "actor": "test-admin",
             "decision": "CONTINUE",
             "reason": "Second request",
             "idempotency_key": idempotency_key,
@@ -625,7 +628,7 @@ async def test_event_logged_for_continue(db_session, api_client) -> None:
 
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Event test"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Event test"},
     )
     assert response.status_code == 200
 
@@ -692,7 +695,7 @@ async def test_decision_full_flow(db_session, api_client) -> None:
     # Step 1: CONTINUE candidate -> approved
     response1 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Step 1: Approve"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Step 1: Approve"},
     )
     assert response1.status_code == 200
     data1 = response1.json()
@@ -702,7 +705,7 @@ async def test_decision_full_flow(db_session, api_client) -> None:
     # Step 2: CONTINUE approved -> testing
     response2 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Step 2: Test"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Step 2: Test"},
     )
     assert response2.status_code == 200
     data2 = response2.json()
@@ -712,7 +715,7 @@ async def test_decision_full_flow(db_session, api_client) -> None:
     # Step 3: CONTINUE testing -> winner
     response3 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Step 3: Winner"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Step 3: Winner"},
     )
     assert response3.status_code == 200
     data3 = response3.json()
@@ -722,7 +725,7 @@ async def test_decision_full_flow(db_session, api_client) -> None:
     # Step 4: CONTINUE from winner (terminal) - should fail
     response4 = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
-        json={"decision": "CONTINUE", "reason": "Step 4: Continue from winner"},
+        json={"actor": "test-admin", "decision": "CONTINUE", "reason": "Step 4: Continue from winner"},
     )
     assert response4.status_code == 200
     data4 = response4.json()
@@ -747,6 +750,7 @@ async def test_supplement_data_from_terminal(db_session, api_client) -> None:
     response = api_client.post(
         DECISION_URL.format(product_id=str(product.id)),
         json={
+            "actor": "test-admin",
             "decision": "SUPPLEMENT_DATA",
             "reason": "Need more data even after rejection",
             "supplement_fields": ["supplier_contact"],
@@ -758,3 +762,240 @@ async def test_supplement_data_from_terminal(db_session, api_client) -> None:
     assert data["success"] is True
     assert data["decision"] == "SUPPLEMENT_DATA"
     assert data["current_status"] == "rejected"
+
+
+# --------------------------------------------------------------------------- #
+# RBAC tests
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_decision_continue_denied_without_permission(
+    db_session, api_client, monkeypatch
+) -> None:
+    """CONTINUE requires product.candidate.approve; without it -> 403."""
+    from app.core.config import get_settings
+    from app.services import approval_rbac
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "approval_rbac_enabled", True)
+    await approval_rbac.create_role(
+        db_session,
+        workspace_id=WORKSPACE,
+        role_name="reviewer",
+        permissions=["tool.approve"],  # NOT product.candidate.approve
+        actors=["limited-user"],
+        enabled=True,
+        trace_id="test",
+    )
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="TEST-RBAC-001",
+        name="RBAC Test Product",
+        status="active",
+        candidate_status="candidate",
+        source="1688",
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    response = api_client.post(
+        DECISION_URL.format(product_id=str(product.id)),
+        json={
+            "actor": "limited-user",
+            "decision": "CONTINUE",
+        },
+    )
+    assert response.status_code == 403
+    assert "product.candidate.approve" in response.text
+
+
+@pytest.mark.asyncio
+async def test_decision_continue_allowed_with_permission(
+    db_session, api_client, monkeypatch
+) -> None:
+    """CONTINUE succeeds when the actor holds product.candidate.approve."""
+    from app.core.config import get_settings
+    from app.services import approval_rbac
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "approval_rbac_enabled", True)
+    await approval_rbac.create_role(
+        db_session,
+        workspace_id=WORKSPACE,
+        role_name="product-ops",
+        permissions=["product.candidate.approve"],
+        actors=["cto@nuotao.example"],
+        enabled=True,
+        trace_id="test",
+    )
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="TEST-RBAC-002",
+        name="RBAC Allowed Product",
+        status="active",
+        candidate_status="candidate",
+        source="1688",
+        meta={"regular_price": "100.00"},
+        attributes={"retail_price": "100.00"},
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    # Add cost data so pricing check passes
+    from decimal import Decimal
+    from app.schemas.product_cost import ProductCostUpsertRequest
+    from app.services import product_cost_service as pcost_service
+
+    await pcost_service.upsert_product_cost(
+        db_session,
+        workspace_id=WORKSPACE,
+        product_id=product.id,
+        data=ProductCostUpsertRequest(
+            purchase_cost=Decimal("20.00"),
+            domestic_shipping=Decimal("2.00"),
+            first_leg_shipping=Decimal("3.00"),
+            last_leg_shipping=Decimal("4.00"),
+            international_shipping=Decimal("25.00"),
+            packaging=Decimal("1.00"),
+            tax_estimate=Decimal("2.00"),
+            handling=Decimal("1.00"),
+            payment_fee=Decimal("3.00"),
+            marketing_amortization=Decimal("2.00"),
+            after_sales_loss=Decimal("2.00"),
+            currency="USD",
+        ),
+        trace_id="test",
+    )
+
+    response = api_client.post(
+        DECISION_URL.format(product_id=str(product.id)),
+        json={
+            "actor": "cto@nuotao.example",
+            "decision": "CONTINUE",
+            "reason": "Approved by CTO",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["current_status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_decision_supplement_data_no_permission_needed(
+    db_session, api_client, monkeypatch
+) -> None:
+    """SUPPLEMENT_DATA is low-risk: no permission required even with RBAC enabled."""
+    from app.core.config import get_settings
+    from app.services import approval_rbac
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "approval_rbac_enabled", True)
+    await approval_rbac.create_role(
+        db_session,
+        workspace_id=WORKSPACE,
+        role_name="reviewer",
+        permissions=["tool.approve"],  # NOT product.candidate.*
+        actors=["limited-user"],
+        enabled=True,
+        trace_id="test",
+    )
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="TEST-RBAC-003",
+        name="RBAC Supplement Product",
+        status="active",
+        candidate_status="candidate",
+        source="1688",
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    response = api_client.post(
+        DECISION_URL.format(product_id=str(product.id)),
+        json={
+            "actor": "limited-user",
+            "decision": "SUPPLEMENT_DATA",
+            "supplement_fields": ["cost", "supplier"],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["decision"] == "SUPPLEMENT_DATA"
+
+
+@pytest.mark.asyncio
+async def test_decision_reject_denied_without_permission(
+    db_session, api_client, monkeypatch
+) -> None:
+    """REJECT requires product.candidate.reject; without it -> 403."""
+    from app.core.config import get_settings
+    from app.services import approval_rbac
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "approval_rbac_enabled", True)
+    await approval_rbac.create_role(
+        db_session,
+        workspace_id=WORKSPACE,
+        role_name="reviewer",
+        permissions=["tool.approve"],  # NOT product.candidate.reject
+        actors=["limited-user"],
+        enabled=True,
+        trace_id="test",
+    )
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="TEST-RBAC-004",
+        name="RBAC Reject Product",
+        status="active",
+        candidate_status="candidate",
+        source="1688",
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    response = api_client.post(
+        DECISION_URL.format(product_id=str(product.id)),
+        json={
+            "actor": "limited-user",
+            "decision": "REJECT",
+            "reason": "Not viable",
+        },
+    )
+    assert response.status_code == 403
+    assert "product.candidate.reject" in response.text
+
+
+@pytest.mark.asyncio
+async def test_decision_legacy_open_mode_no_roles(
+    db_session, api_client, monkeypatch
+) -> None:
+    """Legacy open mode: no enabled roles -> all actors allowed."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "approval_rbac_enabled", True)
+    # No roles created -> legacy open mode
+
+    product = Product(
+        workspace_id=WORKSPACE,
+        sku="TEST-RBAC-005",
+        name="Legacy Open Mode Product",
+        status="active",
+        candidate_status="candidate",
+        source="1688",
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    response = api_client.post(
+        DECISION_URL.format(product_id=str(product.id)),
+        json={
+            "actor": "any-user",
+            "decision": "CONTINUE",
+        },
+    )
+    # Should succeed in legacy open mode (no roles configured)
+    assert response.status_code == 200

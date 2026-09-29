@@ -604,6 +604,11 @@ class ProductDecisionRequest(BaseModel):
 
     decision: Literal["CONTINUE", "REJECT", "SUPPLEMENT_DATA", "APPROVE"]
     reason: str | None = Field(default=None, max_length=500)
+    actor: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Acting principal (staging: body; production: JWT)",
+    )
     supplement_fields: list[str] | None = Field(
         default=None,
         description="Required for SUPPLEMENT_DATA: which fields are needed",

@@ -207,6 +207,7 @@ async def get_product_decision(
 async def apply_product_decision(
     product_id: UUID,
     body: ProductDecisionRequest,
+    request: Request,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDecisionResult:
@@ -218,7 +219,11 @@ async def apply_product_decision(
     - SUPPLEMENT_DATA: Request additional data (no state change)
     - APPROVE: Human approval (advances lifecycle or approves pending decision)
 
-    Security: JWT + Workspace Authorization required.
+    Security: JWT + Workspace Authorization + RBAC required.
+    - CONTINUE/APPROVE: requires ``product.candidate.approve``
+    - REJECT: requires ``product.candidate.reject``
+    - SUPPLEMENT_DATA: no permission required (any authenticated user)
+
     Idempotency: same idempotency_key returns stable result.
 
     Errors:
@@ -227,12 +232,29 @@ async def apply_product_decision(
     - 404: Product not found
     """
     try:
+        actor = resolve_actor(request, body.actor)
+        await pi._assert_human_actor(
+            db, workspace_id=workspace_id, actor=actor
+        )
+        # Permission check: SUPPLEMENT_DATA is low-risk, no permission needed
+        if body.decision != "SUPPLEMENT_DATA":
+            permission = (
+                "product.candidate.approve"
+                if body.decision in ("CONTINUE", "APPROVE")
+                else "product.candidate.reject"
+            )
+            await check_actor_permission(
+                db,
+                workspace_id=workspace_id,
+                actor=actor,
+                permission=permission,
+            )
         result = await decision_service.apply_product_decision(
             db,
             workspace_id=workspace_id,
             product_id=product_id,
             request=body,
-            actor="authenticated_user",  # In production, extract from JWT
+            actor=actor,
             trace_id=get_trace_id(),
         )
         await db.commit()
@@ -251,6 +273,8 @@ async def apply_product_decision(
             idempotency_key=exc.idempotency_key or "",
             trace_id=get_trace_id(),
         )
+    except ApprovalRBACError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except pi.ProductIntelligenceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
