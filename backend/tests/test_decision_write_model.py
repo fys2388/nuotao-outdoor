@@ -470,7 +470,6 @@ async def test_approve_with_rule_fail(db_session, api_client) -> None:
     )
 
     # Create a failed rule log
-    from app.models.rule import RuleExecutionLog
 
     rule_log = RuleExecutionLog(
         workspace_id=WORKSPACE,

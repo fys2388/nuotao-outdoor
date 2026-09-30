@@ -358,7 +358,6 @@ async def get_workbench_tasks(
         ))
 
     # 2. WC sync failures
-    from app.models.listing_job import ListingJob
     result = await db.execute(
         select(ListingJob)
         .where(
