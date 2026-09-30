@@ -395,3 +395,67 @@ async def get_import_and_analyze_job(
             detail="导入任务不存在或已过期",
         )
     return {"success": True, "data": job, "error": None}
+
+
+# ---------------------------------------------------------------------------
+# 1688 商品导入（无 AI 分析）异步任务端点
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/import-from-1688/jobs",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="提交1688商品导入后台任务",
+    dependencies=[Depends(get_current_user)],
+)
+async def create_import_from_1688_job(
+    request: ImportFrom1688Request,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """立即返回任务 ID，前端通过状态接口轮询结果，避免网关长连接超时。"""
+    try:
+        job = await product_import_job_service.create_fetch_job(
+            redis,
+            url_or_id=request.url_or_id,
+            auto_run_pipeline=request.auto_run_pipeline,
+            auto_list=request.auto_list,
+        )
+        return {
+            "success": True,
+            "data": {
+                "job_id": job["job_id"],
+                "status": job["status"],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        logger.error("Create 1688 fetch job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法创建后台导入任务，请检查 Redis 服务",
+        ) from e
+
+
+@router.get(
+    "/import-from-1688/jobs/{job_id}",
+    summary="查询1688商品导入后台任务",
+    dependencies=[Depends(get_current_user)],
+)
+async def get_import_from_1688_job(
+    job_id: str,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """查询后台任务状态和最终商品导入结果。"""
+    try:
+        job = await product_import_job_service.get_fetch_job(redis, job_id)
+    except Exception as e:
+        logger.error("Get 1688 fetch job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法读取后台导入任务状态",
+        ) from e
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="导入任务不存在或已过期",
+        )
+    return {"success": True, "data": job, "error": None}

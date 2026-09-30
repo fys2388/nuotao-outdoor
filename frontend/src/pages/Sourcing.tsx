@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Spin, message, Modal, Descriptions,
@@ -14,6 +14,7 @@ import {
   ThunderboltOutlined, ImportOutlined, ExportOutlined,
   RocketOutlined, StarOutlined, ArrowUpOutlined, ArrowDownOutlined
 } from '@ant-design/icons'
+import { api } from '../api/client'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -132,7 +133,7 @@ export default function SourcingPage() {
     }
   }
 
-  // 导入1688商品到产品工作流
+  // 导入1688商品到产品工作流（异步任务模式，适配牛顿Agent长耗时）
   const handleImportToPipeline = async (product: any) => {
     const productId = product.product_id || product.id || product.offer_id
     if (!productId) {
@@ -142,24 +143,46 @@ export default function SourcingPage() {
 
     try {
       setImportLoading(productId)
-      const resp = await fetch('/api/v1/product-pipeline/import-from-1688', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url_or_id: String(productId),
-          auto_run_pipeline: false,
-        }),
+      const msgKey = `import-pipeline-${productId}`
+      message.loading({ content: '正在导入商品，牛顿Agent处理中...', key: msgKey, duration: 0 })
+
+      // Step 1: 提交后台任务
+      const submitted = await api.createImportFrom1688Job({
+        url_or_id: String(productId),
+        auto_run_pipeline: false,
       })
+      if (!submitted.success || !submitted.data) {
+        message.error({ content: `提交任务失败：${submitted.error || '未知错误'}`, key: msgKey })
+        return
+      }
 
-      const data = await resp.json()
+      const jobId = submitted.data.job_id
+      const TIMEOUT_MS = 20 * 60 * 1000
+      const POLL_MS = 3000
+      const deadline = Date.now() + TIMEOUT_MS
+      let completedData: any = null
 
-      if (data.success && data.data?.product_info) {
-        const info = data.data.product_info
+      // Step 2: 轮询
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS))
+        const jobResponse = await api.getImportFrom1688Job(jobId)
+        const job = jobResponse.data
+        if (!jobResponse.success || !job) break
+        if (job.status === 'succeeded') { completedData = job.data; break }
+        if (job.status === 'failed') { message.error({ content: `导入失败：${job.error || '未知错误'}`, key: msgKey }); return }
+      }
+
+      message.destroy(msgKey)
+
+      if (!completedData) {
+        message.error({ content: '导入任务超时', key: msgKey })
+        return
+      }
+
+      const info = completedData.product_info
+      if (info) {
         message.success(`已导入：${info.name || '未知商品'}（SKU: ${info.sku || '未生成'}，图片: ${info.images?.length || 0}张）`)
-        // 跳转到产品工作流页面
         window.location.hash = '#/product-pipeline'
-      } else {
-        message.error(`导入失败：${data.error || '未知错误'}`)
       }
     } catch (e: any) {
       console.error('Import to pipeline error:', e)
