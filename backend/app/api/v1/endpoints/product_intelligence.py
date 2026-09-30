@@ -163,13 +163,22 @@ async def batch_fill_cost_gaps(
     workspace_id: WorkspaceId,
 ) -> BatchCostFillResult:
     """Fill effective costs for multiple products; isolated per-item results
-    and an ``event_log`` audit entry. Same workspace auth as single edits."""
-    result = await pcs.batch_fill_product_costs(
-        db,
-        workspace_id=workspace_id,
-        items=body.items,
-        trace_id=get_trace_id(),
-    )
+    and an ``event_log`` audit entry. Same workspace auth as single edits.
+
+    Transaction ownership: the service flushes but does not commit; this
+    endpoint owns the transaction and commits on success.
+    """
+    try:
+        result = await pcs.batch_fill_product_costs(
+            db,
+            workspace_id=workspace_id,
+            items=body.items,
+            trace_id=get_trace_id(),
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     return BatchCostFillResult.model_validate(result)
 
 
@@ -185,7 +194,11 @@ async def upsert_cost(
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductCostUpsertResult:
-    """Manually record/edit a cost; appends an immutable snapshot and audit event."""
+    """Manually record/edit a cost; appends an immutable snapshot and audit event.
+
+    Transaction ownership: the service flushes but does not commit; this
+    endpoint owns the transaction and commits on success.
+    """
     try:
         result = await pcs.upsert_product_cost(
             db,
@@ -194,8 +207,13 @@ async def upsert_cost(
             data=body,
             trace_id=get_trace_id(),
         )
+        await db.commit()
     except pcs.ProductCostError as exc:
+        await db.rollback()
         raise _http_error(exc) from exc
+    except Exception:
+        await db.rollback()
+        raise
     return ProductCostUpsertResult.model_validate(result)
 
 
