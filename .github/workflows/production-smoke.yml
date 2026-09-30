@@ -1,0 +1,61 @@
+name: Production Smoke
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smoke Tests
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            BASE=http://localhost:8000
+            echo "=== PRODUCTION SMOKE TESTS ==="
+            echo "Timestamp: $(date -u)"
+            echo ""
+            
+            echo "--- 1. /openapi.json ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" $BASE/openapi.json
+            
+            echo "--- 2. F-5: /products/cost-overview ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" $BASE/products/cost-overview
+            
+            echo "--- 3. F-5: /products/cost-gaps ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/products/cost-gaps?limit=5"
+            
+            echo "--- 4. F-5: /products/cost-gaps/transactions ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/products/cost-gaps/transactions?limit=5"
+            
+            echo "--- 5. F-5: /products/procurement-suggestions ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/products/procurement-suggestions?limit=5"
+            
+            echo "--- 6. F-5: /products/low-stock ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/products/low-stock?limit=5"
+            
+            echo "--- 7. F-5: /products/listing/status ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/products/listing/status?limit=5"
+            
+            echo "--- 8. F-5: /products/workbench/summary ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" $BASE/products/workbench/summary
+            
+            echo "--- 9. F-5: /orders ---"
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" "$BASE/orders?limit=5"
+            
+            echo "--- 10. F-5 route check: /products/{id} not shadowed ---"
+            # Use a non-existent product ID to verify it returns 404 (not shadowed)
+            curl -s -o /dev/null -w "HTTP %{http_code}\n" $BASE/products/00000000-0000-0000-0000-000000000000
+            
+            echo ""
+            echo "=== SMOKE COMPLETE ==="
