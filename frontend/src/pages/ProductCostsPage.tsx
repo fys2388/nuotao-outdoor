@@ -43,6 +43,8 @@ interface CostRow {
   target_market: string
   status: string
   has_cost: boolean
+  has_effective_cost: boolean
+  cost_gap_reason: string | null
   currency: string | null
   version: string | null
   valid_from: string | null
@@ -92,9 +94,82 @@ interface ProfitAnalysis {
   breakeven_price: string
 }
 
+interface CostGapRow {
+  product_id: string
+  sku: string
+  name: string
+  category: string | null
+  target_market: string
+  status: string
+  gap_type: 'missing' | 'invalid'
+  gap_reason: string | null
+  currency: string | null
+  version: string | null
+  valid_from: string | null
+  total_landed_cost: string
+  sale_price: string | null
+}
+
+interface CostGapList {
+  items: CostGapRow[]
+  total: number
+  known: number
+  missing: number
+  invalid: number
+}
+
+interface TransactionGapRow {
+  order_id: string
+  order_number: string
+  received_at: string
+  currency: string
+  gap_item_count: number
+  gap_line_total: string
+  gap_reasons: string[]
+}
+
+interface TransactionGapList {
+  items: TransactionGapRow[]
+  total: number
+  gap_line_count: number
+  gap_line_total: string
+}
+
+interface BatchFillResult {
+  results: Array<{
+    product_id: string
+    sku: string | null
+    success: boolean
+    version: string | null
+    total_landed_cost: string | null
+    error: string | null
+  }>
+  success_count: number
+  failed_count: number
+}
+
+type PageView = 'overview' | 'governance'
+type GapFilter = 'all' | 'missing' | 'invalid'
+
+const GAP_REASON_LABEL: Record<string, string> = {
+  missing: '无成本记录',
+  invalid_zero_purchase: '采购成本为 0（无效）',
+  invalid_zero_landed: '落地成本为 0（无效）',
+  missing_cost: '商品缺有效成本',
+  invalid_cost: '商品成本无效',
+  product_missing: '商品已删除，无法溯源',
+  product_archived: '商品已归档',
+}
+
 type CostFilter = 'all' | 'known' | 'missing'
 
-const COST_FIELDS = [
+type CostField = {
+  name: string
+  label: string
+  required?: boolean
+}
+
+const COST_FIELDS: CostField[] = [
   { name: 'purchase_cost', label: '采购成本', required: true },
   { name: 'domestic_shipping', label: '国内段运费' },
   { name: 'first_leg_shipping', label: '头程运费' },
@@ -103,7 +178,7 @@ const COST_FIELDS = [
   { name: 'packaging', label: '包装费' },
   { name: 'tax_estimate', label: '关税/税费' },
   { name: 'handling', label: '处理费' },
-] as const
+]
 
 const PERIOD_FIELDS = [
   { name: 'payment_fee', label: '支付手续费' },
@@ -138,6 +213,25 @@ function marginColor(rate: string | null): string {
   return 'red'
 }
 
+function computeLanded(
+  values: Record<string, number | null | undefined> | undefined,
+): { landed: string; period: string; breakeven: string } {
+  const get = (key: string) => numeric(values?.[key])
+  const international =
+    values && values.international_shipping !== null && values.international_shipping !== undefined
+      ? get('international_shipping')
+      : get('first_leg_shipping') + get('last_leg_shipping')
+  const landed =
+    get('purchase_cost') +
+    get('domestic_shipping') +
+    international +
+    get('packaging') +
+    get('tax_estimate') +
+    get('handling')
+  const period = get('payment_fee') + get('marketing_amortization') + get('after_sales_loss')
+  return { landed: landed.toFixed(2), period: period.toFixed(2), breakeven: (landed + period).toFixed(2) }
+}
+
 export default function ProductCostsPage() {
   const [rows, setRows] = useState<CostRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -157,6 +251,115 @@ export default function ProductCostsPage() {
   const [profitRow, setProfitRow] = useState<CostRow | null>(null)
   const [profit, setProfit] = useState<ProfitAnalysis | null>(null)
   const [whatIf, setWhatIf] = useState<number | null>(null)
+
+  // ---- P2-9 成本覆盖治理 ----
+  const [view, setView] = useState<PageView>('overview')
+  const [gapRows, setGapRows] = useState<CostGapRow[]>([])
+  const [gapLoading, setGapLoading] = useState(false)
+  const [gapSearch, setGapSearch] = useState('')
+  const [gapType, setGapType] = useState<GapFilter>('all')
+  const [gapSummary, setGapSummary] = useState({ total: 0, known: 0, missing: 0, invalid: 0 })
+  const [selectedGapKeys, setSelectedGapKeys] = useState<string[]>([])
+  const [txRows, setTxRows] = useState<TransactionGapRow[]>([])
+  const [txLoading, setTxLoading] = useState(false)
+  const [txSummary, setTxSummary] = useState({ total: 0, gapLineCount: 0, gapLineTotal: '0' })
+  const [txTab, setTxTab] = useState<'products' | 'transactions'>('products')
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchSaving, setBatchSaving] = useState(false)
+  const [batchForm] = Form.useForm()
+  const batchWatched = Form.useWatch([], batchForm) as Record<string, number | null> | undefined
+
+  const loadGaps = useCallback(async () => {
+    setGapLoading(true)
+    try {
+      const data = (await api.getCostGaps({ limit: 200 })) as CostGapList
+      setGapRows(data.items ?? [])
+      setGapSummary({
+        total: data.total,
+        known: data.known,
+        missing: data.missing,
+        invalid: data.invalid,
+      })
+    } catch (gapError) {
+      message.error(`成本缺口清单加载失败：${apiErrorMessage(gapError)}`)
+    } finally {
+      setGapLoading(false)
+    }
+  }, [])
+
+  const loadTxGaps = useCallback(async () => {
+    setTxLoading(true)
+    try {
+      const data = (await api.getTransactionCostGaps({ limit: 200 })) as TransactionGapList
+      setTxRows(data.items ?? [])
+      setTxSummary({
+        total: data.total,
+        gapLineCount: data.gap_line_count,
+        gapLineTotal: data.gap_line_total,
+      })
+    } catch (txError) {
+      message.error(`交易缺口清单加载失败：${apiErrorMessage(txError)}`)
+    } finally {
+      setTxLoading(false)
+    }
+  }, [])
+
+  const switchView = (value: string | number) => {
+    const next = value as PageView
+    setView(next)
+    if (next === 'governance') {
+      void loadGaps()
+      void loadTxGaps()
+    }
+  }
+
+  const filteredGapRows = useMemo(() => {
+    const keyword = gapSearch.trim().toLowerCase()
+    return gapRows.filter((row) => {
+      if (gapType === 'missing' && row.gap_type !== 'missing') return false
+      if (gapType === 'invalid' && row.gap_type !== 'invalid') return false
+      if (!keyword) return true
+      return [row.sku, row.name, row.category ?? ''].some((field) =>
+        field.toLowerCase().includes(keyword),
+      )
+    })
+  }, [gapRows, gapSearch, gapType])
+
+  const selectedGapRows = useMemo(
+    () => gapRows.filter((row) => selectedGapKeys.includes(row.product_id)),
+    [gapRows, selectedGapKeys],
+  )
+
+  const batchPreview = useMemo(
+    () => computeLanded(batchWatched as Record<string, number | null> | undefined),
+    [batchWatched],
+  )
+
+  const submitBatchFill = async () => {
+    if (!selectedGapRows.length) return
+    const values = await batchForm.validateFields()
+    const cost: Record<string, unknown> = { ...values }
+    if (cost.international_shipping === null || cost.international_shipping === undefined) {
+      delete cost.international_shipping
+    }
+    const items = selectedGapRows.map((row) => ({ product_id: row.product_id, cost }))
+    setBatchSaving(true)
+    try {
+      const result = (await api.batchFillCosts(items)) as BatchFillResult
+      if (result.failed_count === 0) {
+        message.success(`已为 ${result.success_count} 个商品补齐成本并写入审计`)
+      } else {
+        message.warning(`补齐完成：成功 ${result.success_count}，失败 ${result.failed_count}`)
+      }
+      setBatchOpen(false)
+      setSelectedGapKeys([])
+      await Promise.all([loadGaps(), loadTxGaps(), load()])
+    } catch (submitError) {
+      message.error(`批量补齐失败：${apiErrorMessage(submitError)}`)
+    } finally {
+      setBatchSaving(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -180,8 +383,8 @@ export default function ProductCostsPage() {
   const filteredRows = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     return rows.filter((row) => {
-      if (filter === 'known' && !row.has_cost) return false
-      if (filter === 'missing' && row.has_cost) return false
+      if (filter === 'known' && !row.has_effective_cost) return false
+      if (filter === 'missing' && row.has_effective_cost) return false
       if (!keyword) return true
       return [row.sku, row.name, row.category ?? ''].some((field) =>
         field.toLowerCase().includes(keyword),
@@ -197,22 +400,7 @@ export default function ProductCostsPage() {
     return rates.reduce((sum, value) => sum + value, 0) / rates.length
   }, [rows])
 
-  const preview = useMemo(() => {
-    const get = (key: string) => numeric(watched?.[key])
-    const international =
-      watched?.international_shipping !== null && watched?.international_shipping !== undefined
-        ? get('international_shipping')
-        : get('first_leg_shipping') + get('last_leg_shipping')
-    const landed =
-      get('purchase_cost') +
-      get('domestic_shipping') +
-      international +
-      get('packaging') +
-      get('tax_estimate') +
-      get('handling')
-    const period = get('payment_fee') + get('marketing_amortization') + get('after_sales_loss')
-    return { landed: landed.toFixed(2), period: period.toFixed(2), breakeven: (landed + period).toFixed(2) }
-  }, [watched])
+  const preview = useMemo(() => computeLanded(watched as Record<string, number | null> | undefined), [watched])
 
   const openEdit = (row: CostRow) => {
     setEditRow(row)
@@ -300,8 +488,12 @@ export default function ProductCostsPage() {
       key: 'cost_status',
       width: 110,
       render: (_, row) =>
-        row.has_cost ? (
+        row.has_effective_cost ? (
           <Tag color="green">已维护 {row.version}</Tag>
+        ) : row.has_cost ? (
+          <Tag icon={<WarningOutlined />} color="orange">
+            成本无效
+          </Tag>
         ) : (
           <Tag icon={<WarningOutlined />} color="red">
             缺成本
@@ -313,7 +505,7 @@ export default function ProductCostsPage() {
       dataIndex: 'purchase_cost',
       width: 96,
       align: 'right',
-      render: (value, row) => (row.has_cost ? money(value, row.currency ?? 'USD') : '—'),
+      render: (value, row) => (row.has_effective_cost ? money(value, row.currency ?? 'USD') : '—'),
     },
     {
       title: '头程+尾程',
@@ -321,7 +513,7 @@ export default function ProductCostsPage() {
       width: 110,
       align: 'right',
       render: (_, row) =>
-        row.has_cost
+        row.has_effective_cost
           ? money(numeric(row.first_leg_shipping) + numeric(row.last_leg_shipping), row.currency ?? 'USD')
           : '—',
     },
@@ -330,7 +522,7 @@ export default function ProductCostsPage() {
       dataIndex: 'tax_estimate',
       width: 90,
       align: 'right',
-      render: (value, row) => (row.has_cost ? money(value, row.currency ?? 'USD') : '—'),
+      render: (value, row) => (row.has_effective_cost ? money(value, row.currency ?? 'USD') : '—'),
     },
     {
       title: '落地成本',
@@ -339,16 +531,19 @@ export default function ProductCostsPage() {
       align: 'right',
       sorter: (a, b) => numeric(a.total_landed_cost) - numeric(b.total_landed_cost),
       render: (value, row) => (
-        <Text strong>{row.has_cost ? money(value, row.currency ?? 'USD') : '—'}</Text>
+        <Text strong>{row.has_effective_cost ? money(value, row.currency ?? 'USD') : '—'}</Text>
       ),
     },
     {
-      title: '期间成本',
+      title: (
+        <Tooltip title="支付手续费 + 营销摊销 + 售后损失">
+          <span>期间成本</span>
+        </Tooltip>
+      ),
       dataIndex: 'period_cost',
       width: 104,
       align: 'right',
-      tooltip: '支付手续费 + 营销摊销 + 售后损失',
-      render: (value, row) => (row.has_cost ? money(value, row.currency ?? 'USD') : '—'),
+      render: (value, row) => (row.has_effective_cost ? money(value, row.currency ?? 'USD') : '—'),
     },
     {
       title: '参考售价',
@@ -407,6 +602,104 @@ export default function ProductCostsPage() {
     },
   ]
 
+  const gapColumns: ColumnsType<CostGapRow> = [
+    {
+      title: '商品',
+      dataIndex: 'name',
+      key: 'name',
+      width: 260,
+      fixed: 'left',
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{row.name}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {row.sku} · {row.target_market}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: '缺口类型',
+      key: 'gap_type',
+      width: 120,
+      render: (_, row) =>
+        row.gap_type === 'missing' ? (
+          <Tag color="red">无记录</Tag>
+        ) : (
+          <Tag color="orange">无效成本</Tag>
+        ),
+    },
+    {
+      title: '缺口原因',
+      key: 'gap_reason',
+      width: 190,
+      render: (_, row) =>
+        row.gap_reason ? (GAP_REASON_LABEL[row.gap_reason] ?? row.gap_reason) : '—',
+    },
+    { title: '版本', key: 'version', width: 90, render: (_, row) => row.version ?? '—' },
+    {
+      title: '落地成本',
+      dataIndex: 'total_landed_cost',
+      width: 120,
+      align: 'right',
+      render: (value, row) =>
+        row.gap_type === 'invalid' ? money(value, row.currency ?? 'USD') : '—',
+    },
+    {
+      title: '参考售价',
+      dataIndex: 'sale_price',
+      width: 110,
+      align: 'right',
+      render: (value, row) =>
+        value !== null && value !== undefined ? (
+          money(value, row.currency ?? 'USD')
+        ) : (
+          <Text type="secondary">未定价</Text>
+        ),
+    },
+  ]
+
+  const txColumns: ColumnsType<TransactionGapRow> = [
+    { title: '订单号', dataIndex: 'order_number', key: 'order_number', width: 200 },
+    {
+      title: '下单时间',
+      dataIndex: 'received_at',
+      key: 'received_at',
+      width: 170,
+      render: (value) => (value ? new Date(value).toLocaleString() : '—'),
+    },
+    { title: '币种', dataIndex: 'currency', key: 'currency', width: 80 },
+    {
+      title: '缺口行数',
+      dataIndex: 'gap_item_count',
+      key: 'gap_item_count',
+      width: 100,
+      align: 'right',
+    },
+    {
+      title: '缺口金额',
+      dataIndex: 'gap_line_total',
+      key: 'gap_line_total',
+      width: 130,
+      align: 'right',
+      render: (value, row) => <Text strong>{money(value, row.currency)}</Text>,
+    },
+    {
+      title: '缺口原因',
+      dataIndex: 'gap_reasons',
+      key: 'gap_reasons',
+      render: (_, row) => (
+        <Space size={[4, 4]} wrap>
+          {row.gap_reasons.map((reason) => (
+            <Tag key={reason} color="orange">
+              {GAP_REASON_LABEL[reason] ?? reason}
+            </Tag>
+          ))}
+        </Space>
+      ),
+    },
+  ]
+
   return (
     <div className="resource-page">
       <div className="page-heading">
@@ -418,15 +711,31 @@ export default function ProductCostsPage() {
           </Paragraph>
         </div>
         <Space wrap>
+          <Segmented
+            value={view}
+            onChange={(value) => switchView(value)}
+            options={[
+              { value: 'overview', label: '成本总览' },
+              { value: 'governance', label: '成本覆盖治理' },
+            ]}
+          />
           <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
             刷新
           </Button>
         </Space>
       </div>
 
-      {error && (
-        <Alert className="page-alert" type="error" showIcon message="成本数据加载失败" description={error} />
-      )}
+      {view === 'overview' ? (
+        <>
+          {error && (
+            <Alert
+              className="page-alert"
+              type="error"
+              showIcon
+              message="成本数据加载失败"
+              description={error}
+            />
+          )}
 
       <Row gutter={[14, 14]} className="resource-metrics">
         <Col xs={12} lg={6}>
@@ -501,6 +810,133 @@ export default function ProductCostsPage() {
           }}
         />
       </Card>
+        </>
+      ) : (
+        <>
+          <Row gutter={[14, 14]} className="resource-metrics">
+            <Col xs={12} lg={6}>
+              <Card variant="borderless">
+                <Statistic
+                  title="商品缺口（无有效成本）"
+                  value={gapSummary.missing + gapSummary.invalid}
+                  valueStyle={{
+                    color: gapSummary.missing + gapSummary.invalid > 0 ? '#cf1322' : undefined,
+                  }}
+                  prefix={<WarningOutlined />}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} lg={6}>
+              <Card variant="borderless">
+                <Statistic title="缺记录" value={gapSummary.missing} />
+              </Card>
+            </Col>
+            <Col xs={12} lg={6}>
+              <Card variant="borderless">
+                <Statistic
+                  title="无效成本"
+                  value={gapSummary.invalid}
+                  valueStyle={{ color: gapSummary.invalid > 0 ? '#faad14' : undefined }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} lg={6}>
+              <Card variant="borderless">
+                <Statistic title="交易缺口订单" value={txSummary.total} />
+              </Card>
+            </Col>
+          </Row>
+
+          <Card variant="borderless" className="resource-panel">
+            <div className="resource-toolbar">
+              <Segmented
+                value={txTab}
+                onChange={(value) => setTxTab(value as 'products' | 'transactions')}
+                options={[
+                  { value: 'products', label: `商品缺口 ${gapSummary.missing + gapSummary.invalid}` },
+                  { value: 'transactions', label: `交易缺口 ${txSummary.total}` },
+                ]}
+              />
+              {txTab === 'products' && (
+                <>
+                  <Input
+                    allowClear
+                    prefix={<SearchOutlined />}
+                    placeholder="搜索商品名、SKU 或分类"
+                    value={gapSearch}
+                    onChange={(event) => setGapSearch(event.target.value)}
+                    style={{ maxWidth: 260 }}
+                  />
+                  <Segmented
+                    value={gapType}
+                    onChange={(value) => setGapType(value as GapFilter)}
+                    options={[
+                      { value: 'all', label: `全部 ${gapSummary.missing + gapSummary.invalid}` },
+                      { value: 'missing', label: `缺记录 ${gapSummary.missing}` },
+                      { value: 'invalid', label: `无效 ${gapSummary.invalid}` },
+                    ]}
+                  />
+                  <Button
+                    type="primary"
+                    icon={<WalletOutlined />}
+                    disabled={!selectedGapRows.length}
+                    onClick={() => setBatchOpen(true)}
+                  >
+                    批量补齐（{selectedGapRows.length}）
+                  </Button>
+                </>
+              )}
+              {txTab === 'transactions' && (
+                <Text type="secondary">
+                  缺口行 {txSummary.gapLineCount} 项 · 缺口金额 {money(txSummary.gapLineTotal)}
+                </Text>
+              )}
+            </div>
+
+            {txTab === 'products' ? (
+              <Table
+                rowKey="product_id"
+                loading={gapLoading}
+                columns={gapColumns}
+                dataSource={filteredGapRows}
+                rowSelection={{
+                  selectedRowKeys: selectedGapKeys,
+                  onChange: (keys) => setSelectedGapKeys(keys.map(String)),
+                }}
+                scroll={{ x: 980 }}
+                pagination={{
+                  pageSize: 20,
+                  showSizeChanger: true,
+                  showTotal: (total) => `共 ${total} 条`,
+                }}
+                locale={{
+                  emptyText: (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有成本缺口" />
+                  ),
+                }}
+              />
+            ) : (
+              <Table
+                rowKey="order_id"
+                loading={txLoading}
+                columns={txColumns}
+                dataSource={txRows}
+                scroll={{ x: 900 }}
+                pagination={{
+                  pageSize: 20,
+                  showSizeChanger: true,
+                  showTotal: (total) => `共 ${total} 条`,
+                }}
+                locale={{
+                  emptyText: (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有交易成本缺口" />
+                  ),
+                }}
+              />
+            )}
+          </Card>
+        </>
+      )}
 
       <Drawer
         width={620}
@@ -526,7 +962,7 @@ export default function ProductCostsPage() {
           <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
             <Input maxLength={8} style={{ width: 120 }} />
           </Form.Item>
-          <Divider orientation="left" plain>
+          <Divider titlePlacement="left" plain>
             落地成本
           </Divider>
           <Row gutter={12}>
@@ -542,7 +978,7 @@ export default function ProductCostsPage() {
               </Col>
             ))}
           </Row>
-          <Divider orientation="left" plain>
+          <Divider titlePlacement="left" plain>
             期间成本（按单摊销）
           </Divider>
           <Row gutter={12}>
@@ -662,6 +1098,75 @@ export default function ProductCostsPage() {
             </Descriptions>
           </>
         )}
+      </Drawer>
+
+      <Drawer
+        width={620}
+        open={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        title={`批量补齐成本（${selectedGapRows.length} 个商品）`}
+        extra={
+          <Space>
+            <Button onClick={() => setBatchOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              loading={batchSaving}
+              disabled={!selectedGapRows.length}
+              onClick={() => void submitBatchFill()}
+            >
+              批量保存为新版本
+            </Button>
+          </Space>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`将为选中的 ${selectedGapRows.length} 个商品写入同一组成本组件；每个商品生成新版本快照并写入审计，单项失败不影响其余商品。`}
+        />
+        <Form form={batchForm} layout="vertical" initialValues={{ currency: 'USD' }}>
+          <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
+            <Input maxLength={8} style={{ width: 120 }} />
+          </Form.Item>
+          <Divider titlePlacement="left" plain>
+            落地成本
+          </Divider>
+          <Row gutter={12}>
+            {COST_FIELDS.map((field) => (
+              <Col xs={24} sm={12} key={field.name}>
+                <Form.Item
+                  name={field.name}
+                  label={field.label}
+                  rules={field.required ? [{ required: true, message: '请输入采购成本' }] : undefined}
+                >
+                  <InputNumber min={0} step={0.01} precision={2} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            ))}
+          </Row>
+          <Divider titlePlacement="left" plain>
+            期间成本（按单摊销）
+          </Divider>
+          <Row gutter={12}>
+            {PERIOD_FIELDS.map((field) => (
+              <Col xs={24} sm={8} key={field.name}>
+                <Form.Item name={field.name} label={field.label}>
+                  <InputNumber min={0} step={0.01} precision={2} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            ))}
+          </Row>
+          <Card size="small" variant="borderless" style={{ background: '#fafafa' }}>
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="落地成本合计">{batchPreview.landed}</Descriptions.Item>
+              <Descriptions.Item label="期间成本合计">{batchPreview.period}</Descriptions.Item>
+              <Descriptions.Item label="盈亏平衡售价（不亏最低价）">
+                <Text strong>{batchPreview.breakeven}</Text>
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+        </Form>
       </Drawer>
     </div>
   )

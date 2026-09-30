@@ -329,6 +329,7 @@ RFQ
 - P2-8 商品品牌与归因治理已完成首期：未绑定品牌商品可批量补空，品牌可编辑默认销售法人，未归因订单/发票可按原因查询，历史交易可在证据完整后自动补全。
 - `frontend/e2e/consolidation.spec.ts` 已覆盖“商品无品牌 -> 批量绑定 -> 品牌缺默认法人 -> 页面编辑 -> 自动补全归因 -> 报表确认收入”，并在 Chrome 中通过。
 - 下一项 P2-9 是成本覆盖治理；成本不足时继续显示缺失，不计算伪造毛利，也不启用内部利润抵销。
+- P2-9 成本覆盖治理已完成首期：`/products/cost-gaps`（商品缺口 missing/invalid）、`/products/cost-gaps/transactions`（交易缺口）、`/products/cost-gaps/batch-fill`（批量补齐）已接入「成本与利润」页新增的「成本覆盖治理」视图；缺口商品可勾选批量补齐（每项生成版本快照并审计），补齐后商品与交易缺口自动消失；零成本行不再产出伪造毛利。
 - `frontend/e2e/b2b-credit-risk.spec.ts` 已在 Google Chrome 中通过，验证政策审批、风险暂停、人工解除和保险覆盖；B2B 路由冒烟已加入 `/b2b/credit`。
 
 后端双模式兼容性结论和迁移顺序见 `docs/b2c_b2b_compatibility_audit.md` 与 `docs/business_decisions/ADR/COMMERCE-001.md`。

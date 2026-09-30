@@ -107,6 +107,11 @@ api_router.include_router(
     _listing_gate_il.import_module('app.api.v1.endpoints.listing_publish').router
 )
 api_router.include_router(product_workbench.router)
+# Product intelligence must be registered BEFORE products.router: products.py
+# exposes GET /products/{product_id}, which would otherwise shadow the literal
+# /products/cost-overview, /products/cost-gaps and /products/cost-gaps/transactions
+# routes (they returned 422 "product_id: not a valid UUID" instead of matching).
+api_router.include_router(product_intelligence.product_router)
 api_router.include_router(products.router)
 api_router.include_router(product_analysis.router)
 api_router.include_router(product_pipeline.router)
@@ -122,7 +127,8 @@ api_router.include_router(orders.router)
 api_router.include_router(overseas_warehouse.router)
 api_router.include_router(p3.router)
 api_router.include_router(cost_model.router)
-api_router.include_router(product_intelligence.product_router)
+# product_intelligence.product_router is registered earlier (before products.router)
+# to avoid GET /products/{product_id} shadowing its literal /products/... paths.
 api_router.include_router(product_intelligence.decision_router)
 api_router.include_router(product_intelligence.candidate_router)
 api_router.include_router(product_listing.router)

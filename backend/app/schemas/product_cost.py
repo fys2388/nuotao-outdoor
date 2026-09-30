@@ -36,6 +36,8 @@ class ProductCostOverviewRow(BaseModel):
     target_market: str
     status: str
     has_cost: bool
+    has_effective_cost: bool = False
+    cost_gap_reason: str | None = None
     currency: str | None = None
     version: str | None = None
     valid_from: datetime | None = None
@@ -62,6 +64,7 @@ class ProductCostOverview(BaseModel):
     total: int
     known: int
     missing: int
+    invalid: int = 0
 
 
 class ProductCostUpsertResult(BaseModel):
@@ -96,3 +99,79 @@ class ProfitAnalysisOut(BaseModel):
     contribution_margin_rate: Decimal | None = None
     markup_rate: Decimal | None = None
     breakeven_price: Decimal = ZERO
+
+
+# --------------------------------------------------------------------------- #
+# P2-9 cost coverage governance
+# --------------------------------------------------------------------------- #
+
+
+class ProductCostGapRow(BaseModel):
+    """One product lacking an effective cost."""
+
+    product_id: UUID
+    sku: str
+    name: str
+    category: str | None = None
+    target_market: str
+    status: str
+    gap_type: str  # missing | invalid
+    gap_reason: str | None  # missing | invalid_zero_purchase | invalid_zero_landed
+    currency: str | None = None
+    version: str | None = None
+    valid_from: datetime | None = None
+    total_landed_cost: Decimal = ZERO
+    sale_price: Decimal | None = None
+
+
+class ProductCostGapList(BaseModel):
+    items: list[ProductCostGapRow]
+    total: int
+    known: int
+    missing: int
+    invalid: int
+
+
+class TransactionCostGapRow(BaseModel):
+    """One order whose line items lack effective cost evidence."""
+
+    order_id: UUID
+    order_number: str
+    received_at: datetime
+    currency: str
+    gap_item_count: int
+    gap_line_total: Decimal
+    gap_reasons: list[str]
+
+
+class TransactionCostGapList(BaseModel):
+    items: list[TransactionCostGapRow]
+    total: int
+    gap_line_count: int
+    gap_line_total: Decimal
+
+
+class BatchCostFillItem(BaseModel):
+    """One product cost to fill in a batch."""
+
+    product_id: UUID
+    cost: ProductCostUpsertRequest
+
+
+class BatchCostFillRequest(BaseModel):
+    items: list[BatchCostFillItem] = Field(..., min_length=1, max_length=200)
+
+
+class BatchCostFillResultItem(BaseModel):
+    product_id: UUID
+    sku: str | None = None
+    success: bool
+    version: str | None = None
+    total_landed_cost: Decimal | None = None
+    error: str | None = None
+
+
+class BatchCostFillResult(BaseModel):
+    results: list[BatchCostFillResultItem]
+    success_count: int
+    failed_count: int

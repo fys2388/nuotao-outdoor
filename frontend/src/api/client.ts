@@ -524,6 +524,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getCostGaps: (
+    params: { gapType?: string; search?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const q = new URLSearchParams()
+    if (params.gapType) q.set('gap_type', params.gapType)
+    if (params.search) q.set('search', params.search)
+    q.set('limit', String(params.limit ?? 100))
+    q.set('offset', String(params.offset ?? 0))
+    return request(`/products/cost-gaps?${q.toString()}`)
+  },
+  getTransactionCostGaps: (params: { limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams()
+    q.set('limit', String(params.limit ?? 100))
+    q.set('offset', String(params.offset ?? 0))
+    return request(`/products/cost-gaps/transactions?${q.toString()}`)
+  },
+  batchFillCosts: (items: Array<{ product_id: string; cost: Record<string, unknown> }>) =>
+    request('/products/cost-gaps/batch-fill', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
   getProfitAnalysis: (productId: string, salePrice?: number | string) => {
     const q = new URLSearchParams()
     if (salePrice !== undefined && salePrice !== null && salePrice !== '') {

@@ -671,6 +671,16 @@ workspace_id
 - `npm run typecheck` 与 `npm run build` 通过。
 - 下一项 P2-9 应先做成本覆盖治理：列出缺少有效 `ProductCost` 的商品和交易，提供
   可审计的成本补齐入口；内部利润抵销在成本证据完整前保持禁用。
+### 10.19 P2-9 成本覆盖治理回归结果
+
+- `tests/test_cost_coverage_governance.py`：18 项已编写（**尚未运行** —— 环境执行器不可用，见 `docs/audits/V0_16_RELEASE_READINESS.md`）。
+- 覆盖有效成本分类（missing / invalid / known）、零成本行毛利 withholding（伪造毛利
+  修复）、总览计数有效成本化、商品级与交易级缺口清单（缺成本 / 商品归档 / 无法溯源）、
+  补齐后缺口消失、批量补齐部分成功隔离、审计事件（`product.cost.batch_filled` +
+  `product.cost.updated`）、API 端点与工作区隔离。
+- 无新增数据库迁移：复用 `product_cost` / `product_cost_snapshots` / `event_log` /
+  `orders` / `order_items`；`has_effective_cost` 与缺口原因均为派生字段。
+- 内部利润抵销门禁（成本覆盖率 < 99.99% 不抵销）保持不变。
 
 ## 11. 上线判定
 
