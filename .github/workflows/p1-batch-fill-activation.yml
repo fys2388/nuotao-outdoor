@@ -40,9 +40,10 @@ jobs:
             echo ""
             
             # Get first product ID for test batch fill
-            TEST_PRODUCT_ID=$(echo "$MISSING" | head -1 | cut -d'|' -f1)
-            TEST_SKU=$(echo "$MISSING" | head -1 | cut -d'|' -f2)
-            TEST_NAME=$(echo "$MISSING" | head -1 | cut -d'|' -f3)
+            FIRST_LINE=$(echo "$MISSING" | head -1)
+            TEST_PRODUCT_ID=$(echo "$FIRST_LINE" | cut -d'|' -f1)
+            TEST_SKU=$(echo "$FIRST_LINE" | cut -d'|' -f2)
+            TEST_NAME=$(echo "$FIRST_LINE" | cut -d'|' -f3)
             
             echo "Test product: $TEST_SKU ($TEST_NAME)"
             echo "Product ID: $TEST_PRODUCT_ID"
@@ -67,21 +68,7 @@ jobs:
             
             FILL_RESPONSE=$(curl -s -w "\nHTTP=%{http_code}" -X POST "$BASE/products/cost-gaps/batch-fill" \
                 -H "Content-Type: application/json" \
-                -d '{
-                    "items": [
-                        {
-                            "product_id": "$TEST_PRODUCT_ID",
-                            "cost": {
-                                "purchase_cost": 8.00,
-                                "international_shipping": 3.00,
-                                "local_shipping": 1.00,
-                                "packaging": 0.50,
-                                "tax": 0.50,
-                                "other": 2.00
-                            }
-                        }
-                    ]
-                }' 2>&1)
+                -d "{\"items\": [{\"product_id\": \"$TEST_PRODUCT_ID\", \"cost\": {\"purchase_cost\": 8.00, \"international_shipping\": 3.00, \"local_shipping\": 1.00, \"packaging\": 0.50, \"tax\": 0.50, \"other\": 2.00}}]}" 2>&1)
             
             echo "Response:"
             echo "$FILL_RESPONSE"
