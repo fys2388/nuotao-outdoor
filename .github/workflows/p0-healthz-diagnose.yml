@@ -1,0 +1,95 @@
+name: P0-1 Healthz Diagnose
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== P0-1 HEALTHZ DIAGNOSIS ==="
+            echo "Timestamp: $(date -u)"
+            echo ""
+            
+            echo "--- 1. Local Backend (127.0.0.1:8000) ---"
+            echo ""
+            echo "1a. /healthz (no prefix):"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/healthz 2>&1
+            echo ""
+            
+            echo "1b. /api/v1/healthz (with prefix):"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/api/v1/healthz 2>&1
+            echo ""
+            
+            echo "1c. /readyz (no prefix):"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/readyz 2>&1
+            echo ""
+            
+            echo "1d. /api/v1/readyz (with prefix):"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/api/v1/readyz 2>&1
+            echo ""
+            
+            echo "1e. /api/v1/health (deployment service):"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/api/v1/health 2>&1
+            echo ""
+            
+            echo "--- 2. OpenAPI Path Check ---"
+            echo ""
+            echo "Checking if /api/v1/healthz exists in OpenAPI:"
+            curl -s http://127.0.0.1:8000/openapi.json 2>/dev/null | python3 -c "
+            import sys, json
+            d = json.load(sys.stdin)
+            paths = d.get('paths', {})
+            for p in sorted(paths.keys()):
+                if 'health' in p.lower() or 'ready' in p.lower():
+                    print(f'  {p}: {list(paths[p].keys())}')
+            " 2>&1
+            echo ""
+            
+            echo "--- 3. Nginx Config ---"
+            echo ""
+            echo "Checking nginx server blocks:"
+            grep -r "location.*health" /etc/nginx/ 2>/dev/null || echo "  No health location found in nginx"
+            echo ""
+            echo "Checking nginx server_name:"
+            grep -r "server_name" /etc/nginx/sites-enabled/ 2>/dev/null || grep -r "server_name" /etc/nginx/conf.d/ 2>/dev/null || echo "  No server_name found"
+            echo ""
+            
+            echo "--- 4. External Access ---"
+            echo ""
+            echo "2a. Public /healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/healthz 2>&1
+            echo ""
+            
+            echo "2b. Public /api/v1/healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/api/v1/healthz 2>&1
+            echo ""
+            
+            echo "2c. Public /api/v1/readyz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/api/v1/readyz 2>&1
+            echo ""
+            
+            echo "--- 5. Root Cause Summary ---"
+            echo ""
+            echo "Expected paths:"
+            echo "  /api/v1/healthz  (application registered path)"
+            echo "  /api/v1/readyz   (application registered path)"
+            echo ""
+            echo "Tested paths:"
+            echo "  /healthz         -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/healthz)"
+            echo "  /api/v1/healthz  -> $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/healthz)"
+            echo ""
+            echo "=== DIAGNOSIS COMPLETE ==="
