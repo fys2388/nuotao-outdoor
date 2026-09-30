@@ -647,6 +647,34 @@ export const api = {
       error?: string | null
     }>(`/product-pipeline/import-and-analyze-1688/jobs/${jobId}`),
 
+  createImportFrom1688Job: (data: {
+    url_or_id: string
+    auto_run_pipeline?: boolean
+    auto_list?: boolean
+  }) =>
+    request<{
+      success: boolean
+      data: { job_id: string; status: string } | null
+      error?: string | null
+    }>('/product-pipeline/import-from-1688/jobs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getImportFrom1688Job: (jobId: string) =>
+    request<{
+      success: boolean
+      data: {
+        job_id: string
+        status: 'pending' | 'running' | 'succeeded' | 'failed'
+        data?: {
+          product_info?: Record<string, unknown> | null
+          pipeline_result?: Record<string, unknown> | null
+        } | null
+        error?: string | null
+      } | null
+      error?: string | null
+    }>(`/product-pipeline/import-from-1688/jobs/${jobId}`),
+
   getOrders: (
     limit = 100,
     offset = 0,

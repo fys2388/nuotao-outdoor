@@ -9,6 +9,7 @@ import {
   LoadingOutlined, CopyOutlined, ShopOutlined, FileTextOutlined,
   PictureOutlined, RocketOutlined, HistoryOutlined, PlayCircleOutlined
 } from '@ant-design/icons'
+import { api } from '../api/client'
 
 const { Title, Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -284,7 +285,7 @@ export default function ProductPipeline() {
     }
   }, [])
 
-  // 从1688导入商品信息
+  // 从1688导入商品信息（异步任务模式，适配牛顿Agent长耗时）
   const handleImportFrom1688 = async () => {
     if (!importUrl || importUrl.trim().length === 0) {
       message.error('请输入1688商品URL或商品ID')
@@ -293,20 +294,70 @@ export default function ProductPipeline() {
 
     try {
       setImportLoading(true)
-      const resp = await fetch('/api/v1/product-pipeline/import-from-1688', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url_or_id: importUrl.trim(),
-          auto_run_pipeline: autoRunPipeline,
-          auto_list: false,
-        }),
+      // Step 1: 提交后台任务
+      const submitted = await api.createImportFrom1688Job({
+        url_or_id: importUrl.trim(),
+        auto_run_pipeline: autoRunPipeline,
+        auto_list: false,
       })
+      if (!submitted.success || !submitted.data) {
+        message.error(`提交导入任务失败：${submitted.error || '未知错误'}`)
+        return
+      }
 
-      const result = await resp.json()
+      const jobId = submitted.data.job_id
+      const TIMEOUT_MS = 20 * 60 * 1000 // 20分钟
+      const POLL_MS = 3000
+      const deadline = Date.now() + TIMEOUT_MS
 
-      if (result.success && result.data?.product_info) {
-        const productInfo = result.data.product_info
+      message.loading({ content: '正在从1688导入商品，牛顿Agent处理中...', key: 'import1688', duration: 0 })
+
+      // Step 2: 轮询任务状态
+      let completedData: any = null
+      let completedError = ''
+      let elapsed = 0
+      const steps = ['创建Agent任务', '抓取商品数据', '解析商品信息', '完成']
+      let lastStep = 0
+
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS))
+        elapsed = Math.round((Date.now() - (deadline - TIMEOUT_MS)) / 1000)
+
+        const jobResponse = await api.getImportFrom1688Job(jobId)
+        const job = jobResponse.data
+
+        if (!jobResponse.success || !job) {
+          completedError = jobResponse.error || '无法读取任务状态'
+          break
+        }
+
+        if (job.status === 'succeeded') {
+          completedData = job.data
+          break
+        }
+        if (job.status === 'failed') {
+          completedError = job.error || '导入失败'
+          break
+        }
+
+        // 更新进度提示
+        const newStep = elapsed < 15 ? 0 : elapsed < 60 ? 1 : elapsed < 100 ? 2 : 3
+        if (newStep !== lastStep) {
+          lastStep = newStep
+          message.loading({ content: `${steps[lastStep]}… (${elapsed}s)`, key: 'import1688', duration: 0 })
+        }
+      }
+
+      message.destroy('import1688')
+
+      if (!completedData) {
+        message.error(`导入失败：${completedError || '任务超时'}`)
+        return
+      }
+
+      // Step 3: 填充表单
+      const productInfo = completedData.product_info
+      if (productInfo) {
         form.setFieldsValue({
           name: productInfo.name || '',
           category: productInfo.category || '',
@@ -328,19 +379,18 @@ export default function ProductPipeline() {
         if (Array.isArray(productInfo.images)) {
           setSourceImages(productInfo.images.filter((u: any) => typeof u === 'string' && u.startsWith('http')))
         }
-
-        // 如果自动运行工作流
-        if (autoRunPipeline && result.data?.pipeline_result) {
-          setPipelineResult(result.data.pipeline_result)
-          message.info('工作流已自动运行完成')
-        }
-
-        setImportUrl('')
-      } else {
-        message.error(`导入失败：${result.error || '未知错误'}`)
       }
+
+      // 如果自动运行工作流
+      if (autoRunPipeline && completedData.pipeline_result) {
+        setPipelineResult(completedData.pipeline_result)
+        message.info('工作流已自动运行完成')
+      }
+
+      setImportUrl('')
     } catch (e: any) {
       console.error('Import from 1688 error:', e)
+      message.destroy('import1688')
       message.error(`导入失败：${e.message || '网络错误'}`)
     } finally {
       setImportLoading(false)
@@ -572,7 +622,7 @@ export default function ProductPipeline() {
                     unCheckedChildren="仅导入"
                   />
                   <Text type="secondary" style={{ fontSize: '11px' }}>
-                    自动获取商品名称/价格/描述/图片/属性，转换为工作流输入格式
+                    自动获取商品名称/价格/描述/图片/属性，转换为工作流输入格式。异步执行，约1-2分钟
                   </Text>
                 </div>
               </div>
