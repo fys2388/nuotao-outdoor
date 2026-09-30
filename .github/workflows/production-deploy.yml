@@ -80,7 +80,7 @@ jobs:
             echo "=========================================="
             TEMP_DIR=$(mktemp -d /tmp/nuotao-deploy-XXXXXX)
             echo "Temp dir: $TEMP_DIR"
-            git clone --depth 1 --branch main "$REPO_URL" "$TEMP_DIR/repo" 2>&1
+            git clone "$REPO_URL" "$TEMP_DIR/repo" 2>&1
             cd "$TEMP_DIR/repo"
             git checkout "$DEPLOY_SHA" 2>&1
             echo "Deployed SHA: $(git rev-parse HEAD)"
