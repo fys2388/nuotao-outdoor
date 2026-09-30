@@ -1,0 +1,125 @@
+name: Production Precheck
+
+# Read-only pre-deployment checks on production server.
+# Does NOT modify anything. Only reads current state.
+#
+# Trigger manually: Actions > Production Precheck > Run workflow
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  precheck:
+    name: Production Pre-Deployment Precheck (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run production precheck on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            PROD=/opt/nuotao/backend
+            echo "=========================================="
+            echo " PRODUCTION PRE-DEPLOYMENT PRECHECK"
+            echo "=========================================="
+            echo ""
+            
+            echo "=========================================="
+            echo " 1. Current deployed SHA"
+            echo "=========================================="
+            cd "$PROD" 2>/dev/null || { echo "FAIL: $PROD not found"; exit 1; }
+            if [ -f .git/HEAD ]; then
+              echo "Git HEAD: $(git rev-parse HEAD 2>/dev/null || echo 'not a git repo')"
+              echo "Short SHA: $(git rev-parse --short HEAD 2>/dev/null || echo 'N/A')"
+              echo "Branch: $(git branch --show-current 2>/dev/null || echo 'N/A')"
+              echo "Last commit: $(git log -1 --oneline 2>/dev/null || echo 'N/A')"
+            else
+              echo "Not a git checkout. Checking for version file..."
+              if [ -f version.txt ]; then
+                echo "version.txt: $(cat version.txt)"
+              else
+                echo "No version marker found."
+              fi
+            fi
+            echo ""
+            
+            echo "=========================================="
+            echo " 2. Current migration version"
+            echo "=========================================="
+            cd "$PROD"
+            if [ -f alembic.ini ]; then
+              echo "alembic current: $(alembic current 2>/dev/null || echo 'alembic not available')"
+              echo "alembic heads: $(alembic heads 2>/dev/null || echo 'alembic not available')"
+              CUR=$(alembic current 2>/dev/null | grep -oP '00\d+' | tail -1 || echo '')
+              HEADV=$(alembic heads 2>/dev/null | grep -oP '00\d+' | tail -1 || echo '')
+              if [ -n "$CUR" ] && [ -n "$HEADV" ]; then
+                echo "Pending migrations: $([ "$CUR" = "$HEADV" ] && echo 'NONE' || echo "$CUR -> $HEADV")"
+              fi
+            else
+              echo "No alembic.ini found."
+            fi
+            echo ""
+            
+            echo "=========================================="
+            echo " 3. PostgreSQL connection"
+            echo "=========================================="
+            sudo -u postgres psql -d nuotao -tAc "SELECT 'DB_OK: ' || current_database() || ' @ ' || inet_server_addr() || ':' || inet_server_port();" 2>&1 || echo "DB_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 4. Redis connection"
+            echo "=========================================="
+            redis-cli ping 2>&1 || echo "REDIS_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 5. Backend service"
+            echo "=========================================="
+            systemctl status nuotao-backend --no-pager --lines=5 2>&1 || echo "BACKEND_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 6. Scheduler service"
+            echo "=========================================="
+            systemctl status nuotao-scheduler --no-pager --lines=5 2>&1 || echo "SCHEDULER_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 7. Worker service"
+            echo "=========================================="
+            systemctl status nuotao-worker --no-pager --lines=5 2>&1 || echo "WORKER_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 8. Nginx"
+            echo "=========================================="
+            systemctl status nginx --no-pager --lines=5 2>&1 || echo "NGINX_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 9. Current API health"
+            echo "=========================================="
+            echo "GET /healthz:"
+            curl -s -o /dev/null -w "  HTTP %{http_code}\n" http://localhost:8000/healthz 2>&1 || echo "  HEALTHZ_FAILED"
+            echo "GET /readyz:"
+            curl -s http://localhost:8000/readyz 2>&1 || echo "  READYZ_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " 10. Products table mastered columns"
+            echo "=========================================="
+            sudo -u postgres psql -d nuotao -tAc "SELECT column_name FROM information_schema.columns WHERE table_name='products' AND column_name IN ('mastered_at','mastered_by','mastered_trace_id') ORDER BY column_name;" 2>&1 || echo "COLUMN_CHECK_FAILED"
+            echo ""
+            
+            echo "=========================================="
+            echo " PRECHECK COMPLETE"
+            echo "=========================================="
