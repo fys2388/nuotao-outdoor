@@ -673,7 +673,10 @@ workspace_id
   可审计的成本补齐入口；内部利润抵销在成本证据完整前保持禁用。
 ### 10.19 P2-9 成本覆盖治理回归结果
 
-- `tests/test_cost_coverage_governance.py`：18 项已编写（**尚未运行** —— 环境执行器不可用，见 `docs/audits/V0_16_RELEASE_READINESS.md`）。
+- `tests/test_cost_coverage_governance.py`：18 项全部实机通过（**18/18，exit 0**，
+  2026-09-30 执行环境恢复后运行；另跑 `test_profit_engine.py` / `test_cost_blocker.py` /
+  `test_product_intelligence.py` / `test_product_import.py` 共 25/25 通过；非 integration
+  全量 951 项收集、套件 exit 0。见 `docs/audits/V0_16_RELEASE_READINESS.md` §1）。
 - 覆盖有效成本分类（missing / invalid / known）、零成本行毛利 withholding（伪造毛利
   修复）、总览计数有效成本化、商品级与交易级缺口清单（缺成本 / 商品归档 / 无法溯源）、
   补齐后缺口消失、批量补齐部分成功隔离、审计事件（`product.cost.batch_filled` +
