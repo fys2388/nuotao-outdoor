@@ -27,22 +27,16 @@ def upgrade() -> None:
             nullable=True,
             index=True,
         ),
-        postgresql_using='mastered_at',
-        sqlite_using='mastered_at',
     )
     # mastered_by: who approved the Product Master promotion.
     op.add_column(
         'products',
         sa.Column('mastered_by', sa.String(length=128), nullable=True),
-        postgresql_using='mastered_by',
-        sqlite_using='mastered_by',
     )
     # mastered_trace_id: trace ID for the approval that created the Product Master.
     op.add_column(
         'products',
         sa.Column('mastered_trace_id', sa.String(length=64), nullable=True),
-        postgresql_using='mastered_trace_id',
-        sqlite_using='mastered_trace_id',
     )
 
 
