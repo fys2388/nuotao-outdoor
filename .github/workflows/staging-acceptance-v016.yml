@@ -23,6 +23,11 @@ name: Staging Acceptance v0.16
 
 on:
   workflow_dispatch:
+  push:
+    # Auto-trigger only for a commit whose message carries the marker so that
+    # ordinary pushes (which also fire deploy.yml) do not re-run the whole
+    # acceptance. A docs commit "TRIGGER-STAGING-ACCEPTANCE: v0.16" runs it.
+    branches: [main]
 
 env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -34,7 +39,12 @@ jobs:
     name: Staging v0.16 acceptance (real DB + real backend)
     runs-on: ubuntu-latest
     steps:
+      - name: Gate (dispatch or marked push only)
+        if: github.event_name != 'push' || contains(github.event.head_commit.message, 'TRIGGER-STAGING-ACCEPTANCE')
+        run: echo "gate passed"
+
       - name: Run staging acceptance on server
+        if: github.event_name != 'push' || contains(github.event.head_commit.message, 'TRIGGER-STAGING-ACCEPTANCE')
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SERVER_HOST }}
