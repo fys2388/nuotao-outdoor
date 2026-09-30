@@ -227,7 +227,6 @@ def _wc_credentials() -> tuple[Any, dict[str, str]]:
 async def _load_product(product_id: str) -> tuple[Any, Any | None]:
     """Return ``(session, product_or_None)``; caller must close the session."""
     from app.core.database import async_session_factory
-    from app.models.product import Product
 
     session = async_session_factory()
     product: Any | None = None

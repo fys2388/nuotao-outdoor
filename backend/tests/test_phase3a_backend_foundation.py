@@ -337,7 +337,6 @@ class TestPushWooCommerceGate:
     def test_listing_job_approved_allows_push(self):
         """ListingJob with status='approved' allows push."""
         # This test validates the gate logic exists
-        from app.models.listing_job import ListingJob
         job = ListingJob(
             id=uuid.uuid4(),
             workspace_id=uuid.uuid4(),
