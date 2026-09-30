@@ -1,0 +1,128 @@
+name: P1-2 Batch Fill Activation
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Batch Fill Activation
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== P1-2 BATCH FILL ACTIVATION ==="
+            echo "Timestamp: $(date -u)"
+            echo ""
+            
+            BASE=http://127.0.0.1:8000/api/v1
+            PSQL="sudo -u postgres psql -d nuotao -tAc"
+            
+            echo "--- 1. Query Products Missing Cost ---"
+            MISSING=$($PSQL "
+            SELECT p.id::text, p.sku, LEFT(p.name, 40) as name
+            FROM products p
+            LEFT JOIN product_cost pc ON pc.product_id = p.id
+            WHERE pc.total_landed_cost = 0 OR pc.total_landed_cost IS NULL OR pc.id IS NULL
+            ORDER BY p.created_at DESC
+            LIMIT 5
+            " 2>/dev/null)
+            echo "$MISSING"
+            echo ""
+            
+            # Get first product ID for test batch fill
+            TEST_PRODUCT_ID=$(echo "$MISSING" | head -1 | cut -d'|' -f1)
+            TEST_SKU=$(echo "$MISSING" | head -1 | cut -d'|' -f2)
+            TEST_NAME=$(echo "$MISSING" | head -1 | cut -d'|' -f3)
+            
+            echo "Test product: $TEST_SKU ($TEST_NAME)"
+            echo "Product ID: $TEST_PRODUCT_ID"
+            echo ""
+            
+            echo "--- 2. Check Current Cost Status ---"
+            $PSQL "
+            SELECT 
+                p.sku,
+                p.name,
+                COALESCE(pc.total_landed_cost, 'NO_RECORD') as current_cost
+            FROM products p
+            LEFT JOIN product_cost pc ON pc.product_id = p.id
+            WHERE p.id = '$TEST_PRODUCT_ID'
+            "
+            echo ""
+            
+            echo "--- 3. Perform Test Batch Fill ---"
+            echo "Filling cost for: $TEST_SKU"
+            echo "Cost: USD 15.00 (test value)"
+            echo ""
+            
+            FILL_RESPONSE=$(curl -s -w "\nHTTP=%{http_code}" -X POST "$BASE/products/cost-gaps/batch-fill" \
+                -H "Content-Type: application/json" \
+                -d '{
+                    "items": [
+                        {
+                            "product_id": "$TEST_PRODUCT_ID",
+                            "cost": {
+                                "purchase_cost": 8.00,
+                                "international_shipping": 3.00,
+                                "local_shipping": 1.00,
+                                "packaging": 0.50,
+                                "tax": 0.50,
+                                "other": 2.00
+                            }
+                        }
+                    ]
+                }' 2>&1)
+            
+            echo "Response:"
+            echo "$FILL_RESPONSE"
+            echo ""
+            
+            echo "--- 4. Verify Persistence (Cross-Request) ---"
+            echo "Checking product cost in new request..."
+            $PSQL "
+            SELECT 
+                p.sku,
+                pc.total_landed_cost,
+                pc.created_at,
+                pc.updated_at
+            FROM products p
+            JOIN product_cost pc ON pc.product_id = p.id
+            WHERE p.id = '$TEST_PRODUCT_ID'
+            "
+            echo ""
+            
+            echo "--- 5. Verify Event Log ---"
+            $PSQL "
+            SELECT 
+                event_type,
+                payload::text,
+                created_at
+            FROM event_log
+            WHERE event_type IN ('product.cost.batch_filled', 'product.cost.updated')
+            AND created_at > NOW() - INTERVAL '5 minutes'
+            ORDER BY created_at DESC
+            LIMIT 5
+            "
+            echo ""
+            
+            echo "--- 6. Verify Profit Analysis ---"
+            PROFIT=$(curl -s "$BASE/products/$TEST_PRODUCT_ID/profit-analysis?sale_price=39.99" 2>&1)
+            echo "$PROFIT" | head -20
+            echo ""
+            
+            echo "--- 7. Summary ---"
+            echo "Test Batch Fill: $(echo "$FILL_RESPONSE" | grep -o '"total_landed_cost":"[0-9.]*"' || echo 'FAILED')"
+            echo "Cost Persisted: $(echo "$FILL_RESPONSE" | grep -o '"total_landed_cost":"[0-9.]*"' >/dev/null && echo 'YES' || echo 'NO')"
+            echo ""
+            
+            echo "=== BATCH FILL ACTIVATION COMPLETE ==="
