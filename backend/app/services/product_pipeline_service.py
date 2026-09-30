@@ -1341,7 +1341,7 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
             result = retry
 
     ttl = _IMPORT_CACHE_TTL_SECONDS if not _is_sparse_fetch(result) else _IMPORT_CACHE_TTL_SPARSE
-    if redis is not None:
+    if redis is not None and result.get("success"):
         try:
             await redis.set(
                 key,

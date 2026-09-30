@@ -750,6 +750,8 @@ def extract_1688_product(
 """
 
     created = create_agent_task(message, auto=True, model="qwen3.6-plus")
+    logger.info("Newton Agent task created: success=%s task_id=%s error=%s",
+                created.get("success"), created.get("task_id"), created.get("error"))
     if not created.get("success") or not created.get("task_id"):
         return {
             "success": False,
@@ -764,6 +766,7 @@ def extract_1688_product(
     while time.monotonic() < deadline:
         status_result = get_task_status(task_id)
         if not status_result.get("success"):
+            logger.warning("Newton Agent status check failed for %s: %s", task_id, status_result.get("error"))
             return {
                 "success": False,
                 "source": "newton_agent",
@@ -772,6 +775,8 @@ def extract_1688_product(
             }
 
         last_status = str(status_result.get("status") or "UNKNOWN").upper()
+        if last_status not in {"UNKNOWN", "INIT", "RUNNING", "PENDING", "PROCESSING", "WAITING"}:
+            logger.info("Newton Agent task %s terminal status: %s (elapsed=%.1fs)", task_id, last_status, time.monotonic() - (deadline - max_wait))
         if last_status in {"END", "COMPLETED", "SUCCESS"}:
             raw = status_result.get("raw") or {}
             content = str(raw.get("content") or "")
@@ -783,6 +788,7 @@ def extract_1688_product(
                     source_url=url_or_id,
                 )
             except ValueError as exc:
+                logger.warning("Newton Agent result parse failed for %s: %s. Raw content: %.300s", task_id, exc, content)
                 return {
                     "success": False,
                     "source": "newton_agent",
@@ -797,6 +803,8 @@ def extract_1688_product(
             }
 
         if last_status in {"FAILED", "ERROR", "KILL", "KILLED"}:
+            raw = status_result.get("raw") or {}
+            logger.warning("Newton Agent task %s failed with status %s. Raw: %.500s", task_id, last_status, str(raw))
             return {
                 "success": False,
                 "source": "newton_agent",
