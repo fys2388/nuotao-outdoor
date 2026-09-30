@@ -1258,6 +1258,21 @@ def _is_sparse_fetch(result: dict[str, Any]) -> bool:
         and not str(info.get("dimensions") or "").strip()
     )
 
+
+def _has_minimal_data(result: dict[str, Any]) -> bool:
+    """结果是否已具备最小可用数据：名称 + 价格 + ≥1 张图片。
+
+    稀疏重试（ROUND-4F）的目的是从属性表为空的牛顿结果中获取更多维度。
+    但当首次结果已含核心字段（名称、价格、图片）时，重试大概率只是
+    用 300s 超时换取无收益——实测重试 KILL 率 > 50%。此时跳过重试，
+    直接返回稀疏结果，TTL 保持短值以便后续手动或自动重新抽取。
+    """
+    info = ((result or {}).get("data") or {}).get("product_info") or {}
+    has_name = bool(str(info.get("name") or "").strip())
+    has_price = bool(info.get("price"))
+    has_image = bool((info.get("images") or []))
+    return has_name and has_price and has_image
+
 # 1688 开放平台错误码 → 用户可读提示的翻译表。
 # 命中键（子串匹配，大小写不敏感）即返回 (用户可读中文, 稳定的 error_code 键)。
 # 未命中返回 (None, None) 让上层沿用原文。
@@ -1330,15 +1345,23 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
 
     # ROUND-4F: 牛顿是 LLM Agent，属性表提取不稳定（同一 offer 实测 23 条 / 0 条 / 0 条）。
     # 稀疏结果重试一次并保留较丰富者；稀疏结果用短 TTL，避免把单薄数据缓存一小时。
+    # ROUND-4G: 若首次稀疏结果已含核心字段（名称+价格+图片），跳过重试——
+    # 实测重试 KILL 率 > 50%，平均浪费 ~297s 但无数据收益。
     result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
-    if _is_sparse_fetch(result):
-        logger.info("1688 fetch sparse (no attributes/weight/dims), retrying once")
+    if _is_sparse_fetch(result) and not _has_minimal_data(result):
+        logger.info("1688 fetch sparse (no attributes/weight/dims), no minimal data, retrying once")
         retry = await asyncio.to_thread(_fetch_1688_product, url_or_id)
         first_info = ((result.get("data") or {}).get("product_info") or {})
         retry_info = ((retry.get("data") or {}).get("product_info") or {})
-        if _extract_richness(retry_info) > _extract_richness(first_info):
+        # 如果首次失败但重试成功，无论丰富度如何都保留重试结果
+        if (not result.get("success")) and retry.get("success"):
             retry["merged_from_retry"] = True
             result = retry
+        elif _extract_richness(retry_info) > _extract_richness(first_info):
+            retry["merged_from_retry"] = True
+            result = retry
+    elif _is_sparse_fetch(result):
+        logger.info("1688 fetch sparse but has minimal data (name/price/images), skipping retry")
 
     ttl = _IMPORT_CACHE_TTL_SECONDS if not _is_sparse_fetch(result) else _IMPORT_CACHE_TTL_SPARSE
     if redis is not None and result.get("success"):
