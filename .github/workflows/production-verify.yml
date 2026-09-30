@@ -1,0 +1,41 @@
+name: Production Verify
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== SERVICE STATUS ==="
+            systemctl is-active nuotao-backend
+            systemctl status nuotao-backend --no-pager --lines=20 2>&1
+            echo "=== HEALTH ==="
+            curl -v http://localhost:8000/healthz 2>&1
+            echo "=== READY ==="
+            curl -v http://localhost:8000/readyz 2>&1
+            echo "=== OPENAPI ==="
+            curl -s http://localhost:8000/openapi.json 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print('title:', d.get('info',{}).get('title')); print('paths:', len(d.get('paths',{})))" 2>&1
+            echo "=== VERSION ==="
+            cat /opt/nuotao/backend/version.txt 2>/dev/null || echo "no version.txt"
+            cat /opt/nuotao/backend/.deploy_sha 2>/dev/null || echo "no .deploy_sha"
+            echo "=== MIGRATION ==="
+            cd /opt/nuotao/backend && source .venv/bin/activate && alembic current 2>&1
+            echo "=== COLUMNS ==="
+            sudo -u postgres psql -d nuotao -tAc "SELECT column_name FROM information_schema.columns WHERE table_name='products' AND column_name IN ('mastered_at','mastered_by','mastered_trace_id') ORDER BY column_name" 2>&1
+            echo "=== NGINX ==="
+            systemctl is-active nginx
+            echo "=== DONE ==="
