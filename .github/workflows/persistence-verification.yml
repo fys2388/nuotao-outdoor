@@ -40,13 +40,13 @@ jobs:
             import asyncio
             import json
             import sys
+            import subprocess
             import httpx
-            import asyncpg
-            from uuid import uuid4
+            import uuid
             
             BASE = "http://localhost:8001/api/v1/products"
-            DB_DSN = "postgresql://postgres:postgres@localhost:5432/nuotao_staging"
-            TRACE_ID = f"persist-verify-{uuid4().hex[:8]}"
+            DB_NAME = "nuotao_staging"
+            TRACE_ID = f"persist-verify-{uuid.uuid4().hex[:8]}"
             HEADERS = {
                 "X-Trace-Id": TRACE_ID,
                 "X-Workspace-Id": "default",
@@ -59,229 +59,242 @@ jobs:
                 except Exception:
                     return {}
             
+            def psql(query):
+                """Execute a psql query and return the result as a list of dicts."""
+                result = subprocess.run(
+                    ["sudo", "-u", "postgres", "psql", "-d", DB_NAME, "-tA", "-c", query],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(f"  psql error: {result.stderr}")
+                    return []
+                lines = result.stdout.strip().split("\n")
+                rows = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    parts = line.split("|")
+                    rows.append(parts)
+                return rows
+            
             async def main():
                 results = {}
+                sku = f"PERSIST-VERIFY-{uuid.uuid4().hex[:6].upper()}"
+                product_payload = {
+                    "title": "Persistence Verification Product",
+                    "sku": sku,
+                    "source_type": "MANUAL",
+                    "purchase_cost": "0",
+                    "weight_kg": "0.5",
+                    "category": "TEST",
+                }
                 
-                conn = await asyncpg.connect(DB_DSN)
-                
-                try:
-                    sku = f"PERSIST-VERIFY-{uuid4().hex[:6].upper()}"
-                    product_payload = {
-                        "title": "Persistence Verification Product",
-                        "sku": sku,
-                        "source_type": "MANUAL",
-                        "purchase_cost": "0",
-                        "weight_kg": "0.5",
-                        "category": "TEST",
+                async with httpx.AsyncClient(timeout=30) as client:
+                    # STEP A: Create product with zero cost
+                    print(f"========== STEP A: Create zero-cost product ==========")
+                    print(f"  sku: {sku}")
+                    print(f"  trace_id: {TRACE_ID}")
+                    
+                    r = await client.post(f"{BASE}/intake", json=product_payload, headers=HEADERS)
+                    print(f"  POST /intake: HTTP {r.status_code}")
+                    intake_data = jdata(r)
+                    product_id = intake_data.get("product", {}).get("id")
+                    print(f"  product_id: {product_id}")
+                    results["step_a"] = {"http": r.status_code, "product_id": product_id, "sku": sku}
+                    
+                    if not product_id:
+                        print("  ERROR: product_id not returned")
+                        return {"verdict": "ERROR", "error": "product_id not returned"}
+                    
+                    # STEP B: GET profit-analysis (expect MISSING, margin=null)
+                    print(f"\n========== STEP B: GET profit-analysis (pre-fill) ==========")
+                    r = await client.get(f"{BASE}/{product_id}/profit-analysis", params={"sale_price": "24.99"}, headers=HEADERS)
+                    print(f"  HTTP {r.status_code}")
+                    pa = jdata(r)
+                    print(f"  cost_status: {pa.get('cost_status')}")
+                    print(f"  contribution_margin: {pa.get('contribution_margin')}")
+                    print(f"  total_landed_cost: {pa.get('total_landed_cost')}")
+                    results["step_b"] = {
+                        "http": r.status_code,
+                        "cost_status": pa.get("cost_status"),
+                        "contribution_margin": pa.get("contribution_margin"),
+                        "total_landed_cost": pa.get("total_landed_cost"),
                     }
                     
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        # STEP A: Create product with zero cost
-                        print(f"========== STEP A: Create zero-cost product ==========")
-                        print(f"  sku: {sku}")
-                        print(f"  trace_id: {TRACE_ID}")
-                        
-                        r = await client.post(f"{BASE}/intake", json=product_payload, headers=HEADERS)
-                        print(f"  POST /intake: HTTP {r.status_code}")
-                        intake_data = jdata(r)
-                        product_id = intake_data.get("product", {}).get("id")
-                        print(f"  product_id: {product_id}")
-                        results["step_a"] = {"http": r.status_code, "product_id": product_id, "sku": sku}
-                        
-                        if not product_id:
-                            print("  ERROR: product_id not returned")
-                            return {"verdict": "ERROR", "error": "product_id not returned"}
-                        
-                        # STEP B: GET profit-analysis (expect MISSING, margin=null)
-                        print(f"\n========== STEP B: GET profit-analysis (pre-fill) ==========")
-                        r = await client.get(f"{BASE}/{product_id}/profit-analysis", params={"sale_price": "24.99"}, headers=HEADERS)
-                        print(f"  HTTP {r.status_code}")
-                        pa = jdata(r)
-                        print(f"  cost_status: {pa.get('cost_status')}")
-                        print(f"  contribution_margin: {pa.get('contribution_margin')}")
-                        print(f"  total_landed_cost: {pa.get('total_landed_cost')}")
-                        results["step_b"] = {
-                            "http": r.status_code,
-                            "cost_status": pa.get("cost_status"),
-                            "contribution_margin": pa.get("contribution_margin"),
-                            "total_landed_cost": pa.get("total_landed_cost"),
-                        }
-                        
-                        # STEP C: POST /cost-gaps/batch-fill
-                        print(f"\n========== STEP C: POST /cost-gaps/batch-fill ==========")
-                        fill_payload = {
-                            "items": [{
-                                "product_id": str(product_id),
-                                "cost": {
-                                    "currency": "USD",
-                                    "purchase_cost": "4.00",
-                                    "international_shipping": "6.00",
-                                    "packaging": "0.30",
-                                    "tax_estimate": "0.50",
-                                    "handling": "0.20",
-                                }
-                            }]
-                        }
-                        r = await client.post(f"{BASE}/cost-gaps/batch-fill", json=fill_payload, headers=HEADERS)
-                        print(f"  HTTP {r.status_code}")
-                        bf = jdata(r)
-                        print(f"  response:")
-                        print(json.dumps(bf, indent=2, ensure_ascii=False))
-                        results["step_c"] = {"http": r.status_code, "response": bf}
-                        
-                        # STEP D: GET profit-analysis (new request, check persistence)
-                        print(f"\n========== STEP D: GET profit-analysis (post-fill, new request) ==========")
-                        r = await client.get(f"{BASE}/{product_id}/profit-analysis", params={"sale_price": "24.99"}, headers=HEADERS)
-                        print(f"  HTTP {r.status_code}")
-                        pa2 = jdata(r)
-                        print(f"  cost_status: {pa2.get('cost_status')}")
-                        print(f"  contribution_margin: {pa2.get('contribution_margin')}")
-                        print(f"  total_landed_cost: {pa2.get('total_landed_cost')}")
-                        results["step_d"] = {
-                            "http": r.status_code,
-                            "cost_status": pa2.get("cost_status"),
-                            "contribution_margin": pa2.get("contribution_margin"),
-                            "total_landed_cost": pa2.get("total_landed_cost"),
-                        }
-                        
-                        # STEP E: GET /cost-gaps (check if product still in gap)
-                        print(f"\n========== STEP E: GET /cost-gaps (post-fill) ==========")
-                        r = await client.get(f"{BASE}/cost-gaps", params={"limit": 100}, headers=HEADERS)
-                        print(f"  HTTP {r.status_code}")
-                        gaps = jdata(r)
-                        gap_skus = {x.get("sku") for x in gaps.get("items", [])}
-                        in_gap = sku in gap_skus
-                        print(f"  {sku} in gap: {in_gap}")
-                        print(f"  total gaps: {len(gap_skus)}")
-                        results["step_e"] = {"http": r.status_code, "in_gap": in_gap, "total_gaps": len(gap_skus)}
-                        
-                        # STEP F: Direct PostgreSQL query
-                        print(f"\n========== STEP F: Direct PostgreSQL query ==========")
-                        
-                        rows = await conn.fetch("""
-                            SELECT 
-                                pc.id as cost_id,
-                                pc.product_id,
-                                pc.version,
-                                pc.purchase_cost,
-                                pc.total_landed_cost,
-                                pc.valid_from,
-                                pc.created_at
-                            FROM product_costs pc
-                            JOIN products p ON p.id = pc.product_id
-                            WHERE p.sku = $1
-                            ORDER BY pc.valid_from DESC
-                        """, sku)
-                        
-                        print(f"  product_costs rows for {sku}: {len(rows)}")
-                        if rows:
-                            for row in rows:
-                                print(f"    cost_id: {row['cost_id']}")
-                                print(f"    version: {row['version']}")
-                                print(f"    purchase_cost: {row['purchase_cost']}")
-                                print(f"    total_landed_cost: {row['total_landed_cost']}")
-                                print(f"    valid_from: {row['valid_from']}")
-                                print(f"    created_at: {row['created_at']}")
-                        else:
-                            print(f"    NO product_costs rows found!")
-                        
-                        snap_rows = await conn.fetch("""
-                            SELECT 
-                                pcs.id as snapshot_id,
-                                pcs.version,
-                                pcs.purchase_cost,
-                                pcs.total_landed_cost,
-                                pcs.source,
-                                pcs.trace_id,
-                                pcs.created_at
-                            FROM product_cost_snapshots pcs
-                            JOIN products p ON p.id = pcs.product_id
-                            WHERE p.sku = $1
-                            ORDER BY pcs.created_at DESC
-                        """, sku)
-                        
-                        print(f"\n  product_cost_snapshots rows for {sku}: {len(snap_rows)}")
-                        if snap_rows:
-                            for row in snap_rows:
-                                print(f"    snapshot_id: {row['snapshot_id']}")
-                                print(f"    version: {row['version']}")
-                                print(f"    purchase_cost: {row['purchase_cost']}")
-                                print(f"    total_landed_cost: {row['total_landed_cost']}")
-                                print(f"    source: {row['source']}")
-                                print(f"    trace_id: {row['trace_id']}")
-                                print(f"    created_at: {row['created_at']}")
-                        else:
-                            print(f"    NO product_cost_snapshots rows found!")
-                        
-                        evt_rows = await conn.fetch("""
-                            SELECT 
-                                e.id as event_id,
-                                e.event_type,
-                                e.entity_id,
-                                e.payload,
-                                e.trace_id,
-                                e.created_at
-                            FROM event_log e
-                            WHERE e.event_type = 'product.cost.batch_filled'
-                              AND e.trace_id = $1
-                            ORDER BY e.created_at DESC
-                            LIMIT 5
-                        """, TRACE_ID)
-                        
-                        print(f"\n  event_log rows for trace_id={TRACE_ID}: {len(evt_rows)}")
-                        if evt_rows:
-                            for row in evt_rows:
-                                print(f"    event_id: {row['event_id']}")
-                                print(f"    event_type: {row['event_type']}")
-                                print(f"    entity_id: {row['entity_id']}")
-                                print(f"    payload: {row['payload']}")
-                                print(f"    created_at: {row['created_at']}")
-                        else:
-                            print(f"    NO event_log rows for this trace_id!")
-                        
-                        results["step_f"] = {
-                            "product_costs_rows": len(rows),
-                            "product_cost_snapshots_rows": len(snap_rows),
-                            "event_log_rows": len(evt_rows),
-                        }
-                        
-                        # DETERMINE PERSISTENCE STATUS
-                        print(f"\n========== PERSISTENCE DETERMINATION ==========")
-                        
-                        cost_status_after = pa2.get("cost_status")
-                        margin_after = pa2.get("contribution_margin")
-                        landed_after = pa2.get("total_landed_cost")
-                        in_gap_after = in_gap
-                        cost_rows = len(rows)
-                        
-                        if cost_status_after == "KNOWN" and margin_after is not None and cost_rows > 0 and not in_gap_after:
-                            verdict = "PERSISTENCE_VERIFIED"
-                            print(f"  BATCH_FILL_PERSISTENCE = VERIFIED")
-                            print(f"  - DB has {cost_rows} cost row(s)")
-                            print(f"  - profit-analysis shows KNOWN with margin={margin_after}")
-                            print(f"  - cost-gap list does NOT contain {sku}")
-                        else:
-                            verdict = "PERSISTENCE_NOT_VERIFIED"
-                            print(f"  BATCH_FILL_PERSISTENCE = NOT_VERIFIED")
-                            print(f"  - DB has {cost_rows} cost row(s) (expected: rolled back)")
-                            print(f"  - profit-analysis shows cost_status={cost_status_after}, margin={margin_after}")
-                            print(f"  - cost-gap list still contains {sku}: {in_gap}")
-                        
-                        print(f"\n  VERDICT: {verdict}")
-                        results["verdict"] = verdict
-                        
-                        # CLEANUP
-                        print(f"\n========== CLEANUP: Delete verification product ==========")
-                        await conn.execute("DELETE FROM event_log WHERE trace_id = $1", TRACE_ID)
-                        await conn.execute("DELETE FROM product_cost_snapshots WHERE product_id = (SELECT id FROM products WHERE sku = $1)", sku)
-                        await conn.execute("DELETE FROM product_costs WHERE product_id = (SELECT id FROM products WHERE sku = $1)", sku)
-                        await conn.execute("DELETE FROM products WHERE sku = $1", sku)
-                        print(f"  Cleaned up product {sku} and related records")
-                        
-                        return results
-                
-                finally:
-                    await conn.close()
+                    # STEP C: POST /cost-gaps/batch-fill
+                    print(f"\n========== STEP C: POST /cost-gaps/batch-fill ==========")
+                    fill_payload = {
+                        "items": [{
+                            "product_id": str(product_id),
+                            "cost": {
+                                "currency": "USD",
+                                "purchase_cost": "4.00",
+                                "international_shipping": "6.00",
+                                "packaging": "0.30",
+                                "tax_estimate": "0.50",
+                                "handling": "0.20",
+                            }
+                        }]
+                    }
+                    r = await client.post(f"{BASE}/cost-gaps/batch-fill", json=fill_payload, headers=HEADERS)
+                    print(f"  HTTP {r.status_code}")
+                    bf = jdata(r)
+                    print(f"  response:")
+                    print(json.dumps(bf, indent=2, ensure_ascii=False))
+                    results["step_c"] = {"http": r.status_code, "response": bf}
+                    
+                    # STEP D: GET profit-analysis (new request, check persistence)
+                    print(f"\n========== STEP D: GET profit-analysis (post-fill, new request) ==========")
+                    r = await client.get(f"{BASE}/{product_id}/profit-analysis", params={"sale_price": "24.99"}, headers=HEADERS)
+                    print(f"  HTTP {r.status_code}")
+                    pa2 = jdata(r)
+                    print(f"  cost_status: {pa2.get('cost_status')}")
+                    print(f"  contribution_margin: {pa2.get('contribution_margin')}")
+                    print(f"  total_landed_cost: {pa2.get('total_landed_cost')}")
+                    results["step_d"] = {
+                        "http": r.status_code,
+                        "cost_status": pa2.get("cost_status"),
+                        "contribution_margin": pa2.get("contribution_margin"),
+                        "total_landed_cost": pa2.get("total_landed_cost"),
+                    }
+                    
+                    # STEP E: GET /cost-gaps (check if product still in gap)
+                    print(f"\n========== STEP E: GET /cost-gaps (post-fill) ==========")
+                    r = await client.get(f"{BASE}/cost-gaps", params={"limit": 100}, headers=HEADERS)
+                    print(f"  HTTP {r.status_code}")
+                    gaps = jdata(r)
+                    gap_skus = {x.get("sku") for x in gaps.get("items", [])}
+                    in_gap = sku in gap_skus
+                    print(f"  {sku} in gap: {in_gap}")
+                    print(f"  total gaps: {len(gap_skus)}")
+                    results["step_e"] = {"http": r.status_code, "in_gap": in_gap, "total_gaps": len(gap_skus)}
+                    
+                    # STEP F: Direct PostgreSQL query via psql
+                    print(f"\n========== STEP F: Direct PostgreSQL query ==========")
+                    
+                    # Query product_costs table
+                    rows = psql(f"""
+                        SELECT 
+                            pc.id::text as cost_id,
+                            pc.version,
+                            pc.purchase_cost::text,
+                            pc.total_landed_cost::text,
+                            pc.valid_from::text
+                        FROM product_costs pc
+                        JOIN products p ON p.id = pc.product_id
+                        WHERE p.sku = '{sku}'
+                        ORDER BY pc.valid_from DESC;
+                    """)
+                    
+                    print(f"  product_costs rows for {sku}: {len(rows)}")
+                    if rows:
+                        for row in rows:
+                            print(f"    cost_id: {row[0]}")
+                            print(f"    version: {row[1]}")
+                            print(f"    purchase_cost: {row[2]}")
+                            print(f"    total_landed_cost: {row[3]}")
+                            print(f"    valid_from: {row[4]}")
+                    else:
+                        print(f"    NO product_costs rows found!")
+                    
+                    # Query product_cost_snapshots table
+                    snap_rows = psql(f"""
+                        SELECT 
+                            pcs.id::text as snapshot_id,
+                            pcs.version,
+                            pcs.purchase_cost::text,
+                            pcs.total_landed_cost::text,
+                            pcs.source,
+                            pcs.trace_id::text,
+                            pcs.created_at::text
+                        FROM product_cost_snapshots pcs
+                        JOIN products p ON p.id = pcs.product_id
+                        WHERE p.sku = '{sku}'
+                        ORDER BY pcs.created_at DESC;
+                    """)
+                    
+                    print(f"\n  product_cost_snapshots rows for {sku}: {len(snap_rows)}")
+                    if snap_rows:
+                        for row in snap_rows:
+                            print(f"    snapshot_id: {row[0]}")
+                            print(f"    version: {row[1]}")
+                            print(f"    purchase_cost: {row[2]}")
+                            print(f"    total_landed_cost: {row[3]}")
+                            print(f"    source: {row[4]}")
+                            print(f"    trace_id: {row[5]}")
+                            print(f"    created_at: {row[6]}")
+                    else:
+                        print(f"    NO product_cost_snapshots rows found!")
+                    
+                    # Query event_log for batch_filled events
+                    evt_rows = psql(f"""
+                        SELECT 
+                            e.id::text as event_id,
+                            e.event_type,
+                            e.entity_id,
+                            e.payload::text,
+                            e.trace_id::text,
+                            e.created_at::text
+                        FROM event_log e
+                        WHERE e.event_type = 'product.cost.batch_filled'
+                          AND e.trace_id = '{TRACE_ID}'
+                        ORDER BY e.created_at DESC
+                        LIMIT 5;
+                    """)
+                    
+                    print(f"\n  event_log rows for trace_id={TRACE_ID}: {len(evt_rows)}")
+                    if evt_rows:
+                        for row in evt_rows:
+                            print(f"    event_id: {row[0]}")
+                            print(f"    event_type: {row[1]}")
+                            print(f"    entity_id: {row[2]}")
+                            print(f"    payload: {row[3]}")
+                            print(f"    trace_id: {row[4]}")
+                            print(f"    created_at: {row[5]}")
+                    else:
+                        print(f"    NO event_log rows for this trace_id!")
+                    
+                    results["step_f"] = {
+                        "product_costs_rows": len(rows),
+                        "product_cost_snapshots_rows": len(snap_rows),
+                        "event_log_rows": len(evt_rows),
+                    }
+                    
+                    # DETERMINE PERSISTENCE STATUS
+                    print(f"\n========== PERSISTENCE DETERMINATION ==========")
+                    
+                    cost_status_after = pa2.get("cost_status")
+                    margin_after = pa2.get("contribution_margin")
+                    landed_after = pa2.get("total_landed_cost")
+                    in_gap_after = in_gap
+                    cost_rows = len(rows)
+                    
+                    if cost_status_after == "KNOWN" and margin_after is not None and cost_rows > 0 and not in_gap_after:
+                        verdict = "PERSISTENCE_VERIFIED"
+                        print(f"  BATCH_FILL_PERSISTENCE = VERIFIED")
+                        print(f"  - DB has {cost_rows} cost row(s)")
+                        print(f"  - profit-analysis shows KNOWN with margin={margin_after}")
+                        print(f"  - cost-gap list does NOT contain {sku}")
+                    else:
+                        verdict = "PERSISTENCE_NOT_VERIFIED"
+                        print(f"  BATCH_FILL_PERSISTENCE = NOT_VERIFIED")
+                        print(f"  - DB has {cost_rows} cost row(s) (expected: rolled back)")
+                        print(f"  - profit-analysis shows cost_status={cost_status_after}, margin={margin_after}")
+                        print(f"  - cost-gap list still contains {sku}: {in_gap}")
+                    
+                    print(f"\n  VERDICT: {verdict}")
+                    results["verdict"] = verdict
+                    
+                    # CLEANUP
+                    print(f"\n========== CLEANUP: Delete verification product ==========")
+                    psql(f"DELETE FROM event_log WHERE trace_id = '{TRACE_ID}';")
+                    psql(f"DELETE FROM product_cost_snapshots WHERE product_id = (SELECT id FROM products WHERE sku = '{sku}');")
+                    psql(f"DELETE FROM product_costs WHERE product_id = (SELECT id FROM products WHERE sku = '{sku}');")
+                    psql(f"DELETE FROM products WHERE sku = '{sku}';")
+                    print(f"  Cleaned up product {sku} and related records")
+                    
+                    return results
             
             if __name__ == "__main__":
                 result = asyncio.run(main())
