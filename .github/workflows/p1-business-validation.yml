@@ -20,48 +20,26 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-            set -e
             echo "=== P1 BUSINESS VALIDATION ==="
             echo "Timestamp: $(date -u)"
             echo ""
             
-            PROD=/opt/nuotao/backend
-            DB_NAME=nuotao
-            
-            # Get database connection string from .env
-            DB_URL=$(grep "^DATABASE_URL=" "$PROD/.env" | cut -d= -f2- | tr -d '"' | tr -d "'" 2>/dev/null || echo "postgresql://nuotao:nuotao@localhost:5432/nuotao")
-            
-            # Extract host, db, user, password from connection string
-            DB_HOST=$(echo "$DB_URL" | grep -oP '://[^@]+@\K[^:/]+' || echo "localhost")
-            DB_PORT=$(echo "$DB_URL" | grep -oP '@[^:]+:\K[0-9]+' || echo "5432")
-            DB_USER=$(echo "$DB_URL" | grep -oP '://\K[^:]+(?=@)' || echo "nuotao")
-            DB_PASS=$(echo "$DB_URL" | grep -oP '://[^:]+:\K[^@]+' || echo "nuotao")
-            DB_DATABASE=$(echo "$DB_URL" | grep -oP '/\K[^?]+' || echo "nuotao")
-            
-            echo "Database: $DB_DATABASE@$DB_HOST:$DB_PORT"
-            echo ""
-            
-            # Use psql with explicit options for reliable output
-            PSQL="sudo -u postgres psql -h $DB_HOST -p $DB_PORT -U postgres -d $DB_DATABASE -tAc"
+            # Use peer authentication (verified working in earlier workflows)
+            PSQL="sudo -u postgres psql -d nuotao -tAc"
             
             echo "--- 1. Total Products ---"
-            TOTAL=$($PSQL "SELECT COUNT(*) FROM products" 2>/dev/null)
-            echo "Total products: $TOTAL"
+            $PSQL "SELECT COUNT(*) FROM products"
             echo ""
             
             echo "--- 2. Cost Coverage ---"
-            WITH_COST=$($PSQL "SELECT COUNT(DISTINCT product_id) FROM product_cost WHERE workspace_id = (SELECT id FROM workspaces LIMIT 1)" 2>/dev/null)
-            echo "Products with cost records: $WITH_COST"
-            if [ "$TOTAL" -gt 0 ] 2>/dev/null; then
-              echo "Cost coverage rate: $(echo "scale=2; $WITH_COST * 100 / $TOTAL" | bc -l 2>/dev/null || echo "N/A")%"
-            fi
+            $PSQL "SELECT COUNT(DISTINCT product_id) FROM product_cost"
             echo ""
             
             echo "--- 3. Cost Status Distribution ---"
             $PSQL "
             SELECT 
                 CASE 
-                    WHEN EXISTS (SELECT 1 FROM product_cost pc WHERE pc.product_id = p.id AND pc.workspace_id = p.workspace_id) 
+                    WHEN EXISTS (SELECT 1 FROM product_cost pc WHERE pc.product_id = p.id) 
                     THEN 'HAS_COST'
                     ELSE 'NO_COST'
                 END as status,
@@ -69,7 +47,7 @@ jobs:
             FROM products p
             GROUP BY status
             ORDER BY count DESC
-            " 2>/dev/null
+            "
             echo ""
             
             echo "--- 4. Cost Gap Analysis ---"
@@ -82,22 +60,19 @@ jobs:
                 END as gap_type,
                 COUNT(*) as count
             FROM product_cost
-            WHERE workspace_id = (SELECT id FROM workspaces LIMIT 1)
             GROUP BY gap_type
             ORDER BY count DESC
-            " 2>/dev/null
+            "
             echo ""
             
             echo "--- 5. Batch Fill Activity ---"
             $PSQL "
             SELECT 
                 COUNT(*) as total_batch_fills,
-                COUNT(*) FILTER (WHERE payload->>'success_count' > '0') as successful_fills,
                 MAX(created_at) as last_fill
             FROM event_log
             WHERE event_type = 'product.cost.batch_filled'
-            AND workspace_id = (SELECT id FROM workspaces LIMIT 1)
-            " 2>/dev/null
+            "
             echo ""
             
             echo "--- 6. Cost Update Activity ---"
@@ -107,60 +82,54 @@ jobs:
                 MAX(created_at) as last_update
             FROM event_log
             WHERE event_type = 'product.cost.updated'
-            AND workspace_id = (SELECT id FROM workspaces LIMIT 1)
-            " 2>/dev/null
+            "
             echo ""
             
-            echo "--- 7. Profit Analysis Coverage ---"
+            echo "--- 7. Products Missing Cost (Need Batch Fill) ---"
             $PSQL "
-            SELECT 
-                COUNT(DISTINCT product_id) as products_with_profit_analysis
-            FROM product_cost pc
-            JOIN products p ON p.id = pc.product_id
-            WHERE pc.workspace_id = p.workspace_id
-            AND pc.total_landed_cost > 0
-            " 2>/dev/null
+            SELECT COUNT(*) 
+            FROM products p
+            LEFT JOIN product_cost pc ON pc.product_id = p.id
+            WHERE pc.total_landed_cost = 0 OR pc.total_landed_cost IS NULL OR pc.id IS NULL
+            "
             echo ""
             
-            echo "--- 8. Top Cost Gaps by SKU ---"
+            echo "--- 8. Top 10 Products Missing Cost ---"
             $PSQL "
             SELECT 
                 p.sku,
-                p.name,
-                CASE 
-                    WHEN pc.total_landed_cost = 0 OR pc.total_landed_cost IS NULL THEN 'MISSING'
-                    ELSE 'HAS_COST'
-                END as cost_status
+                LEFT(p.name, 50) as name,
+                p.created_at
             FROM products p
-            LEFT JOIN product_cost pc ON pc.product_id = p.id AND pc.workspace_id = p.workspace_id
+            LEFT JOIN product_cost pc ON pc.product_id = p.id
             WHERE pc.total_landed_cost = 0 OR pc.total_landed_cost IS NULL OR pc.id IS NULL
             ORDER BY p.created_at DESC
             LIMIT 10
-            " 2>/dev/null
+            "
             echo ""
             
             echo "--- 9. Category Cost Coverage ---"
             $PSQL "
             SELECT 
-                p.category_name,
+                COALESCE(p.category_name, 'NONE') as category,
                 COUNT(*) as total_products,
                 COUNT(CASE WHEN pc.total_landed_cost > 0 THEN 1 END) as with_cost,
                 ROUND(COUNT(CASE WHEN pc.total_landed_cost > 0 THEN 1 END) * 100.0 / COUNT(*), 2) as coverage_pct
             FROM products p
-            LEFT JOIN product_cost pc ON pc.product_id = p.id AND pc.workspace_id = p.workspace_id
+            LEFT JOIN product_cost pc ON pc.product_id = p.id
             GROUP BY p.category_name
             ORDER BY total_products DESC
             LIMIT 15
-            " 2>/dev/null
+            "
             echo ""
             
-            echo "--- 10. Products Missing Cost (Need Batch Fill) ---"
+            echo "--- 10. Profit Analysis Coverage ---"
             $PSQL "
-            SELECT COUNT(*) 
-            FROM products p
-            LEFT JOIN product_cost pc ON pc.product_id = p.id AND pc.workspace_id = p.workspace_id
-            WHERE pc.total_landed_cost = 0 OR pc.total_landed_cost IS NULL OR pc.id IS NULL
-            " 2>/dev/null
+            SELECT 
+                COUNT(DISTINCT product_id) as products_with_valid_cost
+            FROM product_cost
+            WHERE total_landed_cost > 0
+            "
             echo ""
             
             echo "=== BUSINESS VALIDATION COMPLETE ==="
