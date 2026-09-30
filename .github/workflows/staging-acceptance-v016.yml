@@ -83,7 +83,7 @@ jobs:
             echo " S2. Verify 0058 columns on products"
             echo "=========================================="
             COLS=$(sudo -u postgres psql -d nuotao_staging -tAc \
-              "SELECT column_name||':'||data_type||':'||coalesce(character_maximum_length,'') \
+              "SELECT column_name||':'||data_type||':'||coalesce(character_maximum_length::text,'') \
                FROM information_schema.columns \
                WHERE table_name='products' AND column_name IN \
                ('mastered_at','mastered_by','mastered_trace_id') \
