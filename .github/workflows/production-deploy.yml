@@ -1,21 +1,12 @@
 name: Production Deploy
 
-# Deploy v0.16 to production. Steps:
-#   1. Deploy code (git clone to temp, copy to /opt/nuotao/backend/)
-#   2. Run alembic migrations
-#   3. Restart backend
-#   4. Verify healthz/readyz
-#
-# Trigger manually: Actions > Production Deploy > Run workflow
-# with input: sha (defaults to main HEAD)
-
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: 'Git SHA to deploy (defaults to main HEAD)'
+        description: 'Git SHA to deploy'
         required: false
-        default: ''
+        default: '969ec499bf70005e3437b81c1af16ab57734d0a6'
 
 env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -25,21 +16,9 @@ env:
 
 jobs:
   deploy:
-    name: Production Deploy v0.16
     runs-on: ubuntu-latest
     steps:
-      - name: Determine SHA
-        id: sha
-        shell: bash
-        run: |
-          if [ -n "${{ inputs.sha }}" ]; then
-            echo "sha=${{ inputs.sha }}" >> $GITHUB_OUTPUT
-          else
-            SHA=$(git ls-remote "$REPO_URL" refs/heads/main | cut -f1)
-            echo "sha=$SHA" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Deploy to production server
+      - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SERVER_HOST }}
@@ -48,146 +27,53 @@ jobs:
           port: 22
           script: |
             set -eo pipefail
-            DEPLOY_SHA="${{ steps.sha.outputs.sha }}"
-            SHORT_SHA=$(echo "$DEPLOY_SHA" | cut -c1-7)
+            SHA="${{ inputs.sha }}"
+            SHORT=$(echo "$SHA" | cut -c1-7)
             PROD=/opt/nuotao/backend
-            REPO_URL="${{ env.REPO_URL }}"
-            
-            echo "=========================================="
-            echo " PRODUCTION DEPLOYMENT"
-            echo " SHA: $DEPLOY_SHA ($SHORT_SHA)"
-            echo " Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            echo "=========================================="
-            echo ""
-            
-            echo "=========================================="
-            echo " 1. Backup current version"
-            echo "=========================================="
-            BACKUP_DIR="/opt/nuotao/backup/$(date -u '+%Y%m%dT%H%M%SZ')"
-            mkdir -p "$BACKUP_DIR"
-            if [ -d "$PROD/.venv" ]; then
-              echo "Skipping .venv backup (will be recreated)"
-            fi
-            if [ -f "$PROD/.env" ]; then
-              cp "$PROD/.env" "$BACKUP_DIR/.env"
-              echo "Backed up .env to $BACKUP_DIR/.env"
-            fi
-            echo "Backup directory: $BACKUP_DIR"
-            echo ""
-            
-            echo "=========================================="
-            echo " 2. Clone code to temp directory"
-            echo "=========================================="
-            TEMP_DIR=$(mktemp -d /tmp/nuotao-deploy-XXXXXX)
-            echo "Temp dir: $TEMP_DIR"
-            git clone "$REPO_URL" "$TEMP_DIR/repo" 2>&1
-            cd "$TEMP_DIR/repo"
-            git checkout "$DEPLOY_SHA" 2>&1
-            echo "Deployed SHA: $(git rev-parse HEAD)"
-            echo "Short SHA: $(git rev-parse --short HEAD)"
-            echo "Commit: $(git log -1 --oneline)"
-            echo ""
-            
-            echo "=========================================="
-            echo " 3. Copy code to production"
-            echo "=========================================="
-            # Stop backend first
+            REPO="${{ env.REPO_URL }}"
+            echo "DEPLOY $SHORT $(date -u)"
+            TMP=$(mktemp -d /tmp/nd-XXXXXX)
+            echo "TMP=$TMP"
+            git clone "$REPO" "$TMP/r" 2>&1
+            cd "$TMP/r"
+            git checkout "$SHA" 2>&1
+            echo "SHA=$(git rev-parse HEAD)"
+            echo "LOG=$(git log -1 --oneline)"
+            echo "--- stopping backend ---"
             systemctl stop nuotao-backend 2>/dev/null || true
-            
-            # Copy code (preserve .venv and .env)
-            cd "$TEMP_DIR/repo/backend"
-            rsync -a --exclude='.venv' --exclude='.env' --exclude='.git' ./ "$PROD/"
-            echo "Code copied to $PROD"
-            
-            # Restore .env if backup exists
-            if [ -f "$BACKUP_DIR/.env" ]; then
-              cp "$BACKUP_DIR/.env" "$PROD/.env"
-            fi
-            
-            # Create version marker
-            echo "$DEPLOY_SHA" > "$PROD/.deploy_sha"
-            echo "$SHORT_SHA" > "$PROD/version.txt"
-            echo ""
-            
-            echo "=========================================="
-            echo " 4. Activate venv and run migrations"
-            echo "=========================================="
+            echo "--- backup env ---"
+            BAK="/opt/nuotao/backup/$(date -u +%Y%m%dT%H%M%SZ)"
+            mkdir -p "$BAK"
+            [ -f "$PROD/.env" ] && cp "$PROD/.env" "$BAK/" || echo "no .env"
+            echo "--- rsync ---"
+            cd "$TMP/r/backend"
+            rsync -a --exclude=.venv --exclude=.env --exclude=.git ./ "$PROD/"
+            [ -f "$BAK/.env" ] && cp "$BAK/.env" "$PROD/.env" || true
+            echo "$SHA" > "$PROD/.deploy_sha"
+            echo "$SHORT" > "$PROD/version.txt"
+            echo "--- migrate ---"
             cd "$PROD"
             source .venv/bin/activate
-            echo "Python: $(python --version)"
-            echo "Alembic: $(alembic version 2>/dev/null || echo 'alembic not found')"
-            echo ""
-            
-            echo "Running alembic upgrade head..."
             alembic upgrade head 2>&1
-            ALEMBIC_EXIT=$?
-            echo "Alembic exit code: $ALEMBIC_EXIT"
-            
-            echo ""
-            echo "Current migration version:"
+            echo "MIGRATE_OK=$?"
             alembic current 2>&1
-            echo ""
-            
-            echo "Migration heads:"
-            alembic heads 2>&1
-            echo ""
-            
-            echo "=========================================="
-            echo " 5. Verify migration 0058 columns"
-            echo "=========================================="
-            sudo -u postgres psql -d nuotao -tAc \
-              "SELECT column_name, data_type FROM information_schema.columns \
-               WHERE table_name='products' \
-               AND column_name IN ('mastered_at','mastered_by','mastered_trace_id') \
-               ORDER BY column_name;" 2>&1
-            echo ""
-            
-            echo "=========================================="
-            echo " 6. Restart backend"
-            echo "=========================================="
+            echo "--- columns ---"
+            sudo -u postgres psql -d nuotao -tAc "SELECT column_name FROM information_schema.columns WHERE table_name='products' AND column_name IN ('mastered_at','mastered_by','mastered_trace_id') ORDER BY column_name" 2>&1
+            echo "--- restart ---"
             systemctl start nuotao-backend
             sleep 5
-            systemctl status nuotao-backend --no-pager --lines=10 2>&1
+            systemctl is-active nuotao-backend
+            echo "--- health ---"
+            curl -s -w " HTTP=%{http_code}" http://localhost:8000/healthz 2>&1
             echo ""
-            
-            echo "=========================================="
-            echo " 7. Verify health endpoints"
-            echo "=========================================="
-            echo "GET /healthz:"
-            curl -s -w "\n  HTTP %{http_code}\n" http://localhost:8000/healthz 2>&1
+            curl -s -w " HTTP=%{http_code}" http://localhost:8000/readyz 2>&1
             echo ""
-            
-            echo "GET /readyz:"
-            curl -s -w "\n  HTTP %{http_code}\n" http://localhost:8000/readyz 2>&1
+            curl -s http://localhost:8000/openapi.json 2>&1 | head -c 100
             echo ""
-            
-            echo "GET /openapi.json (first 200 chars):"
-            curl -s http://localhost:8000/openapi.json 2>&1 | head -c 200
-            echo ""
-            echo ""
-            
-            echo "=========================================="
-            echo " 8. Verify services"
-            echo "=========================================="
-            echo "Backend: $(systemctl is-active nuotao-backend)"
-            echo "Nginx: $(systemctl is-active nginx)"
-            echo ""
-            
-            echo "=========================================="
-            echo " 9. Check Redis (with auth)"
-            echo "=========================================="
-            REDIS_PASS=$(grep -oP 'REDIS_PASSWORD=\K.*' "$PROD/.env" 2>/dev/null || echo '')
-            if [ -n "$REDIS_PASS" ]; then
-              redis-cli -a "$REDIS_PASS" ping 2>&1
-            else
-              echo "REDIS_PASSWORD not found in .env"
-            fi
-            echo ""
-            
-            # Cleanup
-            rm -rf "$TEMP_DIR"
-            
-            echo "=========================================="
-            echo " DEPLOYMENT COMPLETE"
-            echo " SHA: $DEPLOY_SHA ($SHORT_SHA)"
-            echo "=========================================="
+            echo "--- nginx ---"
+            systemctl is-active nginx
+            echo "--- redis ---"
+            RPWD=$(grep -oP 'REDIS_PASSWORD=\K.*' "$PROD/.env" 2>/dev/null || echo '')
+            [ -n "$RPWD" ] && redis-cli -a "$RPWD" ping 2>&1 || echo "no redis pw"
+            rm -rf "$TMP"
+            echo "DONE $SHORT"
