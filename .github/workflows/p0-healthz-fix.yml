@@ -1,0 +1,104 @@
+name: P0-2 Healthz Fix
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== P0-2 HEALTHZ FIX ==="
+            echo "Timestamp: $(date -u)"
+            echo ""
+            
+            NGINX_CONFIG=/etc/nginx/sites-enabled/nuotao
+            echo "Current nginx config: $NGINX_CONFIG"
+            echo ""
+            
+            # Backup current config
+            BAK_DIR="/opt/nuotao/backup/nginx-$(date -u +%Y%m%dT%H%M%SZ)"
+            mkdir -p "$BAK_DIR"
+            cp "$NGINX_CONFIG" "$BAK_DIR/nuotao.bak"
+            echo "Backed up to $BAK_DIR/nuotao.bak"
+            echo ""
+            
+            # Check if healthz location already exists
+            if grep -q "location /healthz" "$NGINX_CONFIG" 2>/dev/null; then
+              echo "healthz location already exists"
+            else
+              echo "Adding /healthz and /readyz locations..."
+              
+              # Read current config and add healthz/readyz before the catch-all location
+              # We need to insert before location / or location /api
+              awk '{
+                if (/location \/ {/) {
+                  print "    location /healthz {"
+                  print "        proxy_pass http://127.0.0.1:8000/api/v1/healthz;"
+                  print "    }"
+                  print ""
+                  print "    location /readyz {"
+                  print "        proxy_pass http://127.0.0.1:8000/api/v1/readyz;"
+                  print "    }"
+                  print ""
+                }
+                print
+              }' "$NGINX_CONFIG" > "$NGINX_CONFIG.new"
+              
+              mv "$NGINX_CONFIG.new" "$NGINX_CONFIG"
+              echo "Config updated"
+            fi
+            echo ""
+            
+            # Test nginx config
+            echo "Testing nginx config..."
+            nginx -t 2>&1
+            
+            # Reload nginx
+            echo "Reloading nginx..."
+            systemctl reload nginx
+            echo "Nginx reloaded"
+            echo ""
+            
+            # Verify
+            echo "--- Verification ---"
+            echo ""
+            
+            echo "Local /healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/healthz 2>&1
+            echo ""
+            
+            echo "Local /api/v1/healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" http://127.0.0.1:8000/api/v1/healthz 2>&1
+            echo ""
+            
+            echo "Public /healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/healthz 2>&1
+            echo ""
+            
+            echo "Public /api/v1/healthz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/api/v1/healthz 2>&1
+            echo ""
+            
+            echo "Public /readyz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/readyz 2>&1
+            echo ""
+            
+            echo "Public /api/v1/readyz:"
+            curl -s -w "\nHTTP=%{http_code}\n" https://admin.nuotaooutdoor.com/api/v1/readyz 2>&1
+            echo ""
+            
+            echo "=== FIX COMPLETE ==="
