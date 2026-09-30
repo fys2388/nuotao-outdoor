@@ -21,10 +21,14 @@ from app.models.product import Product
 from app.schemas.agent_operations import ApprovalOut
 from app.schemas.product import ProductOut
 from app.schemas.product_cost import (
+    BatchCostFillRequest,
+    BatchCostFillResult,
+    ProductCostGapList,
     ProductCostOverview,
     ProductCostUpsertRequest,
     ProductCostUpsertResult,
     ProfitAnalysisOut,
+    TransactionCostGapList,
 )
 from app.schemas.product_intelligence import (
     ApprovedImageAttachRequest,
@@ -86,7 +90,7 @@ async def cost_overview(
     db: DbSession,
     workspace_id: WorkspaceId,
     search: Annotated[str | None, Query(max_length=128)] = None,
-    cost_status: Annotated[str | None, Query(pattern="^(known|missing)$")] = None,
+    cost_status: Annotated[str | None, Query(pattern="^(known|missing|invalid)$")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ProductCostOverview:
@@ -100,6 +104,73 @@ async def cost_overview(
         offset=offset,
     )
     return ProductCostOverview.model_validate(result)
+
+
+@product_router.get(
+    "/cost-gaps",
+    response_model=ProductCostGapList,
+    summary="List products lacking an effective cost (P2-9)",
+)
+async def cost_gaps(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    gap_type: Annotated[str | None, Query(pattern="^(missing|invalid|all)$")] = "all",
+    search: Annotated[str | None, Query(max_length=128)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ProductCostGapList:
+    """List live products lacking an *effective* cost (missing or invalid row)."""
+    result = await pcs.list_product_cost_gaps(
+        db,
+        workspace_id=workspace_id,
+        gap_type=gap_type or "all",
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return ProductCostGapList.model_validate(result)
+
+
+@product_router.get(
+    "/cost-gaps/transactions",
+    response_model=TransactionCostGapList,
+    summary="List transactions lacking effective cost evidence (P2-9)",
+)
+async def transaction_cost_gaps(
+    db: DbSession,
+    workspace_id: WorkspaceId,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TransactionCostGapList:
+    """List orders whose line items cannot be traced to an effective cost."""
+    result = await pcs.list_transaction_cost_gaps(
+        db,
+        workspace_id=workspace_id,
+        limit=limit,
+        offset=offset,
+    )
+    return TransactionCostGapList.model_validate(result)
+
+
+@product_router.post(
+    "/cost-gaps/batch-fill",
+    response_model=BatchCostFillResult,
+    summary="Batch fill product costs with per-item audit (P2-9)",
+)
+async def batch_fill_cost_gaps(
+    body: BatchCostFillRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> BatchCostFillResult:
+    """Fill effective costs for multiple products; isolated per-item results
+    and an ``event_log`` audit entry. Same workspace auth as single edits."""
+    result = await pcs.batch_fill_product_costs(
+        db,
+        workspace_id=workspace_id,
+        items=body.items,
+        trace_id=get_trace_id(),
+    )
+    return BatchCostFillResult.model_validate(result)
 
 
 @product_router.post(
