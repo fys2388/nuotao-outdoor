@@ -443,7 +443,7 @@ export default function CustomersPage() {
                       </Col>
                       <Col span={8}>
                         <Card size="small">
-                          <Statistic title="平均客单价" value={viewingCustomer.total_orders ? (viewingCustomer.total_spent / viewingCustomer.total_orders).toFixed(2) : 0} prefix="$" />
+                          <Statistic title="平均客单价" value={viewingCustomer.total_orders && viewingCustomer.total_spent ? (viewingCustomer.total_spent / viewingCustomer.total_orders).toFixed(2) : 0} prefix="$" />
                         </Card>
                       </Col>
                     </Row>
