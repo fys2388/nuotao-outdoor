@@ -1,0 +1,102 @@
+name: Fix CLS Product Data
+
+on:
+  workflow_dispatch:
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+jobs:
+  fix-product:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH setup
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "=== Fix CLS Product for WC Push ==="
+            
+            # Product SKU
+            SKU="NEWTON_761441710147_2"
+            
+            # Get product ID from database
+            PRODUCT_ID=$(sudo -u postgres psql -d nuotao -tAc "
+              SELECT id::text FROM products 
+              WHERE sku = '$SKU' 
+              LIMIT 1
+            ")
+            
+            echo "Product ID: $PRODUCT_ID"
+            
+            if [ -z "$PRODUCT_ID" ]; then
+              echo "ERROR: Product not found with SKU: $SKU"
+              exit 1
+            fi
+            
+            # Get current product info
+            echo ""
+            echo "=== Current Product Status ==="
+            sudo -u postgres psql -d nuotao -c "
+              SELECT 
+                sku,
+                candidate_status,
+                meta->>'regular_price' as regular_price,
+                meta->>'price' as price,
+                meta->>'sale_price' as sale_price,
+                status
+              FROM products 
+              WHERE id = '$PRODUCT_ID'
+            "
+            
+            # Step 1: Set retail price (USD 45.99 for folding table)
+            echo ""
+            echo "=== Step 1: Setting Retail Price ==="
+            sudo -u postgres psql -d nuotao -c "
+              UPDATE products 
+              SET meta = jsonb_set(
+                jsonb_set(
+                  jsonb_set(COALESCE(meta, '{}'::jsonb), '{regular_price}', '\"45.99\"'),
+                  '{price}', '\"45.99\"'
+                ),
+                '{sale_price}', '\"39.99\"'
+              )
+              WHERE id = '$PRODUCT_ID'
+            "
+            
+            echo "Price set to: USD 45.99 (regular) / USD 39.99 (sale)"
+            
+            # Step 2: Approve candidate status
+            echo ""
+            echo "=== Step 2: Approving Candidate ==="
+            sudo -u postgres psql -d nuotao -c "
+              UPDATE products 
+              SET candidate_status = 'approved'
+              WHERE id = '$PRODUCT_ID'
+            "
+            
+            echo "Candidate status set to: approved"
+            
+            # Verify changes
+            echo ""
+            echo "=== Verification ==="
+            sudo -u postgres psql -d nuotao -c "
+              SELECT 
+                sku,
+                candidate_status,
+                meta->>'regular_price' as regular_price,
+                meta->>'sale_price' as sale_price,
+                status
+              FROM products 
+              WHERE id = '$PRODUCT_ID'
+            "
+            
+            echo ""
+            echo "=== Done ==="
+            echo "Product ready for WC push"
