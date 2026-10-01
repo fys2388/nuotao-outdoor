@@ -91,6 +91,14 @@ async def create_product_candidate(
     if "weight" in product_data or "weight_kg" in product_data:
         product.weight_kg = _safe_decimal(product_data.get("weight_kg", product_data.get("weight", 0)))
 
+    # 设置零售价到 product.meta（用于决策流程定价检查）
+    retail_price = product_data.get("retail_price")
+    if retail_price:
+        product.meta = dict(product.meta) if product.meta else {}
+        product.meta["retail_price"] = retail_price
+        product.meta["regular_price"] = retail_price
+        product.meta["currency"] = "USD"
+    
     # 将 1688 源图片写入 product.meta["images"]，供前端商品列表/详情展示。
     # 前端读路径：meta.media.images → meta.images → attributes.images
     images = product_data.get("images") or product_data.get("image_urls") or []

@@ -364,7 +364,7 @@ export default function CustomersPage() {
                         <Text strong style={{ color: '#722ed1' }}>${viewingCustomer.total_spent?.toLocaleString()}</Text>
                       </Descriptions.Item>
                       <Descriptions.Item label="客单价">
-                        ${viewingCustomer.total_orders ? (viewingCustomer.total_spent / viewingCustomer.total_orders).toFixed(2) : '0'}
+                        ${viewingCustomer.total_orders && viewingCustomer.total_spent ? (viewingCustomer.total_spent / viewingCustomer.total_orders).toFixed(2) : '0'}
                       </Descriptions.Item>
                       <Descriptions.Item label="首单时间">
                         {viewingCustomer.first_order_at ? dayjs(viewingCustomer.first_order_at).format('YYYY-MM-DD') : '-'}

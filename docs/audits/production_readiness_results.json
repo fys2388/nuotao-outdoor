@@ -1,0 +1,165 @@
+{
+  "timestamp": "2026-10-01T15:30:05.642686+00:00",
+  "results": [
+    {
+      "test": "Vision request format",
+      "status": "PASSED",
+      "detail": "Converted messages contain 2 parts"
+    },
+    {
+      "test": "LLMRequest vision flag",
+      "status": "PASSED",
+      "detail": "vision=True, images=1"
+    },
+    {
+      "test": "Auth error handling",
+      "status": "PASSED",
+      "detail": "kind=auth"
+    },
+    {
+      "test": "Timeout error handling",
+      "status": "PASSED",
+      "detail": "kind=timeout"
+    },
+    {
+      "test": "JSON parsing with vision flag",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Invalid JSON rejection",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "QC schema fields",
+      "status": "PASSED",
+      "detail": "All 11 fields present"
+    },
+    {
+      "test": "QC result structure",
+      "status": "PASSED",
+      "detail": "vision_analysis_performed=True"
+    },
+    {
+      "test": "Product creation",
+      "status": "PASSED",
+      "detail": "id=26f5450c-3632-4ccf-a65a-268ac06949c2"
+    },
+    {
+      "test": "Brief creation",
+      "status": "PASSED",
+      "detail": "id=beea1dca-4f6f-4e7f-a2b5-0ed3f42ceaa6"
+    },
+    {
+      "test": "Generation run creation",
+      "status": "PASSED",
+      "detail": "id=1e425d04-315a-45c9-a73d-9b4ecc40f564"
+    },
+    {
+      "test": "Asset creation",
+      "status": "PASSED",
+      "detail": "id=8f965a63-d89d-4946-ad6a-61dfb7c0758a, status=QC_PASSED"
+    },
+    {
+      "test": "Asset status transition (QC_PASSED → PENDING_REVIEW)",
+      "status": "PASSED",
+      "detail": "status=PENDING_REVIEW"
+    },
+    {
+      "test": "Human approval (PENDING_REVIEW → APPROVED)",
+      "status": "PASSED",
+      "detail": "status=APPROVED"
+    },
+    {
+      "test": "Review record creation",
+      "status": "PASSED",
+      "detail": "id=3cd2ae1a-7d99-4e98-a7c9-3c1f96c83faf"
+    },
+    {
+      "test": "Approval request creation",
+      "status": "PASSED",
+      "detail": "id=36504ea7-7c9a-4493-b26f-56e30ea6d193, status=pending"
+    },
+    {
+      "test": "Workspace isolation",
+      "status": "PASSED",
+      "detail": "Other workspace products: 0"
+    },
+    {
+      "test": "Dedup key tracking",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Automation workflow (dedicated model)",
+      "status": "PASSED",
+      "detail": "id=a38c4398-bae3-4018-93cf-9f38f42307b7, type=batch_generation"
+    },
+    {
+      "test": "Workflow execution tracking",
+      "status": "PASSED",
+      "detail": "runs=1, success=1"
+    },
+    {
+      "test": "Cost event tracking",
+      "status": "PASSED",
+      "detail": "id=184eea49-e524-49ff-a2f6-0039500c80d4, cost=0.05"
+    },
+    {
+      "test": "Trace ID propagation",
+      "status": "PASSED",
+      "detail": "trace_id=test-trace-001"
+    },
+    {
+      "test": "AI QC PASS ≠ Human Approval",
+      "status": "PASSED",
+      "detail": "QC_PASSED=QC_PASSED, APPROVED=APPROVED"
+    },
+    {
+      "test": "WC Push requires APPROVED + QC_PASSED",
+      "status": "PASSED",
+      "detail": "Required: {'status': 'APPROVED', 'quality_passed': True}"
+    },
+    {
+      "test": "Creative Agent cannot set APPROVED",
+      "status": "PASSED",
+      "detail": "Allowed: ['QC_PASSED', 'REJECTED']"
+    },
+    {
+      "test": "Anonymous → denied",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Cross-workspace → denied",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Viewer → read only",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Operator → allowed operations",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Admin → privileged operations",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "test": "Approval chain enforced",
+      "status": "PASSED",
+      "detail": "Chain: QC_PASSED → PENDING_REVIEW → APPROVED"
+    }
+  ],
+  "summary": {
+    "total": 31,
+    "passed": 31,
+    "failed": 0
+  }
+}

@@ -30,7 +30,7 @@ body,
 body {
   color: var(--ink-900);
   background: var(--ivory-100);
-  font-family: "Aptos", "Segoe UI Variable", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 

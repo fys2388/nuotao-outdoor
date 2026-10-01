@@ -110,8 +110,8 @@ export function AIAnalysis() {
 
       if (res.error) {
         setError(res.error);
-      } else if (res.data) {
-        setResult(res.data);
+      } else {
+        setResult(res);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "解析 JSON 失败，请检查输入格式");

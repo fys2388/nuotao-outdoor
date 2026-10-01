@@ -20,6 +20,7 @@ The transport is OpenAI-compatible ``/chat/completions`` for both providers;
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -27,6 +28,13 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+
+# Disable proxy environment variables to avoid httpx URL parsing issues
+# on Windows where proxy settings may contain special characters that
+# httpx's URL parser cannot handle (e.g., InvalidURL: Invalid port ':1]').
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["NO_PROXY"] = ""
 
 from app.core.config import get_settings
 
@@ -72,6 +80,9 @@ class LLMRequest:
     ``provider``/``model`` default to the configured primary; explicit
     values (including ``api_key``/``base_url``) are used by tests or by
     callers that need a specific route.
+
+    ``vision`` enables multimodal (image) input; ``images`` is a list of
+    image URLs or base64 data URLs to include in the message.
     """
 
     messages: list[dict[str, str]]
@@ -83,6 +94,9 @@ class LLMRequest:
     response_format: str | None = None  # "json_object" when structured output
     api_key: str | None = None
     base_url: str | None = None
+    # Vision/multimodal support (P0-2: Vision Model Integration)
+    vision: bool = False
+    images: list[str] = field(default_factory=list)  # URLs or base64 data URLs
 
 
 @dataclass(frozen=True)
@@ -136,6 +150,66 @@ def _provider_config(provider: str) -> tuple[str, str, str]:
             settings.sensenova_default_model,
         )
     raise LLMError(f"unsupported provider '{provider}'", kind="invalid_response")
+
+
+def _convert_messages_for_vision(
+    messages: list[dict[str, str]],
+    images: list[str],
+) -> list[dict[str, Any]]:
+    """Convert messages to OpenAI multimodal format with images.
+
+    When vision=True, the last user message is converted to include
+    image content parts. The first image becomes part of the message,
+    additional images are appended as extra content parts.
+    """
+    if not messages:
+        return messages
+
+    converted: list[dict[str, Any]] = []
+    last_user_idx = -1
+
+    # Find the last user message
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user":
+            last_user_idx = i
+
+    if last_user_idx < 0:
+        # No user message found, return as-is
+        return [dict(m) for m in messages]
+
+    for i, msg in enumerate(messages):
+        if i == last_user_idx and images:
+            # Convert this message to multimodal format
+            text_content = msg.get("content", "")
+            content_parts: list[dict[str, Any]] = []
+
+            # Add text part first
+            if text_content:
+                content_parts.append({"type": "text", "text": text_content})
+
+            # Add image parts
+            for img in images:
+                if img.startswith("data:"):
+                    # Already a data URL (base64)
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": img},
+                    })
+                else:
+                    # Regular URL
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": img},
+                    })
+
+            converted.append({
+                "role": "user",
+                "content": content_parts,
+            })
+        else:
+            converted.append(dict(msg))
+
+    return converted
 
 
 
@@ -299,6 +373,13 @@ async def _post(
     if request.response_format == "json_object":
         payload["response_format"] = {"type": "json_object"}
 
+    # P0-2: Vision/multimodal support
+    # When vision=True and images are provided, convert the last user message
+    # to include image content in OpenAI's multimodal format.
+    if request.vision and request.images:
+        converted_messages = _convert_messages_for_vision(request.messages, request.images)
+        payload["messages"] = converted_messages
+
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -311,7 +392,7 @@ async def _post(
             response = await client.post(url, headers=headers, json=payload)
         else:
             timeout = httpx.Timeout(settings.llm_timeout_seconds)
-            async with httpx.AsyncClient(timeout=timeout) as http_client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as http_client:
                 response = await http_client.post(url, headers=headers, json=payload)
     except httpx.TimeoutException as exc:
         raise LLMError(f"provider '{provider}' timed out", kind="timeout") from exc

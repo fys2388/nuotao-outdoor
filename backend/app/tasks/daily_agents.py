@@ -286,7 +286,7 @@ async def run_marketing_manager_daily(session: AsyncSession) -> dict[str, Any]:
                     "gap": str(check.reconciliation.gap),
                     "violations": check.violations,
                 },
-                execution_action="investigate_revenue_gap",
+                execution_action="manual_review",
                 expected_impact="恢复收入口径可对账后，营销分析结论才可对外发布",
                 priority="high",
                 risk_level="low",
