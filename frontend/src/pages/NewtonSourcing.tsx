@@ -193,10 +193,12 @@ export default function NewtonSourcingPage() {
 
   const fetchStatus = async () => {
     try {
+      console.log('[NewtonSourcing] Fetching Newton status...')
       const data: any = await api.getNewtonStatus()
+      console.log('[NewtonSourcing] Newton status response:', data)
       setStatus(data.data)
-    } catch {
-      // 静默失败
+    } catch (error) {
+      console.error('[NewtonSourcing] Failed to fetch Newton status:', error)
     }
   }
 

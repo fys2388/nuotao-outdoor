@@ -49,6 +49,17 @@ from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.consolidation import Brand, CommerceAttribution, LegalEntity
 from app.models.content_marketing import ContentItem, EDMCampaign, SEORecord
 from app.models.currency import ExchangeRate
+from app.models.creative import (
+    CreativeApprovalRequest,
+    CreativeBrief,
+    CreativeCalibrationRun,
+    CreativeCostEvent,
+    CreativeGenerationRun,
+    CreativeKnowledgeEntry,
+    CreativePromptTemplate,
+    CreativeReview,
+    CreativeStudioAsset,
+)
 from app.models.customer import (
     CustomerAccount,
     CustomerInteraction,
@@ -184,6 +195,15 @@ __all__ = [
     "ContentItem",
     "CreativeAnalysisRun",
     "CreativeAsset",
+    "CreativeApprovalRequest",
+    "CreativeBrief",
+    "CreativeCalibrationRun",
+    "CreativeCostEvent",
+    "CreativeGenerationRun",
+    "CreativeKnowledgeEntry",
+    "CreativePromptTemplate",
+    "CreativeReview",
+    "CreativeStudioAsset",
     "CustomerAiEvaluation",
     "CustomerAccount",
     "CustomerAccountMerge",

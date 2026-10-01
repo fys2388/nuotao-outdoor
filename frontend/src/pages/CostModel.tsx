@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Spin, message, Modal, Descriptions,
@@ -23,10 +23,10 @@ import {
   SaveOutlined, FundOutlined,
   EnvironmentOutlined, DatabaseOutlined,
   SettingOutlined, CloudOutlined,
-  InboxOutlined, LikeOutlined,
+  LikeOutlined,
   DislikeOutlined, ShareAltOutlined,
   GiftOutlined, ShoppingCartOutlined,
-  TargetOutlined, FlagOutlined,
+  AimOutlined, FlagOutlined,
   CheckSquareOutlined, UnorderedListOutlined,
   PlayCircleOutlined, PauseCircleOutlined,
   StopOutlined, StarOutlined, HeartOutlined,
@@ -34,14 +34,15 @@ import {
   InstagramOutlined, TwitterOutlined,
   FacebookOutlined, TikTokOutlined,
   VideoCameraOutlined, PictureOutlined,
-  MoneyCollectOutlined, ContractOutlined,
+  MoneyCollectOutlined, FileProtectOutlined,
   MailOutlined, CalculatorOutlined,
   PieChartOutlined, LineChartOutlined,
-  TrendingUpOutlined, TrendingDownOutlined,
+  RiseOutlined, FallOutlined,
   PercentageOutlined, BankOutlined,
   TruckOutlined, ShopOutlined,
-  PackageOutlined, CreditCardOutlined,
-  AuditOutlined, ProfileOutlined
+  CreditCardOutlined,
+  AuditOutlined, ProfileOutlined,
+  InfoCircleOutlined
 } from '@ant-design/icons'
 
 const { Title, Text, Paragraph } = Typography
@@ -82,6 +83,7 @@ interface CostCalculatorInput {
   return_rate: number
   other_cost: number
   desired_margin: number
+  selling_price?: number
 }
 
 export default function CostModelPage() {
@@ -142,14 +144,15 @@ export default function CostModelPage() {
   // 计算成本
   const calcTotalCost = () => {
     const c = calculator
+    const sellingPrice = c.selling_price ?? 0
     const unitDomestic = c.domestic_shipping
     const unitInternational = c.international_shipping
     const subtotal = c.purchase_cost + unitDomestic + unitInternational + c.other_cost
     const tariff = subtotal * (c.tariff_rate / 100)
-    const platformFee = c.selling_price * (c.platform_fee_rate / 100)
-    const paymentFee = c.selling_price * (c.payment_fee_rate / 100)
-    const marketing = c.selling_price * (c.marketing_rate / 100)
-    const returnCost = c.selling_price * (c.return_rate / 100)
+    const platformFee = sellingPrice * (c.platform_fee_rate / 100)
+    const paymentFee = sellingPrice * (c.payment_fee_rate / 100)
+    const marketing = sellingPrice * (c.marketing_rate / 100)
+    const returnCost = sellingPrice * (c.return_rate / 100)
     const total = subtotal + tariff + platformFee + paymentFee + marketing + returnCost
     return {
       subtotal,

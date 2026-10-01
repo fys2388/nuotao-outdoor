@@ -27,6 +27,7 @@ from app.api.v1.endpoints import (
     calibration,
     consolidation,
     connectors,
+    creative,
     currency,
     customer_data,
     growth_memory,
@@ -158,6 +159,7 @@ api_router.include_router(emails.router)
 api_router.include_router(edm_automation.router)
 api_router.include_router(fulfillment.router)
 api_router.include_router(image_gen.router)
+api_router.include_router(creative.router)
 api_router.include_router(inventory.router)
 api_router.include_router(activity_planner.router)
 api_router.include_router(influencer.router)

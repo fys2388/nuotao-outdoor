@@ -50,6 +50,12 @@ const ExchangeRatesPage = lazy(() => import('../pages/ExchangeRates'))
 const CustomerDataPage = lazy(() => import('../pages/CustomerDataPage'))
 const LogsPage = lazy(() => import('../pages/Logs'))
 const ListingJobsPage = lazy(() => import('../pages/ListingJobs'))
+const CreativeStudioPage = lazy(() => import('../pages/CreativeStudio'))
+const CreativeWorkbenchPage = lazy(() => import('../pages/CreativeWorkbench'))
+const CreativeAnalyticsPage = lazy(() => import('../pages/CreativeAnalytics'))
+const CreativeKnowledgePage = lazy(() => import('../pages/CreativeKnowledge'))
+const CreativeCalibrationPage = lazy(() => import('../pages/CreativeCalibration'))
+const CreativeAutomationPage = lazy(() => import('../pages/CreativeAutomation'))
 
 function PageLoader() {
   return (
@@ -227,6 +233,13 @@ export default function AppRoutes() {
             )
           }
         />
+
+        <Route path="creative" element={page(<CreativeStudioPage />)} />
+        <Route path="creative/workbench/:productId" element={page(<CreativeWorkbenchPage />)} />
+        <Route path="creative/analytics" element={page(<CreativeAnalyticsPage />)} />
+        <Route path="creative/knowledge" element={page(<CreativeKnowledgePage />)} />
+        <Route path="creative/calibration" element={page(<CreativeCalibrationPage />)} />
+        <Route path="creative/automation" element={page(<CreativeAutomationPage />)} />
 
         <Route path="ai/suggestions" element={page(<AgentSuggestionsPage />)} />
         <Route path="ai/agents" element={page(<AgentMonitorPage />)} />

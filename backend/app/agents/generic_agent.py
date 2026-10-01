@@ -67,6 +67,10 @@ async def run_generic_agent(
     task_type: str = "generic_agent",
     trace_id: str | None = None,
     persist: bool = True,
+    # P0-2: Vision/multimodal options
+    vision: bool = False,
+    images: list[str] | None = None,
+    model: str | None = None,
 ) -> GenericAgentResult:
     """Run a generic AI agent analysis pipeline.
 
@@ -81,6 +85,9 @@ async def run_generic_agent(
         temperature: LLM temperature
         task_type: task type for LLM gateway routing
         persist: when False, skip audit persistence (dry-run)
+        vision: enable multimodal (image) input
+        images: list of image URLs or base64 data URLs
+        model: explicit model override (e.g. 'gpt-4o' for vision)
 
     Returns:
         GenericAgentResult with output dict or error.
@@ -108,6 +115,7 @@ async def run_generic_agent(
         return GenericAgentResult(agent_run=None, output=None, error=error_msg)
 
     # 2. LLM Gateway call
+    # P0-2: When vision=True and images are provided, include them in the request
     request = LLMRequest(
         messages=[
             {"role": "system", "content": rendered.text},
@@ -116,6 +124,9 @@ async def run_generic_agent(
         task_type=task_type,
         response_format="json_object",
         temperature=temperature,
+        vision=vision,
+        images=images or [],
+        model=model,
     )
 
     try:

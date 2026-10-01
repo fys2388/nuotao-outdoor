@@ -1391,4 +1391,239 @@ export const api = {
   getNewtonCostDaily: () => request('/newton/cost/daily'),
   getNewtonCostAlerts: () => request('/newton/cost/alerts'),
   getNewtonCostCredits: () => request('/newton/cost/credits'),
+
+  // ── Creative Studio (C13) ──────────────────────────────────────────
+  getCreativeStatus: () => request('/creative/status'),
+  getCreativeModels: () => request('/creative/models'),
+  getCreativeOperations: () => request('/creative/operations'),
+
+  // Workspace
+  getCreativeWorkspace: (productId: string) =>
+    request(`/creative/workspace/${productId}`),
+  createCreativeBriefFromProduct: (productId: string, data: {
+    objective?: string
+    channel?: string
+    target_market?: string
+    visual_style?: string
+    created_by?: string
+  }) => request(`/creative/workspace/${productId}/brief`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // Briefs
+  createCreativeBrief: (data: Record<string, unknown>) =>
+    request('/creative/briefs', { method: 'POST', body: JSON.stringify(data) }),
+  getCreativeBriefs: (limit = 50, offset = 0, status?: string, productId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (status) params.set('status', status)
+    if (productId) params.set('product_id', productId)
+    return request(`/creative/briefs?${params.toString()}`)
+  },
+  getCreativeBrief: (briefId: string) => request(`/creative/briefs/${briefId}`),
+  updateCreativeBriefStatus: (briefId: string, data: { status: string; updated_by?: string }) =>
+    request(`/creative/briefs/${briefId}/status`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  // Generation Runs
+  createCreativeRun: (data: Record<string, unknown>) =>
+    request('/creative/runs', { method: 'POST', body: JSON.stringify(data) }),
+  getCreativeRuns: (limit = 50, offset = 0, status?: string, productId?: string, briefId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (status) params.set('status', status)
+    if (productId) params.set('product_id', productId)
+    if (briefId) params.set('brief_id', briefId)
+    return request(`/creative/runs?${params.toString()}`)
+  },
+  getCreativeRun: (runId: string) => request(`/creative/runs/${runId}`),
+  executeCreativeRun: (runId: string, data: {
+    prompt: string
+    model?: string
+    width?: number
+    height?: number
+    reference_image?: string
+    negative_prompt?: string
+  }) => request(`/creative/runs/${runId}/execute`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    timeoutMs: 300000,
+  }),
+
+  // Assets
+  createCreativeAsset: (data: Record<string, unknown>) =>
+    request('/creative/assets', { method: 'POST', body: JSON.stringify(data) }),
+  uploadCreativeAsset: (formData: FormData) =>
+    request('/creative/assets/upload', { method: 'POST', body: formData }),
+  getCreativeAssets: (limit = 50, offset = 0, status?: string, productId?: string, briefId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (status) params.set('status', status)
+    if (productId) params.set('product_id', productId)
+    if (briefId) params.set('brief_id', briefId)
+    return request(`/creative/assets?${params.toString()}`)
+  },
+  getCreativeAsset: (assetId: string) => request(`/creative/assets/${assetId}`),
+  getCreativeAssetImage: (assetId: string) =>
+    `${API_BASE}/creative/assets/${assetId}/image`,
+  runCreativeAiQc: (assetId: string, data: { trace_id?: string; persist?: boolean } = {}) =>
+    request(`/creative/assets/${assetId}/ai-qc`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      timeoutMs: 120000,
+    }),
+  runCreativeQc: (assetId: string) =>
+    request(`/creative/assets/${assetId}/qc`, { method: 'POST' }),
+  reviewCreativeAsset: (assetId: string, data: {
+    decision: string
+    reasons?: Record<string, unknown>
+    reviewer?: string
+  }) => request(`/creative/assets/${assetId}/review`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  pushCreativeAssetToWc: (assetId: string, data: { as_featured_image?: boolean } = {}) =>
+    request(`/creative/assets/${assetId}/push-to-wc`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Reviews
+  getCreativeReviews: (limit = 50, assetId?: string, reviewType?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (assetId) params.set('asset_id', assetId)
+    if (reviewType) params.set('review_type', reviewType)
+    return request(`/creative/reviews?${params.toString()}`)
+  },
+
+  // Cost
+  getCreativeCostSummary: () => request('/creative/cost/summary'),
+  getCreativeCostByProduct: (productId: string) =>
+    request(`/creative/cost/by-product/${productId}`),
+  getCreativeCostByBrief: (briefId: string) =>
+    request(`/creative/cost/by-brief/${briefId}`),
+  getCreativeCostBudget: () => request('/creative/cost/budget'),
+
+  // Templates
+  createCreativeTemplate: (data: Record<string, unknown>) =>
+    request('/creative/templates', { method: 'POST', body: JSON.stringify(data) }),
+  getCreativeTemplates: (limit = 50, status?: string, assetType?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (status) params.set('status', status)
+    if (assetType) params.set('asset_type', assetType)
+    return request(`/creative/templates?${params.toString()}`)
+  },
+  getCreativeTemplate: (templateId: string) => request(`/creative/templates/${templateId}`),
+  updateCreativeTemplate: (templateId: string, data: Record<string, unknown>) =>
+    request(`/creative/templates/${templateId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  renderCreativeTemplate: (templateId: string, data: Record<string, unknown>) =>
+    request(`/creative/templates/${templateId}/render`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Approvals
+  createCreativeApprovalRequest: (data: Record<string, unknown>) =>
+    request('/creative/approvals/requests', { method: 'POST', body: JSON.stringify(data) }),
+  getCreativeApprovalRequests: (limit = 50, status?: string, type?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (status) params.set('status', status)
+    if (type) params.set('type', type)
+    return request(`/creative/approvals/requests?${params.toString()}`)
+  },
+  approveCreativeRequest: (requestId: string, data: { comment?: string } = {}) =>
+    request(`/creative/approvals/requests/${requestId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  rejectCreativeRequest: (requestId: string, data: { reason: string }) =>
+    request(`/creative/approvals/requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Generate from brief
+  generateFromCreativeBrief: (briefId: string, data: {
+    count?: number
+    model?: string
+    width?: number
+    height?: number
+    created_by?: string
+  } = {}) => request(`/creative/briefs/${briefId}/generate`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    timeoutMs: 300000,
+  }),
+
+  // ── Creative Analytics (C15) ───────────────────────────────────────
+  getCreativeAnalyticsDashboard: (days = 30) =>
+    request(`/creative/analytics/dashboard?days=${days}`),
+  getCreativeAnalyticsPerformance: (days = 30) =>
+    request(`/creative/analytics/performance?days=${days}`),
+  getCreativeAnalyticsTemplates: (days = 30) =>
+    request(`/creative/analytics/templates?days=${days}`),
+  getCreativeAnalyticsKnowledge: (days = 30) =>
+    request(`/creative/analytics/knowledge?days=${days}`),
+
+  // ── Creative Knowledge (P2) ────────────────────────────────────────
+  getCreativeKnowledgeEntries: (limit = 50, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    return request(`/creative/knowledge/entries?${params.toString()}`)
+  },
+  getCreativeKnowledgeSummary: () => request(`/creative/knowledge/summary`),
+
+  // ── Creative Calibration (P2) ──────────────────────────────────────
+  getCreativeCalibrationRuns: (limit = 20) =>
+    request(`/creative/calibration/runs?limit=${limit}`),
+
+  // ── Creative Automation (P2) ───────────────────────────────────────
+  getCreativeAutomationWorkflows: (limit = 50, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    return request(`/creative/automation/workflows?${params.toString()}`)
+  },
+  createCreativeAutomationWorkflow: (data: Record<string, unknown>) =>
+    request('/creative/automation/workflows', { method: 'POST', body: JSON.stringify(data) }),
+  updateCreativeAutomationWorkflow: (workflowId: string, data: Record<string, unknown>) =>
+    request(`/creative/automation/workflows/${workflowId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  triggerCreativeAutomationWorkflow: (workflowId: string) =>
+    request(`/creative/automation/workflows/${workflowId}/trigger`, { method: 'POST' }),
+}
+
+// ── Agent types (Agents page) ─────────────────────────────────────────
+export interface Agent {
+  id: string
+  name: string
+  agent_id: string
+  status: 'active' | 'inactive'
+  description?: string
+  domain: string
+  version: string
+  model_provider: string
+  model_name: string
+  prompt_version: string
+  permission_level: string
+}
+
+export interface GenericAgentResponse {
+  success: boolean
+  output: string
+  trace_id: string
+  cost: number
+  latency_ms: number
+  error?: string
+  data?: Record<string, unknown>
+  status?: string
+  agent_run_id?: string
+}
+
+// ── Agent API ──────────────────────────────────────────────────────────
+export const agentApi = {
+  list: () => request<{ data: Agent[] }>('/admin/agents'),
+}
+
+export const genericAgentApi = {
+  run: (agentId: string, input: Record<string, unknown>) =>
+    request<GenericAgentResponse>(`/agents/${agentId}/run`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  analyze: (agentKey: string, input: Record<string, unknown>) =>
+    request<GenericAgentResponse>(`/agents/${agentKey}/analyze`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 }

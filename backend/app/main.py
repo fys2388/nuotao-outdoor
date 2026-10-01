@@ -7,9 +7,17 @@ Exposes the FastAPI application with:
 """
 
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Disable proxy environment variables globally to avoid httpx URL parsing issues
+# on Windows where proxy settings may contain special characters that
+# httpx's URL parser cannot handle (e.g., InvalidURL: Invalid port ':1]').
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["NO_PROXY"] = "*"
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -301,3 +309,9 @@ def _custom_openapi() -> dict:
 
 
 app.openapi = _custom_openapi  # type: ignore[method-assign]
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.environ.get("API_PORT", "8000")), reload=True)

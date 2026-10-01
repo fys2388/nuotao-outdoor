@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Spin, message, Modal, Descriptions,
@@ -26,7 +26,7 @@ import {
   InboxOutlined, LikeOutlined,
   DislikeOutlined, ShareAltOutlined,
   GiftOutlined, ShoppingCartOutlined,
-  DollarOutlined, TargetOutlined,
+  DollarOutlined, AimOutlined,
   FlagOutlined, CheckSquareOutlined,
   UnorderedListOutlined, PlayCircleOutlined,
   PauseCircleOutlined, StopOutlined
@@ -252,7 +252,7 @@ export default function ActivityPlannerPage() {
                   <Card size="small">
                     <Calendar
                       fullscreen={false}
-                      dateRender={(date) => {
+                      dateCellRender={(date) => {
                         const day = date.date()
                         let activities: MarketingActivity[] = []
                         mockActivities.forEach(a => {

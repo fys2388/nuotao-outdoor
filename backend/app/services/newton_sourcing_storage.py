@@ -209,6 +209,11 @@ async def import_products_to_candidates(
         ]
 
         # 构建候选产品数据
+        purchase_cost = float(price) if price else 0
+        # 基于采购价计算建议零售价（采购价 * 3 倍，最低 $5）
+        # 1688 价格单位为 CNY，转换为 USD 估算零售价
+        retail_price_usd = max(round(purchase_cost * 3 * 0.14, 2), 5.0)  # CNY -> USD 汇率约 0.14
+        
         candidate_data = {
             "name": product_name[:200],
             "sku": f"NEWTON_{product_id_1688 or int(time.time())}_{i}",
@@ -217,8 +222,10 @@ async def import_products_to_candidates(
             "brand": supplier[:100] if supplier else None,
             "source_url": detail_url,
             "target_market": "US",
-            "purchase_cost": float(price) if price else 0,
-            "currency": "CNY",
+            "purchase_cost": purchase_cost,
+            "currency": "USD",
+            # 零售价（用于决策流程定价检查）
+            "retail_price": retail_price_usd,
             # 牛顿选品元数据
             "newton_score": score,
             "newton_reason": reason,

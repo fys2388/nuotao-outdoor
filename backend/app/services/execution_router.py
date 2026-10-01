@@ -71,7 +71,6 @@ _execution_handlers: dict[str, callable] = {}
 ACTION_ALIASES: dict[str, str] = {
     "restock_inventory": "create_purchase_order",       # 库存补货 -> 创建采购单
     "optimize_listing": "update_product_listing",         # 上架优化 -> 更新商品上架信息
-    "investigate_revenue_gap": "generate_marketing_content",  # 收入差距分析 -> 生成营销内容
     "optimize_campaign": "generate_marketing_content",    # 优化营销活动 -> 生成营销内容
     "start_sourcing": "start_product_sourcing",           # 开始选品 -> 开始产品选品
 }

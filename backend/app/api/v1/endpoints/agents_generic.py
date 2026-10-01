@@ -48,6 +48,16 @@ class GenericAgentResponse(BaseModel):
     dry_run: bool = False
 
 
+class CreativePipelineRequest(BaseModel):
+    """Request body for the full creative pipeline."""
+
+    product_id: UUID = Field(..., description="Product UUID to analyze")
+    execute_immediately: bool = Field(
+        default=False,
+        description="If True, batch generate assets after brief creation",
+    )
+
+
 # Agent configuration: (agent_id, agent_name, prompt_name, task_type, trigger)
 AGENT_CONFIGS = {
     "marketing-manager": {
@@ -104,6 +114,18 @@ AGENT_CONFIGS = {
             "You are the Nuotao Outdoor Business Analyst. Analyze the provided business "
             "context and respond with ONLY a JSON object containing financial analysis, KPI "
             "assessments, trend predictions, risk factors, and actionable recommendations."
+        ),
+    },
+    "creative-agent": {
+        "agent_id": "creative_agent",
+        "agent_name": "Creative Agent",
+        "prompt_name": "AGENT_CREATIVE_AGENT",
+        "task_type": "creative_agent",
+        "trigger": "api:creative-agent:analyze",
+        "system_instruction": (
+            "You are the Nuotao Outdoor Creative Agent. Analyze the provided product "
+            "context and respond with ONLY a JSON object containing creative strategy, "
+            "asset requirements, visual style guidelines, and cost estimates."
         ),
     },
 }
@@ -204,3 +226,47 @@ async def analyze_business(
 ) -> GenericAgentResponse:
     """Analyze business context and generate financial/KPI/trend analysis."""
     return await _run_agent("business-analyst", body, db, workspace_id)
+
+
+@router.post(
+    "/creative-agent/analyze",
+    response_model=GenericAgentResponse,
+    summary="Run the Creative Agent (product creative strategy + asset requirements)",
+)
+async def analyze_creative(
+    body: GenericAgentRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> GenericAgentResponse:
+    """Analyze product context and generate creative strategy/asset recommendations."""
+    return await _run_agent("creative-agent", body, db, workspace_id)
+
+
+@router.post(
+    "/creative-agent/pipeline",
+    response_model=dict,
+    summary="Run the full Creative Pipeline (analyze -> brief -> generate)",
+)
+async def run_creative_pipeline(
+    body: CreativePipelineRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Run the full creative pipeline: analyze product -> create brief -> generate assets.
+
+    This endpoint orchestrates the complete creative production workflow:
+    1. Analyze the product for creative requirements
+    2. Create a CreativeBrief with the recommended assets
+    3. Optionally batch generate all assets
+
+    Returns a summary with brief_id, analysis, and optional generation results.
+    """
+    from app.agents.creative_agent import run_creative_pipeline as run_pipeline
+
+    return await run_pipeline(
+        db,
+        workspace_id=workspace_id,
+        product_id=body.product_id,
+        execute_immediately=body.execute_immediately,
+        trace_id=get_trace_id(),
+    )
