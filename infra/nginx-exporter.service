@@ -1,0 +1,19 @@
+[Unit]
+Description=Nginx Prometheus Exporter
+Documentation=https://github.com/nginxinc/nginx-prometheus-exporter
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nginx-exporter
+Group=nginx-exporter
+Restart=always
+RestartSec=5
+ExecStart=/usr/local/bin/nginx-exporter \
+    --nginx.scrape-uri=http://127.0.0.1:80/stub_status \
+    --web.listen-address=:9113
+ExecReload=/bin/kill -HUP \$MAINPID
+
+[Install]
+WantedBy=multi-user.target
