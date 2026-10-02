@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,7 +121,7 @@ async def startup_event():
 @router.post("/login", response_model=Token)
 @limiter.limit(RATE_LIMIT_AUTH)
 async def login(
-    request,
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
@@ -306,7 +306,7 @@ from sqlalchemy import select
 @router.post("/mfa/setup", response_model=MFASecretResponse)
 @limiter.limit(RATE_LIMIT_AUTH)
 async def setup_mfa(
-    request,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
