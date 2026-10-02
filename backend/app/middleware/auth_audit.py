@@ -70,3 +70,6 @@ class AuthAuditMiddleware(BaseHTTPMiddleware):
                     str(e),
                 )
                 raise
+        else:
+            # Pass through for non-auth endpoints
+            return await call_next(request)
