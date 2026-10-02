@@ -4,19 +4,19 @@
 loki.source.file "nuotao_backend" {
   targets    = [
     {
-      __path__    = "/var/log/nuotao/*.log"
-      __address__ = "localhost"
-      job         = "nuotao-backend"
+      __path__    = "/var/log/nuotao/*.log",
+      __address__ = "localhost",
+      job         = "nuotao-backend",
     },
     {
-      __path__    = "/var/log/syslog"
-      __address__ = "localhost"
-      job         = "system"
+      __path__    = "/var/log/syslog",
+      __address__ = "localhost",
+      job         = "system",
     },
     {
-      __path__    = "/var/log/auth.log"
-      __address__ = "localhost"
-      job         = "auth"
+      __path__    = "/var/log/auth.log",
+      __address__ = "localhost",
+      job         = "auth",
     },
   ]
   forward_to = loki.write.default.receiver
