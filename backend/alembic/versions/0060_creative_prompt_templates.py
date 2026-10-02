@@ -24,7 +24,7 @@ def upgrade() -> None:
     op.create_table(
         "creative_prompt_templates",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("workspace_id", sa.Uuid(), nullable=False),
+        sa.Column("workspace_id", sa.String(length=36), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
