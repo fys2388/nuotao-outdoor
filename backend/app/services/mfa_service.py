@@ -25,11 +25,10 @@ class MFAService:
     def generate_totp_secret(self, username: str, email: str) -> dict:
         """Generate a new TOTP secret and QR code."""
         # Generate secret
-        totp = pyotp.TOTP(
-            secret=pyotp.random_base32(),
-            digits=6,
-            interval=30,
-        )
+        secret = pyotp.random_base32()
+        totp = pyotp.TOTP(secret)
+        totp.digits = 6
+        totp.interval = 30
 
         # Get provisioning URI
         provisioning_uri = totp.provisioning_uri(
@@ -44,7 +43,7 @@ class MFAService:
         backup_codes = self._generate_backup_codes(count=10)
 
         return {
-            "secret": totp.secret,
+            "secret": secret,
             "provisioning_uri": provisioning_uri,
             "qr_code_base64": qr_code,
             "backup_codes": backup_codes,
@@ -54,6 +53,8 @@ class MFAService:
         """Verify a TOTP code against the secret."""
         try:
             totp = pyotp.TOTP(secret)
+            totp.digits = 6
+            totp.interval = 30
             return totp.verify(token, valid_window=1)  # Allow 1 time step window
         except Exception:
             return False
@@ -79,6 +80,8 @@ class MFAService:
     def generate_totp_code(self, secret: str) -> str:
         """Generate current TOTP code for testing/backup."""
         totp = pyotp.TOTP(secret)
+        totp.digits = 6
+        totp.interval = 30
         return totp.now()
 
     def _generate_qr_code(self, uri: str) -> str:
