@@ -1,5 +1,5 @@
 # Loki Configuration for Nuotao AI OS
-# /etc/loki/loki.yml
+# Single-binary mode (no ring)
 
 auth_enabled: false
 
@@ -8,21 +8,30 @@ server:
   http_listen_port: 3100
   grpc_listen_address: 0.0.0.0
   grpc_listen_port: 9096
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /var/lib/loki
+  storage:
+    filesystem:
+      chunks_directory: /var/lib/loki/chunks
+      rules_directory: /var/lib/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
 
 limits_config:
   ingestion_rate_mb: 4
   ingestion_burst_size_mb: 8
   max_query_length: 365d
-  max_terms: 512
+  max_entries_limit_per_query: 5000
+  retention_stream: 30d
 
-pattern_ingester:
-  enabled: true
-
-pattern_ingester_config:
-  forward_send_batch_max_size: 30
-  forward_send_batch_min_size: 10
-  forward_send_batch_wait: 1s
-  forward_send_batch_max_wait: 5s
+compactor:
+  working_directory: /var/lib/loki/compactor
+  shared_store: filesystem
 
 schema_config:
   configs:
@@ -36,29 +45,16 @@ schema_config:
 
 storage_config:
   tsdb_shipper:
-    active_index_directory: /loki/tsdb-index
-    cache_location: /loki/tsdb-cache
-    ship_interval: 5m
+    active_index_directory: /var/lib/loki/tsdb-index
+    cache_location: /var/lib/loki/tsdb-cache
   filesystem:
-    directory: /loki/chunks
-
-compactor:
-  working_directory: /loki/compactor
-  shared_store: filesystem
-  retention_enabled: true
-  delete_request_store: filesystem
-
-retention_rules:
-  per_tenant:
-    '{}':
-      retention_period: 30d
+    directory: /var/lib/loki/chunks
 
 analytics:
- _reporting_enabled: false
+  reporting_enabled: false
 
 query_range:
   results_cache:
     cache:
-      embedded:
+      embedded_cache:
         enabled: true
-      prefix: query_range_
