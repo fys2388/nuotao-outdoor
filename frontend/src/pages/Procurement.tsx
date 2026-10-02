@@ -10,7 +10,7 @@ import {
   EyeOutlined, PlusOutlined, EditOutlined,
   TruckOutlined, CheckCircleOutlined, WarningOutlined,
   SyncOutlined, ClockCircleOutlined, ShopOutlined,
-  DollarOutlined, PackageOutlined, CopyOutlined,
+  DollarOutlined, InboxOutlined, CopyOutlined,
   SendOutlined, DownloadOutlined, FileTextOutlined,
   UserOutlined, PhoneOutlined, GlobalOutlined
 } from '@ant-design/icons'
