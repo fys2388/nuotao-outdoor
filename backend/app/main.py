@@ -105,6 +105,10 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+# Auth audit logging middleware
+from app.middleware.auth_audit import AuthAuditMiddleware
+app.add_middleware(AuthAuditMiddleware)
+
 # CORS 中间件配置 - 允许前端跨域访问
 app.add_middleware(
     CORSMiddleware,
