@@ -6,9 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
+from app.schemas.auth import UserResponse
 from app.schemas.product import (
     ProductBatchDeleteRequest,
     ProductDeleteResult,
@@ -21,6 +23,7 @@ router = APIRouter(prefix="/products", tags=["products 产品管理"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MiB
 
@@ -33,6 +36,7 @@ MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MiB
 )
 async def import_products(
     file: UploadFile,
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductImportResult:
@@ -71,6 +75,7 @@ async def import_products(
 
 @router.get("", response_model=list[ProductOut], summary="产品列表 / List products")
 async def list_products(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     status: str | None = Query(default=None, max_length=24),
@@ -93,6 +98,7 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductOut, summary="产品详情 / Get product by ID")
 async def get_product(
     product_id: UUID,
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductOut:
@@ -115,6 +121,7 @@ async def get_product(
 )
 async def batch_delete_products(
     body: ProductBatchDeleteRequest,
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDeleteResult:
@@ -135,6 +142,7 @@ async def batch_delete_products(
 )
 async def delete_product(
     product_id: UUID,
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> ProductDeleteResult:
@@ -159,6 +167,7 @@ async def delete_product(
     summary="从 WooCommerce 同步产品 / Sync products from WooCommerce",
 )
 async def sync_woocommerce_products(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     per_page: int = Query(default=100, ge=1, le=100),
@@ -189,6 +198,7 @@ async def sync_woocommerce_products(
     summary="批量推送产品到 WooCommerce / Push products to WooCommerce",
 )
 async def push_products_to_woocommerce(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     body: dict = Body(default={}),
