@@ -27,11 +27,13 @@ limits_config:
   ingestion_burst_size_mb: 8
   max_query_length: 365d
   max_entries_limit_per_query: 5000
-  retention_stream: 30d
+  retention_stream:
+    - tenant_id: '{tenant}'
+      max_age: 30d
+      unit: days
 
 compactor:
   working_directory: /var/lib/loki/compactor
-  shared_store: filesystem
 
 schema_config:
   configs:
