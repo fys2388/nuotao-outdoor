@@ -82,6 +82,7 @@ APP_VERSION = "1.0.0"
 
 # Rate limiting configuration
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 app = FastAPI(
     title=settings.app_name,
