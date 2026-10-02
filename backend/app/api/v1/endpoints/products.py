@@ -10,7 +10,7 @@ from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
-from app.schemas.auth import UserResponse
+from app.schemas.user import UserResponse
 from app.schemas.product import (
     ProductBatchDeleteRequest,
     ProductDeleteResult,
