@@ -1,0 +1,31 @@
+# Alloy Configuration for Nuotao AI OS
+# /etc/alloy/config.alloy
+
+# Loki 日志转发
+loki.source.file "nuotao_backend" {
+  targets    = [
+    "/var/log/nuotao/*.log",
+    "/var/log/syslog",
+    "/var/log/auth.log",
+  ]
+  forward_to = loki.write.default.receiver
+}
+
+# Systemd 日志
+loki.source.syslog "syslog" {
+  listen_address = ":1514"
+  listen_protocol = "udp"
+  forward_to = loki.write.default.receiver
+}
+
+# 写入 Loki
+loki.write "default" {
+  endpoint {
+    url = "http://localhost:3100/loki/api/v1/push"
+  }
+}
+
+# Promtail 兼容
+lriver.source.file "compat" {
+  targets = []
+}
