@@ -2,8 +2,6 @@
 认证 API 端点（数据库版本）
 登录、注册、Token 刷新、当前用户、修改密码、用户管理
 """
-from __future__ import annotations
-
 import logging
 from datetime import timedelta
 from uuid import UUID
