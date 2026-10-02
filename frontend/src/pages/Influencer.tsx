@@ -26,7 +26,6 @@ import {
   InboxOutlined, LikeOutlined,
   DislikeOutlined, ShareAltOutlined,
   GiftOutlined, ShoppingCartOutlined,
-  DollarOutlined, TargetOutlined,
   FlagOutlined, CheckSquareOutlined,
   UnorderedListOutlined, PlayCircleOutlined,
   PauseCircleOutlined, StopOutlined,
@@ -36,7 +35,6 @@ import {
   TwitterOutlined, FacebookOutlined,
   TikTokOutlined, VideoCameraOutlined,
   PictureOutlined, LinkOutlined as LinkIcon,
-  MoneyCollectOutlined, ContractOutlined,
   SendOutlined as SendIcon, MailOutlined
 } from '@ant-design/icons'
 
