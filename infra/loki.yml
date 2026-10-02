@@ -1,0 +1,64 @@
+# Loki Configuration for Nuotao AI OS
+# /etc/loki/loki.yml
+
+auth_enabled: false
+
+server:
+  http_listen_address: 0.0.0.0
+  http_listen_port: 3100
+  grpc_listen_address: 0.0.0.0
+  grpc_listen_port: 9096
+
+limits_config:
+  ingestion_rate_mb: 4
+  ingestion_burst_size_mb: 8
+  max_query_length: 365d
+  max_terms: 512
+
+pattern_ingester:
+  enabled: true
+
+pattern_ingester_config:
+  forward_send_batch_max_size: 30
+  forward_send_batch_min_size: 10
+  forward_send_batch_wait: 1s
+  forward_send_batch_max_wait: 5s
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: loki_index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+    ship_interval: 5m
+  filesystem:
+    directory: /loki/chunks
+
+compactor:
+  working_directory: /loki/compactor
+  shared_store: filesystem
+  retention_enabled: true
+  delete_request_store: filesystem
+
+retention_rules:
+  per_tenant:
+    '{}':
+      retention_period: 30d
+
+analytics:
+ _reporting_enabled: false
+
+query_range:
+  results_cache:
+    cache:
+      embedded:
+        enabled: true
+      prefix: query_range_
