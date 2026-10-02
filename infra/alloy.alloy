@@ -19,7 +19,7 @@ loki.source.file "nuotao_backend" {
       job         = "auth",
     },
   ]
-  forward_to = loki.write.default.receiver
+  forward_to = [loki.write.default.receiver],
 }
 
 loki.write "default" {
