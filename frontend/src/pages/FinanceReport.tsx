@@ -11,7 +11,6 @@ import {
   TrendingUpOutlined, TrendingDownOutlined,
   CheckCircleOutlined, WarningOutlined,
   SyncOutlined, ClockCircleOutlined, ShopOutlined,
-  PackageOutlined, CopyOutlined, GlobalOutlined,
   HomeOutlined, ExportOutlined, ImportOutlined,
   SwapOutlined, EnvironmentOutlined, FileTextOutlined,
   BarChartOutlined, PieChartOutlined, LineChartOutlined,
