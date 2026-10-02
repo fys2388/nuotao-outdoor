@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # Bump on each release; not read from .env to avoid drift between dev and prod.
 APP_VERSION = "1.0.0"
 
+# Rate limiting configuration
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+
 app = FastAPI(
     title=settings.app_name,
     version=APP_VERSION,
@@ -94,7 +97,12 @@ app = FastAPI(
         "displayRequestDuration": True,
         "showExtensions": True,
     },
+    on_event=("startup", "shutdown"),
 )
+
+# Add rate limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # CORS 中间件配置 - 允许前端跨域访问
 app.add_middleware(
