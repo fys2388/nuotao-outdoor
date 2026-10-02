@@ -172,6 +172,7 @@ class MFASecretResponse(BaseModel):
     secret: str
     provisioning_uri: str
     qr_code_base64: str
+    backup_codes: list[str] = []
 
 
 class MFAVerifyRequest(BaseModel):

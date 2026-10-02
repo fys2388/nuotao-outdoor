@@ -5,7 +5,10 @@ Implements TOTP (Time-based One-Time Password) for two-factor authentication.
 
 import base64
 import qrcode
+import secrets
+import string
 from io import BytesIO
+from datetime import datetime, timezone
 from typing import Optional
 
 import pyotp
@@ -18,8 +21,6 @@ class MFAService:
 
     def __init__(self):
         self.settings = get_settings()
-        # Secret key for MFA (should be stored securely)
-        self.mfa_secret_key = "NUOTA0_MFA_SECRET_2024"  # Replace with env var in production
 
     def generate_totp_secret(self, username: str, email: str) -> dict:
         """Generate a new TOTP secret and QR code."""
@@ -39,10 +40,14 @@ class MFAService:
         # Generate QR code
         qr_code = self._generate_qr_code(provisioning_uri)
 
+        # Generate backup codes
+        backup_codes = self._generate_backup_codes(count=10)
+
         return {
             "secret": totp.secret,
             "provisioning_uri": provisioning_uri,
             "qr_code_base64": qr_code,
+            "backup_codes": backup_codes,
         }
 
     def verify_totp_code(self, secret: str, token: str) -> bool:
@@ -52,6 +57,24 @@ class MFAService:
             return totp.verify(token, valid_window=1)  # Allow 1 time step window
         except Exception:
             return False
+
+    def verify_backup_code(self, backup_codes: list, code: str) -> bool:
+        """Verify a backup code."""
+        if not backup_codes:
+            return False
+        
+        # Normalize code for comparison
+        normalized_code = code.upper().strip()
+        
+        # Check if code is in backup codes
+        if normalized_code in backup_codes:
+            return True
+        return False
+
+    def remove_backup_code(self, backup_codes: list, code: str) -> list:
+        """Remove a used backup code and return updated list."""
+        normalized_code = code.upper().strip()
+        return [c for c in backup_codes if c.upper() != normalized_code]
 
     def generate_totp_code(self, secret: str) -> str:
         """Generate current TOTP code for testing/backup."""
@@ -77,6 +100,17 @@ class MFAService:
         qr_string = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
         return f"data:image/png;base64,{qr_string}"
+
+    def _generate_backup_codes(self, count: int = 10) -> list:
+        """Generate backup codes for emergency access."""
+        codes = []
+        for _ in range(count):
+            # Generate code in format XXXX-XXXX
+            code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+            code += '-'
+            code += ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+            codes.append(code)
+        return codes
 
 
 # Singleton instance

@@ -3,7 +3,7 @@
 登录、注册、Token 刷新、当前用户、修改密码、用户管理
 """
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -299,6 +299,8 @@ async def delete_user_admin(
 # ============================================
 
 from app.services.mfa_service import mfa_service
+from app.models.user import User as UserModel
+from sqlalchemy import select
 
 
 @router.post("/mfa/setup", response_model=MFASecretResponse)
@@ -306,20 +308,37 @@ from app.services.mfa_service import mfa_service
 async def setup_mfa(
     request,
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Set up MFA for current user. Returns TOTP secret and QR code."""
+    # Check if user already has MFA enabled
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == UUID(current_user.id))
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    if user.mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA 已启用，无需重复设置")
+
+    # Generate new TOTP secret
     secret_data = mfa_service.generate_totp_secret(
         username=current_user.username,
-        email=current_user.email,
+        email=current_user.email or "",
     )
 
-    # TODO: Store secret in user profile (requires DB migration)
-    # For now, return secret for client to store temporarily
+    # Store secret temporarily (will be confirmed on verification)
+    user.mfa_secret = secret_data["secret"]
+    user.mfa_backup_codes = secret_data["backup_codes"]
+    await db.commit()
 
     return MFASecretResponse(
         secret=secret_data["secret"],
         provisioning_uri=secret_data["provisioning_uri"],
         qr_code_base64=secret_data["qr_code_base64"],
+        backup_codes=secret_data["backup_codes"],
     )
 
 
@@ -327,37 +346,96 @@ async def setup_mfa(
 async def verify_mfa(
     request: MFAVerifyRequest,
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Verify MFA code and enable MFA for current user."""
-    # TODO: Verify against stored secret (requires DB migration)
-    # For now, just verify the code format
-
     if not request.code or len(request.code) != 6:
         raise HTTPException(status_code=400, detail="验证码格式错误")
 
-    # TODO: Check code against user's stored TOTP secret
-    # For now, accept any valid 6-digit code
+    # Get user from database
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == UUID(current_user.id))
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    if not user.mfa_secret:
+        raise HTTPException(status_code=400, detail="请先设置 MFA")
+
+    # Verify TOTP code
+    valid = mfa_service.verify_totp_code(user.mfa_secret, request.code)
+    
+    if not valid:
+        # Try backup code
+        if user.mfa_backup_codes:
+            valid = mfa_service.verify_backup_code(user.mfa_backup_codes, request.code)
+            if valid:
+                # Remove used backup code
+                user.mfa_backup_codes = mfa_service.remove_backup_code(
+                    user.mfa_backup_codes, request.code
+                )
+                await db.commit()
+
+    if not valid:
+        raise HTTPException(status_code=401, detail="验证码错误")
+
+    # Enable MFA
+    user.mfa_enabled = True
+    user.mfa_enabled_at = datetime.now(timezone.utc)
+    await db.commit()
+
     return MFAVerifyResponse(
         success=True,
         message="MFA 验证成功，已启用",
     )
 
 
-@router.post("/mfa/verify-code")
-async def verify_mfa_code(
-    request: MFAVerifyRequest,
-    secret: str = "",  # Temporary: secret passed in request
+@router.post("/mfa/disable")
+async def disable_mfa(
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Verify MFA code against provided secret."""
-    if not request.code or len(request.code) != 6:
-        raise HTTPException(status_code=400, detail="验证码格式错误")
+    """Disable MFA for current user."""
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == UUID(current_user.id))
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    
+    if not user.mfa_enabled:
+        raise HTTPException(status_code=400, detail="MFA 未启用")
 
-    if not secret:
-        raise HTTPException(status_code=400, detail="缺少 secret")
+    # Disable MFA
+    user.mfa_enabled = False
+    user.mfa_secret = None
+    user.mfa_backup_codes = None
+    user.mfa_enabled_at = None
+    await db.commit()
 
-    valid = mfa_service.verify_totp_code(secret, request.code)
-    if not valid:
-        raise HTTPException(status_code=401, detail="验证码错误")
+    return {"success": True, "message": "MFA 已禁用"}
 
-    return {"success": True, "message": "验证码正确"}
+
+@router.get("/mfa/status")
+async def get_mfa_status(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get MFA status for current user."""
+    result = await db.execute(
+        select(UserModel).where(UserModel.id == UUID(current_user.id))
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return {
+        "mfa_enabled": user.mfa_enabled,
+        "has_backup_codes": bool(user.mfa_backup_codes),
+        "backup_codes_count": len(user.mfa_backup_codes) if user.mfa_backup_codes else 0,
+        "mfa_enabled_at": user.mfa_enabled_at.isoformat() if user.mfa_enabled_at else None,
+    }
