@@ -8,14 +8,14 @@ import {
 import {
   DollarOutlined, ReloadOutlined, SearchOutlined,
   EyeOutlined, PlusOutlined, EditOutlined,
-  TrendingUpOutlined, TrendingDownOutlined,
+  ArrowUpOutlined, ArrowDownOutlined,
   CheckCircleOutlined, WarningOutlined,
   SyncOutlined, ClockCircleOutlined, ShopOutlined,
   HomeOutlined, ExportOutlined, ImportOutlined,
   SwapOutlined, EnvironmentOutlined, FileTextOutlined,
   BarChartOutlined, PieChartOutlined, LineChartOutlined,
   WalletOutlined, CreditCardOutlined, BankOutlined,
-  CalculatorOutlined, ArrowUpOutlined, ArrowDownOutlined
+  CalculatorOutlined
 } from '@ant-design/icons'
 
 const { Title, Text, Paragraph } = Typography

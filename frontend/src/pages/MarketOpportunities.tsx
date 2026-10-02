@@ -4,7 +4,7 @@ import { useState } from 'react'
 import {
   Card, Input, Button, Typography, Row, Col, Tag, Space, message, Alert, Spin
 } from 'antd'
-import { RocketOutlined, ThunderboltOutlined, TrendChartOutlined } from '@ant-design/icons'
+import { RocketOutlined, ThunderboltOutlined, AreaChartOutlined } from '@ant-design/icons'
 
 const { Title, Paragraph, Text } = Typography
 const { TextArea } = Input
