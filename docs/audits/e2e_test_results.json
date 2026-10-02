@@ -1,17 +1,17 @@
 {
-  "timestamp": "2026-10-02T01:12:19",
+  "timestamp": "2026-10-02T09:10:18",
   "results": [
     {
       "test": "Analytics Dashboard",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 27
+      "duration_ms": 28
     },
     {
       "test": "Knowledge Entries",
       "status": "PASSED",
       "detail": "HTTP 200, count=N/A",
-      "duration_ms": 7
+      "duration_ms": 8
     },
     {
       "test": "Automation Workflows List",
@@ -22,56 +22,56 @@
     {
       "test": "Create Automation Workflow",
       "status": "PASSED",
-      "detail": "HTTP 201, id=bdab2ba0-c4f4-4ab5-9708-47c63ad0b676",
-      "duration_ms": 13
+      "detail": "HTTP 201, id=034fb41e-5244-48e4-88c1-6aab095c69e7",
+      "duration_ms": 12
     },
     {
       "test": "Verify Created Workflow",
       "status": "PASSED",
       "detail": "HTTP 200, found=True, type=list",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "test": "Calibration Runs",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 8
+      "duration_ms": 7
     },
     {
       "test": "Creative Assets List",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "test": "Creative Briefs List",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 8
+      "duration_ms": 6
     },
     {
       "test": "Anonymous Access Denied",
       "status": "PASSED",
       "detail": "HTTP 401",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "test": "Cross-Workspace Isolation",
       "status": "PASSED",
       "detail": "HTTP 200 - 数据层使用 DEFAULT_WORKSPACE_ID",
-      "duration_ms": 7
+      "duration_ms": 6
     },
     {
       "test": "Products List",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 9
+      "duration_ms": 6
     },
     {
       "test": "Briefs List",
       "status": "PASSED",
       "detail": "HTTP 200",
-      "duration_ms": 4
+      "duration_ms": 6
     }
   ],
   "summary": {
