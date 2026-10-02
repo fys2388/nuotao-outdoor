@@ -1,0 +1,77 @@
+global:
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'security@nuotaooutdoor.com'
+  smtp_auth_username: 'security@nuotaooutdoor.com'
+  smtp_auth_password: 'NUOTA0_SMTP_PASSWORD'
+  smtp_require_tls: true
+  resolve_timeout: 5m
+
+receivers:
+  - name: 'security-email'
+    email_configs:
+      - to: 'security@nuotaooutdoor.com'
+        send_resolved: true
+        headers:
+          Subject: '[Nuotao 安全告警] {{ .GroupLabels.severity }} - {{ .GroupLabels.alertname }}'
+          From: 'security@nuotaooutdoor.com'
+
+  - name: 'security-slack'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/T00000000/B00000000/xxxxxxxx'
+        channel: '#security'
+        title: '[{{ .GroupLabels.severity | toUpper }}] {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+        send_resolved: true
+        mention_channel: 'here'
+
+  - name: 'security-sms'
+    webhook_configs:
+      - url: 'http://localhost:9093/api/v1/alert'
+        send_resolved: true
+
+route:
+  receiver: 'security-email'
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - match:
+        severity: 'critical'
+      receiver: 'security-sms'
+      repeat_interval: 15m
+      continue: true
+    - match:
+        severity: 'high'
+      receiver: 'security-slack'
+      repeat_interval: 1h
+      continue: true
+    - match:
+        severity: 'medium'
+      receiver: 'security-email'
+      repeat_interval: 4h
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'high'
+    equal: ['alertname', 'instance']
+
+  - source_match:
+      severity: 'high'
+    target_match:
+      severity: 'medium'
+    equal: ['alertname', 'instance']
+
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+notify_on_recovery: true
+notify_on_restate: true
+auto_resolve: true
+auto_resolve_after: 30m
+
+smarthttp:
+  enable: true
+  base_url: 'http://localhost:9093'
