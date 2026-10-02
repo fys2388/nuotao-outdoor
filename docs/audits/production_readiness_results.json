@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-01T15:30:05.642686+00:00",
+  "timestamp": "2026-10-02T01:09:31.785125+00:00",
   "results": [
     {
       "test": "Vision request format",
@@ -44,22 +44,22 @@
     {
       "test": "Product creation",
       "status": "PASSED",
-      "detail": "id=26f5450c-3632-4ccf-a65a-268ac06949c2"
+      "detail": "id=a81b3a54-c9ea-4340-a7b6-922222580923"
     },
     {
       "test": "Brief creation",
       "status": "PASSED",
-      "detail": "id=beea1dca-4f6f-4e7f-a2b5-0ed3f42ceaa6"
+      "detail": "id=3b1d0749-4dc4-46ae-917f-44e1143c5760"
     },
     {
       "test": "Generation run creation",
       "status": "PASSED",
-      "detail": "id=1e425d04-315a-45c9-a73d-9b4ecc40f564"
+      "detail": "id=9326d95a-578c-4087-b7d7-d450bfa90b0a"
     },
     {
       "test": "Asset creation",
       "status": "PASSED",
-      "detail": "id=8f965a63-d89d-4946-ad6a-61dfb7c0758a, status=QC_PASSED"
+      "detail": "id=4c259dcc-b354-4cb4-ad29-aa1f59ecf799, status=QC_PASSED"
     },
     {
       "test": "Asset status transition (QC_PASSED → PENDING_REVIEW)",
@@ -74,12 +74,12 @@
     {
       "test": "Review record creation",
       "status": "PASSED",
-      "detail": "id=3cd2ae1a-7d99-4e98-a7c9-3c1f96c83faf"
+      "detail": "id=c57470ce-c8fb-47ca-90d8-41240c79c8ef"
     },
     {
       "test": "Approval request creation",
       "status": "PASSED",
-      "detail": "id=36504ea7-7c9a-4493-b26f-56e30ea6d193, status=pending"
+      "detail": "id=9fcd406a-2c3f-4a57-baf3-2d6d7eede1fa, status=pending"
     },
     {
       "test": "Workspace isolation",
@@ -94,7 +94,7 @@
     {
       "test": "Automation workflow (dedicated model)",
       "status": "PASSED",
-      "detail": "id=a38c4398-bae3-4018-93cf-9f38f42307b7, type=batch_generation"
+      "detail": "id=af671bef-8be6-4cb7-bf52-908f739d28ec, type=batch_generation"
     },
     {
       "test": "Workflow execution tracking",
@@ -104,7 +104,7 @@
     {
       "test": "Cost event tracking",
       "status": "PASSED",
-      "detail": "id=184eea49-e524-49ff-a2f6-0039500c80d4, cost=0.05"
+      "detail": "id=c0c13d92-4547-46b5-a6d6-e206a3ea3843, cost=0.05"
     },
     {
       "test": "Trace ID propagation",
