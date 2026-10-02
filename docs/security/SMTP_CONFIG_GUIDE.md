@@ -1,264 +1,314 @@
-# Nuotao AI OS - SMTP 邮箱配置指南
+# SMTP 邮箱配置指南
 
-## 1. 配置 Gmail SMTP
+**文档**: SMTP 邮箱配置
+**版本**: v1.0
+**日期**: 2026-10-02
 
-### 步骤 1: 创建 Gmail 应用密码
+---
 
-1. 访问 https://myaccount.google.com/
-2. 选择 "安全性"
-3. 找到 "2 步验证" 并开启
-4. 返回安全性页面，选择 "应用密码"
-5. 选择 "邮件" 作为应用
-6. 选择设备名称 (如: Nuotao Alertmanager)
-7. 复制生成的应用密码 (格式: xxxx xxxx xxxx xxxx)
+## 1. 概述
 
-### 步骤 2: 配置 Alertmanager
+配置 SMTP 邮箱用于接收安全告警邮件通知。支持多种邮箱服务商:
+- Gmail
+- Outlook / Microsoft 365
+- QQ 邮箱
+- 企业邮箱 (Exchange)
+
+---
+
+## 2. Gmail 配置
+
+### 2.1 启用两步验证
+
+1. 访问 https://myaccount.google.com/security
+2. 点击 "两步验证"
+3. 按提示启用
+
+### 2.2 创建应用密码
+
+1. 访问 https://myaccount.google.com/apppasswords
+2. 选择应用: Mail
+3. 选择设备: Computer
+4. 输入自定义名称 (例如: Alertmanager)
+5. 点击 "生成"
+6. 复制生成的应用密码 (例如: `abcd efgh ijkl mnop`)
+
+### 2.3 更新 Alertmanager 配置
 
 编辑 `/etc/alertmanager/alertmanager.yml`:
 
 ```yaml
 global:
   smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'security@nuotaooutdoor.com'
-  smtp_auth_username: 'security@nuotaooutdoor.com'
-  smtp_auth_password: 'your_app_password_here'
+  smtp_from: 'alerts@your-gmail.com'
+  smtp_auth_username: 'alerts@your-gmail.com'
+  smtp_auth_password: 'abcdefghijk1'  # 应用密码 (无空格)
   smtp_require_tls: true
   resolve_timeout: 5m
+
+receivers:
+  - name: 'security-email'
+    email_configs:
+      - to: 'admin@your-company.com'
+        send_resolved: true
+        headers:
+          Subject: '[Nuotao 安全告警] {{ .GroupLabels.severity }} - {{ .GroupLabels.alertname }}'
+          From: 'alerts@your-gmail.com'
 ```
 
-### 步骤 3: 重启 Alertmanager
+### 2.4 重启 Alertmanager
 
 ```bash
 systemctl restart alertmanager
 ```
 
-## 2. 配置其他邮箱服务商
+---
 
-### QQ 邮箱
+## 3. Outlook / Microsoft 365 配置
 
-```yaml
-global:
-  smtp_smarthost: 'smtp.qq.com:587'
-  smtp_from: 'security@qq.com'
-  smtp_auth_username: 'security@qq.com'
-  smtp_auth_password: 'your_app_password_here'
-  smtp_require_tls: true
-```
+### 3.1 创建应用密码
 
-### 企业邮箱
+1. 访问 https://account.live.com/proofs/manage
+2. 启用两因素身份验证
+3. 生成应用密码
+
+### 3.2 更新 Alertmanager 配置
 
 ```yaml
 global:
-  smtp_smarthost: 'smtp.yourcompany.com:587'
-  smtp_from: 'security@yourcompany.com'
-  smtp_auth_username: 'security@yourcompany.com'
-  smtp_auth_password: 'your_password_here'
+  smtp_smarthost: 'smtp.office365.com:587'
+  smtp_from: 'alerts@your-outlook.com'
+  smtp_auth_username: 'alerts@your-outlook.com'
+  smtp_auth_password: 'your-app-password'
   smtp_require_tls: true
+  resolve_timeout: 5m
 ```
-
-## 3. 测试 SMTP 配置
-
-### 步骤 1: 发送测试告警
-
-```bash
-# 创建测试告警
-cat > /tmp/test_email_alert.json << EOF
-[
-  {
-    "labels": {
-      "alertname": "TestEmailAlert",
-      "severity": "warning",
-      "instance": "localhost"
-    },
-    "annotations": {
-      "summary": "Nuotao 邮件告警测试",
-      "description": "这是一个测试邮件告警，验证 SMTP 配置"
-    }
-  }
-]
-EOF
-
-# 发送测试告警
-curl -X POST http://localhost:9093/api/v2/alerts \
-  -H 'Content-Type: application/json' \
-  -d @/tmp/test_email_alert.json
-```
-
-### 步骤 2: 检查邮件收件箱
-
-- 检查邮箱是否收到告警邮件
-- 验证邮件格式是否正确
-- 确认发件人地址正确
-
-### 步骤 3: 检查 Alertmanager 日志
-
-```bash
-# 查看 Alertmanager 日志
-journalctl -u alertmanager -n 50
-
-# 查看错误日志
-journalctl -u alertmanager -n 50 | grep -i error
-```
-
-## 4. 邮件模板
-
-### 告警邮件主题
-
-```
-[Nuotao 安全告警] {{ .GroupLabels.severity }} - {{ .GroupLabels.alertname }}
-```
-
-### 告警邮件正文
-
-Alertmanager 会自动生成邮件正文，包含以下信息:
-- 告警名称
-- 告警严重性
-- 告警详情
-- 时间戳
-- 运行手册链接
-
-### 自定义邮件模板
-
-创建模板文件 `/etc/alertmanager/templates/email.tmpl`:
-
-```go
-{{ define "email.subject" }}
-[Nuotao 安全告警] {{ .GroupLabels.severity | toUpper }} - {{ .GroupLabels.alertname }}
-{{ end }}
-
-{{ define "email.html" }}
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: Arial, sans-serif; }
-        .header { color: #333; }
-        .critical { color: #FF0000; font-weight: bold; }
-        .high { color: #FFA500; font-weight: bold; }
-        .medium { color: #FFFF00; font-weight: bold; }
-        .low { color: #32CD32; font-weight: bold; }
-        .footer { color: #666; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Nuotao 安全告警</h1>
-    </div>
-
-    <h2>
-        {{ if eq .GroupLabels.severity "critical" }}
-        <span class="critical">CRITICAL</span>
-        {{ else if eq .GroupLabels.severity "high" }}
-        <span class="high">HIGH</span>
-        {{ else if eq .GroupLabels.severity "medium" }}
-        <span class="medium">MEDIUM</span>
-        {{ else }}
-        <span class="low">LOW</span>
-        {{ end }}
-    </h2>
-
-    <h3>告警详情</h3>
-    <ul>
-        <li><strong>告警名称</strong>: {{ .GroupLabels.alertname }}</li>
-        <li><strong>严重性</strong>: {{ .GroupLabels.severity }}</li>
-        <li><strong>实例</strong>: {{ .GroupLabels.instance }}</li>
-        <li><strong>时间</strong>: {{ .GroupLabels.startsAt }}</li>
-    </ul>
-
-    <h3>告警内容</h3>
-    {{ range .Alerts }}
-    <div style="margin: 10px 0; padding: 10px; background: #f5f5f5;">
-        <p><strong>摘要</strong>: {{ .Annotations.summary }}</p>
-        <p><strong>描述</strong>: {{ .Annotations.description }}</p>
-        {{ if .Annotations.runbook }}
-        <p><strong>运行手册</strong>: <a href="{{ .Annotations.runbook }}">{{ .Annotations.runbook }}</a></p>
-        {{ end }}
-    </div>
-    {{ end }}
-
-    <div class="footer">
-        <p>此邮件由 Nuotao AI OS Alertmanager 自动发送</p>
-        <p>请勿直接回复此邮件</p>
-    </div>
-</body>
-</html>
-{{ end }}
-```
-
-## 5. 安全最佳实践
-
-### 5.1 应用密码
-
-- 使用应用密码而非账户密码
-- 定期轮换应用密码
-- 存储应用密码在安全位置
-
-### 5.2 邮件安全
-
-- 不在邮件中包含敏感信息
-- 使用 TLS 加密传输
-- 配置 SPF/DKIM/DMARC
-
-### 5.3 监控
-
-- 监控邮件发送失败
-- 记录所有邮件发送
-- 定期审查邮件日志
-
-## 6. 故障排查
-
-### 问题 1: 邮件无法发送
-
-**可能原因**:
-- SMTP 服务器地址错误
-- 端口错误
-- 认证失败
-
-**解决方法**:
-```bash
-# 检查 SMTP 连接
-telnet smtp.gmail.com 587
-
-# 检查 Alertmanager 日志
-journalctl -u alertmanager -n 50
-
-# 检查错误日志
-journalctl -u alertmanager -n 50 | grep -i error
-```
-
-### 问题 2: 认证失败
-
-**可能原因**:
-- 应用密码错误
-- 2 步验证未开启
-
-**解决方法**:
-- 重新生成应用密码
-- 确认 2 步验证已开启
-- 检查用户名是否正确
-
-### 问题 3: 邮件被标记为垃圾邮件
-
-**可能原因**:
-- 未配置 SPF/DKIM/DMARC
-- 邮件内容触发垃圾邮件过滤器
-
-**解决方法**:
-- 配置 SPF 记录
-- 配置 DKIM 签名
-- 配置 DMARC 记录
-- 检查邮件内容
-
-## 7. 参考资源
-
-- [Gmail 应用密码](https://support.google.com/accounts/answer/185833)
-- [Alertmanager SMTP 配置](https://prometheus.io/docs/alerting/latest/configuration/#email_config)
-- [SPF 配置](https://support.google.com/a/answer/33786)
-- [DKIM 配置](https://support.google.com/a/answer/2466580)
-- [DMARC 配置](https://support.google.com/a/answer/2466583)
 
 ---
 
-**更新日期**: 2026-10-02
-**维护者**: Security Team
+## 4. QQ 邮箱配置
+
+### 4.1 开启 SMTP 服务
+
+1. 登录 QQ 邮箱
+2. 点击 "设置" -> "账号"
+3. 找到 "POP3/IMAP/SMTP..."
+4. 开启 SMTP 服务
+5. 生成授权码
+
+### 4.2 更新 Alertmanager 配置
+
+```yaml
+global:
+  smtp_smarthost: 'smtp.qq.com:465'
+  smtp_from: 'alerts@your-qq.com'
+  smtp_auth_username: 'alerts@your-qq.com'
+  smtp_auth_password: 'your-authorization-code'
+  smtp_require_tls: true
+  smtp_skip_verify: false
+  resolve_timeout: 5m
+```
+
+---
+
+## 5. 企业邮箱配置
+
+### 5.1 Exchange Online
+
+```yaml
+global:
+  smtp_smarthost: 'smtp.office365.com:587'
+  smtp_from: 'alerts@your-company.com'
+  smtp_auth_username: 'alerts@your-company.com'
+  smtp_auth_password: 'your-app-password'
+  smtp_require_tls: true
+  resolve_timeout: 5m
+```
+
+### 5.2 Exchange On-Premises
+
+```yaml
+global:
+  smtp_smarthost: 'smtp.your-company.com:587'
+  smtp_from: 'alerts@your-company.com'
+  smtp_auth_username: 'alerts@your-company.com'
+  smtp_auth_password: 'your-password'
+  smtp_require_tls: true
+  resolve_timeout: 5m
+```
+
+---
+
+## 6. 邮件模板
+
+### 6.1 基础模板
+
+```yaml
+receivers:
+  - name: 'security-email'
+    email_configs:
+      - to: 'admin@your-company.com'
+        send_resolved: true
+        headers:
+          Subject: '[Nuotao 安全告警] {{ .GroupLabels.severity }} - {{ .GroupLabels.alertname }}'
+          From: 'alerts@your-company.com'
+        html: |
+          <h2>Nuotao 安全告警</h2>
+          <table>
+            <tr><td><b>严重级别</b></td><td>{{ .GroupLabels.severity }}</td></tr>
+            <tr><td><b>告警名称</b></td><td>{{ .GroupLabels.alertname }}</td></tr>
+            <tr><td><b>实例</b></td><td>{{ .CommonLabels.instance }}</td></tr>
+            <tr><td><b>开始时间</b></td><td>{{ .StartsAt.Format "2006-01-02 15:04:05" }}</td></tr>
+          </table>
+          <h3>告警详情</h3>
+          <ul>
+            {{ range .Alerts }}
+            <li><b>{{ .Annotations.summary }}</b><br>
+                {{ .Annotations.description }}
+            </li>
+            {{ end }}
+          </ul>
+```
+
+### 6.2 简版模板
+
+```yaml
+receivers:
+  - name: 'security-email'
+    email_configs:
+      - to: 'admin@your-company.com'
+        send_resolved: true
+        headers:
+          Subject: '[{{ .GroupLabels.severity | toUpper }}] {{ .GroupLabels.alertname }}'
+          From: 'alerts@your-company.com'
+        html: |
+          <p><b>严重级别</b>: {{ .GroupLabels.severity }}</p>
+          <p><b>告警名称</b>: {{ .GroupLabels.alertname }}</p>
+          <p><b>实例</b>: {{ .CommonLabels.instance }}</p>
+          {{ range .Alerts }}
+          <p><b>摘要</b>: {{ .Annotations.summary }}</p>
+          {{ end }}
+```
+
+---
+
+## 7. 测试配置
+
+### 7.1 发送测试告警
+
+```bash
+curl -X POST http://localhost:9093/api/v2/alerts \
+  -H 'Content-Type: application/json' \
+  -d '[{
+    "labels": {
+      "alertname": "TestAlert",
+      "severity": "critical",
+      "instance": "localhost:8000"
+    },
+    "annotations": {
+      "summary": "测试告警 - 请确认邮件接收",
+      "description": "这是一个测试告警，用于验证邮件配置"
+    }
+  }]'
+```
+
+### 7.2 检查告警状态
+
+```bash
+curl -X GET http://localhost:9093/api/v2/alerts | python3 -m json.tool
+```
+
+### 7.3 查看 Alertmanager 日志
+
+```bash
+journalctl -u alertmanager -f
+```
+
+---
+
+## 8. 故障排查
+
+### 8.1 邮件发送失败
+
+**错误**: `dial tcp: lookup smtp.gmail.com: no such host`
+
+**解决**:
+```bash
+# 检查 DNS 解析
+nslookup smtp.gmail.com
+
+# 检查网络连接
+telnet smtp.gmail.com 587
+```
+
+**错误**: `authentication failed`
+
+**解决**:
+- 检查用户名和密码是否正确
+- 确认是否使用应用密码而非邮箱密码
+- 检查是否已启用两步验证
+
+**错误**: `TLS handshake failed`
+
+**解决**:
+- 检查服务器是否支持 TLS
+- 尝试更改端口 (587 -> 465)
+- 检查防火墙设置
+
+### 8.2 邮件未收到
+
+**检查项**:
+1. 收件人地址是否正确
+2. 是否进入垃圾邮件文件夹
+3. 发送方地址是否在白名单
+
+**调试命令**:
+```bash
+# 查看 Alertmanager 日志
+journalctl -u alertmanager -f
+
+# 手动测试 SMTP 连接
+swaks --to admin@your-company.com \
+      --from alerts@your-gmail.com \
+      --server smtp.gmail.com:587 \
+      --tls \
+      --auth \
+      --html "Test email"
+```
+
+---
+
+## 9. 安全建议
+
+### 9.1 密钥管理
+
+1. **不要硬编码密码**: 使用环境变量或 Secrets 管理
+2. **使用应用密码**: 不要使用邮箱主密码
+3. **定期更换密码**: 每 90 天更换应用密码
+4. **限制权限**: 应用密码只用于邮件发送
+
+### 9.2 配置示例
+
+```yaml
+global:
+  smtp_smarthost: '{{ env "SMTP_HOST" }}:{{ env "SMTP_PORT" }}'
+  smtp_from: '{{ env "SMTP_FROM" }}'
+  smtp_auth_username: '{{ env "SMTP_USERNAME" }}'
+  smtp_auth_password: '{{ env "SMTP_PASSWORD" }}'
+  smtp_require_tls: true
+  resolve_timeout: 5m
+```
+
+---
+
+## 10. 参考文档
+
+- [Alertmanager 配置文档](https://prometheus.io/docs/alerting/latest/configuration/)
+- [Gmail 应用密码](https://support.google.com/mail/answer/185833)
+- [Microsoft 应用密码](https://support.microsoft.com/en-us/office/use-an-app-password-with-2-step-verification)
+- [QQ 邮箱 SMTP](https://help.mail.qq.com/detail/10001371)
+
+---
+
+**文档生成**: 2026-10-02
+**生成者**: DeepSeek Harness AI Agent
