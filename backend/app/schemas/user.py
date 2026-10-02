@@ -161,3 +161,25 @@ class UserListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+# ============================================
+# MFA (Multi-Factor Authentication) Schemas
+# ============================================
+
+class MFASecretResponse(BaseModel):
+    """MFA setup response with TOTP secret and QR code"""
+    secret: str
+    provisioning_uri: str
+    qr_code_base64: str
+
+
+class MFAVerifyRequest(BaseModel):
+    """MFA verification request"""
+    code: str = Field(..., min_length=6, max_length=6, description="6-digit TOTP code")
+
+
+class MFAVerifyResponse(BaseModel):
+    """MFA verification response"""
+    success: bool
+    message: str

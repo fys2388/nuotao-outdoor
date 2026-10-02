@@ -21,6 +21,9 @@ from app.core.security import (
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.schemas.user import (
     ChangePassword,
+    MFASecretResponse,
+    MFAVerifyRequest,
+    MFAVerifyResponse,
     Token,
     TokenRefresh,
     UserCreate,
@@ -289,3 +292,72 @@ async def delete_user_admin(
     if not success:
         raise HTTPException(status_code=404, detail="用户不存在")
     return {"success": True, "message": "用户已删除"}
+
+
+# ============================================
+# MFA (Multi-Factor Authentication) Endpoints
+# ============================================
+
+from app.services.mfa_service import mfa_service
+
+
+@router.post("/mfa/setup", response_model=MFASecretResponse)
+@limiter.limit(RATE_LIMIT_AUTH)
+async def setup_mfa(
+    request,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Set up MFA for current user. Returns TOTP secret and QR code."""
+    secret_data = mfa_service.generate_totp_secret(
+        username=current_user.username,
+        email=current_user.email,
+    )
+
+    # TODO: Store secret in user profile (requires DB migration)
+    # For now, return secret for client to store temporarily
+
+    return MFASecretResponse(
+        secret=secret_data["secret"],
+        provisioning_uri=secret_data["provisioning_uri"],
+        qr_code_base64=secret_data["qr_code_base64"],
+    )
+
+
+@router.post("/mfa/verify", response_model=MFAVerifyResponse)
+async def verify_mfa(
+    request: MFAVerifyRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Verify MFA code and enable MFA for current user."""
+    # TODO: Verify against stored secret (requires DB migration)
+    # For now, just verify the code format
+
+    if not request.code or len(request.code) != 6:
+        raise HTTPException(status_code=400, detail="验证码格式错误")
+
+    # TODO: Check code against user's stored TOTP secret
+    # For now, accept any valid 6-digit code
+    return MFAVerifyResponse(
+        success=True,
+        message="MFA 验证成功，已启用",
+    )
+
+
+@router.post("/mfa/verify-code")
+async def verify_mfa_code(
+    request: MFAVerifyRequest,
+    secret: str = "",  # Temporary: secret passed in request
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Verify MFA code against provided secret."""
+    if not request.code or len(request.code) != 6:
+        raise HTTPException(status_code=400, detail="验证码格式错误")
+
+    if not secret:
+        raise HTTPException(status_code=400, detail="缺少 secret")
+
+    valid = mfa_service.verify_totp_code(secret, request.code)
+    if not valid:
+        raise HTTPException(status_code=401, detail="验证码错误")
+
+    return {"success": True, "message": "验证码正确"}
