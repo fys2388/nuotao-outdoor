@@ -24,7 +24,7 @@ def upgrade() -> None:
     op.create_table(
         "creative_calibration_runs",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("workspace_id", sa.Uuid(), nullable=False),
+        sa.Column("workspace_id", sa.String(length=36), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, server_default="proposed"),
