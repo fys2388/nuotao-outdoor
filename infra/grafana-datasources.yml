@@ -1,0 +1,45 @@
+# Grafana Data Sources Configuration
+# /etc/grafana/provisioning/datasources/datasources.yml
+
+apiVersion: 1
+
+datasources:
+  # Prometheus
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+
+  # Loki
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://localhost:3100
+    editable: true
+    jsonData:
+      httpMethod: POST
+      derivedFields:
+        - datasourceUid: loki
+          matcherType: regex
+          matcherRegex: '\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\b'
+          name: TraceID
+          url: http://localhost:4318/trace/$${__value.raw}
+
+  # PostgreSQL
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: localhost:5432
+    database: nuotao
+    user: nuotao
+    secureJsonData:
+      password: Nuotao_DB_2024
+    editable: true
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
