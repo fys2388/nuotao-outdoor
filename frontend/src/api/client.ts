@@ -58,6 +58,47 @@ export interface WcStatusResponse {
   wc_verify_status: string | null
 }
 
+// ── 商品生命周期：下架（回收站）/ 恢复 / 彻底删除 ────────────────────
+export interface ProductLifecycleItemOut {
+  product_id: string
+  sku: string | null
+  success: boolean
+  action: string
+  woocommerce_id: number | null
+  woocommerce_status: string | null
+  verified: boolean
+  error: string | null
+  message: string | null
+}
+
+/** 下架（移入回收站）结果。本地与 WooCommerce 分别汇报，避免掩盖「店铺仍在售」。 */
+export interface ProductDeleteOutcome {
+  deleted: number
+  not_found: string[]
+  wc_unpublished: number
+  wc_unpublish_failed: ProductLifecycleItemOut[]
+  blocked: boolean
+  message: string | null
+}
+
+export interface ProductRestoreOutcome {
+  restored: number
+  not_found: string[]
+  wc_restored: number
+  wc_restore_failed: ProductLifecycleItemOut[]
+  blocked: boolean
+  message: string | null
+}
+
+export interface ProductPurgeOutcome {
+  purged: number
+  blocked: number
+  wc_delete_failed: number
+  not_found: string[]
+  items: ProductLifecycleItemOut[]
+  message: string | null
+}
+
 // ── Product Decision Write types (Phase 3C-3) ───────────────────────
 export type DecisionType = 'CONTINUE' | 'REJECT' | 'SUPPLEMENT_DATA' | 'APPROVE'
 
@@ -431,12 +472,38 @@ export const api = {
     if (category) params.set('category', category)
     return request(`/products?${params.toString()}`)
   },
-  deleteProduct: (productId: string) =>
-    request<{ deleted: number; not_found: string[] }>(`/products/${productId}`, {
-      method: 'DELETE',
+  // 下架到回收站（可恢复），并联动把 WooCommerce 商品移入回收站。
+  // forceLocal=true 表示「接受店铺未下架，仅处理本地」。
+  deleteProduct: (productId: string, forceLocal = false) =>
+    request<ProductDeleteOutcome>(
+      `/products/${productId}${forceLocal ? '?force_local=true' : ''}`,
+      { method: 'DELETE' },
+    ),
+  batchDeleteProducts: (productIds: string[], forceLocal = false) =>
+    request<ProductDeleteOutcome>('/products/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ product_ids: productIds, force_local: forceLocal }),
     }),
-  batchDeleteProducts: (productIds: string[]) =>
-    request<{ deleted: number; not_found: string[] }>('/products/batch-delete', {
+  // 回收站
+  getRecycleBin: (limit = 200, offset = 0) =>
+    request<{ items: Record<string, any>[]; total: number }>(
+      `/products/recycle-bin?limit=${limit}&offset=${offset}`,
+    ),
+  restoreProduct: (productId: string, forceLocal = false) =>
+    request<ProductRestoreOutcome>(
+      `/products/${productId}/restore${forceLocal ? '?force_local=true' : ''}`,
+      { method: 'POST' },
+    ),
+  restoreProducts: (productIds: string[], forceLocal = false) =>
+    request<ProductRestoreOutcome>(
+      `/products/restore${forceLocal ? '?force_local=true' : ''}`,
+      { method: 'POST', body: JSON.stringify({ product_ids: productIds }) },
+    ),
+  // 彻底删除（不可逆）：本地记录硬删除 + WooCommerce 商品永久删除
+  purgeProduct: (productId: string) =>
+    request<ProductPurgeOutcome>(`/products/${productId}/purge`, { method: 'DELETE' }),
+  purgeProducts: (productIds: string[]) =>
+    request<ProductPurgeOutcome>('/products/purge', {
       method: 'POST',
       body: JSON.stringify({ product_ids: productIds }),
     }),
@@ -764,11 +831,15 @@ export const api = {
   },
   createSupplier: (data: Record<string, unknown>) =>
     request('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
+  deleteSupplier: (supplierId: string) =>
+    request(`/suppliers/${supplierId}`, { method: 'DELETE' }),
   getInventorySnapshots: (limit = 100, location?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
     if (location) params.set('location', location)
     return request(`/inventory-snapshots?${params.toString()}`)
   },
+  deleteInventorySnapshot: (snapshotId: string) =>
+    request(`/inventory-snapshots/${snapshotId}`, { method: 'DELETE' }),
   getSupplyShipments: (limit = 100, status?: string, carrier?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
     if (status) params.set('status', status)
