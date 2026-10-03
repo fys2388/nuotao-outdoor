@@ -14,6 +14,7 @@ import {
   Modal,
   Popconfirm,
   Row,
+  Segmented,
   Select,
   Space,
   Statistic,
@@ -41,10 +42,12 @@ import {
   ShoppingCartOutlined,
   TeamOutlined,
   TruckOutlined,
+  UndoOutlined,
   WarningOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { api, ApiError, request } from '../api/client'
+import { api, ApiError, request, type ProductDeleteOutcome } from '../api/client'
+import { getProductImages } from '../utils/productImages'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -111,6 +114,49 @@ function apiErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '未知错误'
 }
 
+/**
+ * 409 表示下架被 WooCommerce 失败阻断——后端把完整结果放在 `detail` 里。
+ * 这种情况不是普通的请求错误，前端必须让运营看到「哪几个商品还在店铺里卖」，
+ * 并显式选择是否接受。
+ */
+function blockedDetail(error: unknown): ProductDeleteOutcome | null {
+  if (error instanceof ApiError && error.status === 409) {
+    // ApiError.detail 存的是后端原始响应体，FastAPI 把结果放在外层 detail 字段里。
+    const body = error.detail as { detail?: unknown } | null
+    const detail = body?.detail
+    if (detail && typeof detail === 'object') return detail as ProductDeleteOutcome
+  }
+  return null
+}
+
+/** 展示下架失败明细，并让运营显式决定是否「仍然只处理本地」。 */
+function reportBlockedUnpublish(detail: ProductDeleteOutcome, onForce: () => void) {
+  const failed = detail.wc_unpublish_failed || []
+  Modal.confirm({
+    title: 'WooCommerce 下架失败',
+    okText: '仍然移入回收站',
+    okButtonProps: { danger: true },
+    cancelText: '取消',
+    content: (
+      <div>
+        <p>{detail.message || '店铺未成功下架，商品可能仍在前台在售。'}</p>
+        <ul style={{ paddingLeft: 20, maxHeight: 240, overflow: 'auto' }}>
+          {failed.map((item, index) => (
+            <li key={`${item.product_id}-${index}`}>
+              <strong>{item.sku || '(无 SKU)'}</strong>
+              {` — ${item.error || item.action}`}
+            </li>
+          ))}
+        </ul>
+        <p style={{ color: '#888', marginBottom: 0 }}>
+          继续操作只会把本地商品移入回收站，WooCommerce 商品仍会在售。
+        </p>
+      </div>
+    ),
+    onOk: onForce,
+  })
+}
+
 function currency(value: unknown, currencyCode = 'USD'): string {
   const amount = Number(value || 0)
   return `${currencyCode} ${amount.toLocaleString(undefined, {
@@ -148,17 +194,12 @@ const productStatus: Record<string, { color: string; label: string }> = {
 }
 
 function productImages(product: ProductRecord | null): string[] {
-  if (!product) return []
-  const media = product.meta?.media
-  const candidates = media?.images || media?.gallery_images || product.meta?.images || []
-  if (!Array.isArray(candidates)) return []
-  return Array.from(
-    new Set(
-      candidates
-        .map((item) => (typeof item === 'string' ? item : item?.url || item?.src))
-        .filter((url): url is string => typeof url === 'string' && /^https?:\/\//.test(url)),
-    ),
-  )
+  // Delegates to the shared resolver. The inline version read only
+  // media.images / media.gallery_images / meta.images, so it could not see
+  // media.main_image (written by the WooCommerce sync) or meta.main_images
+  // (which build_wc_payload prefers) — products that plainly had an image
+  // rendered the placeholder instead.
+  return getProductImages(product)
 }
 
 function englishLocalization(product: ProductRecord | null): Record<string, any> | null {
@@ -168,6 +209,9 @@ function englishLocalization(product: ProductRecord | null): Record<string, any>
 
 export function ProductsPage() {
   const [products, setProducts] = useState<ProductRecord[]>([])
+  const [recycled, setRecycled] = useState<ProductRecord[]>([])
+  // 「回收站」是同一个页面的第二个视图：下架可恢复，彻底删除不可逆。
+  const [view, setView] = useState<'active' | 'recycle'>('active')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -175,36 +219,46 @@ export function ProductsPage() {
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
   const [pushing, setPushing] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
   const [detailProduct, setDetailProduct] = useState<ProductRecord | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+
+  const inRecycleBin = view === 'recycle'
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const response = await api.getProducts(500, 0, status === 'all' ? undefined : status)
-      setProducts((response as ProductRecord[]) || [])
+      if (view === 'recycle') {
+        const response = await api.getRecycleBin(500, 0)
+        setRecycled((response.items || []) as unknown as ProductRecord[])
+      } else {
+        const response = await api.getProducts(500, 0, status === 'all' ? undefined : status)
+        setProducts((response as ProductRecord[]) || [])
+      }
     } catch (loadError) {
-      setProducts([])
+      if (view === 'recycle') setRecycled([])
+      else setProducts([])
       setError(apiErrorMessage(loadError))
     } finally {
       setLoading(false)
     }
-  }, [status])
+  }, [status, view])
 
   useEffect(() => {
     void load()
   }, [load])
 
   const visibleProducts = useMemo(() => {
+    const source = inRecycleBin ? recycled : products
     const keyword = search.trim().toLowerCase()
-    if (!keyword) return products
-    return products.filter((product) =>
+    if (!keyword) return source
+    return source.filter((product) =>
       [product.name, product.sku, product.category, product.brand]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(keyword)),
     )
-  }, [products, search])
+  }, [products, recycled, inRecycleBin, search])
 
   const stats = useMemo(
     () => ({
@@ -315,59 +369,151 @@ export function ProductsPage() {
     }
   }
 
-  const deleteOne = (product: ProductRecord) => {
-    Modal.confirm({
-      title: '删除该商品？',
-      content: `将软删「${product.name}」（SKU: ${product.sku}），列表不再显示，可在数据库中恢复。`,
-      okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        const result = (await api.deleteProduct(String(product.id))) as {
-          deleted: number
-          not_found: string[]
-        }
+  const unpublishOne = (product: ProductRecord) => {
+    const doUnpublish = async (forceLocal = false) => {
+      try {
+        const result = await api.deleteProduct(String(product.id), forceLocal)
         if (result.deleted > 0) {
-          message.success(`已删除 ${result.deleted} 个商品`)
+          const warn = result.wc_unpublish_failed?.length
+            ? `；${result.wc_unpublish_failed.length} 个 WooCommerce 商品未下架`
+            : ''
+          message.success(`已移入回收站：${product.name}${warn}`)
         } else {
-          message.warning('该商品已被删除或不存在')
+          message.warning('该商品不存在或已在回收站中')
         }
         setSelectedKeys((keys) => keys.filter((key) => String(key) !== String(product.id)))
         await load()
-      },
+      } catch (unpublishError) {
+        const detail = blockedDetail(unpublishError)
+        if (detail && !forceLocal) {
+          reportBlockedUnpublish(detail, () => void doUnpublish(true))
+          return
+        }
+        message.error(`下架失败：${apiErrorMessage(unpublishError)}`)
+      }
+    }
+
+    Modal.confirm({
+      title: '下架该商品？',
+      content: `「${product.name}」（SKU: ${product.sku}）将移入回收站，并同时下架 WooCommerce 商品。之后可在回收站恢复。`,
+      okText: '下架',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => doUnpublish(false),
     })
   }
 
-  const batchDelete = () => {
+  const batchUnpublish = () => {
     if (selectedKeys.length === 0) {
-      message.warning('请先勾选需要删除的商品')
+      message.warning('请先勾选需要下架的商品')
       return
     }
     const count = selectedKeys.length
+    const doUnpublish = async (forceLocal = false) => {
+      setDeleting(true)
+      try {
+        const result = await api.batchDeleteProducts(selectedKeys.map(String), forceLocal)
+        const warn = result.wc_unpublish_failed?.length
+          ? `，${result.wc_unpublish_failed.length} 个 WooCommerce 商品未下架`
+          : ''
+        message.success(
+          `已移入回收站 ${result.deleted} 个` +
+            (result.not_found.length ? `，${result.not_found.length} 个不存在已跳过` : '') +
+            warn,
+        )
+        setSelectedKeys([])
+        await load()
+      } catch (unpublishError) {
+        const detail = blockedDetail(unpublishError)
+        if (detail && !forceLocal) {
+          reportBlockedUnpublish(detail, () => void doUnpublish(true))
+          return
+        }
+        message.error(`下架失败：${apiErrorMessage(unpublishError)}`)
+      } finally {
+        setDeleting(false)
+      }
+    }
+
     Modal.confirm({
-      title: `批量删除选中的 ${count} 个商品？`,
-      content: '将对选中商品执行软删，列表不再显示，可在数据库中恢复。',
-      okText: `删除 ${count} 个`,
+      title: `批量下架选中的 ${count} 个商品？`,
+      content: '将移入回收站，并同时下架对应的 WooCommerce 商品。之后可在回收站恢复。',
+      okText: `下架 ${count} 个`,
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => doUnpublish(false),
+    })
+  }
+
+  const restoreOne = async (product: ProductRecord) => {
+    setBusyId(String(product.id))
+    try {
+      await api.restoreProduct(String(product.id))
+      message.success(`已恢复：${product.name}`)
+      await load()
+    } catch (restoreError) {
+      message.error(`恢复失败：${apiErrorMessage(restoreError)}`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const batchRestore = async () => {
+    const ids = selectedKeys.map(String)
+    if (ids.length === 0) {
+      message.warning('请先勾选需要恢复的商品')
+      return
+    }
+    try {
+      const result = await api.restoreProducts(ids)
+      message.success(
+        `已恢复 ${result.restored} 个` +
+          (result.wc_restore_failed?.length
+            ? `；${result.wc_restore_failed.length} 个 WooCommerce 状态未还原`
+            : ''),
+      )
+      setSelectedKeys([])
+      await load()
+    } catch (restoreError) {
+      message.error(`批量恢复失败：${apiErrorMessage(restoreError)}`)
+    }
+  }
+
+  const purgeOne = (product: ProductRecord) => {
+    Modal.confirm({
+      title: '彻底删除该商品？',
+      content: (
+        <div>
+          <p>
+            将<strong>永久删除</strong>「{product.name}」（SKU: {product.sku}）
+            以及对应的 WooCommerce 商品，<strong>不可恢复</strong>。
+          </p>
+          <p style={{ color: '#888', marginBottom: 0 }}>
+            已被 B2B 订单 / 询价 / 履约记录引用的商品会被数据库拒绝删除（有交易凭证的
+            商品不可抹除，请改用下架）。
+          </p>
+        </div>
+      ),
+      okText: '彻底删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
-        setDeleting(true)
+        setBusyId(String(product.id))
         try {
-          const result = (await api.batchDeleteProducts(selectedKeys.map(String))) as {
-            deleted: number
-            not_found: string[]
+          const result = await api.purgeProduct(String(product.id))
+          if (result.blocked > 0) {
+            const reason = result.items.find((item) => item.action === 'blocked')?.error
+            message.warning(reason || '该商品被业务单据引用，无法彻底删除')
+          } else if (result.wc_delete_failed > 0) {
+            message.warning('本地已删除，但 WooCommerce 商品未删除，需人工清理')
+          } else {
+            message.success(`已彻底删除：${product.name}`)
           }
-          message.success(
-            `已删除 ${result.deleted} 个` +
-              (result.not_found.length ? `，${result.not_found.length} 个不存在已跳过` : ''),
-          )
-          setSelectedKeys([])
           await load()
-        } catch (deleteError) {
-          message.error(`删除失败：${apiErrorMessage(deleteError)}`)
-          throw deleteError
+        } catch (purgeError) {
+          message.error(`彻底删除失败：${apiErrorMessage(purgeError)}`)
         } finally {
-          setDeleting(false)
+          setBusyId(null)
         }
       },
     })
@@ -435,7 +581,7 @@ export function ProductsPage() {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 130,
+      width: inRecycleBin ? 190 : 130,
       render: (_, record) => (
         <Space size={0}>
           <Button
@@ -448,15 +594,39 @@ export function ProductsPage() {
           >
             查看
           </Button>
-          <Button
-            type="link"
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => deleteOne(record)}
-          >
-            删除
-          </Button>
+          {inRecycleBin ? (
+            <>
+              <Button
+                type="link"
+                size="small"
+                icon={<UndoOutlined />}
+                loading={busyId === String(record.id)}
+                onClick={() => void restoreOne(record)}
+              >
+                恢复
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                loading={busyId === String(record.id)}
+                onClick={() => purgeOne(record)}
+              >
+                彻底删除
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => unpublishOne(record)}
+            >
+              下架
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -476,41 +646,76 @@ export function ProductsPage() {
       error={error}
       extra={
         <>
-          <Button
-            icon={<CloudSyncOutlined />}
-            onClick={syncProducts}
-            disabled={Boolean(error)}
-          >
-            同步 WooCommerce
-          </Button>
-          <Button
-            type="primary"
-            icon={<AppstoreAddOutlined />}
-            onClick={() => void pushSelected()}
-            loading={pushing}
-          >
-            推送选中商品
-          </Button>
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            onClick={batchDelete}
-            loading={deleting}
-            disabled={selectedKeys.length === 0}
-          >
-            批量删除{selectedKeys.length > 0 ? `（${selectedKeys.length}）` : ''}
-          </Button>
+          <Segmented
+            value={view}
+            onChange={(value) => {
+              setView(value as 'active' | 'recycle')
+              setSelectedKeys([])
+              setSearch('')
+            }}
+            options={[
+              { label: '商品列表', value: 'active' },
+              { label: '回收站', value: 'recycle' },
+            ]}
+          />
+          {inRecycleBin ? (
+            <Button
+              icon={<UndoOutlined />}
+              onClick={() => void batchRestore()}
+              disabled={selectedKeys.length === 0}
+            >
+              批量恢复{selectedKeys.length > 0 ? `（${selectedKeys.length}）` : ''}
+            </Button>
+          ) : (
+            <>
+              <Button
+                icon={<CloudSyncOutlined />}
+                onClick={syncProducts}
+                disabled={Boolean(error)}
+              >
+                同步 WooCommerce
+              </Button>
+              <Button
+                type="primary"
+                icon={<AppstoreAddOutlined />}
+                onClick={() => void pushSelected()}
+                loading={pushing}
+              >
+                推送选中商品
+              </Button>
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                onClick={batchUnpublish}
+                loading={deleting}
+                disabled={selectedKeys.length === 0}
+              >
+                批量下架{selectedKeys.length > 0 ? `（${selectedKeys.length}）` : ''}
+              </Button>
+            </>
+          )}
         </>
       }
     >
-      <Row gutter={[14, 14]} className="resource-metrics">
-        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="商品主数据" value={stats.total} prefix={<ShopOutlined />} /></Card></Col>
-        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="可销售" value={stats.sellable} styles={{ content: { color: '#2f8b64' } }} /></Card></Col>
-        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="候选商品" value={stats.candidate} /></Card></Col>
-        <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="WC 已同步" value={stats.synced} suffix="条" styles={{ content: { color: '#1890ff' } }} /><div style={{fontSize:12,color:'#999',marginTop:4}}>推送 {stats.pushed} / 拉取 {stats.pulled}</div></Card></Col>
-      </Row>
+      {!inRecycleBin && (
+        <Row gutter={[14, 14]} className="resource-metrics">
+          <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="商品主数据" value={stats.total} prefix={<ShopOutlined />} /></Card></Col>
+          <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="可销售" value={stats.sellable} styles={{ content: { color: '#2f8b64' } }} /></Card></Col>
+          <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="候选商品" value={stats.candidate} /></Card></Col>
+          <Col xs={12} lg={6}><Card variant="borderless"><Statistic title="WC 已同步" value={stats.synced} suffix="条" styles={{ content: { color: '#1890ff' } }} /><div style={{fontSize:12,color:'#999',marginTop:4}}>推送 {stats.pushed} / 拉取 {stats.pulled}</div></Card></Col>
+        </Row>
+      )}
 
       <Card variant="borderless" className="resource-panel">
+        {inRecycleBin && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="回收站中的商品已从 WooCommerce 前台下架"
+            description="可随时恢复；「彻底删除」会永久删除本地记录与 WooCommerce 商品，不可恢复。注意：WooCommerce 回收站默认约 30 天后会被 WordPress 自动清空，逾期恢复将失败。"
+          />
+        )}
         <div className="resource-toolbar">
           <Input
             allowClear
@@ -519,17 +724,19 @@ export function ProductsPage() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Select
-            value={status}
-            onChange={setStatus}
-            options={[
-              { value: 'all', label: '全部状态' },
-              { value: 'active', label: '可销售' },
-              { value: 'draft', label: '草稿' },
-              { value: 'pending', label: '待审核' },
-              { value: 'inactive', label: '停用' },
-            ]}
-          />
+          {!inRecycleBin && (
+            <Select
+              value={status}
+              onChange={setStatus}
+              options={[
+                { value: 'all', label: '全部状态' },
+                { value: 'active', label: '可销售' },
+                { value: 'draft', label: '草稿' },
+                { value: 'pending', label: '待审核' },
+                { value: 'inactive', label: '停用' },
+              ]}
+            />
+          )}
           <Text type="secondary">当前展示 {visibleProducts.length} 条</Text>
         </div>
         <Table
@@ -540,7 +747,7 @@ export function ProductsPage() {
           rowSelection={{ selectedRowKeys: selectedKeys, onChange: setSelectedKeys }}
           scroll={{ x: 1100 }}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-          locale={{ emptyText: emptyText('当前没有商品主数据') }}
+          locale={{ emptyText: emptyText(inRecycleBin ? '回收站是空的' : '当前没有商品主数据') }}
         />
       </Card>
       <Drawer
@@ -1335,6 +1542,25 @@ export function SuppliersPage() {
     }
   }
 
+  const deleteSupplier = async (record: SupplierRecord) => {
+    Modal.confirm({
+      title: `确认删除供应商「${record.name}」？`,
+      content: `供应商编号：${record.code}。删除后不可恢复，关联数据将保留引用。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.deleteSupplier(record.id)
+          message.success(`供应商「${record.name}」已删除`)
+          await load()
+        } catch (delError) {
+          message.error(`删除失败：${apiErrorMessage(delError)}`)
+        }
+      },
+    })
+  }
+
   return (
     <ResourcePage
       kicker="SHARED SUPPLY BASE"
@@ -1371,6 +1597,16 @@ export function SuppliersPage() {
               render: (value: string | null) => value ? <a href={value} target="_blank" rel="noreferrer">打开</a> : '-',
             },
             { title: '创建时间', dataIndex: 'created_at', width: 155, render: (value) => dayjs(value).format('YYYY-MM-DD HH:mm') },
+            {
+              title: '操作',
+              key: 'actions',
+              width: 100,
+              render: (_: unknown, record: SupplierRecord) => (
+                <Button danger size="small" icon={<DeleteOutlined />} onClick={() => deleteSupplier(record)}>
+                  删除
+                </Button>
+              ),
+            },
           ]}
         />
       </Card>
@@ -1449,6 +1685,25 @@ export function InventoryPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const deleteSnapshot = async (record: InventorySnapshotRecord) => {
+    Modal.confirm({
+      title: '确认删除该库存快照？',
+      content: `商品：${record.product_id?.slice(0, 12) || '未绑定'}，地区：${record.location.toUpperCase()}，账面：${record.quantity}`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.deleteInventorySnapshot(record.id)
+          message.success('库存快照已删除')
+          await load()
+        } catch (delError) {
+          message.error(`删除失败：${apiErrorMessage(delError)}`)
+        }
+      },
+    })
+  }
 
   const totals = useMemo(
     () =>
@@ -1534,6 +1789,16 @@ export function InventoryPage() {
                 { title: '可用', dataIndex: 'available', align: 'right', width: 90, render: (value: number) => <strong>{value}</strong> },
                 { title: '在途', dataIndex: 'in_transit', align: 'right', width: 90 },
                 { title: '快照时间', dataIndex: 'snapshot_time', width: 155, render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm') },
+                {
+                  title: '操作',
+                  key: 'actions',
+                  width: 80,
+                  render: (_: unknown, record: InventorySnapshotRecord) => (
+                    <Button danger size="small" icon={<DeleteOutlined />} onClick={() => deleteSnapshot(record)}>
+                      删除
+                    </Button>
+                  ),
+                },
               ]}
             />
           </Card>
