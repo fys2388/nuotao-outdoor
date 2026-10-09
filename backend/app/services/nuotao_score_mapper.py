@@ -13,6 +13,14 @@ Design rules (AGENTS.md §1.2.5, §2.1):
   fabricated precise score; the caller records the evidence flag.
 * Brand Fit has no structured source yet, so it uses a neutral default until
   the brand rulebook / AI assessment supplies it (P2); V5/V6/V8 still gate it.
+
+PHASE 6 (data integrity gate):
+``map_dimensions`` remains the backward-compatible mapper that uses
+``NEUTRAL=5.0`` for absent inputs. The new :func:`map_dimensions_strict`
+raises :class:`DataInsufficientError` when a dimension has no real source,
+so the V3 selection pipeline never silently fabricates a neutral score.
+The data integrity gate (``data_integrity_gate.check_integrity``) must be
+called before ``map_dimensions_strict`` to decide whether scoring may proceed.
 """
 
 from __future__ import annotations
@@ -22,6 +30,9 @@ from decimal import Decimal
 from typing import Any
 
 # Neutral 0-10 score used when a dimension has no structured source yet.
+# PHASE 6: this constant is retained for backward compatibility with
+# ``map_dimensions``. New code should use ``map_dimensions_strict`` which
+# refuses to use it and instead raises when data is missing.
 NEUTRAL = Decimal("5.0")
 # Supplier A/B/C/D grade -> durability support score (reviewed, configurable).
 SUPPLIER_RATING_SCORE: dict[str, Decimal] = {
@@ -193,6 +204,128 @@ def map_dimensions(facts: ScoreFacts) -> tuple[dict[str, Decimal], dict[str, Any
         evidence["differentiation"] = (
             "differentiation_dim" if has_diff else "differentiation/competition missing -> neutral"
         )
+
+    dimensions = {
+        "value": value,
+        "utility": utility,
+        "weight_packability": weight_packability,
+        "durability": durability,
+        "brand_fit": brand_fit,
+        "differentiation": differentiation_dim,
+    }
+    return dimensions, evidence
+
+
+# ---------------------------------------------------------------------------
+# PHASE 6 — strict mapper: no silent NEUTRAL defaults
+# ---------------------------------------------------------------------------
+
+class DataInsufficientError(Exception):
+    """Raised when a dimension has no real data source and the strict mapper
+    refuses to fabricate a neutral score.
+
+    The caller (the V3 selection pipeline) should have already called
+    ``data_integrity_gate.check_integrity`` before invoking
+    :func:`map_dimensions_strict`; this error is the last line of defence
+    against silent NEUTRAL fabrication.
+    """
+
+    def __init__(self, missing: list[str], message: str | None = None) -> None:
+        self.missing = missing
+        super().__init__(message or f"insufficient data for strict scoring: {missing}")
+
+
+def _op_dim_strict(operational: dict[str, Any], key: str) -> Decimal:
+    """Return score 0-10 for an operational dimension, raising if absent.
+
+    Unlike :func:`_op_dim`, this variant does NOT return ``NEUTRAL`` for a
+    missing key — it raises :class:`DataInsufficientError` instead, so the
+    caller knows the data gap explicitly.
+    """
+    raw = operational.get(key)
+    if raw is None or raw == "":
+        raise DataInsufficientError([key])
+    return Decimal(str(raw))
+
+
+def map_dimensions_strict(facts: ScoreFacts) -> tuple[dict[str, Decimal], dict[str, Any]]:
+    """Map :class:`ScoreFacts` to the six V3.0 dimensions WITHOUT neutral defaults.
+
+    This is the PHASE 6 replacement for :func:`map_dimensions`. Instead of
+    silently filling in ``NEUTRAL=5.0`` for missing data, it raises
+    :class:`DataInsufficientError` when a dimension has no real source.
+
+    The caller must call ``data_integrity_gate.check_integrity`` first and
+    only invoke this function when the gate passes. When the gate passes,
+    most inputs have real data; the few remaining gaps (e.g. brand_fit
+    without an AI override) are surfaced explicitly.
+
+    Returns ``(dimensions, evidence)`` where every dimension is backed by
+    real data, not a fabricated neutral.
+    """
+    op = facts.operational
+    evidence: dict[str, Any] = {}
+
+    # --- Value: operational profit + margin rate ----------------------------
+    profit = _op_dim_strict(op, "profit")
+    margin_score = _margin_score(facts.margin_rate)
+    if margin_score is not None:
+        value = _blend(profit, margin_score, Decimal("0.7"))
+        evidence["value"] = f"profit_dim={profit} blended with margin={facts.margin_rate}"
+    else:
+        # margin_rate missing: use profit only, no neutral padding.
+        value = _clamp(profit)
+        evidence["value"] = f"profit_dim={profit}; margin_rate missing"
+
+    # --- Utility: demand dimension ------------------------------------------
+    demand = _op_dim_strict(op, "demand")
+    utility = _clamp(demand)
+    evidence["utility"] = f"demand_dim={demand}"
+
+    # --- Weight & Packability: logistics + weight ---------------------------
+    logistics = _op_dim_strict(op, "logistics")
+    weight_score = _weight_score(facts.weight_kg)
+    if weight_score is not None:
+        weight_packability = _blend(logistics, weight_score, Decimal("0.6"))
+        evidence["weight_packability"] = (
+            f"logistics_dim={logistics}, weight_kg={facts.weight_kg}"
+        )
+    else:
+        # weight_kg missing: use logistics only, no neutral padding.
+        weight_packability = _clamp(logistics)
+        evidence["weight_packability"] = (
+            f"logistics_dim={logistics}; weight_kg missing"
+        )
+
+    # --- Durability: compliance + supplier grade ----------------------------
+    compliance = _op_dim_strict(op, "compliance")
+    supplier_score = SUPPLIER_RATING_SCORE.get(str(facts.supplier_rating or "").upper())
+    if supplier_score is None:
+        # supplier_rating missing: use compliance only, no neutral padding.
+        durability = _clamp(compliance)
+        evidence["durability_supplier"] = "supplier grade missing -> compliance only"
+    else:
+        evidence["durability_supplier"] = f"supplier_{facts.supplier_rating}={supplier_score}"
+        durability = _blend(compliance, supplier_score, Decimal("0.5"))
+
+    # --- Brand Fit: override only, no DEFAULT_BRAND_FIT fallback ------------
+    if facts.brand_fit_override is not None:
+        brand_fit = _clamp(Decimal(str(facts.brand_fit_override)))
+        evidence["brand_fit"] = "override"
+    else:
+        # No AI/rulebook brand fit: this is a real gap, surface it.
+        raise DataInsufficientError(
+            ["brand_fit"],
+            "brand_fit_override missing — no AI/rulebook brand fit available",
+        )
+
+    # --- Differentiation: own differentiation + whitespace -------------------
+    differentiation_raw = _op_dim_strict(op, "differentiation")
+    competition = _op_dim_strict(op, "competition")
+    differentiation_dim = _blend(differentiation_raw, competition, Decimal("0.6"))
+    evidence["differentiation"] = (
+        f"differentiation_dim={differentiation_raw}, whitespace_dim={competition}"
+    )
 
     dimensions = {
         "value": value,
