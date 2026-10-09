@@ -658,6 +658,35 @@ export const api = {
       }),
       timeoutMs: 300000,
     }),
+  // ── Product Full Update & Auto Optimize ──────────────────────────────
+  fullUpdateProduct: (productId: string, body: {
+    name?: string
+    description?: string
+    category?: string
+    brand?: string
+    price?: string
+    status?: string
+    weight_kg?: number
+    dimensions?: Record<string, unknown>
+    tags?: string[]
+    images?: Array<{ url: string; alt: string }>
+    meta?: Record<string, unknown>
+  }) =>
+    request(`/products/${productId}/full-update`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  autoOptimizeProducts: (body: {
+    product_ids: string[]
+    source_url?: string
+    auto_fill_price?: boolean
+    auto_fill_images?: boolean
+    auto_fill_description?: boolean
+  }) =>
+    request('/products/auto-optimize', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   approveProductImage: (taskId: string, actor = 'admin') =>
     request(`/image-gen/tasks/${taskId}/approve`, {
       method: 'POST',
