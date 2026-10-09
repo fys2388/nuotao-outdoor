@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +18,9 @@ from app.core.actor import resolve_actor
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
-from app.models.product import Product
+from app.models.product import Product, ProductCost
+from app.models.product_intelligence import SourcingCandidate
+from app.models.supplier import Supplier
 from app.schemas.agent_operations import ApprovalOut
 from app.schemas.product import ProductOut
 from app.schemas.product_cost import (
@@ -62,6 +65,7 @@ from app.services import (
     product_intelligence as pi,
     task_queue,
 )
+from app.services.nuotao_selection_service import check_data_integrity
 from app.services.approval_rbac import ApprovalRBACError, check_actor_permission
 from app.services.product_content_service import (
     attach_approved_image,
@@ -1245,3 +1249,321 @@ async def batch_update(body: dict, db: DbSession, workspace_id: WorkspaceId) -> 
             count += 1
     await db.commit()
     return {"success": True, "updated_count": count}
+
+
+# ---------------------------------------------------------------------------
+# 产品完整更新与自动优化端点（P0 优先级）
+# ---------------------------------------------------------------------------
+
+
+class ProductFullUpdateRequest(BaseModel):
+    """产品完整更新请求（支持所有字段）"""
+    name: str | None = None
+    description: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    price: str | None = None
+    status: str | None = None
+    weight_kg: float | None = None
+    dimensions: dict[str, Any] | None = None
+    tags: list[str] | None = None
+    images: list[dict[str, str]] | None = None
+    meta: dict[str, Any] | None = None
+
+
+class AutoOptimizeRequest(BaseModel):
+    """产品自动优化请求"""
+    product_ids: list[str] = Field(..., description="产品 ID 列表")
+    source_url: str | None = Field(None, description="1688 来源链接（可选，用于补充数据）")
+    auto_fill_price: bool = Field(True, description="自动填充价格")
+    auto_fill_images: bool = Field(True, description="自动填充图片")
+    auto_fill_description: bool = Field(True, description="自动填充描述")
+
+
+class ProductOptimizeResult(BaseModel):
+    """产品优化结果"""
+    product_id: str
+    sku: str
+    name: str
+    updated_fields: list[str]
+    completeness_score: float
+    missing_fields: list[str]
+
+
+@product_router.patch(
+    "/{product_id}/full-update",
+    summary="产品完整更新（支持所有字段）",
+)
+async def full_update_product(
+    product_id: UUID,
+    body: ProductFullUpdateRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """完整更新产品所有字段（包括 price, images, meta 等）"""
+    result = await db.execute(
+        select(Product).where(
+            Product.workspace_id == workspace_id,
+            Product.id == product_id,
+        )
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    updated_fields = []
+
+    # 更新基本字段
+    if body.name is not None:
+        product.name = body.name
+        updated_fields.append("name")
+    if body.description is not None:
+        product.description = body.description
+        updated_fields.append("description")
+    if body.category is not None:
+        product.category = body.category
+        updated_fields.append("category")
+    if body.brand is not None:
+        product.brand = body.brand
+        updated_fields.append("brand")
+    if body.status is not None:
+        product.status = body.status
+        updated_fields.append("status")
+    if body.weight_kg is not None:
+        product.weight_kg = body.weight_kg
+        updated_fields.append("weight_kg")
+    if body.dimensions is not None:
+        product.dimensions = body.dimensions
+        updated_fields.append("dimensions")
+    if body.tags is not None:
+        product.tags = body.tags
+        updated_fields.append("tags")
+
+    # 更新 meta 字段（price, images, etc.）
+    meta_updates = {}
+    if body.price is not None:
+        meta_updates["price"] = body.price
+    if body.images is not None:
+        meta_updates["media"] = {"images": body.images}
+    if body.meta is not None:
+        meta_updates.update(body.meta)
+
+    if meta_updates:
+        product.meta = {**(product.meta or {}), **meta_updates}
+        if body.price is not None:
+            updated_fields.append("price")
+        if body.images is not None:
+            updated_fields.append("images")
+        if body.meta is not None:
+            updated_fields.append("meta")
+
+    await db.commit()
+
+    # 计算完整性得分
+    checks = {
+        "name": product.name,
+        "sku": product.sku,
+        "price": (product.meta or {}).get("price"),
+        "description": product.description,
+        "category": product.category,
+        "weight_kg": product.weight_kg,
+        "dimensions": product.dimensions,
+        "images": (product.meta or {}).get("media", {}).get("images"),
+        "woocommerce_id": (product.meta or {}).get("woocommerce_id"),
+        "status": product.status,
+        "tags": product.tags,
+    }
+    total = len(checks)
+    passed = sum(1 for v in checks.values() if v and v not in ([], ""))
+    completeness_score = round(passed / total * 100, 1)
+    missing_fields = [k for k, v in checks.items() if not v or v in ([], "")]
+
+    return {
+        "success": True,
+        "product_id": str(product.id),
+        "updated_fields": updated_fields,
+        "completeness_score": completeness_score,
+        "missing_fields": missing_fields,
+    }
+
+
+@product_router.post(
+    "/auto-optimize",
+    summary="产品自动优化（自动补充缺失字段）",
+)
+async def auto_optimize_products(
+    body: AutoOptimizeRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """自动优化产品，补充缺失字段"""
+    results = []
+
+    for pid in body.product_ids:
+        result = await db.execute(
+            select(Product).where(
+                Product.workspace_id == workspace_id,
+                Product.id == UUID(pid),
+            )
+        )
+        product = result.scalar_one_or_none()
+        if not product:
+            results.append({
+                "product_id": pid,
+                "success": False,
+                "error": "Product not found",
+            })
+            continue
+
+        updated_fields = []
+        meta = product.meta or {}
+
+        # 0. 从 product.attributes 提取物理字段到 meta
+        attrs = product.attributes or {}
+        if attrs:
+            if "weight_kg" not in meta and attrs.get("weight_kg"):
+                try:
+                    meta["weight_kg"] = float(attrs["weight_kg"])
+                    updated_fields.append("weight_kg")
+                except (ValueError, TypeError):
+                    pass
+            if "category" not in meta and attrs.get("category"):
+                meta["category"] = attrs["category"]
+                updated_fields.append("category")
+            if "brand" not in meta and attrs.get("brand"):
+                meta["brand"] = attrs["brand"]
+                updated_fields.append("brand")
+            if "dimensions" not in meta and attrs.get("dimensions"):
+                meta["dimensions"] = attrs["dimensions"]
+                updated_fields.append("dimensions")
+            if "tags" not in meta and attrs.get("tags"):
+                tags = attrs["tags"]
+                meta["tags"] = tags if isinstance(tags, list) else [tags]
+                updated_fields.append("tags")
+
+        # 1. 自动补充价格（从 source_price 计算）
+        if body.auto_fill_price and not meta.get("price"):
+            source_price = meta.get("source_price")
+            if source_price:
+                # 简单计算：成本价 * 2 倍
+                try:
+                    price_float = float(source_price) * 2
+                    meta["price"] = str(round(price_float, 2))
+                    meta["regular_price"] = str(round(price_float * 2, 2))
+                    meta["sale_price"] = str(round(price_float, 2))
+                    updated_fields.append("price")
+                except (ValueError, TypeError):
+                    pass
+
+        # 1.5 从产品成本数据估算 margin_rate 和 reference_price_usd
+        if not meta.get("margin_rate"):
+            cost_obj = await pcs.latest_cost_for_product(db, workspace_id, UUID(pid))
+            if cost_obj and cost_obj.total_landed_cost > 0:
+                try:
+                    landed = float(cost_obj.total_landed_cost)
+                    sale_str = meta.get("price", "") or (source_price if source_price else "")
+                    if sale_str:
+                        sale = float(sale_str)
+                        if sale > 0 and landed > 0:
+                            margin = (sale - landed) / sale
+                            meta["margin_rate"] = str(round(margin, 4))
+                            meta["reference_price_usd"] = str(round(sale, 2))
+                            updated_fields.append("margin_rate")
+                except (ValueError, TypeError):
+                    pass
+
+        # 2. 自动补充图片（从 1688 源或 Agnes AI）
+        if body.auto_fill_images and not meta.get("media", {}).get("images"):
+            source_url = product.source_url or meta.get("source_url")
+            if source_url:
+                # 从 1688 URL 提取图片（简化版）
+                meta["media"] = {
+                    "images": [source_url.replace("/offer/", "/img/") if "/offer/" in source_url else source_url],
+                    "main_image": source_url,
+                }
+                updated_fields.append("images")
+
+        # 3. 自动补充描述（从 attributes 或 source 数据）
+        if body.auto_fill_description and not product.description:
+            desc_parts = []
+            if attrs.get("material"):
+                desc_parts.append(f"材质：{attrs['material']}")
+            if attrs.get("dimensions"):
+                desc_parts.append(f"尺寸：{attrs['dimensions']}")
+            if attrs.get("features"):
+                desc_parts.append(f"特点：{', '.join(attrs['features'])}")
+            if desc_parts:
+                product.description = "; ".join(desc_parts)
+                updated_fields.append("description")
+
+        # 4. 补充 weight_kg（直接字段，不只是 meta）
+        if not product.weight_kg and meta.get("weight_kg"):
+            try:
+                product.weight_kg = Decimal(str(meta["weight_kg"]))
+                updated_fields.append("weight_kg")
+            except (ValueError, TypeError):
+                pass
+
+        # 5. 补充 category（直接字段）
+        if not product.category and meta.get("category"):
+            product.category = meta["category"]
+            updated_fields.append("category")
+
+        # 6. 从 SourcingCandidate 关联的 Supplier 获取 rating
+        supplier_rating = None
+        if body.auto_fill_price:  # 复用已查询的成本数据
+            src_rows = (
+                await db.execute(
+                    select(Supplier.rating)
+                    .join(SourcingCandidate, SourcingCandidate.supplier_id == Supplier.id)
+                    .where(
+                        SourcingCandidate.workspace_id == workspace_id,
+                        SourcingCandidate.product_id == UUID(pid),
+                        Supplier.status == "active",
+                    )
+                    .limit(1)
+                )
+            ).all()
+            if src_rows:
+                supplier_rating = src_rows[0][0]
+                if supplier_rating:
+                    meta["supplier_rating"] = supplier_rating
+                    updated_fields.append("supplier_rating")
+
+        # 更新 meta
+        if updated_fields:
+            product.meta = meta
+            await db.commit()
+
+        # 重新计算 data_integrity_score
+        integrity_result = await check_data_integrity(db, UUID(pid), workspace_id=workspace_id)
+
+        # 计算完整性（基于 data_integrity）
+        completeness_score = float(integrity_result.get("score", 0))
+        missing_fields = integrity_result.get("missing_fields", [])
+
+        results.append({
+            "product_id": pid,
+            "sku": product.sku,
+            "name": product.name,
+            "success": True,
+            "updated_fields": updated_fields,
+            "completeness_score": completeness_score,
+            "missing_fields": missing_fields,
+            "data_integrity_status": integrity_result.get("status"),
+            "supplier_rating": supplier_rating,
+            "auto_filled": {
+                "price": meta.get("price"),
+                "margin_rate": meta.get("margin_rate"),
+                "weight_kg": meta.get("weight_kg"),
+                "category": meta.get("category"),
+                "supplier_rating": supplier_rating,
+            },
+        })
+
+    return {
+        "success": True,
+        "results": results,
+        "total_processed": len(results),
+        "total_updated": sum(1 for r in results if r.get("updated_fields")),
+    }

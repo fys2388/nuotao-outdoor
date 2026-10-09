@@ -74,6 +74,7 @@ export const navigationGroups: NavigationGroup[] = [
       { key: 'product-candidates', label: '候选产品与选品', path: '/products/candidates', icon: <FileSearchOutlined /> },
       { key: 'product-analysis', label: 'AI 产品分析', path: '/products/analysis', icon: <RobotOutlined /> },
       { key: 'product-costs', label: '成本与利润', path: '/products/costs', icon: <CalculatorOutlined /> },
+      { key: 'product-enrichment', label: '数据增强', path: '/products/enrichment', icon: <RobotOutlined /> },
       { key: 'product-pipeline', label: '商品工作台', path: '/products/pipeline', icon: <DeploymentUnitOutlined /> },
       { key: 'product-listing', label: '渠道与上架', path: '/products/listing', icon: <GlobalOutlined /> },
       { key: 'product-listing-jobs', label: '上架工单', path: '/products/listing-jobs', icon: <TrophyOutlined /> },
