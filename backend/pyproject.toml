@@ -25,7 +25,7 @@ dependencies = [
     "prometheus-client>=0.20.0",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
-    "slowapi>=0.5.2",
+    "slowapi>=0.1.0",
     "qrcode>=7.4.0",
 ]
 
