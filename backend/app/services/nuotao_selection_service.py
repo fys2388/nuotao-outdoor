@@ -39,8 +39,11 @@ from app.services.nuotao_ai_signals import (
 from app.services.nuotao_score_mapper import (
     SUPPLIER_RATING_SCORE,
     ScoreFacts,
+    DataInsufficientError,
     map_dimensions,
+    map_dimensions_strict,
 )
+from app.services.data_integrity_gate import check_integrity, INTEGRITY_VERSION
 from app.services.nuotao_report import (
     ReportData,
     build_public_badge,
@@ -258,7 +261,74 @@ async def evaluate_product(
         existing_hero_categories=hero_categories,
     )
 
-    dimensions, evidence = map_dimensions(facts)
+    # PHASE 5+6: data integrity gate — check if the product has enough
+    # structured data to be scored. When the gate fails, we update the
+    # product's data integrity fields and skip scoring entirely, so the
+    # old silent NEUTRAL=5.0 default never masks a data gap.
+    gate_result = check_integrity(facts)
+    gate_trace_id = trace_id or f"v3-gate-{uuid.uuid4().hex[:12]}"
+    product.data_integrity_status = gate_result.status
+    product.data_integrity_score = gate_result.score
+    product.data_integrity_missing = gate_result.missing_fields
+    product.data_integrity_checked_at = datetime.now(UTC)
+    product.data_integrity_trace_id = gate_trace_id
+    product.data_integrity_version = INTEGRITY_VERSION
+
+    if not gate_result.passed:
+        # Gate blocked: not enough data to score reliably.
+        # The product stays in its current funnel_stage; no score row is
+        # persisted. The operator sees the gap via data_integrity_* fields.
+        await session.flush()
+        return {
+            "product_id": str(product_id),
+            "score_id": None,
+            "funnel_stage": product.funnel_stage,
+            "gate_blocked": True,
+            "grade": None,
+            "nuotao_total": None,
+            "operational_total": (
+                float(operational_total) if operational_total is not None else None
+            ),
+            "dimensions": None,
+            "veto": None,
+            "evidence": {
+                "gate_status": gate_result.status,
+                "gate_score": float(gate_result.score),
+                "gate_missing_fields": gate_result.missing_fields,
+                "gate_version": gate_result.version,
+            },
+        }
+
+    # Gate passed — use the strict mapper that refuses silent NEUTRAL defaults.
+    try:
+        dimensions, evidence = map_dimensions_strict(facts)
+    except DataInsufficientError as exc:
+        # Last line of defence: the gate said "pass" but a dimension still
+        # has no real source. Record the gap and skip scoring.
+        product.data_integrity_status = "missing"
+        product.data_integrity_missing = exc.missing
+        product.data_integrity_checked_at = datetime.now(UTC)
+        await session.flush()
+        return {
+            "product_id": str(product_id),
+            "score_id": None,
+            "funnel_stage": product.funnel_stage,
+            "gate_blocked": True,
+            "grade": None,
+            "nuotao_total": None,
+            "operational_total": (
+                float(operational_total) if operational_total is not None else None
+            ),
+            "dimensions": None,
+            "veto": None,
+            "evidence": {
+                "gate_status": "missing",
+                "gate_score": 0.0,
+                "gate_missing_fields": exc.missing,
+                "error": str(exc),
+            },
+        }
+
     score_result = compute_nuotao_score(dimensions)
     total = score_result["total"]
     grade = score_result["grade"]
@@ -628,3 +698,81 @@ async def build_product_report(
         generated_at=datetime.now(UTC).isoformat(),
     )
     return build_selection_report(report_data)
+
+
+async def check_data_integrity(
+    session: AsyncSession,
+    product_id: UUID,
+    *,
+    workspace_id: UUID | None = None,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the data integrity gate for one product and persist the result.
+
+    Does NOT run the full V3 evaluation — only checks whether the product
+    has enough structured data to be scored, and updates the product's
+    ``data_integrity_*`` fields. Use this to pre-flight a product before
+    calling :func:`evaluate_product`, or to surface gaps to the operator.
+    """
+    product = await session.get(Product, product_id)
+    if product is None or product.deleted_at is not None:
+        raise ValueError(f"product not found: {product_id}")
+    workspace_id = workspace_id or product.workspace_id
+
+    operational_score = await _latest_operational_score(
+        session, workspace_id, product_id
+    )
+    cost = await latest_cost_for_product(
+        session, workspace_id=workspace_id, product_id=product_id
+    )
+    supplier_rating = await _best_supplier_rating(session, workspace_id, product_id)
+    reference_price, margin_rate, shipping_ratio = _cost_facts(product, cost)
+    reference_price_usd = (
+        reference_price if cost is not None and cost.currency.upper() == "USD" else None
+    )
+
+    auto_block = await _latest_ai_assessment(session, workspace_id, product_id)
+    ai_signals = _resolve_signals(None, auto_block)
+
+    operational: dict[str, Any] = {}
+    if operational_score is not None:
+        operational = {
+            "profit": operational_score.profit,
+            "logistics": operational_score.logistics,
+            "demand": operational_score.demand,
+            "competition": operational_score.competition,
+            "differentiation": operational_score.differentiation,
+            "compliance": operational_score.compliance,
+        }
+
+    facts = ScoreFacts(
+        operational=operational,
+        margin_rate=margin_rate,
+        shipping_ratio=shipping_ratio,
+        weight_kg=product.weight_kg,
+        supplier_rating=supplier_rating,
+        category=product.category,
+        reference_price_usd=reference_price_usd,
+        brand_fit_override=ai_signals.brand_fit,
+    )
+
+    gate_result = check_integrity(facts)
+    gate_trace_id = trace_id or f"v3-gate-{uuid.uuid4().hex[:12]}"
+
+    product.data_integrity_status = gate_result.status
+    product.data_integrity_score = gate_result.score
+    product.data_integrity_missing = gate_result.missing_fields
+    product.data_integrity_checked_at = datetime.now(UTC)
+    product.data_integrity_trace_id = gate_trace_id
+    product.data_integrity_version = INTEGRITY_VERSION
+    await session.flush()
+
+    return {
+        "product_id": str(product_id),
+        "passed": gate_result.passed,
+        "status": gate_result.status,
+        "score": float(gate_result.score),
+        "missing_fields": gate_result.missing_fields,
+        "version": gate_result.version,
+        "trace_id": gate_trace_id,
+    }
