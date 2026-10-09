@@ -1,4 +1,4 @@
-# Auto-generated from pyproject.toml
+﻿# Auto-generated from pyproject.toml
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic[email]>=2.8.0
@@ -16,3 +16,8 @@ python-multipart>=0.0.9
 cryptography>=42.0.0
 httpx>=0.27.0
 prometheus-client>=0.20.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+slowapi>=0.5.2
+qrcode>=7.4.0
+

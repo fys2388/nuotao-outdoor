@@ -23,6 +23,10 @@ dependencies = [
     "cryptography>=42.0.0",
     "httpx>=0.27.0",
     "prometheus-client>=0.20.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "slowapi>=0.5.2",
+    "qrcode>=7.4.0",
 ]
 
 [project.optional-dependencies]
