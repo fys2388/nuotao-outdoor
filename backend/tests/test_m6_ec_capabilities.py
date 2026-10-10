@@ -102,8 +102,12 @@ class TestImageGenIntegration:
         assert result.raw_response.get("mock") is True
 
     @pytest.mark.asyncio
-    async def test_fallback_chain_contains_mock(self):
-        assert "mock" in FALLBACK_CHAIN
+    async def test_fallback_chain_has_no_mock(self):
+        # P0-3: mock is a test/dev placeholder and can never be a production
+        # fallback. A production image request must fail loudly rather than
+        # silently return an SVG placeholder.
+        assert "mock" not in FALLBACK_CHAIN
+        assert FALLBACK_CHAIN
 
 
 # ============================================
@@ -148,7 +152,9 @@ class TestImageGenerationService:
             )
 
     @pytest.mark.asyncio
-    async def test_execute_task_with_mock(self, db_session):
+    async def test_execute_task_with_mock_fails(self, db_session):
+        # P0-3: mock is not a production success path; the service layer must
+        # refuse to mark a mock task as generated (task ends in "failed").
         task = await create_generation_task(
             db_session,
             workspace_id=DEFAULT_WORKSPACE,
@@ -161,13 +167,12 @@ class TestImageGenerationService:
             task_id=task.id,
             workspace_id=DEFAULT_WORKSPACE,
         )
-        assert executed.status == "generated"
-        assert executed.actual_model == "mock"
-        assert executed.cost_cny == Decimal("0")
-        assert executed.image_path is not None or executed.image_url is not None
+        assert executed.status == "failed"
+        assert "P0-3" in (executed.error_message or "")
 
     @pytest.mark.asyncio
-    async def test_generate_and_save(self, db_session):
+    async def test_generate_and_save_mock_fails(self, db_session):
+        # P0-3: mock requests must not be marked generated at the service layer.
         task = await generate_image_and_save(
             db_session,
             workspace_id=DEFAULT_WORKSPACE,
@@ -175,28 +180,27 @@ class TestImageGenerationService:
             use_case="marketing_image",
             model="mock",
         )
-        assert task.status == "generated"
+        assert task.status == "failed"
         result = await get_task(db_session, task_id=task.id, workspace_id=DEFAULT_WORKSPACE)
         assert result is not None
-        assert result["status"] == "generated"
+        assert result["status"] == "failed"
 
     @pytest.mark.asyncio
     async def test_approve_image(self, db_session):
+        # P0-3: mock tasks never reach "generated", so approval must be refused.
         task = await generate_image_and_save(
             db_session,
             workspace_id=DEFAULT_WORKSPACE,
             prompt="test",
             model="mock",
         )
-        approved = await approve_image(
-            db_session,
-            task_id=task.id,
-            approved_by="test_user",
-            workspace_id=DEFAULT_WORKSPACE,
-        )
-        assert approved.status == "approved"
-        assert approved.approved_by == "test_user"
-        assert approved.approved_at is not None
+        with pytest.raises(ImageGenServiceError):
+            await approve_image(
+                db_session,
+                task_id=task.id,
+                approved_by="test_user",
+                workspace_id=DEFAULT_WORKSPACE,
+            )
 
     @pytest.mark.asyncio
     async def test_reject_image(self, db_session):
