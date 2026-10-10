@@ -4,11 +4,6 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
-    inputs:
-      skip_staging:
-        description: 'Skip staging validation and deploy directly to production'
-        type: boolean
-        default: false
 
 env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -50,7 +45,6 @@ jobs:
   stage-validate:
     name: Staging validation (server-side dry-run)
     needs: ci-gate
-    if: github.event_name != 'workflow_dispatch' || !github.event.inputs.skip_staging
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -132,8 +126,7 @@ jobs:
 
   deploy-production:
     name: Deploy to Production
-    needs: ci-gate
-    if: github.event_name != 'workflow_dispatch' || !github.event.inputs.skip_staging
+    needs: [ci-gate, stage-validate]
     environment: production
     runs-on: ubuntu-latest
     steps:
@@ -472,4 +465,8 @@ jobs:
             redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "[redis] not available, skipping worker registry check"
 
             echo "=== Deployment completed successfully ==="
+
+
+
+
 
