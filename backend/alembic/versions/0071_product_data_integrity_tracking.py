@@ -17,8 +17,14 @@ created before this migration are not falsely marked incomplete.
 defaults so existing rows get sensible initial values.
 
 Revision ID: 0071
-Revises: 0070
+Revises: 0069
 Create Date: 2026-10-05
+
+Chains off 0069 rather than 0070: 0070 alters ``product_mappings``, which the
+application database role does not own (``must be owner of table
+product_mappings``), so it cannot be part of an upgrade path the app role can
+actually run. It is kept in-tree as ``0070_product_mapping_workspace_scope.py
+.dsh-parked`` for a future run as the table owner.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0071"
-down_revision = "0070"
+down_revision = "0069"
 branch_labels = None
 depends_on = None
 
