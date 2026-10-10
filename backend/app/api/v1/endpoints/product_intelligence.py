@@ -5,6 +5,7 @@ Routes under ``/products`` extend the existing product domain; routes under
 involved in this phase - all processing is deterministic.
 """
 
+import logging
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
@@ -78,6 +79,8 @@ from app.services.product_intelligence import ProductDecisionActorError
 product_router = APIRouter(prefix="/products", tags=["product-intelligence"])
 decision_router = APIRouter(prefix="/product-decisions", tags=["product-decisions"])
 candidate_router = APIRouter(prefix="/product-candidates", tags=["product-candidates"])
+
+logger = logging.getLogger(__name__)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
@@ -1360,16 +1363,19 @@ async def full_update_product(
     await db.commit()
 
     # 计算完整性得分
+    product_meta = product.meta or {}
+    product_media = product_meta.get("media")
+    product_images = product_media.get("images") if isinstance(product_media, dict) else None
     checks = {
         "name": product.name,
         "sku": product.sku,
-        "price": (product.meta or {}).get("price"),
+        "price": product_meta.get("price"),
         "description": product.description,
         "category": product.category,
         "weight_kg": product.weight_kg,
         "dimensions": product.dimensions,
-        "images": (product.meta or {}).get("media", {}).get("images"),
-        "woocommerce_id": (product.meta or {}).get("woocommerce_id"),
+        "images": product_images,
+        "woocommerce_id": product_meta.get("woocommerce_id"),
         "status": product.status,
         "tags": product.tags,
     }
@@ -1378,12 +1384,24 @@ async def full_update_product(
     completeness_score = round(passed / total * 100, 1)
     missing_fields = [k for k, v in checks.items() if not v or v in ([], "")]
 
+    # 持久化数据完整性评分，列表页 / 数据增强页的进度条依赖该字段
+    data_integrity_score = None
+    data_integrity_status = None
+    try:
+        integrity_result = await check_data_integrity(db, product_id, workspace_id=workspace_id)
+        data_integrity_score = float(integrity_result.get("score", 0))
+        data_integrity_status = integrity_result.get("status")
+    except Exception:  # noqa: BLE001 - 完整性评分失败不应阻断更新本身
+        logger.warning("full-update: data integrity gate failed for %s", product_id)
+
     return {
         "success": True,
         "product_id": str(product.id),
         "updated_fields": updated_fields,
         "completeness_score": completeness_score,
         "missing_fields": missing_fields,
+        "data_integrity_score": data_integrity_score,
+        "data_integrity_status": data_integrity_status,
     }
 
 
@@ -1400,10 +1418,19 @@ async def auto_optimize_products(
     results = []
 
     for pid in body.product_ids:
+        try:
+            pid_uuid = UUID(pid)
+        except (ValueError, TypeError):
+            results.append({
+                "product_id": pid,
+                "success": False,
+                "error": "Invalid product_id: not a valid UUID",
+            })
+            continue
         result = await db.execute(
             select(Product).where(
                 Product.workspace_id == workspace_id,
-                Product.id == UUID(pid),
+                Product.id == pid_uuid,
             )
         )
         product = result.scalar_one_or_none()
@@ -1417,6 +1444,7 @@ async def auto_optimize_products(
 
         updated_fields = []
         meta = product.meta or {}
+        source_price = meta.get("source_price")
 
         # 0. 从 product.attributes 提取物理字段到 meta
         attrs = product.attributes or {}
@@ -1457,7 +1485,9 @@ async def auto_optimize_products(
 
         # 1.5 从产品成本数据估算 margin_rate 和 reference_price_usd
         if not meta.get("margin_rate"):
-            cost_obj = await pcs.latest_cost_for_product(db, workspace_id, UUID(pid))
+            cost_obj = await pcs.latest_cost_for_product(
+                db, workspace_id=workspace_id, product_id=UUID(pid)
+            )
             if cost_obj and cost_obj.total_landed_cost > 0:
                 try:
                     landed = float(cost_obj.total_landed_cost)
@@ -1473,7 +1503,9 @@ async def auto_optimize_products(
                     pass
 
         # 2. 自动补充图片（从 1688 源或 Agnes AI）
-        if body.auto_fill_images and not meta.get("media", {}).get("images"):
+        media = meta.get("media")
+        has_images = isinstance(media, dict) and bool(media.get("images"))
+        if body.auto_fill_images and not has_images:
             source_url = product.source_url or meta.get("source_url")
             if source_url:
                 # 从 1688 URL 提取图片（简化版）
@@ -1491,7 +1523,9 @@ async def auto_optimize_products(
             if attrs.get("dimensions"):
                 desc_parts.append(f"尺寸：{attrs['dimensions']}")
             if attrs.get("features"):
-                desc_parts.append(f"特点：{', '.join(attrs['features'])}")
+                features = attrs["features"]
+                features_text = ", ".join(features) if isinstance(features, list) else str(features)
+                desc_parts.append(f"特点：{features_text}")
             if desc_parts:
                 product.description = "; ".join(desc_parts)
                 updated_fields.append("description")
@@ -1536,7 +1570,7 @@ async def auto_optimize_products(
             await db.commit()
 
         # 重新计算 data_integrity_score
-        integrity_result = await check_data_integrity(db, UUID(pid), workspace_id=workspace_id)
+        integrity_result = await check_data_integrity(db, pid_uuid, workspace_id=workspace_id)
 
         # 计算完整性（基于 data_integrity）
         completeness_score = float(integrity_result.get("score", 0))
