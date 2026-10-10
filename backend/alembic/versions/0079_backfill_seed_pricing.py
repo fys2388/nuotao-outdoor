@@ -75,6 +75,11 @@ _PURCHASE_UPPER = _range_upper("target_purchase_price_cny", "p.")
 
 _WID_LIT = "'{}'::uuid".format(WORKSPACE_ID)
 _SOURCE_LIT = "'{}'".format(SOURCE_TAG)
+# jsonb 字符串字面量：'"xxx"'::jsonb。不能用 to_jsonb('xxx')——字面量是 unknown
+# 类型，而 to_jsonb 是 any 多态函数，PostgreSQL 无法推断参数类型，直接报
+# DatatypeMismatchError: could not determine polymorphic type because input
+# has type unknown（staging 离线渲染不会执行，所以只在生产运行时才暴露）。
+_SOURCE_JSONB = "'\"{}\"'::jsonb".format(SOURCE_TAG)
 
 
 def upgrade() -> None:
@@ -92,7 +97,7 @@ def upgrade() -> None:
                         to_jsonb({retail_upper})
                     ),
                     '{{pricing_source}}',
-                    to_jsonb({source})
+                    {source_jsonb}
                 ),
                 updated_at = now()
             WHERE workspace_id = {wid}
@@ -102,7 +107,7 @@ def upgrade() -> None:
             """.format(
                 retail_upper=_RETAIL_UPPER,
                 wid=_WID_LIT,
-                source=_SOURCE_LIT,
+                source_jsonb=_SOURCE_JSONB,
             )
         )
     )
