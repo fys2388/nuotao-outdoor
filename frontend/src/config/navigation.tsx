@@ -70,7 +70,10 @@ export const navigationGroups: NavigationGroup[] = [
       { key: 'product-workbench', label: '产品工作台', path: '/products/workbench', icon: <DeploymentUnitOutlined /> },
       // 流程顺序：发现 → 选品 → 审批 → 分析 → 成本(闸门前置) → 上架 → 数据管理
       { key: 'product-market-opportunities', label: '市场机会', path: '/products/publish', icon: <ThunderboltOutlined /> },
-      { key: 'product-opportunities', label: '机会池', path: '/products/opportunities', icon: <CompassOutlined /> },
+      // TODO(tech-debt): 「机会池」(/products/opportunities) 暂不入菜单——后端
+      // opportunity 域整域缺失（生产库无表、无 ORM 模型、无路由、无迁移，
+      // GET /api/v1/opportunities 返回 404），页面打开必然报错。
+      // 设计见 docs/OPPORTUNITY_DATA_DOMAIN_DESIGN.md；后端落地后把此项加回。
       { key: 'product-newton', label: '牛顿 AI 对话选品', path: '/products/newton-sourcing', icon: <CompassOutlined /> },
       { key: 'product-pipeline-runner', label: '管线执行', path: '/products/pipeline-runner', icon: <ThunderboltOutlined /> },
       { key: 'product-decision-queue', label: '决策审批队列', path: '/products/decision-queue', icon: <FileSearchOutlined /> },
