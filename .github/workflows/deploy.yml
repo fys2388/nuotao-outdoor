@@ -1,5 +1,9 @@
 name: Deploy to Production (staging-gated)
 
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master]
@@ -9,6 +13,9 @@ env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
   SERVER_USER: ${{ secrets.SERVER_USER }}
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  WOOCOMMERCE_BASE_URL: ${{ secrets.WOOCOMMERCE_BASE_URL }}
+  WOOCOMMERCE_CONSUMER_KEY: ${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}
+  WOOCOMMERCE_CONSUMER_SECRET: ${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}
 
 jobs:
   ci-gate:
@@ -213,6 +220,26 @@ jobs:
               fi
             else
               echo "[env] template or .env not found, skipping drift check"
+            fi
+
+            echo "=== 2.6 Injecting WooCommerce REST credentials into server .env ==="
+            # WooCommerce 自托管店（https://nuotaooutdoor.com）的 REST 凭证只放
+            # GitHub Secrets，服务器 .env 每次部署重新注入。backend 侧通过
+            # Settings.woocommerce_consumer_key / _secret / _base_url 读取
+            # （pydantic-settings 无 env_prefix，字段名与 env 变量名直连）。
+            ENV_FILE=/opt/nuotao/backend/.env
+            if [ -n "$WOOCOMMERCE_CONSUMER_KEY" ] && [ -n "$WOOCOMMERCE_CONSUMER_SECRET" ]; then
+              mkdir -p "$(dirname "$ENV_FILE")"
+              touch "$ENV_FILE"
+              sed -i '/^WOOCOMMERCE_BASE_URL=/d;/^WOOCOMMERCE_CONSUMER_KEY=/d;/^WOOCOMMERCE_CONSUMER_SECRET=/d' "$ENV_FILE"
+              {
+                echo "WOOCOMMERCE_BASE_URL=${WOOCOMMERCE_BASE_URL:-https://nuotaooutdoor.com}"
+                echo "WOOCOMMERCE_CONSUMER_KEY=${WOOCOMMERCE_CONSUMER_KEY}"
+                echo "WOOCOMMERCE_CONSUMER_SECRET=${WOOCOMMERCE_CONSUMER_SECRET}"
+              } >> "$ENV_FILE"
+              echo "[wc] credentials injected into $ENV_FILE"
+            else
+              echo "[wc] WC secrets not configured in this repo, skipping injection"
             fi
 
             echo "=== 3. Running database migrations ==="
