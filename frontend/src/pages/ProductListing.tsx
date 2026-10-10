@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Spin, message, Modal, Descriptions, List,
@@ -191,7 +191,10 @@ export default function ProductListingPage() {
     try {
       setLoading(true)
       // 调用商品API（包含商品上架相关功能）
-      const productsResp = await fetch('/api/v1/products')
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const productsResp = await fetch('/api/v1/products', { headers })
       if (productsResp.ok) {
         const productsData = await productsResp.json()
         setProductListingData(productsData)
@@ -214,7 +217,10 @@ export default function ProductListingPage() {
   const generateAiCopy = async (productId: string) => {
     try {
       setAiCopyLoading(true)
-      const resp = await fetch(`/api/v1/products/${productId}/generate-copy`, { method: 'POST' })
+      const copyToken = localStorage.getItem('admin_token') || ''
+      const copyHeaders: HeadersInit = {}
+      if (copyToken) copyHeaders['Authorization'] = `Bearer ${copyToken}`
+      const resp = await fetch(`/api/v1/products/${productId}/generate-copy`, { method: 'POST', headers: copyHeaders })
       if (resp.ok) {
         const data = await resp.json()
         setAiCopyResult(data)

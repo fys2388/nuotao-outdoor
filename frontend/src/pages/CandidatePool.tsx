@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -317,8 +317,11 @@ export default function CandidatePool() {
       params.set('limit', String(PAGE_LIMIT))
       params.set('offset', '0')
       if (categoryFilter !== 'all') params.set('category', categoryFilter)
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
 
-      const resp = await fetch(`/api/v1/products?${params.toString()}`)
+      const resp = await fetch(`/api/v1/products?${params.toString()}`, { headers })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
       const body = await resp.json()
@@ -413,10 +416,11 @@ export default function CandidatePool() {
     }
 
     setImportLoading(true)
+    const importToken = localStorage.getItem('admin_token') || ''
     try {
       const resp = await fetch('/api/v1/product-pipeline/import-from-1688', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(importToken && { Authorization: `Bearer ${importToken}` }) },
         body: JSON.stringify({
           url_or_id: urlOrId,
           auto_run_pipeline: false,
@@ -476,10 +480,11 @@ export default function CandidatePool() {
       additional_info: typeof snap.description === 'string' ? snap.description : '',
     }
 
+    const analysisToken = localStorage.getItem('admin_token') || ''
     try {
       const resp = await fetch('/api/v1/product-analysis/analyze-and-report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(analysisToken && { Authorization: `Bearer ${analysisToken}` }) },
         body: JSON.stringify({ product_info: productInfo }),
       })
       const data = await resp.json().catch(() => null)
@@ -515,11 +520,14 @@ export default function CandidatePool() {
     }
 
     setCostState({ mode: 'loading' })
+    const costToken = localStorage.getItem('admin_token') || ''
+    const costHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+    if (costToken) costHeaders['Authorization'] = `Bearer ${costToken}`
     try {
       // 配置（非阻塞：失败不阻断计算）
       let config: Record<string, any> | null = null
       try {
-        const statusResp = await fetch('/api/v1/cost-model/status')
+        const statusResp = await fetch('/api/v1/cost-model/status', { headers: costHeaders })
         if (statusResp.ok) config = await statusResp.json()
       } catch {
         config = null
@@ -544,7 +552,7 @@ export default function CandidatePool() {
 
       const resp = await fetch('/api/v1/cost-model/calculate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: costHeaders,
         body: JSON.stringify({ order }),
       })
       if (!resp.ok) {
@@ -563,10 +571,13 @@ export default function CandidatePool() {
   // ---- 自动预填成本利润 ----
   const runAutoPrefill = async (p: CandidateProduct) => {
     setAutoPrefillState({ loading: true, result: null, error: null })
+    const prefillToken = localStorage.getItem('admin_token') || ''
+    const prefillHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+    if (prefillToken) prefillHeaders['Authorization'] = `Bearer ${prefillToken}`
     try {
       const resp = await fetch('/api/v1/cost-prefill/auto-prefill-product', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: prefillHeaders,
         body: JSON.stringify({
           product_id: p.id,
           persist: true,

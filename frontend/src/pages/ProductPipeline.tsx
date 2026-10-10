@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import {
   Card, Form, Input, Button, Space, Typography, Steps, Tag, Alert,
   Row, Col, Spin, message, Tabs, Divider, Select, Descriptions, Collapse,
@@ -115,9 +115,12 @@ export default function ProductPipeline() {
   const generateOneImage = async (
     prompt: string, useCase: string, width: number, height: number, reference: string,
   ): Promise<string> => {
+    const imgToken = localStorage.getItem('admin_token') || ''
+    const imgHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+    if (imgToken) imgHeaders['Authorization'] = `Bearer ${imgToken}`
     const resp = await fetch('/api/v1/image-gen/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: imgHeaders,
       body: JSON.stringify({
         prompt,
         use_case: useCase,
@@ -420,9 +423,12 @@ export default function ProductPipeline() {
         product_features: values.product_features?.split('\n').filter(Boolean) || [],
       }
 
+      const runToken = localStorage.getItem('admin_token') || ''
+      const runHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+      if (runToken) runHeaders['Authorization'] = `Bearer ${runToken}`
       const resp = await fetch('/api/v1/product-pipeline/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: runHeaders,
         body: JSON.stringify({
           product_info: productInfo,
           auto_list: false,
@@ -451,9 +457,12 @@ export default function ProductPipeline() {
 
     try {
       setListingLoading(true)
+      const confirmToken = localStorage.getItem('admin_token') || ''
+      const confirmHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+      if (confirmToken) confirmHeaders['Authorization'] = `Bearer ${confirmToken}`
       const resp = await fetch('/api/v1/product-pipeline/confirm-list', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: confirmHeaders,
         body: JSON.stringify({
           pipeline_result: pipelineResult,
           status: status,

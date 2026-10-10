@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Row, Col, Button, Typography, Spin, Empty, Alert, Table, Tag,
@@ -313,7 +313,7 @@ export default function CreativeWorkbench() {
       formData.append('asset_type', 'hero_image')
       
       // Use fetch for file upload
-      const token = localStorage.getItem('access_token') || ''
+      const token = localStorage.getItem('admin_token') || ''
       const response = await fetch(`/api/v1/creative/assets/upload`, {
         method: 'POST',
         headers: {
