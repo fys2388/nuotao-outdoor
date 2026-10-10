@@ -7,7 +7,6 @@ export interface ProductWithMeta {
   meta?: Record<string, unknown> | null
   attributes?: Record<string, unknown> | null
   images?: string[]
-  [key: string]: unknown
 }
 
 /**

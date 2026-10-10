@@ -70,7 +70,10 @@ export const navigationGroups: NavigationGroup[] = [
       { key: 'product-workbench', label: '产品工作台', path: '/products/workbench', icon: <DeploymentUnitOutlined /> },
       // 流程顺序：发现 → 选品 → 审批 → 分析 → 成本(闸门前置) → 上架 → 数据管理
       { key: 'product-market-opportunities', label: '市场机会', path: '/products/publish', icon: <ThunderboltOutlined /> },
+      { key: 'product-opportunities', label: '机会池', path: '/products/opportunities', icon: <CompassOutlined /> },
       { key: 'product-newton', label: '牛顿 AI 对话选品', path: '/products/newton-sourcing', icon: <CompassOutlined /> },
+      { key: 'product-pipeline-runner', label: '管线执行', path: '/products/pipeline-runner', icon: <ThunderboltOutlined /> },
+      { key: 'product-decision-queue', label: '决策审批队列', path: '/products/decision-queue', icon: <FileSearchOutlined /> },
       { key: 'product-candidates', label: '候选产品与选品', path: '/products/candidates', icon: <FileSearchOutlined /> },
       { key: 'product-analysis', label: 'AI 产品分析', path: '/products/analysis', icon: <RobotOutlined /> },
       { key: 'product-costs', label: '成本与利润', path: '/products/costs', icon: <CalculatorOutlined /> },
@@ -78,7 +81,9 @@ export const navigationGroups: NavigationGroup[] = [
       { key: 'product-pipeline', label: '商品工作台', path: '/products/pipeline', icon: <DeploymentUnitOutlined /> },
       { key: 'product-listing', label: '渠道与上架', path: '/products/listing', icon: <GlobalOutlined /> },
       { key: 'product-listing-jobs', label: '上架工单', path: '/products/listing-jobs', icon: <TrophyOutlined /> },
-      { key: 'products', label: '商品主数据', path: '/products', icon: <DatabaseOutlined /> },
+      { key: 'product-master', label: '产品主数据', path: '/products/master', icon: <DatabaseOutlined /> },
+      { key: 'product-mapping', label: '产品映射', path: '/products/mapping', icon: <ApartmentOutlined /> },
+      { key: 'products', label: '商品清单', path: '/products', icon: <DatabaseOutlined /> },
     ],
   },
   {

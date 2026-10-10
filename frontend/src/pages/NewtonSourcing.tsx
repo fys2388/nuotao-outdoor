@@ -110,6 +110,9 @@ export default function NewtonSourcingPage() {
   }
 
   // 真实写入系统选品候选库（POST /newton/sourcing/import）
+  // 契约：API 仅在数据库事务 commit 成功后才返回 success，并回传真实的
+  // product_id / candidate_id / source_offer_id / trace_id。UI 只用响应里的
+  // 真实 ID 更新状态，禁止 optimistic success；HTTP 失败即显示真实错误。
   const addCandidates = async (products: any[], keys: string[]) => {
     if (products.length === 0) {
       message.warning('请先选择要加入候选的商品')
@@ -125,15 +128,31 @@ export default function NewtonSourcingPage() {
       const info = res?.data || {}
       const imported = Number(info.imported || 0)
       const skipped = Number(info.skipped || 0)
-      if (imported > 0) {
+      // 用 API 返回的真实候选 ID（items[].product_id）更新本地状态，
+      // 而不是按本地 key 猜测。
+      const confirmedIds = new Set<string>(
+        (info.items || [])
+          .filter((it: any) => ['created', 'exists'].includes(it.status))
+          .map((it: any) => String(it.product_id || it.source_offer_id || ''))
+          .filter(Boolean),
+      )
+      if (confirmedIds.size > 0) {
         setImportedKeys(prev => {
           const next = new Set(prev)
           keys.forEach(k => next.add(k))
+          confirmedIds.forEach(k => next.add(k))
           return next
         })
-        message.success(`已加入候选库 ${imported} 个${skipped ? `，跳过 ${skipped} 个` : ''}`)
+      }
+      if (imported > 0) {
+        message.success(`已加入候选库 ${imported} 个${skipped ? `，复用已存在 ${skipped} 个` : ''}（trace: ${String(info.trace_id || '').slice(0, 8)}…）`)
+      } else if (skipped > 0) {
+        message.info(`${skipped} 个商品已在候选库中，未重复建档`)
       } else {
-        message.warning(info.errors?.[0]?.error || '没有可导入的商品（可能已存在）')
+        message.warning(info.errors?.[0]?.error || '没有可导入的商品')
+      }
+      if (Array.isArray(info.errors) && info.errors.length > 0) {
+        message.warning(`${info.errors.length} 个商品导入失败，已跳过，不影响其他条目`)
       }
     } catch (e: any) {
       message.error(e?.message || '加入候选库失败')

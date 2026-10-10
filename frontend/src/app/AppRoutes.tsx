@@ -31,6 +31,11 @@ const ProductEnrichmentPage = lazy(() => import('../pages/ProductEnrichmentPage'
 const NewtonSourcingPage = lazy(() => import('../pages/NewtonSourcing'))
 const ProductPipelinePage = lazy(() => import('../pages/ProductPipeline'))
 const ProductPublishPage = lazy(() => import('../pages/ProductPublish'))
+const ProductMasterPage = lazy(() => import('../pages/ProductMaster'))
+const ProductMappingPage = lazy(() => import('../pages/ProductMapping'))
+const PipelineRunnerPage = lazy(() => import('../pages/PipelineRunner'))
+const OpportunityPage = lazy(() => import('../pages/Opportunity'))
+const DecisionQueuePage = lazy(() => import('../pages/DecisionQueue'))
 const ProductWorkbenchPage = lazy(() => import('../pages/ProductWorkbench'))
 const ProductDecisionCockpitPage = lazy(() => import('../pages/ProductDecisionCockpit'))
 const MarketOpportunitiesPage = lazy(() => import('../pages/MarketOpportunities'))
@@ -102,6 +107,11 @@ export default function AppRoutes() {
         <Route path="products/publish" element={page(<MarketOpportunitiesPage />)} />
         <Route path="products/pipeline" element={page(<ProductPipelinePage />)} />
         <Route path="products/listing-jobs" element={page(<ListingJobsPage />)} />
+        <Route path="products/opportunities" element={page(<OpportunityPage />)} />
+        <Route path="products/decision-queue" element={page(<DecisionQueuePage />)} />
+        <Route path="products/pipeline-runner" element={page(<PipelineRunnerPage />)} />
+        <Route path="products/master" element={page(<ProductMasterPage />)} />
+        <Route path="products/mapping" element={page(<ProductMappingPage />)} />
 
         <Route path="b2c/overview" element={page(<B2COverviewPage />)} />
         <Route path="b2c/products" element={page(<ProductsPage />)} />
