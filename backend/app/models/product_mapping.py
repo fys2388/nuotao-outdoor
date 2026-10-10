@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, UniqueConstraint
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -17,8 +18,19 @@ class ProductMapping(Base):
     """Product mapping between Nuotao and WooCommerce"""
     __tablename__ = "product_mappings"
     __table_args__ = (
-        UniqueConstraint("nuotao_product_id", name="uq_product_mappings_nuotao_id"),
-        UniqueConstraint("woocommerce_id", name="uq_product_mappings_woo_id"),
+        # 唯一约束必须带 workspace 维度：WooCommerce 是按店铺隔离的，同一个数字商品
+        # ID 在不同 workspace 里完全可能是两个不同的商品。原来的全局唯一约束会把它们
+        # 错误地互斥——B 空间无法映射到一个 A 空间已经在用的 WC 商品 ID。
+        UniqueConstraint(
+            "workspace_id",
+            "nuotao_product_id",
+            name="uq_product_mappings_workspace_nuotao",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "woocommerce_id",
+            name="uq_product_mappings_workspace_woo",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

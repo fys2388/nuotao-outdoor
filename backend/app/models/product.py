@@ -51,6 +51,11 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # 1688 来源的唯一标识：从链接中提取并规范化后的数字 offer id。
+    # NULL 表示该行不是 1688 来源（手工录入、CSV 导入、WooCommerce 反向同步等）。
+    # 见 ``uq_products_workspace_source_offer``：同一 workspace 内同一个 1688
+    # 链接只允许存在一条活行，这是「同一链接被重复选品」的根本防线。
+    source_offer_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     attributes: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     meta: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
@@ -68,6 +73,22 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     mastered_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Trace ID for the approval that created the Product Master (Phase 3A).
     mastered_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # V3.0 data integrity tracking (Phase 1 of V3 evaluation fix).
+    # These fields are populated by the data integrity checker and are used
+    # by the V3 selection pipeline to decide whether a candidate has enough
+    # structured data to be scored — replacing the silent NEUTRAL=5.0 default
+    # that masked missing data. All fields are NULL until the first check runs,
+    # so rows created before this migration are not falsely marked incomplete.
+    data_integrity_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    data_integrity_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    data_integrity_missing: Mapped[list[Any]] = mapped_column(
+        AI_JSON, nullable=False, default=list
+    )
+    data_integrity_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    data_integrity_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    data_integrity_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     # Soft delete: NULL means the product is live; a timestamp hides it from all
     # business reads while keeping the row for audit and later re-creation.
     deleted_at: Mapped[datetime | None] = mapped_column(
@@ -84,6 +105,18 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
+        ),
+        # 同一 workspace 内同一个 1688 offer 只允许一条活行。
+        # 应用层「先 SELECT 再 INSERT」的查重会被并发绕过（两个请求都查不到、
+        # 都插入），数据库约束不会；这是「同一链接被重复选品」的根本防线。
+        # 条件里的 IS NOT NULL 让非 1688 来源（手工/CSV/WC 反向同步）不受约束。
+        Index(
+            "uq_products_workspace_source_offer",
+            "workspace_id",
+            "source_offer_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND source_offer_id IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND source_offer_id IS NOT NULL"),
         ),
     )
 
