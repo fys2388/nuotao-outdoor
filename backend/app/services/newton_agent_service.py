@@ -306,6 +306,9 @@ def fetch_task_result(task_id: str) -> dict[str, Any]:
     """
     获取Agent任务结果（商品列表/对比表/询盘结果等）
 
+    优先调用 task.fetch；若 400 则回退到 task.get 并从 chunks/content
+    提取结构化结果。
+
     Args:
         task_id: 任务ID
 
@@ -328,9 +331,29 @@ def fetch_task_result(task_id: str) -> dict[str, Any]:
             "summary": result.get("summary", result.get("answer", "")),
             "raw": result,
         }
-    except Exception as e:
-        logger.error("Newton fetch result failed: %s", str(e))
-        return {"success": False, "error": str(e), "task_id": task_id, "source": "newton_api"}
+    except Exception as e_fetch:
+        # task.fetch 可能返回 400（API 变更）；回退到 task.get 解析 chunks
+        logger.warning("Newton task.fetch failed (%s), falling back to task.get", str(e_fetch)[:200])
+        try:
+            data = _call_newton_api("com.alibaba.agent.newtoncloud.task.get", {"taskId": task_id})
+            result = data.get("result", data)
+            raw_chunks = result.get("chunks", "")
+            raw_content = result.get("content", "")
+            return {
+                "success": True,
+                "source": "newton_api_task_get",
+                "task_id": task_id,
+                "status": result.get("status", "end"),
+                "chunks": raw_chunks,
+                "content": raw_content,
+                "products": [],
+                "comparison": None,
+                "summary": raw_content,
+                "raw": result,
+            }
+        except Exception as e_get:
+            logger.error("Newton fallback task.get also failed: %s", str(e_get))
+            return {"success": False, "error": str(e_get), "task_id": task_id, "source": "newton_api"}
 
 
 def list_models() -> dict[str, Any]:

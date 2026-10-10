@@ -314,7 +314,10 @@ class SourcingCandidate(Base, TimestampMixin, WorkspaceMixin):
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (Index("ix_sourcing_candidates_product", "workspace_id", "product_id"),)
+    __table_args__ = (
+        Index("ix_sourcing_candidates_product", "workspace_id", "product_id"),
+        Index("ix_sourcing_candidates_offer", "workspace_id", "notes"),
+    )
 
 
 class ProductScoreEvidence(Base, CreatedAtMixin, WorkspaceMixin):

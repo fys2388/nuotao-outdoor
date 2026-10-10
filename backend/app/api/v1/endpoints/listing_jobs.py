@@ -233,6 +233,7 @@ async def push_listing_job(
     try:
         result = await push_product_to_woocommerce_gated(
             product_id=str(job.product_id),
+            _current_user=_user,
             force=False,
         )
     except HTTPException as exc:

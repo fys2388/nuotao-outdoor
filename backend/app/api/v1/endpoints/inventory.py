@@ -8,8 +8,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.core.workspace import get_workspace_id
+from app.schemas.user import UserResponse
 from typing import Annotated
 from uuid import UUID
 from pydantic import BaseModel
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
@@ -84,7 +87,7 @@ class ReplenishmentRequest(BaseModel):
 
 
 @router.get("/status")
-async def get_status() -> dict[str, Any]:
+async def get_status(_current_user: CurrentUser) -> dict[str, Any]:
     return get_inventory_system_status()
 
 
@@ -109,12 +112,12 @@ async def create_warehouse_endpoint(request: CreateWarehouseRequest) -> dict[str
 
 
 @router.get("/warehouses")
-async def list_warehouses_endpoint() -> dict[str, Any]:
+async def list_warehouses_endpoint(_current_user: CurrentUser) -> dict[str, Any]:
     return list_warehouses()
 
 
 @router.get("/warehouses/{warehouse_id}")
-async def get_warehouse_status(warehouse_id: str) -> dict[str, Any]:
+async def get_warehouse_status(_current_user: CurrentUser, warehouse_id: str) -> dict[str, Any]:
     try:
         return get_inventory_status(warehouse_id)
     except ValueError as e:
@@ -229,7 +232,7 @@ async def sync_1688_inventory(request: SyncRequest) -> dict[str, Any]:
 
 
 @router.get("/sync/history", summary="获取库存同步历史记录")
-async def get_inventory_sync_history(limit: int = 20) -> dict[str, Any]:
+async def get_inventory_sync_history(_current_user: CurrentUser, limit: int = 20) -> dict[str, Any]:
     """
     获取库存同步历史记录
 

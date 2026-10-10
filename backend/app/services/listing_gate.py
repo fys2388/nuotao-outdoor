@@ -34,11 +34,20 @@ HARD_BLOCK: set[str] = {
     "missing_price",
     "unapproved_candidate",
     "cjk_without_localization",
+    # PRICE-002 (hard): a price below landed cost loses money on every unit.
+    # Never forceable - this is exactly the defect that let product 2230 ship at
+    # $5.83 against a $6.30 purchase cost.
+    "negative_margin",
 }
 # Reasons that require human review but are overridable (-> 409).
 REVIEW_REQUIRED: set[str] = {
     "unapproved_copy",
     "thin_copy",
+    # PRICE-002: covers cost but misses the configured net-margin floor
+    # (``pricing_min_net_margin``, default 25%). Overridable because a
+    # deliberate loss-leader or clearance decision is a legitimate business
+    # call - but it must be made by a human, not silently by a pipeline.
+    "below_margin_target",
 }
 
 _COPY_STATUSES_PASSING = {"approved"}
@@ -147,6 +156,8 @@ def evaluate_gate(
     en_copy: dict,
     *,
     purchase_cost: Any = _COST_UNSET,
+    purchase_currency: str = "USD",
+    cost_row: Any = None,
 ) -> dict:
     """Evaluate the pre-publish gate.
 
@@ -160,6 +171,11 @@ def evaluate_gate(
       * None      caller loaded the authoritative row and there is none. That is
                   the actionable case and IS reported.
       * a value   zero or blank -> missing_cost; a positive number passes.
+
+    ``cost_row`` is the optional ``ProductCost`` row. When it carries a valid
+    ``total_landed_cost`` (P2-9 effective-cost semantics) the margin check uses
+    the *measured* landed cost; otherwise it falls back to configured logistics
+    defaults and marks the basis ``estimated``.
 
     The gate is pure and has no database access; the caller loads the row.
     """
@@ -192,6 +208,34 @@ def evaluate_gate(
             "code": "missing_cost",
             "message": "缺少采购成本（purchase_cost 为空或为 0），上架后毛利无法核算",
         })
+
+    # PRICE-002 (hard): the price must cover landed cost and meet the configured
+    # net-margin floor. Only evaluated when both a positive price and a positive
+    # purchase cost are known - the missing_price / missing_cost branches above
+    # already handle the "we do not know" case, and judging a margin from absent
+    # data would produce false blocks.
+    if purchase_cost is not _COST_UNSET and _num(purchase_cost) and prices.get("regular_price"):
+        from app.services.pricing_policy import evaluate_price
+
+        verdict = evaluate_price(
+            prices["regular_price"],
+            purchase_cost,
+            purchase_currency=purchase_currency,
+            cost_row=cost_row,
+        )
+        if verdict["verdict"] == "negative":
+            reasons.append({
+                "code": "negative_margin",
+                "message": verdict["message"],
+            })
+        elif verdict["verdict"] == "below_target":
+            suggested = verdict.get("suggested_price")
+            hint = f"，建议售价 ${suggested}" if suggested else ""
+            reasons.append({
+                "code": "below_margin_target",
+                "message": verdict["message"] + hint
+                + f"（落地成本口径：{verdict.get('landed_basis')}）",
+            })
 
     # Candidate lifecycle (M5.13): NULL means the row is already a downstream
     # commerce product, so it is not gated by the candidate state machine.
@@ -281,12 +325,39 @@ def evaluate_gate_from_dict(listing_data: dict[str, Any]) -> dict[str, Any]:
     # Only checked when the payload carries a cost field at all. Callers that do
     # not forward one have no cost signal, and asserting absence from silence
     # would turn every pipeline push into a needs_review.
+    cost_value = None
     if any(k in data for k in ("purchase_cost", "cost_price")):
         cost_value = data.get("purchase_cost", data.get("cost_price"))
         if _num(cost_value) is None:
             reasons.append({
                 "code": "missing_cost",
                 "message": "缺少采购成本（purchase_cost 为空或为 0），上架后毛利无法核算",
+            })
+
+    # PRICE-002 on the ungated path too: the pipeline builds this dict and pushes
+    # straight to WooCommerce, so without the same margin check it would remain a
+    # bypass around the storefront gate. Same rule as evaluate_gate - judge only
+    # when both a positive price and a positive cost are present.
+    if price is not None and _num(cost_value):
+        from app.services.pricing_policy import evaluate_price
+
+        verdict = evaluate_price(
+            price,
+            cost_value,
+            purchase_currency=str(data.get("purchase_cost_currency") or "USD"),
+        )
+        if verdict["verdict"] == "negative":
+            reasons.append({
+                "code": "negative_margin",
+                "message": verdict["message"],
+            })
+        elif verdict["verdict"] == "below_target":
+            suggested = verdict.get("suggested_price")
+            hint = f"，建议售价 ${suggested}" if suggested else ""
+            reasons.append({
+                "code": "below_margin_target",
+                "message": verdict["message"] + hint
+                + f"（落地成本口径：{verdict.get('landed_basis')}）",
             })
 
     title = str(data.get("name") or data.get("title") or "").strip()
@@ -374,13 +445,72 @@ _MAX_ATTRIBUTES = 8
 _MAX_ATTRIBUTE_OPTIONS = 10
 _MAX_IMAGES = 10
 
+#: A fetchable listing image must be an absolute HTTP(S) URL: WooCommerce
+#: downloads it at sync time, so a local path, a ``data:`` URI or a mock
+#: placeholder can never be published.
+_LISTING_IMAGE_SCHEMES = ("http://", "https://")
+
+#: Substrings that identify a non-real asset. ``mock`` catches the P0-3
+#: placeholder backend; ``placeholder``/``example.com`` catch test fixtures.
+_LISTING_IMAGE_REJECT_MARKERS = (
+    "mock",
+    "placeholder",
+    "example.com",
+)
+
+
+def is_real_listing_image(url: str) -> bool:
+    """True only for an absolute HTTP(S) URL that is not a mock/placeholder."""
+    text = str(url or "").strip()
+    if not text.startswith(_LISTING_IMAGE_SCHEMES):
+        return False
+    lowered = text.lower()
+    return not any(marker in lowered for marker in _LISTING_IMAGE_REJECT_MARKERS)
+
+
+def collect_listing_images(meta: dict[str, Any] | None) -> list[dict[str, str]]:
+    """Collect the publishable image set from every location the pipeline writes.
+
+    P0-6: ``attach_approved_image`` writes approved creative assets to
+    ``meta["media"]["images"]``, while the WC payload reader only looked at
+    ``meta["main_images"]`` / ``meta["images"]`` — so an approved, genuinely
+    generated image never reached WooCommerce. The approved media block is now
+    the highest-priority source, and the legacy flat keys remain as fallback.
+    Entries are deduplicated in order and filtered through
+    :func:`is_real_listing_image`.
+    """
+    if not isinstance(meta, dict):
+        return []
+    media = meta.get("media")
+    media = media if isinstance(media, dict) else {}
+
+    sources: list[Any] = [
+        media.get("images"),
+        meta.get("main_images"),
+        meta.get("images"),
+    ]
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        normalised = normalise_listing_images(source)
+        for entry in normalised:
+            url = entry.get("src", "")
+            if not is_real_listing_image(url) or url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+    return [{"src": url} for url in urls]
+
 
 def normalise_listing_images(raw: Any) -> list[dict[str, str]]:
     """Normalise pipeline image shapes into WooCommerce ``[{"src": url}]``.
 
     Accepts strings, ``{"src": ...}``, ``{"url": ...}`` and ``{"image_url": ...}``.
     Returns an empty list rather than guessing: an unparsable image entry is
-    dropped instead of being replaced with a placeholder.
+    dropped instead of being replaced with a placeholder. Non-HTTP(S) entries
+    (``data:`` URIs, local paths) are dropped here as well — the listing gate
+    must never publish a payload it cannot deliver.
     """
     if isinstance(raw, str):
         raw = [raw]
@@ -396,7 +526,7 @@ def normalise_listing_images(raw: Any) -> list[dict[str, str]]:
             ).strip()
         else:
             continue
-        if text:
+        if text and is_real_listing_image(text):
             images.append({"src": text})
     return images
 
@@ -545,9 +675,13 @@ def build_wc_payload(product: Any, prices: dict, en_copy: dict) -> dict:
     if brand and not _CJK_RE.search(brand):
         payload["brand"] = brand
 
-    # ``main_images`` is the pipeline's curated first five; ``images`` is the
-    # flat backwards-compatible array. Prefer the curated set when both exist.
-    images = normalise_listing_images(meta.get("main_images") or meta.get("images"))
+    # P0-6: the pipeline writes approved creative assets to
+    # ``meta["media"]["images"]`` while the old reader only looked at
+    # ``meta["main_images"]`` / ``meta["images"]``, so approved images never
+    # reached WooCommerce. ``collect_listing_images`` reads every location,
+    # keeps the first occurrence in order, and drops anything that is not a
+    # real fetchable HTTP(S) URL (data URIs, mock SVGs, local paths).
+    images = collect_listing_images(meta)
     if images:
         payload["images"] = images[:_MAX_IMAGES]
 

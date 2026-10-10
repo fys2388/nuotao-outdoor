@@ -6,12 +6,16 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
+from app.core.workspace import get_workspace_id
+from app.schemas.user import UserResponse
 from app.services.sourcing_service import (
     ai_quality_check,
     batch_import_products,
@@ -26,6 +30,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sourcing", tags=["sourcing"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
 
 
 # ============================================
@@ -81,7 +87,7 @@ class QualityCheckRequest(BaseModel):
     "/status",
     summary="获取选品系统状态",
 )
-async def get_status() -> dict[str, Any]:
+async def get_status(_current_user: CurrentUser) -> dict[str, Any]:
     """获取选品系统状态和配置"""
     return get_sourcing_status()
 
@@ -92,6 +98,8 @@ async def get_status() -> dict[str, Any]:
 )
 async def create_candidate(
     request: ProductCandidateRequest,
+    _current_user: CurrentUser,
+    workspace_id: WorkspaceId,
     db: DbSession,
 ) -> dict[str, Any]:
     """
@@ -110,6 +118,7 @@ async def create_candidate(
             product_data=product_data,
             source_type=source_type,
             source_url=source_url,
+            workspace_id=workspace_id,
         )
         await db.commit()
 
@@ -143,6 +152,8 @@ async def create_candidate(
 )
 async def batch_import(
     request: BatchImportRequest,
+    _current_user: CurrentUser,
+    workspace_id: WorkspaceId,
     db: DbSession,
 ) -> dict[str, Any]:
     """
@@ -156,6 +167,7 @@ async def batch_import(
             session=db,
             products_data=request.products,
             source_type=request.source_type,
+            workspace_id=workspace_id,
         )
         await db.commit()
         return result
@@ -174,6 +186,7 @@ async def batch_import(
 )
 async def quality_check(
     request: QualityCheckRequest,
+    _current_user: CurrentUser,
 ) -> dict[str, Any]:
     """
     AI 结构化分析质检
@@ -198,6 +211,8 @@ async def quality_check(
 )
 async def calculate_score(
     request: ProductScoreRequest,
+    _current_user: CurrentUser,
+    workspace_id: WorkspaceId,
     db: DbSession,
 ) -> dict[str, Any]:
     """
@@ -221,6 +236,7 @@ async def calculate_score(
             session=db,
             product_id=product_id,
             score_data=score_data if score_data else None,
+            workspace_id=workspace_id,
         )
         await db.commit()
 
@@ -258,6 +274,8 @@ async def calculate_score(
     summary="获取产品候选列表",
 )
 async def list_candidates(
+    _current_user: CurrentUser,
+    workspace_id: WorkspaceId,
     db: DbSession,
     status: str | None = "candidate",
     limit: int = 50,
@@ -275,11 +293,12 @@ async def list_candidates(
             status=status,
             limit=limit,
             offset=offset,
+            workspace_id=workspace_id,
         )
         return result
     except Exception as e:
         logger.exception("List product candidates failed: %s", str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=f"List product candidates failed: {e!s}",
         )

@@ -5,11 +5,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app.api.v1.endpoints.auth import get_current_user
+from app.core.workspace import get_workspace_id
+from app.schemas.user import UserResponse
 from app.services.alert_system_service import (
     check_margin_decline,
     check_refund_rate,
@@ -27,6 +30,8 @@ from app.services.alert_system_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 # ============================================
@@ -178,6 +183,7 @@ async def create_alert_endpoint(
     summary="获取预警列表",
 )
 async def list_alerts_endpoint(
+    _current_user: CurrentUser,
     alert_status: str | None = None,
     severity: str | None = None,
     alert_type: str | None = None,

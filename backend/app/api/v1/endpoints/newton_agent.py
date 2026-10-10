@@ -245,6 +245,12 @@ async def search_products(request: SearchRequest, db: DbSession) -> StandardResp
                     source_query=request.query,
                     workspace_id=DEFAULT_WORKSPACE_ID,
                 )
+                # import_products_to_candidates only flushes and explicitly
+                # delegates commit to the caller. get_db() never auto-commits,
+                # so without this commit the session close discards every
+                # candidate row while the API still reports imported=N
+                # (reported success but nothing persisted).
+                await db.commit()
                 result["candidate_import"] = {
                     "imported": import_res.get("imported", 0),
                     "skipped": import_res.get("skipped", 0),
@@ -260,6 +266,8 @@ async def search_products(request: SearchRequest, db: DbSession) -> StandardResp
                 except Exception:  # noqa: BLE001
                     pass
             except Exception as import_err:  # noqa: BLE001
+                # Keep the session usable after a failed import.
+                await db.rollback()
                 logger.warning("Auto-import newton products to candidates failed: %s", import_err)
                 result["candidate_import_error"] = str(import_err)
 
@@ -454,14 +462,24 @@ async def import_sourcing_to_candidates(
     request: ImportSourcingRequest,
     db: DbSession,
 ) -> StandardResponse:
-    """将牛顿找品商品批量导入系统选品候选库"""
+    """将牛顿找品商品批量导入系统选品候选库。
+
+    事务边界：service 只做 flush + savepoint 隔离，**本端点独占 commit**。
+    只有 commit 真正成功后才返回 success=True，并回传每条真实的
+    product_id / candidate_id；失败一律 rollback 后 500，禁止 fake success。
+    """
+    from app.core.tracing import new_trace_id
+
+    trace_id = new_trace_id()
     try:
         result = await import_products_to_candidates(
             session=db,
             products=request.products,
             sourcing_id=request.sourcing_id,
             source_query=request.source_query,
+            trace_id=trace_id,
         )
+        await db.commit()
         total = result.get("total", 0)
         imported = result.get("imported", 0)
         skipped = result.get("skipped", 0)
@@ -473,9 +491,19 @@ async def import_sourcing_to_candidates(
                 "部分商品导入失败: imported=%d, skipped=%d, errors=%d",
                 imported, skipped, len(result["errors"]),
             )
-        return StandardResponse(success=True, data=result)
+        return StandardResponse(
+            success=True,
+            data={
+                **result,
+                "trace_id": trace_id,
+                "committed": True,
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Import sourcing to candidates failed: %s", str(e))
+        await db.rollback()
+        logger.error("Import sourcing to candidates failed: %s", str(e), exc_info=True)
         # 不向前端暴露 SQLAlchemy 原始错误体（含 SQL、参数、约束名）
         raise HTTPException(
             status_code=500,

@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -35,6 +36,7 @@ from app.schemas.supply_chain import (
     SupplyChainKnowledgeCreate,
     SupplyChainKnowledgeOut,
 )
+from app.schemas.user import UserResponse
 from app.models.supplier import Supplier
 from app.services import supply_chain
 
@@ -42,6 +44,7 @@ router = APIRouter(tags=["supply-chain"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 def _http_error(exc: supply_chain.SupplyChainError) -> HTTPException:
@@ -86,6 +89,7 @@ async def create_supplier(
     summary="List suppliers",
 )
 async def list_suppliers(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     status: str | None = Query(default=None, max_length=16),
@@ -105,6 +109,7 @@ async def list_suppliers(
     summary="Get a supplier",
 )
 async def get_supplier(
+    _current_user: CurrentUser,
     supplier_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
@@ -187,6 +192,7 @@ async def create_supplier_profile(
     summary="List supplier profiles",
 )
 async def list_supplier_profiles(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     risk_level: str | None = Query(default=None, max_length=16),
@@ -277,6 +283,7 @@ async def create_purchase_order(
     summary="List purchase orders",
 )
 async def list_purchase_orders(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     po_status: str | None = Query(default=None, alias="status", max_length=16),
@@ -302,6 +309,7 @@ async def list_purchase_orders(
     summary="Get a purchase order with line items",
 )
 async def get_purchase_order(
+    _current_user: CurrentUser,
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
@@ -475,6 +483,7 @@ async def create_inventory(
     summary="List inventory snapshots",
 )
 async def list_inventory(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     location: str | None = Query(default=None, max_length=32),
@@ -565,6 +574,7 @@ async def create_shipment(
     summary="List shipments",
 )
 async def list_shipments(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     status_filter: str | None = Query(default=None, alias="status", max_length=16),
@@ -635,6 +645,7 @@ async def add_logistics_event(
     summary="List logistics events for a shipment",
 )
 async def list_logistics_events(
+    _current_user: CurrentUser,
     shipment_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
@@ -699,6 +710,7 @@ async def create_knowledge_entry(
     summary="Query supply chain knowledge entries",
 )
 async def list_knowledge_entries(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     category: str | None = Query(default=None, max_length=64),
@@ -731,6 +743,7 @@ async def list_knowledge_entries(
     summary="Get purchase order statistics by supplier",
 )
 async def get_purchase_order_stats(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> dict:

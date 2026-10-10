@@ -195,11 +195,18 @@ async def _run_fetch_job(redis: Redis, job_id: str) -> None:
 
     await _update_job(redis, job_id, prefix=FETCH_JOB_PREFIX, status="running", started_at=_now())
     try:
-        result = await import_from_1688(
-            str(job["url_or_id"]),
-            auto_run_pipeline=bool(job.get("auto_run_pipeline", False)),
-            auto_list=bool(job.get("auto_list", False)),
-        )
+        # 传 session：不传的话 run_pipeline 的 V3.0 闸门会被标记为 skipped（不评估
+        # 也不阻断）、候选也不会落库，于是「同步接口导入会进候选库、异步任务导入
+        # 不会」——同一次业务操作在两条路径上得到不同结果。
+        from app.core.database import async_session_factory
+
+        async with async_session_factory() as session:
+            result = await import_from_1688(
+                str(job["url_or_id"]),
+                auto_run_pipeline=bool(job.get("auto_run_pipeline", False)),
+                auto_list=bool(job.get("auto_list", False)),
+                session=session,
+            )
         if result.get("success"):
             await _update_job(
                 redis, job_id, prefix=FETCH_JOB_PREFIX,

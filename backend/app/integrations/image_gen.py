@@ -5,9 +5,12 @@ backends via a simple adapter pattern; the service layer never talks to a
 specific provider directly.
 
 Backends (Phase 1):
-- ``wan2.7-image`` (default): Alibaba Cloud DashScope / Bailian, ¥0.08/img
+- ``doubao-seedream-5-0-pro-260628`` (default): Volcengine Ark, ¥0.30/img
+- ``doubao-seedream-5-0-260128``: Volcengine, ¥0.22/img
+- ``doubao-seedream-4-5-251128``: Volcengine, ¥0.25/img
+- ``doubao-seedream-4-0-250828``: Volcengine, ¥0.20/img
 - ``qwen-image-3.0``: Alibaba Cloud, ¥0.18/img (high quality)
-- ``seedream-4.0``: Volcengine Ark, ¥0.22/img
+- ``agnes-image-2.5-flash``: Agnes AI (OpenAI-compatible), ¥0.08/img
 - ``mock``: returns a placeholder for development / tests (no API call)
 
 Costs are recorded in CNY for budget tracking. The gateway enforces timeout,
@@ -128,6 +131,16 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
         "quality": "high",
         "default": False,
     },
+    # --- Agnes AI (OpenAI-compatible T2I + I2I, verified 2026-10-05) ---
+    "agnes-image-2.5-flash": {
+        "cost_cny": 0.08,
+        "provider": "agnes",
+        "quality": "high",
+        "default": False,
+        "free_quota": "platform-dependent",
+        "api_style": "openai_images",
+        "i2i_supported": True,
+    },
     "mock": {
         "cost_cny": 0.0,
         "provider": "mock",
@@ -136,15 +149,24 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
     },
 }
 
-# Fallback chain: Seedream 5.0 pro (default) -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image -> mock.
+# Fallback chain: Seedream 5.0 pro (default) -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image.
+#
+# P0-3: ``mock`` is deliberately NOT in this chain. A placeholder must never be
+# the terminal fallback of a production image request: when every real backend
+# fails, ``generate_image`` raises ``ImageGenError`` so the caller sees a real
+# failure instead of an SVG that looks like a success. Tests that need a
+# placeholder must opt in explicitly with ``model="mock"``.
 FALLBACK_CHAIN: list[str] = [
     "doubao-seedream-5-0-pro-260628",
     "doubao-seedream-5-0-260128",
     "doubao-seedream-4-5-251128",
     "doubao-seedream-4-0-250828",
     "qwen-image-3.0",
-    "mock",
+    "agnes-image-2.5-flash",
 ]
+
+#: Placeholder backend, test/dev only. Never a production success path (P0-3).
+MOCK_MODEL = "mock"
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_RETRIES = 2
@@ -206,6 +228,18 @@ async def generate_image(
         if fb not in attempt_models:
             attempt_models.append(fb)
 
+    # P0-3: a production request must have at least one REAL backend to try.
+    # ``mock`` never counts — otherwise a total provider outage would be masked
+    # by a placeholder that looks like a success. Explicit ``model="mock"``
+    # (tests/dev) still works.
+    if model != MOCK_MODEL and not any(
+        m in BACKEND_PRICING and m != MOCK_MODEL for m in attempt_models
+    ):
+        raise ImageGenError(
+            "no image generation backends configured - set VOLCENGINE_API_KEY, "
+            "DASHSCOPE_API_KEY, or OPENAI_BASE_URL (Agnes image provider)"
+        )
+
     last_error: str | None = None
 
     for attempt_model in attempt_models:
@@ -255,7 +289,7 @@ async def _dispatch_to_backend(
     timeout_seconds: float,
 ) -> ImageGenResult:
     """Dispatch to the appropriate backend adapter."""
-    if model == "mock":
+    if model == MOCK_MODEL:
         return _generate_mock(prompt=prompt, width=width, height=height)
 
     provider = BACKEND_PRICING.get(model, {}).get("provider", "unknown")
@@ -286,6 +320,17 @@ async def _dispatch_to_backend(
             width=width,
             height=height,
             negative_prompt=negative_prompt,
+            timeout_seconds=timeout_seconds,
+        )
+
+    if provider == "agnes":
+        return await _generate_agnes(
+            model=model,
+            prompt=prompt,
+            width=width,
+            height=height,
+            negative_prompt=negative_prompt,
+            reference_image=reference_image,
             timeout_seconds=timeout_seconds,
         )
 
@@ -419,7 +464,7 @@ async def _generate_alibaba_sync(
         payload["parameters"]["negative_prompt"] = negative_prompt
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             resp = await client.post(base_url, headers=headers, json=payload)
             if resp.status_code != 200:
                 raise ImageGenError(
@@ -487,7 +532,7 @@ async def _generate_alibaba_async(
         payload["input"]["negative_prompt"] = negative_prompt
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             # 1. Submit async task
             resp = await client.post(base_url, headers=headers, json=payload)
             if resp.status_code != 200:
@@ -566,7 +611,7 @@ async def _generate_volcengine(
         payload["negative_prompt"] = negative_prompt
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             resp = await client.post(
                 "https://ark.cn-beijing.volces.com/api/v3/images/generations",
                 headers=headers,
@@ -589,6 +634,89 @@ async def _generate_volcengine(
         raise ImageGenError("Volcengine request timed out") from None
     except httpx.HTTPError as exc:
         raise ImageGenError(f"Volcengine HTTP error: {exc}") from None
+
+
+async def _generate_agnes(
+    *,
+    model: str,
+    prompt: str,
+    width: int,
+    height: int,
+    negative_prompt: str | None,
+    reference_image: str | None,
+    timeout_seconds: float,
+) -> ImageGenResult:
+    """Agnes AI image generation adapter (OpenAI-compatible).
+
+    Verified 2026-10-05:
+    - T2I: ``agnes-image-2.5-flash`` returns HTTP 200 with real PNG images.
+    - I2I: When ``reference_image`` is provided (URL or data URI), the API
+      returns I2I output at 1024x1024. Output URLs contain ``/i2i/`` path.
+    - **Note**: Agnes does NOT support ``negative_prompt``; passing it causes
+      HTTP 400. The parameter is silently dropped.
+
+    Requires ``OPENAI_API_KEY`` and ``OPENAI_BASE_URL`` (Agnes hub).
+    """
+    settings = get_settings()
+    api_key = settings.openai_api_key
+    base_url = settings.openai_base_url
+    if not api_key:
+        raise ImageGenError("OPENAI_API_KEY not configured (Agnes image provider)")
+
+    # OpenAI-compatible images/generations endpoint
+    endpoint = f"{base_url.rstrip('/')}/images/generations"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "size": f"{width}x{height}",
+        "n": 1,
+    }
+    # NOTE: Agnes does NOT support negative_prompt (HTTP 400 if passed).
+    # The parameter is silently ignored here.
+    if reference_image:
+        # I2I: pass reference as URL or data:image/...;base64,<b64>
+        payload["image"] = reference_image
+
+    try:
+        max_retries = 2  # 免费额度限流时重试
+        for attempt in range(max_retries + 1):
+            async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
+                resp = await client.post(endpoint, headers=headers, json=payload)
+                if resp.status_code == 429:
+                    if attempt < max_retries:
+                        delay = 3.0 * (attempt + 1)  # 3s, 6s
+                        logger.warning("Agnes rate limited (429), retry %d/%d in %.1fs",
+                                       attempt + 1, max_retries, delay)
+                        await _async_sleep(delay)
+                        continue
+                    raise ImageGenError(
+                        f"Agnes rate limited (429) after {max_retries} retries"
+                    )
+                if resp.status_code != 200:
+                    raise ImageGenError(
+                        f"Agnes failed: {resp.status_code} {resp.text[:500]}"
+                    )
+                data = resp.json()
+                images = data.get("data", [])
+                if images and (images[0].get("url") or images[0].get("b64_json")):
+                    return ImageGenResult(
+                        image_url=images[0].get("url"),
+                        image_b64=images[0].get("b64_json"),
+                        model=model,
+                        cost_cny=get_model_cost(model),
+                        raw_response=data,
+                    )
+                raise ImageGenError(f"Agnes no image in response: {data}")
+        raise ImageGenError("Agnes retries exhausted")
+    except httpx.TimeoutException:
+        raise ImageGenError("Agnes request timed out") from None
+    except httpx.HTTPError as exc:
+        raise ImageGenError(f"Agnes HTTP error: {exc}") from None
 
 
 async def _async_sleep(seconds: float) -> None:
@@ -701,7 +829,7 @@ async def _generate_jimeng_marketing(
         return headers, f"https://{host}/?{query}", body_str
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             # 1. Submit task
             submit_body: dict[str, Any] = {
                 "req_key": req_key,

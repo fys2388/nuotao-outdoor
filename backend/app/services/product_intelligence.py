@@ -218,7 +218,17 @@ def _recommended_price(total_cost: Decimal) -> Decimal | None:
 
 
 def _derive_sku(title: str, source_url: str | None) -> str:
-    """Deterministic SKU from source url (or title) for intake without sku."""
+    """Deterministic SKU from source url (or title) for intake without sku.
+
+    1688 链接优先取 offer id：同一个 offer 的短链/长链/带不同 query 串的链接都应
+    得到同一个 SKU。原先直接 sha1 原始 URL，链接一变就是另一个 SKU，来源查重之外
+    的 SKU 查重也随之失效。
+    """
+    from app.services.product_source_identity import extract_1688_offer_id
+
+    offer_id = extract_1688_offer_id(source_url)
+    if offer_id:
+        return f"NTO-{offer_id}"
     seed = source_url or title
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10].upper()
     return f"NTO-{digest}"
@@ -749,16 +759,18 @@ async def intake_product(
             raise ProductIntelligenceError(f"supplier_code '{data.supplier_code}' not found")
         supplier_id = supplier
 
-    product = (
-        await session.execute(
-            select(Product).where(
-                Product.workspace_id == workspace_id,
-                Product.sku == sku,
-            )
-        )
-    ).scalar_one_or_none()
-    if product is None:
-        product = Product(
+    # 「同一 1688 链接不重复建档」：原查询只按 SKU（且不过滤 deleted_at），而
+    # intake 的 SKU 缺省由 source_url 的 sha1 派生——同一个 offer 带不同 query 串
+    # 就会得到不同 SKU，于是重复录入会各建一条。这里改为优先按来源键命中。
+    from app.services.product_source_identity import (
+        get_or_create_by_source,
+        resolve_source_offer_id,
+    )
+
+    source_offer_id = resolve_source_offer_id(source_url=data.source_url)
+
+    def _build_product() -> Product:
+        return Product(
             workspace_id=workspace_id,
             sku=sku,
             name=data.title,
@@ -769,6 +781,7 @@ async def intake_product(
             candidate_status="candidate",
             source="intake",
             source_url=data.source_url,
+            source_offer_id=source_offer_id,
             category=data.category,
             attributes=data.attributes,
             meta=_intake_meta(data),
@@ -776,9 +789,15 @@ async def intake_product(
             dimensions=data.dimensions,
             target_market=data.target_market,
         )
-        session.add(product)
-        await session.flush()
-    else:
+
+    product, created = await get_or_create_by_source(
+        session,
+        workspace_id=workspace_id,
+        source_offer_id=source_offer_id,
+        build=_build_product,
+        fallback_sku=sku,
+    )
+    if not created:
         product.name = data.title
         if data.description:
             product.description = data.description

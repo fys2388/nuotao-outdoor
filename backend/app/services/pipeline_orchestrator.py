@@ -13,7 +13,7 @@ import importlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +60,7 @@ def create_pipeline_run(*, product_name: str, source_url: str | None = None,
                          source_id: str | None = None, selection_id: str | None = None,
                          auto_list: bool = False) -> dict[str, Any]:
     """创建流水线运行实例。"""
-    run_id = f"pipe_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{UUID.hex[:8]}"
+    run_id = f"pipe_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     steps = []
     for sd in PIPELINE_STEPS:
         steps.append({**sd, "status": "pending", "retry_count": 0, "result": None,

@@ -192,6 +192,15 @@ async def execute_generation_task(
     try:
         from app.core.config import get_settings
         settings = get_settings()
+
+        # P0-3: mock is a test/dev placeholder and can never be a production
+        # success path. Refuse to persist it as ``generated`` — the task is
+        # marked failed below by the existing handler.
+        if task.requested_model == image_gen_gateway.MOCK_MODEL:
+            raise ImageGenServiceError(
+                "mock image generation is not a production success path (P0-3)"
+            )
+
         gen_result = await image_gen_gateway.generate_image(
             prompt=task.prompt,
             model=task.requested_model,
@@ -202,6 +211,16 @@ async def execute_generation_task(
             timeout_seconds=settings.image_gen_timeout_seconds,
             max_retries=settings.image_gen_max_retries,
         )
+
+        # Belt and braces: even if a backend silently returned a placeholder,
+        # never let it reach status=generated.
+        if gen_result.model == image_gen_gateway.MOCK_MODEL:
+            raise ImageGenServiceError(
+                f"image backend returned a mock placeholder "
+                f"(requested_model={task.requested_model!r}); refusing to mark the "
+                f"task as generated (P0-3)"
+            )
+
         task.actual_model = gen_result.model
         task.cost_cny = Decimal(str(gen_result.cost_cny))
         task.image_url = gen_result.image_url

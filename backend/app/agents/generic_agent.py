@@ -71,6 +71,7 @@ async def run_generic_agent(
     vision: bool = False,
     images: list[str] | None = None,
     model: str | None = None,
+    provider: str | None = None,
 ) -> GenericAgentResult:
     """Run a generic AI agent analysis pipeline.
 
@@ -87,7 +88,9 @@ async def run_generic_agent(
         persist: when False, skip audit persistence (dry-run)
         vision: enable multimodal (image) input
         images: list of image URLs or base64 data URLs
-        model: explicit model override (e.g. 'gpt-4o' for vision)
+        model: explicit model override (e.g. 'agnes-2.5-flash' for vision)
+        provider: explicit provider override (required for vision routing — the
+            default provider chain cannot see images, see P0-5)
 
     Returns:
         GenericAgentResult with output dict or error.
@@ -127,6 +130,7 @@ async def run_generic_agent(
         vision=vision,
         images=images or [],
         model=model,
+        provider=provider,
     )
 
     try:
