@@ -597,6 +597,9 @@ def upgrade() -> None:
                     :target_market, :weight_kg, CAST(:attributes AS jsonb), CAST(:tags AS jsonb), CAST(:meta AS jsonb),
                     now(), now()
                 )
+                -- 幂等：同一 workspace 内 SKU 唯一（uq_products_workspace_sku）。
+                -- 若这些产品已由脚本/其他环境预置，跳过而不是让整个部署失败。
+                ON CONFLICT (workspace_id, sku) DO NOTHING
                 """
             ).bindparams(
                 workspace_id=WORKSPACE_ID,

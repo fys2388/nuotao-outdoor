@@ -27,6 +27,32 @@ depends_on = None
 WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
 CHANGED_BY = "migration_0074_category_configs"
 
+
+def _align_workspace_id_to_uuid() -> None:
+    """把 strategy_versions.workspace_id 从 varchar(32) 对齐到 uuid。
+
+    0027 建表时该列是 ``String(32)``，但本迁移用 ``CAST(:workspace_id AS uuid)``
+    写入 36 字符的 UUID 值，触发::
+
+        value too long for type character varying(32)
+
+    ORM 侧 ``WorkspaceMixin.workspace_id`` 一直是 ``Mapped[Uuid]``，与 0073 对齐
+    ``creative_*`` 表的理由相同。存量值本身就是合法 UUID 文本，故 ``::uuid``
+    转换无损。
+
+    写成无条件 ALTER 而非先查再改：staging 校验用 ``alembic upgrade head --sql``
+    离线渲染，任何依赖 ``op.get_bind().execute()`` 的运行时探测都会在那里崩掉；
+    而 ``ALTER COLUMN ... TYPE uuid USING workspace_id::uuid`` 对已经是 uuid 的
+    列是无操作，因此在线重跑同样安全。
+    """
+    op.alter_column(
+        "strategy_versions",
+        "workspace_id",
+        type_=sa.Uuid(),
+        existing_nullable=False,
+        postgresql_using="workspace_id::uuid",
+    )
+
 # --------------------------------------------------------------------------- #
 # 品类配置定义
 # --------------------------------------------------------------------------- #
@@ -196,6 +222,7 @@ EXCLUDED_CATEGORIES: list[dict] = [
 
 def upgrade() -> None:
     """插入品类配置到 strategy_versions 表。"""
+    _align_workspace_id_to_uuid()
     for cfg in CATEGORY_CONFIGS:
         new_config = {
             "name": cfg["name"],
