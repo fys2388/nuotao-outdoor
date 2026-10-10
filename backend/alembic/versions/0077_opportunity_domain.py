@@ -1,4 +1,4 @@
-"""0036_opportunity_domain
+"""0077_opportunity_domain
 
 新增 Opportunity 数据域（ADR IDENTITY-002 阶段①②）：
 ``opportunities`` + ``opportunity_candidates``。
@@ -25,8 +25,8 @@
 
 非破坏性：无存量数据、无 backfill、不涉及 ``products`` 表任何 DDL。
 
-Revision ID: 0036
-Revises: 0035
+Revision ID: 0077
+Revises: 0076
 Create Date: 2026-08-24
 """
 import sqlalchemy as sa
@@ -38,8 +38,8 @@ from alembic import op
 JSON_TYPE = sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
 
 # revision identifiers, used by Alembic.
-revision = '0036'
-down_revision = '0035'
+revision = '0077'
+down_revision = '0076'
 branch_labels = None
 depends_on = None
 
