@@ -140,7 +140,7 @@ jobs:
               nginx -t -c /etc/nginx/nginx.conf 2>&1 | head -3 || true
               echo "[staging] nginx template present and copied"
             else
-              echo "WARN: infra/nginx/console.conf 涓嶅瓨鍦紙娌跨敤鐢熶骇鏃㈡湁閰嶇疆锛?
+              echo "WARN: infra/nginx/console.conf missing (keeping existing production nginx config)"
             fi
             echo "=== STAGING VALIDATION PASSED ==="
 
@@ -224,7 +224,7 @@ jobs:
             echo "[db] 鎵ц鏁版嵁搴撹縼绉?.."
             if ! alembic upgrade head; then
               echo "ERROR: 鏁版嵁搴撹縼绉诲け璐ワ紝璇风櫥褰曟湇鍔″櫒鎺掓煡:"
-              echo "  1) 瀵规瘮涓婇潰 [db] 杩炴帴閰嶇疆 涓?PostgreSQL 瀹為檯瀵嗙爜鏄惁涓€鑷?
+              echo "  1) compare the [db] connection config above with the real PostgreSQL password"
               echo "  2) 纭鏁版嵁搴撳凡鍚姩: systemctl status postgresql"
               echo "  3) 瀵嗙爜涓嶇鏃堕噸缃? sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<姝ｇ‘瀵嗙爜>';\""
               exit 1
