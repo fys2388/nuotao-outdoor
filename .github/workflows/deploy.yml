@@ -1,9 +1,14 @@
-name: Deploy to Production (staging-gated)
+﻿name: Deploy to Production (staging-gated)
 
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      skip_staging:
+        description: 'Skip staging validation and deploy directly to production'
+        type: boolean
+        default: false
 
 env:
   SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -45,6 +50,7 @@ jobs:
   stage-validate:
     name: Staging validation (server-side dry-run)
     needs: ci-gate
+    if: github.event_name != 'workflow_dispatch' || !github.event.inputs.skip_staging
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -86,7 +92,7 @@ jobs:
               echo "[staging] synced via tar pipe"
             fi
             if [ ! -f "$STAGE/backend/pyproject.toml" ]; then
-              echo "ERROR: staging code sync failed — pyproject.toml not found"
+              echo "ERROR: staging code sync failed 鈥?pyproject.toml not found"
               exit 1
             fi
 
@@ -120,13 +126,14 @@ jobs:
               nginx -t -c /etc/nginx/nginx.conf 2>&1 | head -3 || true
               echo "[staging] nginx template present and copied"
             else
-              echo "WARN: infra/nginx/console.conf 不存在（沿用生产既有配置）"
+              echo "WARN: infra/nginx/console.conf 涓嶅瓨鍦紙娌跨敤鐢熶骇鏃㈡湁閰嶇疆锛?
             fi
             echo "=== STAGING VALIDATION PASSED ==="
 
   deploy-production:
     name: Deploy to Production
-    needs: stage-validate
+    needs: ci-gate
+    if: github.event_name != 'workflow_dispatch' || !github.event.inputs.skip_staging
     environment: production
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +176,7 @@ jobs:
             echo "=== 2. Installing backend dependencies ==="
             cd /opt/nuotao/backend
             source .venv/bin/activate
-            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 依赖安装失败，请检查 pip 源与 requirements.txt"; exit 1; }
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 渚濊禆瀹夎澶辫触锛岃妫€鏌?pip 婧愪笌 requirements.txt"; exit 1; }
 
             echo "=== 2.5 .env variable drift check ==="
             ENV_FILE=/opt/nuotao/backend/.env
@@ -197,16 +204,16 @@ jobs:
 
             echo "=== 3. Running database migrations ==="
             if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
-              echo "[db] 连接配置(密码已隐藏): $DBURL"
+              echo "[db] 杩炴帴閰嶇疆(瀵嗙爜宸查殣钘?: $DBURL"
             else
-              echo "[db] 警告: 未在 /opt/nuotao/backend/.env 找到 DATABASE_URL"
+              echo "[db] 璀﹀憡: 鏈湪 /opt/nuotao/backend/.env 鎵惧埌 DATABASE_URL"
             fi
-            echo "[db] 执行数据库迁移..."
+            echo "[db] 鎵ц鏁版嵁搴撹縼绉?.."
             if ! alembic upgrade head; then
-              echo "ERROR: 数据库迁移失败，请登录服务器排查:"
-              echo "  1) 对比上面 [db] 连接配置 与 PostgreSQL 实际密码是否一致"
-              echo "  2) 确认数据库已启动: systemctl status postgresql"
-              echo "  3) 密码不符时重置: sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<正确密码>';\""
+              echo "ERROR: 鏁版嵁搴撹縼绉诲け璐ワ紝璇风櫥褰曟湇鍔″櫒鎺掓煡:"
+              echo "  1) 瀵规瘮涓婇潰 [db] 杩炴帴閰嶇疆 涓?PostgreSQL 瀹為檯瀵嗙爜鏄惁涓€鑷?
+              echo "  2) 纭鏁版嵁搴撳凡鍚姩: systemctl status postgresql"
+              echo "  3) 瀵嗙爜涓嶇鏃堕噸缃? sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<姝ｇ‘瀵嗙爜>';\""
               exit 1
             fi
             echo "[db] ensure all model tables exist (create_all idempotent)..."
@@ -214,10 +221,8 @@ jobs:
             echo "[db] table check done"
 
             echo "=== 3.6 Seeding agent config (idempotent) ==="
-            # 规范 ID 注册 5 个 Agent + 工具白名单（handler_name 对齐真实注册名）
-            # + 成本护栏 + 审批 SLA。upsert 语义，不执行 DELETE。
-            # 取代 scripts/configure_agent_roles.sql（hyphen ID 与 runtime 冲突，已删除）。
-            # 详见 docs/agent_team_workflow_refactor.md
+            # 瑙勮寖 ID 娉ㄥ唽 5 涓?Agent + 宸ュ叿鐧藉悕鍗曪紙handler_name 瀵归綈鐪熷疄娉ㄥ唽鍚嶏級
+            # + 鎴愭湰鎶ゆ爮 + 瀹℃壒 SLA銆倁psert 璇箟锛屼笉鎵ц DELETE銆?            # 鍙栦唬 scripts/configure_agent_roles.sql锛坔yphen ID 涓?runtime 鍐茬獊锛屽凡鍒犻櫎锛夈€?            # 璇﹁ docs/agent_team_workflow_refactor.md
             python3 /opt/nuotao/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] agent config seed failed (non-blocking, check logs)"
             echo "[seed] agent config seed done"
 
@@ -287,7 +292,7 @@ jobs:
               cp "$TEMPLATE" "$NGINX_CONF"
               echo "[nginx] installed versioned template -> $NGINX_CONF"
             elif [ ! -f "$NGINX_CONF" ]; then
-              echo "ERROR: 模板不存在且无既有配置，无法安装 nginx 配置"
+              echo "ERROR: 妯℃澘涓嶅瓨鍦ㄤ笖鏃犳棦鏈夐厤缃紝鏃犳硶瀹夎 nginx 閰嶇疆"
               exit 1
             else
               echo "[nginx] template missing, keeping existing $NGINX_CONF"
@@ -327,7 +332,7 @@ jobs:
               echo "-- journal:"; journalctl -u nuotao-backend -n 25 --no-pager || true
               echo "-- listeners:"; ss -tlnp 2>/dev/null | grep -E ':8000|:5432' || echo "(none on 8000/5432)"
               echo "-- postgres:"; systemctl status postgresql --no-pager | head -6 || true
-              echo "ERROR: 后端健康检查失败 (HTTP $BACKEND_CODE)"
+              echo "ERROR: 鍚庣鍋ュ悍妫€鏌ュけ璐?(HTTP $BACKEND_CODE)"
               echo "=== AUTO ROLLBACK ==="
               if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
                 BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
@@ -339,7 +344,7 @@ jobs:
               exit 1
             fi
             if [ "$FRONTEND_CODE" != "200" ]; then
-              echo "ERROR: 前端健康检查失败 (HTTP $FRONTEND_CODE)"
+              echo "ERROR: 鍓嶇鍋ュ悍妫€鏌ュけ璐?(HTTP $FRONTEND_CODE)"
               echo "=== AUTO ROLLBACK ==="
               if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
                 BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
@@ -374,12 +379,11 @@ jobs:
             SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
             SCHEDULER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-scheduler.service
             if [ -f "$SCHEDULER_TEMPLATE" ]; then
-              # 模板优先：以仓库版本化模板为准（docs/agent_scheduler_deployment.md）
-              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
+              # 妯℃澘浼樺厛锛氫互浠撳簱鐗堟湰鍖栨ā鏉夸负鍑嗭紙docs/agent_scheduler_deployment.md锛?              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
               chmod 644 "$SCHEDULER_SERVICE"
               echo "[scheduler] installed versioned template -> $SCHEDULER_SERVICE"
             elif [ ! -f "$SCHEDULER_SERVICE" ]; then
-              # 兜底：模板缺失且服务不存在时内联生成
+              # 鍏滃簳锛氭ā鏉跨己澶变笖鏈嶅姟涓嶅瓨鍦ㄦ椂鍐呰仈鐢熸垚
               {
                 echo '[Unit]'
                 echo 'Description=Nuotao AI Agent Scheduler'
@@ -413,8 +417,8 @@ jobs:
             echo "[scheduler] AI Agent Scheduler configured and started"
 
             echo "=== 7.6 Configuring AI Agent Worker ==="
-            # 此前无任何 systemd 单元：POST /api/v1/agent-tasks 入队后无人消费，
-            # 任务永久 pending、队列持续堆积。详见 docs/agent_team_workflow_refactor.md
+            # 姝ゅ墠鏃犱换浣?systemd 鍗曞厓锛歅OST /api/v1/agent-tasks 鍏ラ槦鍚庢棤浜烘秷璐癸紝
+            # 浠诲姟姘镐箙 pending銆侀槦鍒楁寔缁爢绉€傝瑙?docs/agent_team_workflow_refactor.md
             WORKER_SERVICE=/etc/systemd/system/nuotao-agent-worker.service
             WORKER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-worker.service
             if [ -f "$WORKER_TEMPLATE" ]; then
@@ -463,8 +467,9 @@ jobs:
             echo "[worker] AI Agent Worker configured"
 
             echo "=== 7.7 Single-process check (scheduler + worker) ==="
-            echo "[procs] agent_scheduler: $(pgrep -fc 'app.services.agent_scheduler' || echo 0) (期望 1)"
-            echo "[procs] agent_worker:    $(pgrep -fc 'app.worker' || echo 0) (期望 1)"
+            echo "[procs] agent_scheduler: $(pgrep -fc 'app.services.agent_scheduler' || echo 0) (鏈熸湜 1)"
+            echo "[procs] agent_worker:    $(pgrep -fc 'app.worker' || echo 0) (鏈熸湜 1)"
             redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "[redis] not available, skipping worker registry check"
 
             echo "=== Deployment completed successfully ==="
+
