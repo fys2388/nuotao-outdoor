@@ -1,4 +1,4 @@
-﻿name: Deploy to Production (staging-gated)
+name: Deploy to Production (staging-gated)
 
 on:
   push:
@@ -111,6 +111,8 @@ jobs:
             echo "=== [staging] frontend build validation ==="
             cd "$STAGE/frontend"
             npm install --silent
+            # 4GB 服务器上限制 Node 堆内存，避免 OOM killer 杀构建进程
+            export NODE_OPTIONS="--max-old-space-size=2048"
             npm run build
             echo "[staging] frontend build OK"
 
@@ -271,6 +273,8 @@ jobs:
             echo "=== 5. Building frontend ==="
             cd /opt/nuotao/frontend
             npm install --silent
+            # 4GB 服务器上限制 Node 堆内存，避免 OOM killer 杀构建进程
+            export NODE_OPTIONS="--max-old-space-size=2048"
             npm run build
 
             echo "=== 6. Deploying frontend ==="
@@ -465,6 +469,7 @@ jobs:
             redis-cli --raw KEYS 'nuotao:agent-worker:*' 2>/dev/null | head -5 || echo "[redis] not available, skipping worker registry check"
 
             echo "=== Deployment completed successfully ==="
+
 
 
 
