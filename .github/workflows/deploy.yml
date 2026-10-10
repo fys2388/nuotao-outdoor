@@ -109,9 +109,27 @@ jobs:
             fi
 
             echo "=== [staging] frontend build validation ==="
+            # 4GB 机器上前端构建峰值内存易触发 OOM killer，幂等补 2GB swap 兜底（失败不阻断）
+            (
+              if [ "$(id -u)" = 0 ]; then
+                if ! swapon --show 2>/dev/null | grep -q .; then
+                  (fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none)
+                  chmod 600 /swapfile
+                  mkswap /swapfile >/dev/null
+                  swapon /swapfile
+                  echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
+                  echo "[swap] created 2G /swapfile"
+                else
+                  echo "[swap] already active: $(swapon --show --noheadings 2>/dev/null | wc -l) device(s)"
+                fi
+              else
+                echo "[swap] not root, skipping swapfile creation"
+              fi
+            ) || echo "[swap] setup failed (non-fatal)"
+            free -m | head -2 || true
             cd "$STAGE/frontend"
             npm install --silent
-            # 4GB 服务器上限制 Node 堆内存，避免 OOM killer 杀构建进程
+            # 限制 Node 堆内存，避免 OOM killer 杀构建进程
             export NODE_OPTIONS="--max-old-space-size=2048"
             npm run build
             echo "[staging] frontend build OK"
@@ -271,9 +289,27 @@ jobs:
             systemctl status nuotao-backend --no-pager
 
             echo "=== 5. Building frontend ==="
+            # 4GB 机器上前端构建峰值内存易触发 OOM killer，幂等补 2GB swap 兜底（失败不阻断）
+            (
+              if [ "$(id -u)" = 0 ]; then
+                if ! swapon --show 2>/dev/null | grep -q .; then
+                  (fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none)
+                  chmod 600 /swapfile
+                  mkswap /swapfile >/dev/null
+                  swapon /swapfile
+                  echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
+                  echo "[swap] created 2G /swapfile"
+                else
+                  echo "[swap] already active: $(swapon --show --noheadings 2>/dev/null | wc -l) device(s)"
+                fi
+              else
+                echo "[swap] not root, skipping swapfile creation"
+              fi
+            ) || echo "[swap] setup failed (non-fatal)"
+            free -m | head -2 || true
             cd /opt/nuotao/frontend
             npm install --silent
-            # 4GB 服务器上限制 Node 堆内存，避免 OOM killer 杀构建进程
+            # 限制 Node 堆内存，避免 OOM killer 杀构建进程
             export NODE_OPTIONS="--max-old-space-size=2048"
             npm run build
 
