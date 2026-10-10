@@ -18,11 +18,12 @@ Routes:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.schemas.agent_suggestion import (
     ApproveRequest,
@@ -40,11 +41,14 @@ from app.schemas.agent_suggestion import (
     SuggestionListResponse,
     SuggestionResponse,
 )
+from app.schemas.user import UserResponse
 from app.services import agent_suggestion_service, execution_router, feedback_loop
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent-suggestions", tags=["agent_suggestions"])
+
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 # --------------------------------------------------------------------------- #
@@ -53,6 +57,7 @@ router = APIRouter(prefix="/agent-suggestions", tags=["agent_suggestions"])
 
 @router.get("", response_model=SuggestionListResponse)
 async def list_suggestions(
+    _current_user: CurrentUser,
     status: str | None = Query(None, description="状态过滤"),
     agent_id: str | None = Query(None, description="Agent ID"),
     suggestion_type: str | None = Query(None, description="类型"),
@@ -86,7 +91,7 @@ async def list_suggestions(
 
 
 @router.get("/{suggestion_id}", response_model=SuggestionResponse)
-async def get_suggestion(suggestion_id: int, db: AsyncSession = Depends(get_db)):
+async def get_suggestion(_current_user: CurrentUser, suggestion_id: int, db: AsyncSession = Depends(get_db)):
     """获取建议详情。"""
     suggestion = await agent_suggestion_service.get_suggestion(db, suggestion_id)
     if not suggestion:
@@ -95,7 +100,7 @@ async def get_suggestion(suggestion_id: int, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/pending/stats", response_model=PendingStatsResponse)
-async def pending_stats(db: AsyncSession = Depends(get_db)):
+async def pending_stats(_current_user: CurrentUser, db: AsyncSession = Depends(get_db)):
     """获取待审批建议统计。"""
     stats = await agent_suggestion_service.get_pending_approval_count(db)
     return PendingStatsResponse(total=stats.get("total", 0), by_type=stats)
@@ -269,6 +274,7 @@ async def submit_feedback(
 
 @router.get("/feedback/stats", response_model=FeedbackStatsResponse)
 async def feedback_stats(
+    _current_user: CurrentUser,
     agent_id: str | None = Query(None),
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
@@ -280,6 +286,7 @@ async def feedback_stats(
 
 @router.get("/learning-summary/{agent_id}", response_model=LearningSummaryResponse)
 async def learning_summary(
+    _current_user: CurrentUser,
     agent_id: str,
     days: int = Query(7, ge=1, le=90),
     db: AsyncSession = Depends(get_db),

@@ -26,10 +26,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
+from app.core.workspace import DEFAULT_WORKSPACE_ID
+from app.models.product import Product
+from app.services.product_source_identity import (
+    resolve_source_offer_id,
+)
+from app.services.sourcing_service import create_product_candidate
+
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
 SOURCING_RESULTS_DIR = os.path.join(DATA_DIR, "newton_sourcing_results")
+
+# 1688 报价为人民币，入库统一换算为美元（与候选行的 currency="USD" 保持一致）。
+# 与 evaluation_context._DEFAULT_CNY_USD_RATE 同口径。
+_CNY_TO_USD = 0.14
 
 # 牛顿来源标识
 NEWTON_SOURCE_TYPE = "1688"
@@ -159,9 +170,13 @@ async def import_products_to_candidates(
     sourcing_id: str = "",
     source_query: str = "",
     workspace_id: UUID | None = None,
+    trace_id: str | None = None,
 ) -> dict[str, Any]:
     """
     将牛顿找品商品批量导入选品候选库
+
+    事务边界：本 service 只做 flush 与 savepoint 隔离，**不 commit**——
+    由调用方（端点）独占 commit/rollback，保证「API 成功 = 事务已提交」。
 
     Args:
         session: 数据库会话
@@ -169,6 +184,7 @@ async def import_products_to_candidates(
         sourcing_id: 选品批次ID
         source_query: 来源查询词
         workspace_id: 工作空间ID
+        trace_id: 全链路追踪 ID（写入 product_sources / event_log）
 
     Returns:
         导入结果，包含：
@@ -177,17 +193,15 @@ async def import_products_to_candidates(
         - skipped: 跳过数
         - errors: 错误列表
         - candidate_ids: 导入的候选ID列表
+        - items: 逐条结果（product_id / candidate_id / source_offer_id / status）
     """
-    from app.core.workspace import DEFAULT_WORKSPACE_ID
-    from app.models.product import Product
-    from app.services.sourcing_service import create_product_candidate
-
     result = {
         "total": len(products),
         "imported": 0,
         "skipped": 0,
         "errors": [],
         "candidate_ids": [],
+        "items": [],
     }
 
     ws_id = workspace_id or DEFAULT_WORKSPACE_ID
@@ -209,14 +223,19 @@ async def import_products_to_candidates(
         ]
 
         # 构建候选产品数据
-        purchase_cost = float(price) if price else 0
+        # 1688 报价是人民币：必须先把采购价也换算成美元，否则 CNY 数值会被
+        # 当作 USD 参与成本/利润率计算（下游只看 currency 字段），导致
+        # 落地成本虚高、V10 利润率否决对每个候选都误触发。
+        purchase_cost_cny = float(price) if price else 0
+        purchase_cost = round(purchase_cost_cny * _CNY_TO_USD, 2)
         # 基于采购价计算建议零售价（采购价 * 3 倍，最低 $5）
-        # 1688 价格单位为 CNY，转换为 USD 估算零售价
-        retail_price_usd = max(round(purchase_cost * 3 * 0.14, 2), 5.0)  # CNY -> USD 汇率约 0.14
+        retail_price_usd = max(round(purchase_cost * 3, 2), 5.0)
         
         candidate_data = {
             "name": product_name[:200],
-            "sku": f"NEWTON_{product_id_1688 or int(time.time())}_{i}",
+            # 有 1688 商品 ID 时 SKU 由 create_product_candidate 按 SOP 红线
+            # NT-<offer_id> 统一派生（跨路径同 offer 同 SKU）；这里不再自带
+            # NEWTON_ 前缀，避免与 pipeline 路径的 NT- SKU 分裂。
             "description": f"牛顿AI选品推荐。{reason}"[:500],
             "category": product.get("category", "户外用品"),
             "brand": supplier[:100] if supplier else None,
@@ -232,75 +251,135 @@ async def import_products_to_candidates(
             "newton_sourcing_id": sourcing_id,
             "newton_query": source_query,
             "ali1688_product_id": str(product_id_1688),
+            # 显式来源键：让 create_product_candidate 能按 1688 offer 幂等建档
+            # （来源键查重；SKU 由 service 按 NT-<offer_id> 统一派生）。
+            "source_id": str(product_id_1688) if product_id_1688 else None,
             "min_order_qty": min_order,
             "images": images,
         }
 
-        # 幂等：同 SKU 已入库则复用既有候选，避免唯一约束冲突导致整批 500
-        try:
+        # 来源键解析（与 create_product_candidate 内部口径一致）：
+        # 幂等预检与逐条结果回传都按 source_offer_id，而不是 SKU 字符串。
+        offer_id = resolve_source_offer_id(
+            source_url=detail_url or None,
+            source_id=str(product_id_1688) if product_id_1688 else None,
+        )
+
+        # 幂等预检：同来源键已入库则复用既有候选（真正的并发防线是
+        # get_or_create_by_source 的 DB 唯一索引，这里只是提前短路）。
+        if offer_id:
             existing = (
                 await session.execute(
                     select(Product).where(
-                        Product.sku == candidate_data["sku"],
+                        Product.source_offer_id == offer_id,
                         Product.workspace_id == ws_id,
+                        Product.deleted_at.is_(None),
                     )
                 )
             ).scalar_one_or_none()
             if existing is not None:
                 result["skipped"] += 1
                 result["candidate_ids"].append(str(existing.id))
+                result["items"].append({
+                    "index": i,
+                    "status": "exists",
+                    "product_id": str(existing.id),
+                    "source_offer_id": offer_id,
+                })
                 logger.info(
-                    "商品已存在，复用既有候选: sku=%s, id=%s",
-                    candidate_data["sku"], existing.id,
+                    "商品已存在（来源键命中），复用既有候选: offer=%s, id=%s",
+                    offer_id, existing.id,
                 )
                 continue
-        except Exception as e:
-            logger.warning("重复检查查询失败（不阻断导入）: sku=%s, error=%s",
-                           candidate_data["sku"], str(e))
 
         try:
-            # 创建选品候选
-            product_obj, source_obj = await create_product_candidate(
-                session=session,
-                product_data=candidate_data,
-                source_type=NEWTON_SOURCE_TYPE,
-                source_url=detail_url or None,
-                workspace_id=workspace_id,
-                trace_id=f"{NEWTON_SOURCE_PREFIX}_{sourcing_id or int(time.time())}",
-            )
+            # 创建选品候选。整条记录包在 savepoint（begin_nested）里：
+            # 本条任何 IntegrityError/业务异常只回滚到 savepoint，
+            # 不再把整批（含此前已成功的条目）一并撤销——原先直接
+            # session.rollback() 会让「16 条里 1 条失败 → 15 条全丢」。
+            async with session.begin_nested():
+                product_obj, source_obj = await create_product_candidate(
+                    session=session,
+                    product_data=candidate_data,
+                    source_type=NEWTON_SOURCE_TYPE,
+                    source_url=detail_url or None,
+                    workspace_id=workspace_id,
+                    trace_id=f"{NEWTON_SOURCE_PREFIX}_{sourcing_id or int(time.time())}_{trace_id or ''}".rstrip("_"),
+                )
 
             result["candidate_ids"].append(str(product_obj.id))
             result["imported"] += 1
+            result["items"].append({
+                "index": i,
+                "status": "created",
+                "product_id": str(product_obj.id),
+                "source_offer_id": product_obj.source_offer_id,
+            })
             logger.info(
-                "商品已导入选品候选库: id=%s, name=%s, score=%s",
-                product_obj.id, product_name, score,
+                "商品已导入选品候选库: id=%s, offer=%s, name=%s, score=%s",
+                product_obj.id, product_obj.source_offer_id, product_name, score,
             )
 
         except IntegrityError:
-            # 并发写入导致的重复：回滚本条并跳过，不影响其他条目
-            await session.rollback()
-            result["skipped"] += 1
+            # 并发写入导致的重复：savepoint 已回滚本条，按来源键回查复用。
+            fallback = None
+            if offer_id:
+                fallback = (
+                    await session.execute(
+                        select(Product).where(
+                            Product.source_offer_id == offer_id,
+                            Product.workspace_id == ws_id,
+                            Product.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if fallback is not None:
+                result["skipped"] += 1
+                result["candidate_ids"].append(str(fallback.id))
+                result["items"].append({
+                    "index": i,
+                    "status": "exists",
+                    "product_id": str(fallback.id),
+                    "source_offer_id": offer_id,
+                })
+            else:
+                result["skipped"] += 1
+                result["errors"].append({
+                    "index": i,
+                    "product": product_name,
+                    "error": "来源键冲突且回查失败，本条已跳过",
+                })
+                result["items"].append({
+                    "index": i,
+                    "status": "failed",
+                    "source_offer_id": offer_id,
+                })
             logger.warning(
-                "商品已存在（唯一约束冲突），跳过: index=%d, sku=%s",
-                i, candidate_data["sku"],
+                "商品已存在（唯一约束冲突），跳过: index=%d, offer=%s",
+                i, offer_id,
             )
         except Exception as e:
-            # 单条失败必须回滚：否则 Session 事务失效会拖垮后续全部条目
-            await session.rollback()
+            # 单条业务失败：savepoint 回滚本条，不影响其他条目。
             result["errors"].append({
                 "index": i,
                 "product": product_name,
                 "error": "商品导入失败，已回滚，不影响其他条目",
             })
             result["skipped"] += 1
+            result["items"].append({
+                "index": i,
+                "status": "failed",
+                "source_offer_id": offer_id,
+            })
             logger.warning(
-                "商品导入失败: index=%d, sku=%s, error=%s",
-                i, candidate_data["sku"], str(e),
+                "商品导入失败: index=%d, offer=%s, error=%s",
+                i, offer_id, str(e),
             )
 
-    await session.commit()
+    # 事务边界：service 只 flush，不 commit。commit 由端点独占，
+    # 保证「API 成功 = 数据库事务已提交」。
     logger.info(
-        "批量导入完成: total=%d, imported=%d, skipped=%d",
+        "批量导入完成（未提交，等待端点 commit）: total=%d, imported=%d, skipped=%d",
         result["total"], result["imported"], result["skipped"],
     )
     return result

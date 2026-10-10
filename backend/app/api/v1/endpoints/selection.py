@@ -6,12 +6,16 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
+from app.core.workspace import get_workspace_id
+from app.schemas.user import UserResponse
 from app.services.selection_manager_service import (
     approve_selection_decision,
     create_selection_decision,
@@ -26,6 +30,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/selection", tags=["selection"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 # ============================================
@@ -60,7 +66,9 @@ class ApprovalRequest(BaseModel):
     "/status",
     summary="获取选品管理系统状态",
 )
-async def get_status() -> dict[str, Any]:
+async def get_status(
+    current_user: CurrentUser,
+) -> dict[str, Any]:
     """获取选品管理系统状态、阈值配置、工作流说明"""
     return get_selection_manager_status()
 
@@ -70,6 +78,7 @@ async def get_status() -> dict[str, Any]:
     summary="生成选品建议候选清单",
 )
 async def get_recommendations(
+    current_user: CurrentUser,
     db: DbSession,
     limit: int = 20,
     min_score: float = 50.0,
@@ -104,6 +113,7 @@ async def get_recommendations(
     summary="创建选品决策（进入审批队列）",
 )
 async def create_decision(
+    current_user: CurrentUser,
     request: SelectionDecisionRequest,
     db: DbSession,
 ) -> dict[str, Any]:
@@ -168,6 +178,7 @@ async def create_decision(
     summary="审批通过选品决策",
 )
 async def approve_decision(
+    current_user: CurrentUser,
     decision_id: str,
     request: ApprovalRequest,
     db: DbSession,
@@ -219,6 +230,7 @@ async def approve_decision(
     summary="拒绝选品决策",
 )
 async def reject_decision(
+    current_user: CurrentUser,
     decision_id: str,
     request: ApprovalRequest,
     db: DbSession,
@@ -271,6 +283,7 @@ async def reject_decision(
     summary="获取选品决策列表",
 )
 async def list_decisions(
+    current_user: CurrentUser,
     db: DbSession,
     approval_status: str | None = None,
     decision_type: str | None = None,
@@ -296,4 +309,178 @@ async def list_decisions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"List selection decisions failed: {e!s}",
+        )
+
+
+# ============================================
+# 批量选品工作流端点
+# ============================================
+
+class BatchProcessRequest(BaseModel):
+    """批量选品处理请求"""
+    category: str | None = Field(None, description="品类筛选（如 camping_lighting）")
+    limit: int = Field(50, description="最大处理数量", ge=1, le=200)
+    dry_run: bool = Field(False, description="是否仅预览不执行")
+
+
+@router.post(
+    "/batch/process",
+    summary="批量处理选品工作流",
+)
+async def batch_process(
+    current_user: CurrentUser,
+    body: BatchProcessRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """
+    批量处理 funnel_stage='recalled' 的产品
+
+    将产品送入 LangGraph 选品工作流，更新漏斗阶段和决策建议。
+    """
+    from app.services.selection_batch_service import process_batch_products
+
+    try:
+        result = await process_batch_products(
+            db,
+            workspace_id=workspace_id,
+            category=body.category,
+            limit=body.limit,
+            dry_run=body.dry_run,
+        )
+        await db.commit()
+        return result
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Batch process failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Batch process failed: {e!s}",
+        )
+
+
+@router.get(
+    "/batch/status",
+    summary="获取选品漏斗状态",
+)
+async def batch_status(
+    current_user: CurrentUser,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """获取选品漏斗状态（各阶段产品数量）"""
+    from app.services.selection_batch_service import get_batch_status
+
+    try:
+        return await get_batch_status(db, workspace_id=workspace_id)
+    except Exception as e:
+        logger.exception("Get batch status failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Get batch status failed: {e!s}",
+        )
+
+
+# ============================================
+# 选品→上架桥接端点
+# ============================================
+
+class TriggerListingRequest(BaseModel):
+    """触发上架 Pipeline 请求"""
+    product_ids: list[str] | None = Field(None, description="产品 ID 列表")
+    category: str | None = Field(None, description="品类筛选")
+    dry_run: bool = Field(False, description="是否仅预览")
+
+
+@router.post(
+    "/listing/trigger",
+    summary="触发已批准产品的上架 Pipeline",
+)
+async def trigger_listing(
+    current_user: CurrentUser,
+    body: TriggerListingRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """
+    触发已批准产品的 WooCommerce 上架 Pipeline
+
+    需要产品已有 approval_status='approved' 的决策记录。
+    """
+    from app.services.selection_listing_bridge import trigger_listing_pipeline
+
+    try:
+        product_uuids = [UUID(pid) for pid in (body.product_ids or [])] if body.product_ids else None
+        result = await trigger_listing_pipeline(
+            db,
+            workspace_id=workspace_id,
+            product_ids=product_uuids,
+            category=body.category,
+            dry_run=body.dry_run,
+        )
+        await db.commit()
+        return result
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Trigger listing failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Trigger listing failed: {e!s}",
+        )
+
+
+@router.get(
+    "/listing/pending",
+    summary="获取待上架产品列表",
+)
+async def get_pending(
+    current_user: CurrentUser,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """获取待上架产品列表（已有 approved 决策）"""
+    from app.services.selection_listing_bridge import get_pending_products
+
+    try:
+        products = await get_pending_products(db, workspace_id=workspace_id)
+        return {"products": products, "total": len(products)}
+    except Exception as e:
+        logger.exception("Get pending failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Get pending failed: {e!s}",
+        )
+
+
+@router.post(
+    "/approve-and-list",
+    summary="审批决策并触发上架",
+)
+async def approve_and_list(
+    current_user: CurrentUser,
+    body: BatchProcessRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """
+    审批所有待审决策并触发上架 Pipeline
+
+    一步完成：审批 → 触发 Pipeline → WooCommerce 上架
+    """
+    from app.services.selection_batch_service import approve_and_trigger_pipeline
+
+    try:
+        result = await approve_and_trigger_pipeline(
+            db,
+            workspace_id=workspace_id,
+            dry_run=body.dry_run,
+        )
+        await db.commit()
+        return result
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Approve and list failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Approve and list failed: {e!s}",
         )

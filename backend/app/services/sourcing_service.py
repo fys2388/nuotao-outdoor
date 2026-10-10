@@ -19,6 +19,7 @@ from app.models.product_intelligence import (
     ProductCostSnapshot,
     ProductScore,
     ProductSource,
+    SourcingCandidate,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,20 +73,72 @@ async def create_product_candidate(
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
 
-    # 创建产品
-    product = Product(
-        workspace_id=workspace_id,
-        name=product_data.get("name", "Unnamed Product"),
-        sku=product_data.get("sku", f"SKU-{int(time.time())}"),
-        description=product_data.get("description", ""),
-        category=product_data.get("category"),
-        brand=product_data.get("brand"),
-        status="draft",
-        candidate_status="candidate",
-        source=source_type.lower(),
-        source_url=source_url,
-        target_market=product_data.get("target_market", "US"),
+    from app.services.product_source_identity import (
+        get_or_create_by_source,
+        resolve_source_offer_id,
     )
+
+    # 「同一 1688 链接不重复建档」：先按来源键命中已有候选，其次按 SKU 认领历史行。
+    # 这里原先是无条件 INSERT，配合「SKU 缺省为当前秒级时间戳」，同一个 1688 链接
+    # 每导入一次就多一条候选。
+    source_offer_id = resolve_source_offer_id(
+        source_url=source_url,
+        source_id=product_data.get("source_id") or product_data.get("offer_id"),
+        meta=product_data if isinstance(product_data, dict) else None,
+    )
+    # 有来源键时 SKU 派生为 SOP 红线格式 NT-<offer_id>（与 product_pipeline
+    # _generate_sku 一致）；没有稳定标识时只能用时间戳兜底（此时确实不存在
+    # 任何稳定标识可以把两次导入认成同一个商品）。
+    requested_sku = product_data.get("sku") or (
+        f"NT-{source_offer_id}" if source_offer_id else f"SKU-{int(time.time())}"
+    )
+
+    def _build_candidate() -> Product:
+        return Product(
+            workspace_id=workspace_id,
+            name=product_data.get("name", "Unnamed Product"),
+            sku=requested_sku,
+            description=product_data.get("description", ""),
+            category=product_data.get("category"),
+            brand=product_data.get("brand"),
+            status="draft",
+            candidate_status="candidate",
+            source=source_type.lower(),
+            source_url=source_url,
+            source_offer_id=source_offer_id,
+            target_market=product_data.get("target_market", "US"),
+        )
+
+    product, created = await get_or_create_by_source(
+        session,
+        workspace_id=workspace_id,
+        source_offer_id=source_offer_id,
+        build=_build_candidate,
+        fallback_sku=requested_sku,
+    )
+
+    if not created:
+        # 命中同一来源的已有候选：同步本次导入的信息，而不是再建一条。
+        if product_data.get("name"):
+            product.name = str(product_data["name"])
+        if product_data.get("description"):
+            product.description = product_data["description"]
+        if product_data.get("category"):
+            product.category = product_data["category"]
+        if product_data.get("brand"):
+            product.brand = product_data["brand"]
+        if source_url:
+            product.source_url = source_url
+        logger.info(
+            "复用已有候选（同一来源）: id=%s offer=%s sku=%s",
+            product.id, source_offer_id, product.sku,
+        )
+
+    # 幂等命中时把来源键补上：历史行（0069 迁移前建的）source_offer_id
+    # 可能为空，补写后下次直接命中来源查重（与 get_or_create_by_source 的
+    # fallback_sku 认领逻辑配合）。
+    if not created and source_offer_id and not product.source_offer_id:
+        product.source_offer_id = source_offer_id
 
     # 设置可选字段
     if "weight" in product_data or "weight_kg" in product_data:
@@ -113,7 +166,6 @@ async def create_product_candidate(
         product.meta = dict(product.meta) if product.meta else {}
         product.meta["images"] = valid_images
 
-    session.add(product)
     await session.flush()
 
     # 创建产品来源记录
@@ -179,15 +231,200 @@ async def create_product_candidate(
 
     await session.flush()
 
+    # SOP §1.5：candidate 创建必须同步 append-only 成本快照 + 供应商候选
+    # （product_sourcing_candidates）+ 审计事件，全部在同一请求事务内。
+    # 原先这条路径只写 product_cost，SOP 要求的产品成本快照与供应商候选
+    # 始终缺失，导致验收时「product_sourcing_candidates = 0」。
+    from app.services import event_service
+
+    snapshot_id = await _append_candidate_cost_snapshot(
+        session,
+        workspace_id=workspace_id,
+        product_id=product.id,
+        product_data=product_data,
+        trace_id=trace_id,
+    )
+
+    sourcing_candidate = await get_or_create_sourcing_candidate(
+        session,
+        workspace_id=workspace_id,
+        product_id=product.id,
+        source_type=source_type,
+        source_url=source_url,
+        title=str(product.name),
+        purchase_cost=purchase_cost,
+        moq=int(product_data.get("min_order_qty") or 0) or None,
+        supplier_code=product_data.get("brand") or None,
+        source_offer_id=source_offer_id,
+        trace_id=trace_id,
+    )
+
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="product.candidate.imported",
+        entity_type="product",
+        entity_id=str(product.id),
+        payload={
+            "source_type": source_type,
+            "source_offer_id": source_offer_id,
+            "product_id": str(product.id),
+            "sourcing_candidate_id": str(sourcing_candidate.id),
+            "cost_snapshot_id": str(snapshot_id),
+            "created": created,
+        },
+        trace_id=trace_id,
+        commit=False,
+    )
+
     logger.info(
-        "Product candidate created: id=%s, name=%s, source=%s, trace=%s",
+        "Product candidate created: id=%s, name=%s, source=%s, created=%s, "
+        "sourcing_candidate=%s, trace=%s",
         product.id,
         product.name,
         source_type,
+        created,
+        sourcing_candidate.id,
         trace_id,
     )
 
     return product, product_source
+
+
+async def _append_candidate_cost_snapshot(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    product_data: dict[str, Any],
+    trace_id: str | None,
+) -> UUID:
+    """candidate 创建时同步写一条 append-only 成本快照（SOP §1.5）。
+
+    只在有成本数据时落快照：purchase_cost > 0 或任一运费分项存在。
+    成本数据全部缺失时不造零值快照（宁缺勿造，与 intake 口径一致），
+    返回的 UUID 复用 product_id 占位，事件 payload 中可识别。
+    """
+    from datetime import UTC, datetime
+
+    from app.services.product_cost_service import landed_breakdown
+
+    purchase_cost = _safe_decimal(
+        product_data.get("purchase_cost", product_data.get("cost_price", 0))
+    )
+    domestic_shipping = _safe_decimal(product_data.get("domestic_shipping", 0))
+    first_leg_shipping = _safe_decimal(product_data.get("first_leg_shipping", 0))
+    last_leg_shipping = _safe_decimal(product_data.get("last_leg_shipping", 0))
+
+    if purchase_cost <= 0 and not any(
+        value > 0
+        for value in (domestic_shipping, first_leg_shipping, last_leg_shipping)
+    ):
+        return product_id
+
+    _intl, total_landed_cost, total_cost = landed_breakdown(
+        purchase_cost=purchase_cost,
+        domestic_shipping=domestic_shipping,
+        first_leg_shipping=first_leg_shipping,
+        last_leg_shipping=last_leg_shipping,
+        international_shipping=None,
+        packaging=Decimal("0"),
+        tax_estimate=Decimal("0"),
+        handling=Decimal("0"),
+    )
+
+    snapshot = ProductCostSnapshot(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        currency=product_data.get("currency", "USD"),
+        purchase_cost=purchase_cost,
+        domestic_shipping=domestic_shipping,
+        first_leg_shipping=first_leg_shipping,
+        last_leg_shipping=last_leg_shipping,
+        international_shipping=_intl,
+        total_landed_cost=total_landed_cost,
+        total_cost=total_cost,
+        weight_kg=(
+            _safe_decimal(
+                product_data.get("weight_kg", product_data.get("weight"))
+            )
+            if product_data.get("weight_kg") or product_data.get("weight")
+            else None
+        ),
+        source="sourcing_import",
+        valid_from=datetime.now(UTC),
+        trace_id=trace_id,
+    )
+    session.add(snapshot)
+    await session.flush()
+    return snapshot.id
+
+
+async def get_or_create_sourcing_candidate(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    source_type: str,
+    source_url: str | None,
+    title: str,
+    purchase_cost: Decimal,
+    moq: int | None,
+    supplier_code: str | None,
+    source_offer_id: str | None,
+    trace_id: str | None,
+) -> SourcingCandidate:
+    """为产品幂等维护一条 1688 供应商候选（SOP §1.5）。
+
+    幂等键：``(workspace_id, product_id, source_offer_id)``——同一产品同一
+    1688 来源只保留一条；重复建档时更新报价字段而不是再插一条。没有
+    offer id（非 1688 来源）时退化为 ``(workspace_id, product_id)``。
+    """
+    query = select(SourcingCandidate).where(
+        SourcingCandidate.workspace_id == workspace_id,
+        SourcingCandidate.product_id == product_id,
+    )
+    if source_offer_id:
+        # 复用 products 的来源键语义：候选行上以 notes 前缀记录来源 offer，
+        # 与 product_id 一起构成稳定查重键。
+        query = query.where(
+            SourcingCandidate.notes == f"offer:{source_offer_id}"
+        )
+    else:
+        query = query.where(SourcingCandidate.notes.is_(None))
+
+    existing = (
+        (await session.execute(query)).scalars().all()
+    )
+    if existing:
+        candidate = existing[0]
+        candidate.purchase_price = purchase_cost
+        candidate.moq = moq or candidate.moq
+        if supplier_code:
+            candidate.supplier_code = supplier_code
+        if source_url:
+            candidate.source_url = source_url
+        candidate.title = title
+        candidate.trace_id = trace_id
+        await session.flush()
+        return candidate
+
+    candidate = SourcingCandidate(
+        workspace_id=workspace_id,
+        product_id=product_id,
+        source_type=source_type,
+        source_url=source_url,
+        title=title[:255],
+        status="candidate",
+        purchase_price=purchase_cost,
+        moq=moq,
+        supplier_code=supplier_code,
+        notes=f"offer:{source_offer_id}" if source_offer_id else None,
+        trace_id=trace_id,
+    )
+    session.add(candidate)
+    await session.flush()
+    return candidate
 
 
 async def batch_import_products(
@@ -223,17 +460,20 @@ async def batch_import_products(
 
     for index, product_data in enumerate(products_data):
         try:
-            product, product_source = await create_product_candidate(
-                session=session,
-                product_data=product_data,
-                source_type=source_type,
-                workspace_id=workspace_id,
-                trace_id=f"{trace_id}-{index}" if trace_id else None,
-            )
+            # savepoint 隔离：单条失败只回滚本条，不拖垮后续条目。
+            async with session.begin_nested():
+                product, product_source = await create_product_candidate(
+                    session=session,
+                    product_data=product_data,
+                    source_type=source_type,
+                    workspace_id=workspace_id,
+                    trace_id=f"{trace_id}-{index}" if trace_id else None,
+                )
             results["products"].append({
                 "id": str(product.id),
                 "name": product.name,
                 "sku": product.sku,
+                "source_offer_id": product.source_offer_id,
                 "status": "success",
             })
             results["success"] += 1

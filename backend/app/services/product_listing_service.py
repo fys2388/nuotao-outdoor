@@ -114,6 +114,32 @@ def map_category_to_wc(product_name: str = "", internal_category: str = "") -> l
 
 
 
+def _normalize_wc_images(images: list) -> list[dict]:
+    """Convert mixed image entries to WooCommerce REST API v3 format.
+
+    Accepts strings (URLs), dicts (already WC format), or objects with
+    ``src``/``url``/``image_url``.  WC requires ``{id, src, alt, name, position}``.
+    """
+    result: list[dict] = []
+    for i, item in enumerate(images):
+        if isinstance(item, str):
+            result.append({
+                "id": 0,
+                "src": item,
+                "alt": "",
+                "name": f"image-{i + 1}",
+                "position": i,
+            })
+        elif isinstance(item, dict):
+            entry = dict(item)
+            entry.setdefault("id", 0)
+            entry.setdefault("position", i)
+            entry.setdefault("alt", "")
+            entry.setdefault("name", f"image-{i + 1}")
+            result.append(entry)
+    return result
+
+
 def _is_real_image_url(src: Any) -> bool:
     """真实可上架图片：http(s) 远程图；排除 mock 的 data: SVG 占位图与空值。"""
     if not isinstance(src, str):
@@ -253,6 +279,28 @@ def create_listing_queue(
     }
 
 
+def _find_existing_wc_id(sku: Any) -> int | None:
+    """按 SKU 反查 WooCommerce 里已有的商品 ID；查不到或查询失败返回 ``None``。
+
+    查询失败按「没有」处理是安全的降级方向：宁可走 POST（WooCommerce 会用
+    ``product_invalid_sku`` 拦住重复 SKU），也不要因为一次反查失败就让整单上架失败。
+    """
+    normalized = str(sku or "").strip()
+    if not normalized:
+        return None
+    try:
+        from app.services.wc_unpublish_service import find_wc_id_by_sku
+
+        return find_wc_id_by_sku(
+            normalized,
+            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+            headers={},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("按 SKU 反查 WooCommerce 商品失败 sku=%s: %s", normalized, exc)
+        return None
+
+
 def list_to_woocommerce(
     product: dict[str, Any],
     status: str = "publish",
@@ -297,7 +345,7 @@ def list_to_woocommerce(
         }
 
     try:
-        url = f"{WC_URL}/wp-json/wc/v3/products"
+        base_url = f"{WC_URL}/wp-json/wc/v3/products"
         data = {
             "name": product["name"],
             "type": "simple",
@@ -314,7 +362,19 @@ def list_to_woocommerce(
         if product.get("sale_price"):
             data["sale_price"] = str(product["sale_price"])
         if product.get("images"):
-            data["images"] = product["images"]
+            data["images"] = _normalize_wc_images(product["images"])
+
+        # 幂等：先按 SKU 反查 WooCommerce 是否已经有这个商品。
+        # 原实现无条件 POST —— 同一个 SKU 会被 WooCommerce 以 product_invalid_sku
+        # 拒绝（表现为"上架失败"），而 SKU 一旦漂移就真的建出第二个商品。
+        existing_wc_id = _find_existing_wc_id(product.get("sku"))
+        url = f"{base_url}/{existing_wc_id}" if existing_wc_id else base_url
+        http_method = "PUT" if existing_wc_id else "POST"
+        if existing_wc_id:
+            logger.info(
+                "WooCommerce 已有该 SKU，改为更新而非新建 id=%s sku=%s",
+                existing_wc_id, product.get("sku"),
+            )
 
         # BUG #19: 自动重试。原实现在 429 / 5xx / 网络抖动时直接返回 success=False，
         # 导致 SOP 阶段④ WC 同步失败即终止、运营必须手工重跑。这里包一层指数
@@ -329,11 +389,12 @@ def list_to_woocommerce(
         for attempt in range(1, max_attempts + 1):
             attempts = attempt
             try:
-                resp = requests.post(
+                resp = requests.request(
+                    http_method,
                     url,
                     auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
                     json=data,
-                    timeout=30,
+                    timeout=120,
                 )
                 resp.raise_for_status()
                 result = resp.json()
@@ -391,6 +452,8 @@ def list_to_woocommerce(
                 "status": result.get("status"),
                 "permalink": result.get("permalink"),
                 "attempts": attempts,
+                # 调用方据此区分「新建了商品」还是「更新了已有商品」。
+                "action": "update" if existing_wc_id else "create",
             }
         logger.error(
             "WooCommerce listing exhausted %d attempts for %s: %s",

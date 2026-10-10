@@ -152,6 +152,52 @@ def _provider_config(provider: str) -> tuple[str, str, str]:
     raise LLMError(f"unsupported provider '{provider}'", kind="invalid_response")
 
 
+# ---------------------------------------------------------------------------
+# P0-5: Vision capability whitelist
+# ---------------------------------------------------------------------------
+# Only models in this set actually consume image content parts. Routing a
+# vision request anywhere else is a FAKE SUCCESS: DeepSeek and SenseNova both
+# return HTTP 200 for ``image_url`` content parts but silently ignore the
+# image — the response ``usage`` has no ``image_tokens`` at all, so the caller
+# sees "success" while the model never looked at the picture.
+#
+# Verified 2026-10-05 against the configured Agnes gateway
+# (OPENAI_BASE_URL=https://apihub.agnes-ai.com/v1):
+#   agnes-2.5-flash  -> usage.prompt_tokens_details.image_tokens = 1024  (real)
+#   sensenova        -> HTTP 404 "model is not found"
+#   deepseek         -> HTTP 200 but no image_tokens                   (fake)
+#
+# To add a model: pass an image, confirm ``usage.prompt_tokens_details``
+# contains a non-zero ``image_tokens``, then add the (provider, model) pair.
+VISION_CAPABLE: dict[tuple[str, str], bool] = {
+    ("openai", "agnes-2.5-flash"): True,
+}
+
+
+def vision_capable(provider: str, model: str | None) -> bool:
+    """Return True only for a (provider, model) pair verified to read images.
+
+    ``model=None`` resolves to nothing here (no model configured for the
+    provider) and therefore never passes — an unset vision model must not
+    silently degrade to a text-only call.
+    """
+    if not model:
+        return False
+    return VISION_CAPABLE.get((provider, model), False)
+
+
+def assert_vision_capable(provider: str, model: str | None) -> None:
+    """Raise if the resolved model cannot actually see images."""
+    if vision_capable(provider, model):
+        return
+    raise LLMError(
+        f"model '{model}' on provider '{provider}' does not support vision; "
+        f"image content parts would be silently ignored (P0-5). "
+        f"Known vision-capable models: {sorted(k for k in VISION_CAPABLE)}",
+        kind="invalid_response",
+    )
+
+
 def _convert_messages_for_vision(
     messages: list[dict[str, str]],
     images: list[str],
@@ -268,7 +314,13 @@ def circuit_status() -> dict[str, dict[str, Any]]:
     }
 
 def _provider_chain(request: LLMRequest, *, allow_fallback: bool) -> list[tuple[str, dict]]:
-    """Ordered provider candidates: explicit/primary first, fallback second."""
+    """Ordered provider candidates: explicit/primary first, fallback second.
+
+    P0-5: a vision request must never fall through to a text-only model.
+    Only ``(provider, model)`` pairs in ``VISION_CAPABLE`` are eligible; the
+    provider-level fallback is skipped when it cannot see images. If no
+    vision-capable candidate remains, raise instead of faking a success.
+    """
     settings = get_settings()
     primary = request.provider or settings.llm_provider
     chain: list[tuple[str, dict]] = []
@@ -279,6 +331,32 @@ def _provider_chain(request: LLMRequest, *, allow_fallback: bool) -> list[tuple[
             return
         seen.add(provider)
         chain.append((provider, {"api_key": api_key, "base_url": base_url}))
+
+    if request.vision:
+        resolved_primary_model = request.model or _provider_config(primary)[2]
+        add(primary, request.api_key, request.base_url)
+        if allow_fallback:
+            fallback = settings.llm_fallback_provider
+            if fallback and fallback != primary:
+                fallback_model = _provider_config(fallback)[2]
+                if vision_capable(fallback, fallback_model):
+                    add(fallback, None, None)
+        # Drop every candidate that cannot actually read the image.
+        chain = [
+            (p, o)
+            for p, o in chain
+            if vision_capable(p, request.model or _provider_config(p)[2])
+        ]
+        if not chain:
+            raise LLMError(
+                f"no vision-capable model available for provider '{primary}' "
+                f"(requested model '{request.model}'). Add the model to "
+                f"VISION_CAPABLE after verifying it reports image_tokens, "
+                f"or set provider/model to a vision-capable pair. "
+                f"Known vision-capable: {sorted(VISION_CAPABLE)}",
+                kind="provider",
+            )
+        return chain
 
     add(primary, request.api_key, request.base_url)
     if allow_fallback:
@@ -377,6 +455,11 @@ async def _post(
     # When vision=True and images are provided, convert the last user message
     # to include image content in OpenAI's multimodal format.
     if request.vision and request.images:
+        # P0-5: defense in depth. The provider chain already filters, but this
+        # catches direct ``_post`` callers and models that were added to the
+        # registry without verification. Failing here is better than returning
+        # a 200 from a model that silently ignored the image.
+        assert_vision_capable(provider, model)
         converted_messages = _convert_messages_for_vision(request.messages, request.images)
         payload["messages"] = converted_messages
 
@@ -421,13 +504,28 @@ async def _post(
             f"provider '{provider}' returned non-JSON body", kind="invalid_response"
         ) from exc
 
-    try:
-        content = raw["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
+    choices = raw.get("choices") or []
+    message = (choices[0].get("message") if choices else None) or {}
+    content = message.get("content")
+    if not content:
+        # Reasoning models (e.g. sensenova-*-flash with a reasoning field) spend
+        # the completion budget on `reasoning` BEFORE emitting `content`. Hitting
+        # the max_tokens cap mid-reasoning therefore yields a 200 response with
+        # no content - a budget problem, not a malformed response. Classify it
+        # separately so it stays eligible for provider failover instead of being
+        # hard-failed as invalid_response.
+        finish_reason = choices[0].get("finish_reason") if choices else None
+        if finish_reason == "length":
+            raise LLMError(
+                f"provider '{provider}' hit max_tokens before emitting content "
+                f"(finish_reason=length, reasoning_chars="
+                f"{len(message.get('reasoning') or '')}); raise max_tokens",
+                kind="truncated",
+            )
         raise LLMError(
             f"provider '{provider}' response missing choices[0].message.content",
             kind="invalid_response",
-        ) from exc
+        )
 
     usage = raw.get("usage") or {}
     tokens = {
@@ -435,6 +533,25 @@ async def _post(
         "completion_tokens": int(usage.get("completion_tokens", 0)),
         "total_tokens": int(usage.get("total_tokens", 0)),
     }
+
+    # P0-5: a vision request that consumed zero image tokens never actually
+    # looked at the image. DeepSeek-style providers return HTTP 200 for
+    # ``image_url`` content parts and simply ignore them, which would otherwise
+    # be indistinguishable from a real multimodal call. Failing closed here
+    # makes the illusion impossible.
+    if request.vision and request.images:
+        details = usage.get("prompt_tokens_details") or {}
+        image_tokens = int(details.get("image_tokens") or 0)
+        tokens["image_tokens"] = image_tokens
+        if image_tokens <= 0:
+            raise LLMError(
+                f"provider '{provider}' model '{model}' returned no image_tokens "
+                f"for a vision request with {len(request.images)} image(s); the "
+                f"model ignored the image, so this cannot be treated as a "
+                f"visual success (P0-5)",
+                kind="invalid_response",
+            )
+
     cost = estimate_cost(provider, model, tokens)
     logger.info(
         "llm provider=%s model=%s tokens=%s cost=%s latency_ms=%s trace=%s",

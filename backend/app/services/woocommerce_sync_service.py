@@ -35,10 +35,27 @@ DATA_DIR = os.path.join(
     "woocommerce_sync",
 )
 
-# WooCommerce API 配置（从环境变量或配置文件读取）
-WC_URL = os.getenv("WOOCOMMERCE_URL", "https://nuotaooutdoor.com")
-WC_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "")
-WC_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "")
+# WooCommerce API config.
+# Prefer app.core.config settings (pydantic loads .env); os.getenv is only a
+# fallback for deployments that inject real process environment variables.
+# Why this matters: pydantic's env_file does NOT populate os.environ, so a
+# .env-only setup left os.getenv empty and S11 WC_SYNC silently pushed without
+# credentials.
+from app.core.config import get_settings as _get_settings
+
+_wc_settings = _get_settings()
+
+WC_URL = (
+    (_wc_settings.woocommerce_base_url or "")
+    or os.getenv("WOOCOMMERCE_URL", "")
+    or "https://nuotaooutdoor.com"
+)
+WC_CONSUMER_KEY = (_wc_settings.woocommerce_consumer_key or "") or os.getenv(
+    "WOOCOMMERCE_CONSUMER_KEY", ""
+)
+WC_CONSUMER_SECRET = (_wc_settings.woocommerce_consumer_secret or "") or os.getenv(
+    "WOOCOMMERCE_CONSUMER_SECRET", ""
+)
 
 
 def _ensure_data_dir() -> None:
@@ -1269,19 +1286,40 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
     own_session = db_session is None
 
     try:
-        # 查找产品
+        # 查找产品。加行锁把同一商品的并发推送串行化：否则两个请求都可能读到
+        # 「meta 里没有 woocommerce_id」，于是各自 POST，在 WC 里建出两个商品。
         try:
-            product = await session.get(Product, UUID(str(product_id)))
+            from sqlalchemy import select as _select
+
+            product = (
+                (
+                    await session.execute(
+                        _select(Product)
+                        .where(Product.id == UUID(str(product_id)))
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .first()
+            )
         except Exception:
             product = None
 
         if not product:
             return {"success": False, "error": f"产品不存在: {product_id}", "action": "none"}
 
-        # 获取 WooCommerce ID
-        wc_id = None
-        if product.meta and isinstance(product.meta, dict):
-            wc_id = product.meta.get("woocommerce_id")
+        # 获取 WooCommerce ID：meta 优先；meta 丢失时按 SKU 反查认领。
+        # 上一次创建可能已经在 WooCommerce 落地、只是响应被 Cloudflare 掐断；
+        # 只认 meta 就会再 POST 一次，而 SKU 一旦不同就真的建出第二个商品。
+        from app.services.wc_product_link_service import (
+            remember_wc_product,
+            resolve_wc_product_id,
+        )
+
+        wc_id, adopted = resolve_wc_product_id(
+            product, auth=_get_wc_auth(), headers=_get_wc_headers()
+        )
+        wc_id_was_local = bool(wc_id) and not adopted
 
         target_language = target_language_for_market(product.target_market)
         localization = get_approved_localization(product.meta, target_language)
@@ -1320,6 +1358,73 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
                 wc_product["sale_price"] = str(product.meta["sale_price"])
             if product.meta.get("price"):
                 wc_product["price"] = str(product.meta["price"])
+
+        # PRICE-002 guard on the low-level DB->WC push path (2026-10-06).
+        # This function is the writer used by the pipeline and batch push and does
+        # NOT go through the gated endpoint, so a stale/incorrect meta price could
+        # silently reach the store (this is exactly how product 2230's fixed $22.99
+        # could be overwritten back to $6.25 by any DB->WC push). Only a *negative*
+        # margin hard-blocks; a below-target margin is logged, never vetoed, because
+        # loss-leader pricing is a legitimate human decision.
+        from app.services.pricing_policy import evaluate_price
+
+        _meta = product.meta if isinstance(product.meta, dict) else {}
+        _purchase = (
+            _meta.get("purchase_cost_cny")
+            or _meta.get("purchase_cost")
+            or _meta.get("cost_price")
+        )
+        _currency = (
+            "CNY" if _meta.get("purchase_cost_cny")
+            else str(_meta.get("purchase_cost_currency") or "USD")
+        )
+        _effective_price = (
+            wc_product.get("sale_price")
+            or wc_product.get("regular_price")
+            or wc_product.get("price")
+        )
+        _cost_row = None
+        if _effective_price and _purchase:
+            try:
+                from app.models.product import ProductCost
+                from sqlalchemy import select as _sel_cost
+
+                _cost_row = (
+                    await session.execute(
+                        _sel_cost(ProductCost)
+                        .where(ProductCost.product_id == product.id)
+                        .order_by(
+                            ProductCost.valid_from.desc().nullslast(),
+                            ProductCost.version.desc(),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            except Exception as exc:  # cost table/column drift -> fall back to estimate
+                logger.warning("push margin guard: cost row load failed for %s: %s",
+                               product.sku, exc)
+                _cost_row = None
+
+            _verdict = evaluate_price(
+                _effective_price, _purchase,
+                purchase_currency=_currency, cost_row=_cost_row,
+            )
+            if _verdict["verdict"] == "negative":
+                logger.warning(
+                    "PRICE-002 blocked push sku=%s: %s", product.sku, _verdict["message"]
+                )
+                return {
+                    "success": False,
+                    "product_id": str(product.id),
+                    "sku": product.sku,
+                    "action": "blocked",
+                    "error": f"定价低于落地成本，已阻止推送到 WooCommerce：{_verdict['message']}",
+                }
+            if _verdict["verdict"] == "below_target":
+                logger.warning(
+                    "PRICE-002 below-target margin sku=%s: %s",
+                    product.sku, _verdict["message"],
+                )
 
         # 添加标签
         if product.tags and isinstance(product.tags, list):
@@ -1387,14 +1492,8 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
                 resp.raise_for_status()
                 wc_result = resp.json()
 
-                # 将 WooCommerce ID 写回本地数据库
                 new_wc_id = wc_result.get("id")
                 if new_wc_id:
-                    meta = product.meta or {}
-                    meta["woocommerce_id"] = new_wc_id
-                    meta["woocommerce_slug"] = wc_result.get("slug", "")
-                    product.meta = meta
-                    await session.commit()
                     wc_id = new_wc_id
 
             # 回读验证
@@ -1407,6 +1506,17 @@ async def push_product_to_woocommerce(product_id: str, db_session=None) -> dict:
             )
             verify_resp.raise_for_status()
             verified = verify_resp.json()
+
+            # 把关联写回本地：本次是「新建」或「按 SKU 认领」时都要记下来（同时写入
+            # product_mappings）。否则 meta 永远没有 id，下次推送还得再反查一次。
+            if wc_id and (action == "create" or not wc_id_was_local):
+                await remember_wc_product(
+                    session,
+                    product=product,
+                    wc_id=int(wc_id),
+                    slug=wc_result.get("slug") or None,
+                )
+                await session.commit()
 
             return {
                 "success": True,

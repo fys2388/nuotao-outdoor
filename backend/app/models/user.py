@@ -5,10 +5,9 @@
 from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, DateTime, String, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import AI_JSON, Base, TimestampMixin
 
 
 class User(Base, TimestampMixin):
@@ -28,7 +27,7 @@ class User(Base, TimestampMixin):
     # MFA (Multi-Factor Authentication) fields
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    mfa_backup_codes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    mfa_backup_codes: Mapped[list | None] = mapped_column(AI_JSON, nullable=True)
     mfa_enabled_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:

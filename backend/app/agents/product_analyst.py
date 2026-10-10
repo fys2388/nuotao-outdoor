@@ -54,6 +54,12 @@ TRIGGER = "api:product-analyst:analyze"
 # produce a high-confidence profitability conclusion or a "test" decision.
 UNKNOWN_COST_MAX_CONFIDENCE = Decimal("0.500")
 
+# Completion budget for one analyst call. The routed provider is a reasoning
+# model that emits `reasoning` before the JSON answer, so the global
+# LLM_MAX_TOKENS default (sized for non-reasoning models) can be exhausted
+# before any content is produced.
+MODEL_MAX_TOKENS = 8000
+
 GatewayComplete = Callable[..., Awaitable[llm_gateway.LLMResponse]]
 
 
@@ -102,6 +108,19 @@ def _as_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _block(context: dict, key: str) -> dict:
+    """Return a nested context block, treating an explicit None like a missing key.
+
+    ``context.get(key, {})`` only falls back when the key is ABSENT. The context
+    builder writes explicit ``None`` for unknown blocks (``score``,
+    ``landed_cost``), so the naive form raised ``AttributeError: 'NoneType'
+    object has no attribute 'get'`` on any product that has no score/cost row
+    yet - i.e. every freshly sourced candidate.
+    """
+    value = context.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 async def _load_product(session: AsyncSession, *, workspace_id: UUID, product_id: UUID) -> None:
     """Verify the product exists (read-only); raises ProductAnalystError."""
     from app.models.product import Product
@@ -120,18 +139,18 @@ async def _load_product(session: AsyncSession, *, workspace_id: UUID, product_id
 
 def _rule_context(context: dict, *, recommended_price: Decimal | None = None) -> dict:
     """Build the rule-engine context from a product context (JSON-safe)."""
-    cost_status = context.get("landed_cost", {}).get("cost_status", "UNKNOWN")
-    total_cost = _as_decimal(context.get("cost", {}).get("total_cost")) or Decimal("0")
-    weight = _as_decimal(context.get("product", {}).get("weight_kg"))
+    cost_status = _block(context, "landed_cost").get("cost_status", "UNKNOWN")
+    total_cost = _as_decimal(_block(context, "cost").get("total_cost")) or Decimal("0")
+    weight = _as_decimal(_block(context, "product").get("weight_kg"))
     margin_rate: Decimal | None = None
     shipping_ratio: Decimal | None = None
-    landed = _as_decimal(context.get("landed_cost", {}).get("total_landed_cost"))
+    landed = _as_decimal(_block(context, "landed_cost").get("total_landed_cost"))
     if landed is not None and landed > Decimal("0"):
         price = recommended_price
         if price is not None and price > Decimal("0"):
             margin_rate = ((price - landed) / price).quantize(Decimal("0.0001"))
             international = _as_decimal(
-                context.get("landed_cost", {}).get("international_shipping")
+                _block(context, "landed_cost").get("international_shipping")
             ) or Decimal("0")
             if international > Decimal("0"):
                 shipping_ratio = (international / price).quantize(Decimal("0.0001"))
@@ -164,7 +183,7 @@ def _validate_output(
     downgrading the proposal to "reject" (see ``analyze_product``).
     """
     failures: list[str] = []
-    cost_status = context.get("landed_cost", {}).get("cost_status", "UNKNOWN")
+    cost_status = _block(context, "landed_cost").get("cost_status", "UNKNOWN")
 
     if cost_status == "UNKNOWN":
         if output.decision == "test":
@@ -328,6 +347,12 @@ async def analyze_product(
         task_type="product_analyst",
         response_format="json_object",
         temperature=0.2,
+        # The routed model is a reasoning model: it spends completion budget on
+        # `reasoning` before emitting the JSON answer. The global default
+        # (LLM_MAX_TOKENS) is sized for non-reasoning models and was fully
+        # consumed by reasoning on real candidate contexts, leaving content
+        # empty. Give this task an explicit, larger budget.
+        max_tokens=MODEL_MAX_TOKENS,
     )
     caller = gateway_complete or llm_gateway.complete
     try:
@@ -405,10 +430,10 @@ async def analyze_product(
         return ProductAnalysisResult(analysis_run=None, decision=None, output=output, dry_run=True)
 
     # 5. Audit: analysis run + decision proposal + agent run + event.
-    score_total = _as_decimal(context.get("score", {}).get("total"))
+    score_total = _as_decimal(_block(context, "score").get("total"))
     max_cac = output.pricing.max_cac
     if max_cac is None and output.pricing.recommended_price is not None:
-        landed = _as_decimal(context["landed_cost"]["total_landed_cost"]) or Decimal("0")
+        landed = _as_decimal(_block(context, "landed_cost").get("total_landed_cost")) or Decimal("0")
         if landed > Decimal("0"):
             max_cac = (output.pricing.recommended_price - landed).quantize(
                 Decimal("0.01"), ROUND_HALF_UP

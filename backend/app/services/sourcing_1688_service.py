@@ -31,6 +31,15 @@ DEFAULT_TIMEOUT = 15
 
 # 官方 API 元数据。路径必须同时包含 namespace 和 name，不能只传方法名。
 API_METADATA: dict[str, dict[str, str | int]] = {
+    # 账号实际订购的商品详情接口是 simple.get（能力名「获取已购买商家商品信息」）。
+    # alibaba.product.get 从未订购（网关报 gw.APIACLDecline），保留条目以备将来开通。
+    # simple.get 若走 rpartition 兜底会把 namespace 错拆成 "alibaba.product.simple"
+    # 导致 gw.APIUnsupported，因此必须显式登记（2026-10-06 控制台排查实证）。
+    "alibaba.product.simple.get": {
+        "namespace": "com.alibaba.product",
+        "name": "alibaba.product.simple.get",
+        "version": 1,
+    },
     "alibaba.product.get": {
         "namespace": "com.alibaba.product",
         "name": "alibaba.product.get",
@@ -204,13 +213,54 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
         return _mock_product_detail(product_id)
 
     try:
-        method = "alibaba.product.get"
-        data = _call_open_api(method, {"productID": product_id})
+        # 优先调用账号已订购的 simple.get（能力名「获取已购买商家商品信息」，
+        # 需 webSite 参数）；未订购时网关报 gw.APIACLDecline，再降级尝试完整版
+        # alibaba.product.get（当前账号未开通，为将来预留）。
+        try:
+            method = "alibaba.product.simple.get"
+            data = _call_open_api(method, {
+                "productID": product_id,
+                "webSite": "1688",
+            })
+        except OpenAPIError as exc:
+            if "APIACLDecline" not in str(exc) and "APIUnsupported" not in str(exc):
+                raise
+            logger.warning(
+                "1688 simple.get unavailable (%s), falling back to alibaba.product.get",
+                exc,
+            )
+            method = "alibaba.product.get"
+            data = _call_open_api(method, {"productID": product_id})
+        # simple.get 的业务错误放在顶层 errMsg（而非 error_code/result.success），
+        # 网关层检查不到，必须在此拦截，否则会被当成「空成功」静默返回全空字段。
+        # 典型场景：该能力仅可查「已购买商家」的商品，查未采购过的商家会返回
+        # 「由于权限受限，你不能获取该商品的信息。」
+        biz_err = data.get("errMsg") or data.get("errorMessage")
         result = data.get("result") or {}
-        product = result.get("productInfo") or result.get("product") or {}
+        product = result.get("productInfo") or result.get("product") or result
+        if biz_err or not product:
+            message = str(biz_err) if biz_err else "empty product payload"
+            restricted = "权限受限" in message or "permission" in message.lower()
+            logger.warning(
+                "1688 product detail business-level rejection (product_id=%s, "
+                "method=%s): %s",
+                product_id,
+                method,
+                message,
+            )
+            return {
+                "success": False,
+                "source": "1688_open_api",
+                "api_method": method,
+                "error": message,
+                # 供调用方区分「账号无权调用该接口」与「该接口不覆盖此商品」
+                "error_kind": "business_restricted" if restricted else "empty_result",
+                "product": None,
+            }
         return {
             "success": True,
             "source": "1688_open_api",
+            "api_method": method,
             "product": _normalize_product_detail(product),
         }
     except Exception as e:

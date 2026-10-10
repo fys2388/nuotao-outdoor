@@ -16,14 +16,16 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 import requests
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.api.v1.endpoints.auth import get_current_user
+from app.schemas.user import UserResponse
 from app.services.listing_gate import (
     HARD_BLOCK,
     build_wc_payload,
@@ -37,11 +39,17 @@ from app.services.listing_gate import (
 # force=true cannot bypass this gate — it is a hard business precondition.
 from app.models.listing_job import ListingJob
 from app.models.product import Product
+from app.services.wc_product_link_service import remember_wc_product
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["listing-publish"])
+
+# 这两个端点会往**线上店铺**推送商品、改商品状态，属破坏性操作，必须鉴权。
+# 此前它们没有任何鉴权依赖，而 api_router 也没有全局鉴权（见 router.py 的
+# ``api_router = APIRouter()``），等于任何能访问该 API 的人都能操作线上店铺。
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 # nuotaooutdoor.com sits behind Cloudflare, which intermittently tears the TLS
 # handshake down mid-flight (SSLEOFError / UNEXPECTED_EOF_WHILE_READING) - and
@@ -224,14 +232,37 @@ def _wc_credentials() -> tuple[Any, dict[str, str]]:
     return _get_wc_auth(), _get_wc_headers()
 
 
-async def _load_product(product_id: str) -> tuple[Any, Any | None]:
-    """Return ``(session, product_or_None)``; caller must close the session."""
+async def _load_product(
+    product_id: str, *, for_update: bool = False
+) -> tuple[Any, Any | None]:
+    """Return ``(session, product_or_None)``; caller must close the session.
+
+    ``for_update=True`` 会对商品行加锁（``SELECT ... FOR UPDATE``），把同一个商品的
+    并发推送串行化：否则两个请求都可能读到「meta 里还没有 woocommerce_id」，于是各自
+    POST 一次，在 WooCommerce 里建出两个商品。第二个请求会等在锁上，拿到锁时第一个
+    已经回写了 id，于是它走更新而不是创建。
+
+    只用于会创建/认领商品的推送路径；只读预览无需加锁。
+    """
     from app.core.database import async_session_factory
 
     session = async_session_factory()
     product: Any | None = None
     try:
-        product = await session.get(Product, UUID(str(product_id)))
+        if for_update:
+            product = (
+                (
+                    await session.execute(
+                        select(Product)
+                        .where(Product.id == UUID(str(product_id)))
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .first()
+            )
+        else:
+            product = await session.get(Product, UUID(str(product_id)))
     except Exception as exc:  # malformed id, model mismatch, ...
         logger.warning("Failed to load product %s: %s", product_id, exc)
         product = None
@@ -265,12 +296,54 @@ async def _load_purchase_cost(session: Any, product_id: Any) -> Any | None:
         return None
 
 
-def _gate_verdict(product: Any, purchase_cost: Any | None) -> tuple[dict, dict, dict]:
+async def _load_cost_row(session: Any, product_id: Any) -> Any | None:
+    """Latest authoritative ``ProductCost`` row (not just its purchase_cost).
+
+    The margin check in ``evaluate_gate`` prefers a *measured*
+    ``total_landed_cost`` over the configured logistics defaults, so it needs the
+    whole row rather than the scalar ``_load_purchase_cost`` returns. Same
+    ordering and same error tolerance: any failure yields ``None`` and the gate
+    falls back to estimating, never to blocking.
+    """
+    from sqlalchemy import select
+    from app.models.product import ProductCost
+
+    try:
+        result = await session.execute(
+            select(ProductCost)
+            .where(ProductCost.product_id == product_id)
+            .order_by(ProductCost.valid_from.desc().nullslast(), ProductCost.version.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+    except Exception as exc:  # column/table drift, malformed id, ...
+        logger.warning("Failed to load cost row for %s: %s", product_id, exc)
+        return None
+
+
+def _gate_verdict(
+    product: Any,
+    purchase_cost: Any | None,
+    cost_row: Any | None = None,
+) -> tuple[dict, dict, dict]:
     """Run the gate and return ``(gate, prices, english_copy)``."""
     meta = product.meta if isinstance(product.meta, dict) else {}
     english_copy = get_english_copy(meta)
     prices = resolve_prices(meta)
-    gate = evaluate_gate(product, prices, english_copy, purchase_cost=purchase_cost)
+    # Currency comes from the authoritative cost row (cost_sync_service writes
+    # purchase_cost already converted to USD). Falling back to the meta hint only
+    # when there is no row keeps CNY-priced legacy rows from being read as USD.
+    currency = str(getattr(cost_row, "currency", "") or "").strip().upper()
+    if not currency:
+        currency = str(meta.get("purchase_cost_currency") or "USD").strip().upper()
+    gate = evaluate_gate(
+        product,
+        prices,
+        english_copy,
+        purchase_cost=purchase_cost,
+        purchase_currency=currency,
+        cost_row=cost_row,
+    )
     return gate, prices, english_copy
 
 
@@ -280,16 +353,18 @@ def _gate_verdict(product: Any, purchase_cost: Any | None) -> tuple[dict, dict, 
 )
 async def push_product_to_woocommerce_gated(
     product_id: str,
+    _current_user: CurrentUser,
     force: bool = Query(default=False, description="人工复核后强制放行 needs_review"),
 ) -> dict[str, Any]:
-    session, product = await _load_product(product_id)
+    session, product = await _load_product(product_id, for_update=True)
     try:
         if product is None:
             raise HTTPException(status_code=404, detail=f"产品不存在: {product_id}")
 
         meta = product.meta if isinstance(product.meta, dict) else {}
-        purchase_cost = await _load_purchase_cost(session, product.id)
-        gate, prices, english_copy = _gate_verdict(product, purchase_cost)
+        cost_row = await _load_cost_row(session, product.id)
+        purchase_cost = getattr(cost_row, "purchase_cost", None) if cost_row else None
+        gate, prices, english_copy = _gate_verdict(product, purchase_cost, cost_row)
 
         if gate["status"] == "blocked":
             logger.warning(
@@ -486,6 +561,14 @@ async def push_product_to_woocommerce_gated(
             product.meta = meta
             flag_modified(product, "meta")
             wc_id = new_wc_id
+            # 同时写入 product_mappings：该表有唯一约束却从不被写入，导致「meta 与
+            # 映射表」两套机制口径不一致，下架/删除路径也读不到权威关联。
+            await remember_wc_product(
+                session,
+                product=product,
+                wc_id=int(new_wc_id),
+                slug=meta.get("woocommerce_slug") or None,
+            )
             await session.commit()
             logger.info(
                 "Linked WooCommerce product id=%s to sku=%s via %s",
@@ -540,6 +623,8 @@ _FIX_HINTS: dict[str, str] = {
     "cjk_in_approved_copy": "英文文案中仍有中文，请修改后重新批准",
     "unapproved_copy": "生成英文文案，人工核对后批准",
     "thin_copy": "英文描述偏短，建议补充到 600 字符以上",
+    "negative_margin": "售价低于落地成本，每单必亏。按提示的达标最低价上调售价，或核实采购成本与物流成本录入是否偏低",
+    "below_margin_target": "净利率未达目标，按提示的达标最低价与建议售价上调；如为有意的引流/清仓策略，人工复核后可 force 放行",
 }
 
 
@@ -547,7 +632,7 @@ _FIX_HINTS: dict[str, str] = {
     "/{product_id}/gate-preview",
     summary="预览 V3.0 选品闸门结果（不推送，无副作用）",
 )
-async def preview_listing_gate(product_id: str) -> dict[str, Any]:
+async def preview_listing_gate(product_id: str, _current_user: CurrentUser) -> dict[str, Any]:
     """Return the gate verdict plus everything an operator needs to fix it.
 
     The push endpoint only surfaces the gate when it fails, and only as an
@@ -561,8 +646,9 @@ async def preview_listing_gate(product_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"产品不存在: {product_id}")
 
         meta = product.meta if isinstance(product.meta, dict) else {}
-        purchase_cost = await _load_purchase_cost(session, product.id)
-        gate, prices, english_copy = _gate_verdict(product, purchase_cost)
+        cost_row = await _load_cost_row(session, product.id)
+        purchase_cost = getattr(cost_row, "purchase_cost", None) if cost_row else None
+        gate, prices, english_copy = _gate_verdict(product, purchase_cost, cost_row)
 
         reasons = [
             {
@@ -638,6 +724,7 @@ _BATCH_PUSH_MAX = 25
 )
 async def push_products_to_woocommerce_gated(
     req: BatchPushRequest,
+    _current_user: CurrentUser,
 ) -> dict[str, Any]:
     """Push several products through the same gated path as the single endpoint.
 
@@ -677,7 +764,7 @@ async def push_products_to_woocommerce_gated(
     for product_id in ids:
         try:
             pushed = await push_product_to_woocommerce_gated(
-                product_id, force=req.force
+                product_id, _current_user=_current_user, force=req.force
             )
             results.append({
                 "product_id": product_id,

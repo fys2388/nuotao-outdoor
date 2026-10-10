@@ -7,15 +7,18 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.core.workspace import get_workspace_id
 from app.schemas.order import OrderDetailOut, OrderListOut, OrderOut
+from app.schemas.user import UserResponse
 from app.services import order_service
 
 router = APIRouter(prefix="/orders", tags=["orders 订单管理"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 def _parse_datetime(value: str | None, field: str) -> datetime | None:
@@ -33,6 +36,7 @@ def _parse_datetime(value: str | None, field: str) -> datetime | None:
 
 @router.get("", response_model=OrderListOut, summary="订单列表 / List orders")
 async def list_orders(
+    _current_user: CurrentUser,
     db: DbSession,
     workspace_id: WorkspaceId,
     order_status: str | None = Query(default=None, alias="status", max_length=24),

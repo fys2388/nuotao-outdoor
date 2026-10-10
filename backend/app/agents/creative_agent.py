@@ -694,9 +694,17 @@ async def run_ai_quality_check(
         "vision_model_available": vision_model_available,
     }
 
-    # P0-2: Run the QC agent with vision support if image is available
-    # Use gpt-4o or gpt-4o-mini for vision-capable analysis
-    vision_model = "gpt-4o-mini"  # Vision-capable model
+    # P0-2 / P0-5: Run the QC agent with vision support if image is available.
+    # The vision model must be a verified image-capable model, routed through an
+    # explicit provider. The default provider chain (sensenova -> deepseek) does
+    # NOT see images: deepseek returns HTTP 200 while silently ignoring the
+    # picture, which would make a text-only guess look like a visual QC pass.
+    # llm_gateway.VISION_CAPABLE enforces the whitelist and the response-level
+    # image_tokens check makes a fake success impossible.
+    from app.core.config import get_settings
+    settings = get_settings()
+    vision_model = settings.vision_model
+    vision_provider = settings.vision_provider
     result: GenericAgentResult = await run_generic_agent(
         session,
         workspace_id=workspace_id,
@@ -720,6 +728,7 @@ async def run_ai_quality_check(
         vision=vision_model_available,
         images=[image_data_url] if image_data_url else None,
         model=vision_model if vision_model_available else None,
+        provider=vision_provider if vision_model_available else None,
     )
 
     if result.error:
