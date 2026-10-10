@@ -165,7 +165,14 @@ def _wc_call(method: str, url: str, *, auth: Any, headers: dict[str, str],
             time.sleep(delay)
     if last is not None:
         _tag_attempts(last, _WC_MAX_ATTEMPTS)
-    raise last if last is not None else RuntimeError("WooCommerce call failed")
+    # Raise a RequestException (not RuntimeError): every caller catches
+    # requests.exceptions.RequestException and translates it into an honest 502.
+    # RuntimeError escapes that handler and surfaces as a bare 500, which hides
+    # the real cause - the shared 75s push budget was spent by an earlier call
+    # (SKU lookup / category resolution) so this one never ran at all.
+    raise last if last is not None else requests.exceptions.ConnectionError(
+        "WooCommerce call skipped: shared push budget exhausted before this call"
+    )
 
 
 def _find_wc_id_by_sku(sku: str, *, auth: Any, headers: dict[str, str],

@@ -223,21 +223,27 @@ jobs:
             fi
 
             echo "=== 2.6 Injecting WooCommerce REST credentials into server .env ==="
-            # WooCommerce 自托管店（https://nuotaooutdoor.com）的 REST 凭证只放
-            # GitHub Secrets，服务器 .env 每次部署重新注入。backend 侧通过
-            # Settings.woocommerce_consumer_key / _secret / _base_url 读取
-            # （pydantic-settings 无 env_prefix，字段名与 env 变量名直连）。
+            # This script runs on the REMOTE server via appleboy/ssh-action, so the
+            # workflow-level env vars are NOT visible here - the runner-side env is
+            # never shipped to the remote shell. The values must be interpolated into
+            # this script text by GitHub Actions at parse time. The first version of
+            # this step read $WOOCOMMERCE_CONSUMER_KEY from the workflow env and
+            # silently skipped with "WC secrets not configured in this repo" even
+            # though the secrets existed. Secret values are masked in run logs.
             ENV_FILE=/opt/nuotao/backend/.env
-            if [ -n "$WOOCOMMERCE_CONSUMER_KEY" ] && [ -n "$WOOCOMMERCE_CONSUMER_SECRET" ]; then
+            WC_KEY='${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}'
+            WC_SECRET='${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}'
+            WC_BASE='${{ secrets.WOOCOMMERCE_BASE_URL }}'
+            if [ -n "$WC_KEY" ] && [ -n "$WC_SECRET" ]; then
               mkdir -p "$(dirname "$ENV_FILE")"
               touch "$ENV_FILE"
               sed -i '/^WOOCOMMERCE_BASE_URL=/d;/^WOOCOMMERCE_CONSUMER_KEY=/d;/^WOOCOMMERCE_CONSUMER_SECRET=/d' "$ENV_FILE"
               {
-                echo "WOOCOMMERCE_BASE_URL=${WOOCOMMERCE_BASE_URL:-https://nuotaooutdoor.com}"
-                echo "WOOCOMMERCE_CONSUMER_KEY=${WOOCOMMERCE_CONSUMER_KEY}"
-                echo "WOOCOMMERCE_CONSUMER_SECRET=${WOOCOMMERCE_CONSUMER_SECRET}"
+                echo "WOOCOMMERCE_BASE_URL=${WC_BASE:-https://nuotaooutdoor.com}"
+                echo "WOOCOMMERCE_CONSUMER_KEY=${WC_KEY}"
+                echo "WOOCOMMERCE_CONSUMER_SECRET=${WC_SECRET}"
               } >> "$ENV_FILE"
-              echo "[wc] credentials injected into $ENV_FILE"
+              echo "[wc] credentials injected into $ENV_FILE (base_url=${WC_BASE:-https://nuotaooutdoor.com})"
             else
               echo "[wc] WC secrets not configured in this repo, skipping injection"
             fi
