@@ -49,6 +49,9 @@ from app.models.creative import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from app.models.product import Product
+    from app.models.creative import CreativeAutomationWorkflow
+
 logger = logging.getLogger(__name__)
 
 # Default workspace (M1: single workspace)
@@ -923,11 +926,6 @@ def get_creative_status() -> dict[str, Any]:
     }
 
 
-def list_available_models() -> list[dict[str, Any]]:
-    """Return available image models with pricing."""
-    return creative_gateway.list_available_models()
-
-
 # ---------------------------------------------------------------------------
 # Serializers
 # ---------------------------------------------------------------------------
@@ -1721,10 +1719,14 @@ async def generate_brief_assets(
 
         for _ in range(count):
             # Find a matching prompt template by asset_type
+            # Category lives on the Product, not on CreativeBrief (the brief
+            # only carries brief_type/objective/target_market/channel). Reading
+            # brief.category raised AttributeError and aborted every creative
+            # generation run. product_data is already loaded above.
             template_data = await _find_template_for_asset_type(
                 session,
                 asset_type=asset_type,
-                category=brief.category,
+                category=product_data.get("product_category"),
                 workspace_id=ws,
             )
 
@@ -1745,13 +1747,21 @@ async def generate_brief_assets(
                 # Fallback: use the asset_type as a simple prompt
                 prompt_text = f"Generate {asset_type} for {product_data.get('product_name', 'product')}"
 
-            # Create a generation run
+            # Create a generation run.
+            # The creative gateway routes on OPERATION type ("generate",
+            # "background_replace", ...), which is a different axis from the
+            # brief's ASSET type ("hero_image", "detail_scene", "banner").
+            # Passing the asset type straight through raised
+            # ImageGenError("Unknown operation type: hero_image") and failed
+            # every generation run. All brief asset types are plain image
+            # generation; the asset type stays recorded in
+            # parameters.asset_spec below.
             run = await create_generation_run(
                 session,
                 workspace_id=ws,
                 product_id=brief.product_id,
                 brief_id=brief_id,
-                operation=asset_type,
+                operation="generate",
                 model=model,
                 prompt_template_id=prompt_template_id,
                 prompt_version=prompt_version,
