@@ -25,11 +25,9 @@ from app.api.v1.endpoints import (
     b2b_pricing,
     cache,
     calibration,
-    candidate_editor,
     consolidation,
     connectors,
     cost_model,
-    cost_sync,
     creative,
     currency,
     customer_data,
@@ -82,10 +80,8 @@ from app.api.v1.endpoints import (
     rules,
     scraping,
     selection,
-    selection_workflow,
     seo,
     sourcing,
-    sourcing_backfill,
     sourcing_enhanced,
     supply_chain,
     supply_chain_learning,
@@ -95,7 +91,6 @@ from app.api.v1.endpoints import (
     wc_clickback,
     weekly_report,
     woocommerce_sync,
-    workflow,
 )
 
 api_router = APIRouter()
@@ -142,13 +137,9 @@ api_router.include_router(listing_jobs.router)
 api_router.include_router(scraping.router)
 api_router.include_router(selection.router)
 api_router.include_router(nuotao_selection.router)
-api_router.include_router(selection_workflow.router)
 api_router.include_router(seo.router)
 api_router.include_router(sourcing.router)
 api_router.include_router(sourcing_enhanced.router)
-api_router.include_router(sourcing_backfill.router)
-api_router.include_router(candidate_editor.router)
-api_router.include_router(cost_sync.router)
 api_router.include_router(agents.router)
 api_router.include_router(agents.evaluation_router)
 api_router.include_router(agents_generic.router)
@@ -207,4 +198,3 @@ api_router.include_router(consolidation.router)
 api_router.include_router(currency.router)
 api_router.include_router(customer_data.router)
 api_router.include_router(analytics.router)
-api_router.include_router(workflow.router)
