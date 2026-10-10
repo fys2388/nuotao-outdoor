@@ -1,4 +1,4 @@
-"""Application settings loaded from environment variables / .env files."""
+﻿"""Application settings loaded from environment variables / .env files."""
 
 from decimal import Decimal
 from functools import lru_cache
@@ -94,6 +94,28 @@ class Settings(BaseSettings):
     payment_fee_rate: Decimal = Decimal("0.029")
     payment_fee_fixed: Decimal = Decimal("0.30")
 
+    # --- Pricing policy (operating_rules PRICE-002 / PROFIT-001~002) ---------
+    # Business experience values live in configuration, never inside formulas
+    # (AGENTS.md 搂1.2 rule 5). Consumed by ``services.pricing_policy`` and the
+    # pre-publish margin gate in ``services.listing_gate``.
+    #
+    # ``pricing_min_net_margin`` is the binding floor requested by the business:
+    # every product must keep >= 25% net profit. Note this is a *net* margin
+    # (after payment, marketing and after-sales), which is stricter than the
+    # 20% *gross* floor PRICE-001 assigns to 寮曟祦娆?- net is the binding one.
+    pricing_min_net_margin: Decimal = Decimal("0.25")
+    # Logistics defaults, used only to estimate landed cost when the product has
+    # no measured ProductCost row. Mirrors cost_model_service.default_shipping_cost.
+    pricing_default_last_mile: Decimal = Decimal("5.00")
+    pricing_default_first_leg: Decimal = Decimal("0.50")
+    pricing_default_packaging: Decimal = Decimal("0.20")
+    # Variable cost rates applied to the selling price.
+    pricing_marketing_rate: Decimal = Decimal("0.15")
+    pricing_after_sales_rate: Decimal = Decimal("0.03")
+    # CNY -> USD used when the recorded purchase cost is in CNY. Mirrors
+    # cost_sync_service._DEFAULT_CNY_USD_RATE; overridable per environment.
+    pricing_cny_usd_rate: Decimal = Decimal("0.14")
+
     # --- LLM Gateway (M2.2): multi-provider, vendor lock-in avoided ---------
     # Primary provider drives default routing; the fallback is used when the
     # primary is unreachable (network / 5xx / rate limit), never on auth errors.
@@ -105,7 +127,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_default_model: str = "deepseek-chat"
-    # SenseNova (商汤) — OpenAI-compatible endpoint, Free public beta.
+    # SenseNova (鍟嗘堡) 鈥?OpenAI-compatible endpoint, Free public beta.
     # NOTE: sensenova-6.8-flash-lite is a reasoning model; every call emits
     # `reasoning` tokens before `content`, so llm_max_tokens must leave room
     # for both (a trivial prompt measured 230 reasoning tokens).
@@ -114,6 +136,17 @@ class Settings(BaseSettings):
     sensenova_default_model: str = "sensenova-6.8-flash-lite"
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 4000
+
+    # --- Vision (multimodal) routing ----------------------------------------
+    # P0-5: vision must route to a model that genuinely reads images. The
+    # default ``llm_provider`` (sensenova) and ``llm_fallback_provider``
+    # (deepseek) both silently ignore ``image_url`` content parts 鈥?deepseek
+    # even returns HTTP 200 鈥?so a vision call routed to them is a fake
+    # success. These two settings pin the vision path to a verified model and
+    # llm_gateway.VISION_CAPABLE refuses anything else. Verified 2026-10-05:
+    # agnes-2.5-flash reports usage.prompt_tokens_details.image_tokens = 1024.
+    vision_provider: str = "openai"
+    vision_model: str = "agnes-2.5-flash"
 
     # --- Email / SMTP -------------------------------------------------------
     smtp_host: str | None = None
@@ -247,33 +280,28 @@ class Settings(BaseSettings):
     retry_standard_backoff_multiplier: Decimal = Decimal("2.0")
     retry_standard_max_backoff: int = 60
 
-    # --- Cache / Redis 缓存配置 ---
+    # --- Cache / Redis 缂撳瓨閰嶇疆 ---
     cache_enabled: bool = True
     cache_max_connections: int = 20
-    cache_default_ttl: int = 300  # 5 分钟
+    cache_default_ttl: int = 300  # 5 鍒嗛挓
 
-    # --- Supply Chain / Procurement 供应链与采购成本 -----------------------
-    # 产品成本表缺失时的兜底采购成本比例（售价的百分比），仅用于无成本记录的商品
-    procurement_fallback_cost_ratio: Decimal = Decimal("0.40")
-    # 默认国内运费（采购单维度，产品成本表中无 domestic_shipping 时使用）
+    # --- Supply Chain / Procurement 渚涘簲閾句笌閲囪喘鎴愭湰 -----------------------
+    # 浜у搧鎴愭湰琛ㄧ己澶辨椂鐨勫厹搴曢噰璐垚鏈瘮渚嬶紙鍞环鐨勭櫨鍒嗘瘮锛夛紝浠呯敤浜庢棤鎴愭湰璁板綍鐨勫晢鍝?    procurement_fallback_cost_ratio: Decimal = Decimal("0.40")
+    # 榛樿鍥藉唴杩愯垂锛堥噰璐崟缁村害锛屼骇鍝佹垚鏈〃涓棤 domestic_shipping 鏃朵娇鐢級
     procurement_default_domestic_shipping: Decimal = Decimal("5.00")
-    # 采购单自动生成开关（订单支付后是否自动创建采购单）
-    procurement_auto_create_on_payment: bool = True
+    # 閲囪喘鍗曡嚜鍔ㄧ敓鎴愬紑鍏筹紙璁㈠崟鏀粯鍚庢槸鍚﹁嚜鍔ㄥ垱寤洪噰璐崟锛?    procurement_auto_create_on_payment: bool = True
 
-    # --- EDM / Email Marketing 邮件营销安全控制 ---------------------------
-    # 全局营销邮件发送开关，默认关闭（GDPR合规：默认禁止发送营销邮件）
-    edm_send_enabled: bool = False
-    # EDM 默认 dry-run 模式（只记录不实际发送）
+    # --- EDM / Email Marketing 閭欢钀ラ攢瀹夊叏鎺у埗 ---------------------------
+    # 鍏ㄥ眬钀ラ攢閭欢鍙戦€佸紑鍏筹紝榛樿鍏抽棴锛圙DPR鍚堣锛氶粯璁ょ姝㈠彂閫佽惀閿€閭欢锛?    edm_send_enabled: bool = False
+    # EDM 榛樿 dry-run 妯″紡锛堝彧璁板綍涓嶅疄闄呭彂閫侊級
     edm_dry_run_default: bool = True
-    # 24小时去重窗口（小时），同一收件人同一活动24小时内不重复发送
-    edm_dedup_window_hours: int = 24
-    # EDM 发送最大重试次数
-    edm_max_retries: int = 3
-    # EDM 邮件服务提供商（smtp/sendgrid/mailgun/resend，未配置时不发送）
+    # 24灏忔椂鍘婚噸绐楀彛锛堝皬鏃讹級锛屽悓涓€鏀朵欢浜哄悓涓€娲诲姩24灏忔椂鍐呬笉閲嶅鍙戦€?    edm_dedup_window_hours: int = 24
+    # EDM 鍙戦€佹渶澶ч噸璇曟鏁?    edm_max_retries: int = 3
+    # EDM 閭欢鏈嶅姟鎻愪緵鍟嗭紙smtp/sendgrid/mailgun/resend锛屾湭閰嶇疆鏃朵笉鍙戦€侊級
     edm_provider: str = ""
 
     # --- M6 Image Generation (pluggable gateway, cost-guarded) --------------
-    # Default model: doubao-seedream-4-0-250828 (Volcengine Ark, 200 free images quota, ¥0.20/img).
+    # Default model: doubao-seedream-4-0-250828 (Volcengine Ark, 200 free images quota, 楼0.20/img).
     image_gen_default_model: str = "doubao-seedream-4-0-250828"
     image_gen_monthly_budget_cny: Decimal = Decimal("100.00")
     image_gen_high_cost_threshold_cny: Decimal = Decimal("0.15")
@@ -319,3 +347,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return the cached application settings singleton."""
     return Settings()
+
+settings = get_settings()
