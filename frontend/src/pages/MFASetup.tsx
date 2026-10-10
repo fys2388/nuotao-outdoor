@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import {
   Card, Button, Space, Typography, Input, Modal, message,
   QRCode, Spin, Alert, Divider, Checkbox, Form
@@ -33,7 +33,7 @@ export default function MFASetup() {
     try {
       const response = await apiClient.post('/auth/mfa/setup', {}, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
         }
       })
       setSecret(response.data)
@@ -61,7 +61,7 @@ export default function MFASetup() {
         secret: secret.secret
       }, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
         }
       })
       

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Modal, Form, message, Popconfirm, Upload,
@@ -74,8 +74,11 @@ export default function Products() {
         offset: ((page - 1) * pageSize).toString(),
       })
       if (statusFilter !== 'all') params.append('status', statusFilter)
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
 
-      const resp = await fetch(`/api/v1/products?${params}`)
+      const resp = await fetch(`/api/v1/products?${params}`, { headers })
       if (resp.ok) {
         const data = await resp.json()
         setProducts(data || [])
@@ -160,10 +163,13 @@ export default function Products() {
     try {
       setSyncing(true)
       message.loading({ content: `正在同步到WooCommerce: ${product.name}`, key: 'sync' })
-      
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
       const resp = await fetch(`/api/v1/products/${product.id}/push-woocommerce`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
       })
       
       if (resp.ok) {
@@ -186,10 +192,13 @@ export default function Products() {
     try {
       setSyncing(true)
       message.loading({ content: '正在批量同步到WooCommerce...', key: 'batch-sync' })
-      
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
       const resp = await fetch('/api/v1/products/push-woocommerce', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ product_ids: [] }),
       })
       

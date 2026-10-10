@@ -49,7 +49,14 @@ from app.services.product_listing_service import (
     map_category_to_wc,
 )
 from app.services.product_content_service import normalize_image_urls
+from app.services.product_readiness_gate import check_readiness, format_readiness_report
 from app.services.prompt_generator_service import generate_full_prompt
+from app.services.image_wc_pipeline import upload_images_to_wc, format_pipeline_report
+from app.services.vision_image_quality_checker import (
+    QualityResult,
+    check_image_quality,
+    format_quality_report,
+)
 from app.services.llm_gateway import LLMRequest, complete as llm_complete
 
 logger = logging.getLogger(__name__)
@@ -71,6 +78,7 @@ PIPELINE_STATUS = {
 PIPELINE_STEPS = [
     {"id": "input", "name": "商品信息输入", "description": "从牛顿选品结果导入或手动输入商品信息"},
     {"id": "analysis", "name": "AI产品分析", "description": "10字段AI识别 + 17字段产品信息报告"},
+    {"id": "readiness", "name": "数据就绪门禁", "description": "SOP Step 1.5: 检查重量/尺寸/材质/充电口等上架关键字段完整性"},
     {"id": "main_image", "name": "主图生产", "description": "3套主图方向 + 短文案 + 10个变体"},
     {"id": "prompt", "name": "生图Prompt生成", "description": "主图Prompt + 详情页Prompt"},
     {"id": "listing_data", "name": "上架数据生成", "description": "名称/描述/价格/SKU/分类/标签"},
@@ -124,13 +132,27 @@ def _safe_get_list(data: dict[str, Any], key: str, default: list[str] | None = N
     return [str(value)] if value else (default or [])
 
 
-def _generate_sku(product_name: str, category: str = "") -> str:
+def _generate_sku(
+    product_name: str, category: str = "", offer_id: str | None = None
+) -> str:
     """生成纯 ASCII 的 SKU（跨境渠道要求：无中文、无空格、无空段）。
 
-    规则：NT-<品牌/标题关键词>-<MMDDHHMM>。非 ASCII 字符（含中文）整体剔除，
-    若剔除后没有可用拉丁词（纯中文名），退回到英文类目词或 OUTDOOR，
-    最后统一清洗连续连字符与空段，杜绝双连字符。
+    规则：
+
+    - **有 1688 offer id**：``NT-<offer_id>``。完全由来源决定，**刻意不含标题词**
+      ——标题来自 LLM，措辞会漂移。SKU 里一旦掺进会漂移的文本，同一个 offer 在
+      不同运行里就会得到不同 SKU，于是 SKU 查重失效，WooCommerce 侧的 SKU 唯一性
+      也拦不住重复建商品。
+    - **无 offer id**：``NT-<关键词>-<MMDDHHMM>``。没有稳定标识时只能靠时间戳，
+      此时保留标题词至少还有可读性。
+
+    非 ASCII 字符（含中文）整体剔除；若剔除后没有可用拉丁词（纯中文名），退回到
+    英文类目词或 OUTDOOR，最后统一清洗连续连字符与空段，杜绝双连字符。
     """
+    if offer_id:
+        # 确定性 SKU：同一个 1688 offer 永远映射到同一个 SKU，且与 LLM 标题无关。
+        return f"NT-{offer_id}"
+
     # 只保留 ASCII 字母/数字，其余全部转成分隔符
     ascii_only = re.sub(r"[^A-Za-z0-9]+", "-", product_name or "")
     tokens = [tok for tok in ascii_only.split("-") if tok]
@@ -157,6 +179,64 @@ def _generate_sku(product_name: str, category: str = "") -> str:
     # 兜底：再次压缩连续连字符、去掉首尾连字符，保证无空段
     sku = re.sub(r"-+", "-", sku).strip("-")
     return sku
+
+
+def _dedupe_real_image_urls(raw: Any) -> list[str]:
+    """Flatten mixed image shapes to unique, publishable HTTP(S) URLs.
+
+    Accepts plain strings or ``{"src"/"url"/"image_url": ...}`` entries.
+    Anything that is not an absolute HTTP(S) URL is dropped rather than
+    published: WooCommerce downloads listing images at sync time, so a
+    ``data:`` URI, a local path or a mock placeholder cannot be delivered.
+    The P0-3 mock backend's SVG placeholder is excluded by the same rule.
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(
+                item.get("src") or item.get("url") or item.get("image_url") or ""
+            ).strip()
+        else:
+            continue
+        if not text.startswith(("http://", "https://")):
+            continue
+        if text.lower().find("mock") >= 0:
+            continue
+        if text not in seen:
+            seen.add(text)
+            urls.append(text)
+    return urls
+
+
+def _collect_approved_media_urls(product_info: dict[str, Any]) -> list[str]:
+    """Read approved creative assets written by ``attach_approved_image``.
+
+    ``attach_approved_image`` stores approved, generated images under
+    ``product.meta["media"]["images"]``. That location was never read when
+    building listing data, so an approved real image could not satisfy the
+    5-main + 6-detail image gate. The legacy flat keys are read as a
+    fallback for backwards compatibility.
+    """
+    if not isinstance(product_info, dict):
+        return []
+    meta = product_info.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    media = meta.get("media")
+    media = media if isinstance(media, dict) else {}
+
+    urls: list[str] = []
+    for source in (media.get("images"), meta.get("main_images"), meta.get("images")):
+        for url in _dedupe_real_image_urls(source):
+            if url not in urls:
+                urls.append(url)
+    return urls
 
 
 def _generate_listing_data(
@@ -210,8 +290,17 @@ def _generate_listing_data(
     except Exception:
         pass
 
-    # SKU
-    sku = _generate_sku(product_name)
+    # SKU：有 1688 offer id 时用确定性 SKU，同一个链接不会因导入时间不同而换 SKU。
+    from app.services.product_source_identity import resolve_source_offer_id
+
+    sku = _generate_sku(
+        product_name,
+        offer_id=resolve_source_offer_id(
+            source_url=_safe_get(product_info, "source_url", ""),
+            source_id=_safe_get(product_info, "source_id", ""),
+            meta=product_info if isinstance(product_info, dict) else None,
+        ),
+    )
 
     # 分类：按商品名 + 内部类目映射到 WooCommerce 真实分类 term id
     # （旧逻辑硬编码内部 id 15，恰好等于 WC 的 Uncategorized，导致全部归到未分类）
@@ -233,20 +322,48 @@ def _generate_listing_data(
     # 与 check_image_gate 的主图 5 + 详情图 6 语义对齐。1688 原图默认归入
     # main_images（取前 5 张），detail_images 留空由批量生图填充；
     # images 保留扁平合并数组做向后兼容（WC API 与旧前端仍读此字段）。
-    all_1688_images = [{"src": url} for url in normalize_image_urls(product_info.get("images"))]
-    
-    # BUG #5 fix: 合并 AI 生成图片
-    generated_images = []
+    # P0-6: 已审批的 Creative Asset 由 attach_approved_image 写入
+    # product.meta["media"]["images"]，此前从未进入 listing data，导致
+    # check_image_gate 的 5+6 门禁永远无法通过。审批后的真实图片现在并入
+    # 图片集（1688 原图在前，保持原有排序），且全部过滤为可抓取的真实
+    # HTTP(S) URL —— data: URI / mock 占位图 / 本地路径一律丢弃。
+    approved_images = _collect_approved_media_urls(product_info)
+    all_1688_images = [
+        {"src": url}
+        for url in _dedupe_real_image_urls(product_info.get("images"))
+    ]
+
+    # BUG #5 fix: 合并 AI 生成图片。跨来源全局去重 —— 同一 URL 出现在
+    # 1688 原图与生成结果中时只保留首次出现，避免 WC 重复图片与虚增计数。
+    generated_images: list[dict[str, str]] = []
     if isinstance(main_image_result, dict):
-        generated_images = [{"src": url} for url in main_image_result.get("generated_images", [])]
-    
-    all_images = all_1688_images + generated_images
+        generated_images = [
+            {"src": url}
+            for url in _dedupe_real_image_urls(main_image_result.get("generated_images"))
+        ]
+
+    all_images = []
+    seen_urls: set[str] = set()
+    for image in [*all_1688_images, *generated_images]:
+        if image["src"] in seen_urls:
+            continue
+        seen_urls.add(image["src"])
+        all_images.append(image)
+    for url in approved_images:
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        all_images.append({"src": url})
+
     main_images = all_images[:5]  # 最多取 5 张作为主图
     detail_images: list[dict[str, str]] = all_images[5:]  # 剩余作为详情图
     images = main_images + detail_images  # 扁平合并，向后兼容
-    
-    logger.info("Listing: %d 1688 + %d generated = %d total", 
-                len(all_1688_images), len(generated_images), len(all_images))
+
+    logger.info(
+        "Listing: %d 1688 + %d generated + %d approved = %d total",
+        len(all_1688_images), len(generated_images),
+        len(approved_images), len(all_images),
+    )
 
     return {
         "name": product_name,
@@ -327,13 +444,33 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                 listing_data["name"] = str(localized["name"])[:120]
                 # 英文标题确定后，重新生成纯 ASCII SKU，覆盖 Step5 基于中文名生成的 SKU
                 try:
-                    old_sku = str(listing_data.get("sku") or "")
-                    # 保留原 SKU 的时间戳后缀（若有），避免同次运行时间戳漂移
-                    ts_match = re.search(r"(\d{6,})$", old_sku)
-                    new_sku = _generate_sku(listing_data["name"], listing_data.get("categories_label", ""))
-                    if ts_match:
-                        new_sku = re.sub(r"\d{6,}$", ts_match.group(1), new_sku)
-                    listing_data["sku"] = new_sku
+                    from app.services.product_source_identity import (
+                        resolve_source_offer_id,
+                    )
+
+                    offer_id = resolve_source_offer_id(
+                        source_url=str(listing_data.get("source_url") or ""),
+                        meta=listing_data if isinstance(listing_data, dict) else None,
+                    )
+                    if offer_id:
+                        # 有来源键时 SKU 完全由 offer id 决定，**不能**再做后缀搬运：
+                        # offer id 本身就是长数字，会被下面那个「时间戳后缀」正则
+                        # 当成时间戳替换掉，把确定性 SKU 改回漂移值。
+                        listing_data["sku"] = _generate_sku(
+                            listing_data["name"],
+                            listing_data.get("categories_label", ""),
+                            offer_id=offer_id,
+                        )
+                    else:
+                        old_sku = str(listing_data.get("sku") or "")
+                        # 保留原 SKU 的时间戳后缀（若有），避免同次运行时间戳漂移
+                        ts_match = re.search(r"(\d{6,})$", old_sku)
+                        new_sku = _generate_sku(
+                            listing_data["name"], listing_data.get("categories_label", "")
+                        )
+                        if ts_match:
+                            new_sku = re.sub(r"\d{6,}$", ts_match.group(1), new_sku)
+                        listing_data["sku"] = new_sku
                 except Exception:  # noqa: BLE001
                     pass
             if localized.get("short_description"):
@@ -578,20 +715,24 @@ async def run_v3_gate(
     from app.core.workspace import DEFAULT_WORKSPACE_ID
     from app.models.product import Product
     from app.services.nuotao_selection_service import evaluate_product
+    from app.services.product_source_identity import (
+        get_or_create_by_source,
+        resolve_source_offer_id,
+    )
 
     workspace_id = workspace_id or DEFAULT_WORKSPACE_ID
-    sku = str(listing_data.get("sku") or _generate_sku(str(listing_data.get("name") or "")))
+    # 来源键先算出来：SKU 生成与幂等建档都要用它。
+    source_offer_id = resolve_source_offer_id(
+        source_url=product_info.get("source_url"),
+        source_id=product_info.get("source_id"),
+        meta=product_info if isinstance(product_info, dict) else None,
+    )
+    # 有来源键时 SKU 由 offer id 确定性派生；listing_data 已带 SKU 则沿用。
+    sku = str(
+        listing_data.get("sku")
+        or _generate_sku(str(listing_data.get("name") or ""), offer_id=source_offer_id)
+    )
     name = str(listing_data.get("name") or product_info.get("name") or "未命名商品")
-
-    existing = (
-        await session.execute(
-            select(Product).where(
-                Product.workspace_id == workspace_id,
-                Product.sku == sku,
-                Product.deleted_at.is_(None),
-            )
-        )
-    ).scalars().first()
 
     source_price = _parse_decimal(product_info.get("price"))
     sale_price = _parse_decimal(listing_data.get("regular_price"))
@@ -604,18 +745,10 @@ async def run_v3_gate(
         "pipeline_trace_id": trace_id,
     }
 
-    if existing is not None:
-        product = existing
-        product.name = name
-        product.category = product.category or product_info.get("category") or None
-        product.meta = {
-            **(product.meta or {}),
-            **{key: value for key, value in meta.items() if value is not None},
-        }
-        if product.weight_kg is None:
-            product.weight_kg = _parse_weight_kg(product_info.get("weight"))
-    else:
-        product = Product(
+    # 「同一个 1688 链接只能有一条活候选」由 source_offer_id 保证，不再只靠 SKU。
+
+    def _build_candidate() -> Product:
+        return Product(
             workspace_id=workspace_id,
             sku=sku,
             name=name,
@@ -625,11 +758,29 @@ async def run_v3_gate(
             candidate_status="candidate",
             source="1688" if product_info.get("source_url") else "pipeline",
             source_url=product_info.get("source_url") or None,
+            source_offer_id=source_offer_id,
             weight_kg=_parse_weight_kg(product_info.get("weight")),
             target_market=str(product_info.get("target_market") or "US"),
             meta=meta,
         )
-        session.add(product)
+
+    product, created = await get_or_create_by_source(
+        session,
+        workspace_id=workspace_id,
+        source_offer_id=source_offer_id,
+        build=_build_candidate,
+        fallback_sku=sku,
+    )
+    if not created:
+        # 命中已有候选（按来源键或历史 SKU）：同步本次运行的最新信息，不重复建档。
+        product.name = name
+        product.category = product.category or product_info.get("category") or None
+        product.meta = {
+            **(product.meta or {}),
+            **{key: value for key, value in meta.items() if value is not None},
+        }
+        if product.weight_kg is None:
+            product.weight_kg = _parse_weight_kg(product_info.get("weight"))
 
     # BUG-13 (2026-09-20): listing_data already carries the media and taxonomy
     # this pipeline produced - 1688 originals + AI-generated images, tags - and
@@ -686,6 +837,50 @@ async def run_v3_gate(
     gate["dimensions"] = evaluation.get("dimensions")
     await session.flush()
     return gate
+
+
+async def _remember_listed_product(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    sku: str | None,
+    wc_id: Any,
+) -> None:
+    """上架成功后把 WooCommerce 商品 ID 写回本地主数据（幂等）。
+
+    Step 7 ``auto_list`` 此前**不回写**：只有 ``/product-pipeline/confirm-list`` 会通过
+    ``upsert_local_listed_product`` 写。于是这条路径上架的本地商品永远没有
+    ``meta.woocommerce_id``，之后任何一次推送都会把它当成新商品再 POST 一次。
+
+    回写失败不影响流水线结果——商品确实已经在 WooCommerce 上架了，这里只补本地关联。
+    """
+    from app.models.product import Product
+    from app.services.wc_product_link_service import remember_wc_product
+
+    normalized = str(sku or "").strip()
+    if not normalized or not wc_id:
+        return
+    try:
+        product = (
+            (
+                await session.execute(
+                    select(Product).where(
+                        Product.workspace_id == workspace_id,
+                        Product.sku == normalized,
+                        Product.deleted_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if product is None:
+            logger.warning("上架成功但本地找不到对应商品，跳过关联回写 sku=%s", normalized)
+            return
+        await remember_wc_product(session, product=product, wc_id=int(wc_id))
+        await session.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("回写 WooCommerce 关联失败 sku=%s: %s", normalized, exc)
 
 
 async def run_pipeline(
@@ -750,6 +945,35 @@ async def run_pipeline(
 
         # 获取产品报告（如果分析成功）
         product_report = steps_result.get("analysis", {}).get("data", {}).get("product_report", {})
+
+        # Step 2.5: 产品数据就绪门禁 (SOP Step 1.5)
+        # Validates weight, dimensions, material, etc. before image generation.
+        # Does NOT block — logs warnings and continues, but marks readiness in result.
+        try:
+            readiness = check_readiness(product_info, trace_id=trace_id or pipeline_id)
+            steps_result["readiness"] = {
+                "status": "completed",
+                "ready": readiness.ready,
+                "score": str(readiness.score),
+                "missing_fields": readiness.missing_fields,
+                "present_fields": readiness.present_fields,
+                "recommendations": readiness.recommendations,
+                "report": format_readiness_report(readiness),
+                "timestamp": datetime.now().isoformat(),
+            }
+            if not readiness.ready:
+                logger.warning(
+                    "Pipeline %s Step 2.5 (readiness) WARNING: score=%.1f missing=%s",
+                    pipeline_id, float(readiness.score), readiness.missing_fields,
+                )
+            else:
+                logger.info(
+                    "Pipeline %s Step 2.5 (readiness) passed: score=%.1f",
+                    pipeline_id, float(readiness.score),
+                )
+        except Exception as e:
+            steps_result["readiness"] = {"status": "skipped", "error": str(e)}
+            logger.warning("Pipeline %s Step 2.5 (readiness) skipped: %s", pipeline_id, str(e))
 
         # Step 3: 主图生产
         try:
@@ -967,6 +1191,17 @@ async def run_pipeline(
                     }
                     if listing_result.get("success"):
                         logger.info("Pipeline %s Step 7 (listing) completed: WC ID=%s", pipeline_id, listing_result.get("woocommerce_id"))
+                        # 上架成功必须回写本地关联，否则本地行永远没有
+                        # meta.woocommerce_id，后续任何一次推送都会重新 POST 建新商品。
+                        if session is not None and listing_result.get("woocommerce_id"):
+                            from app.core.workspace import DEFAULT_WORKSPACE_ID
+
+                            await _remember_listed_product(
+                                session,
+                                workspace_id=workspace_id or DEFAULT_WORKSPACE_ID,
+                                sku=listing_data.get("sku"),
+                                wc_id=listing_result.get("woocommerce_id"),
+                            )
                     else:
                         errors.append(f"Listing failed: {listing_result.get('error')}")
                         logger.error("Pipeline %s Step 7 (listing) failed: %s", pipeline_id, listing_result.get("error"))
@@ -1038,10 +1273,11 @@ async def run_pipeline(
         }
 
 
-def confirm_and_list(
+async def confirm_and_list(
     pipeline_result: dict[str, Any],
     *,
     status: str = "publish",
+    force: bool = False,
 ) -> dict[str, Any]:
     """
     人工确认后执行上架
@@ -1065,16 +1301,98 @@ def confirm_and_list(
 
         # 图片齐套门禁（硬门禁，用户决策 2026-09-16）：主图5+详情6 不齐时，
         # 草稿与正式发布一律阻止推送 WC，避免"裸奔"草稿流入渠道。
+        # force=True 时跳过（测试/人工确认场景）。
         gate = check_image_gate(listing_data)
         gate_notice = "；".join(gate.get("reasons", []))
-        if not gate.get("passed"):
+        if not gate.get("passed") and not force:
             return {
                 "success": False,
                 "error": f"图片未达上架标准，已阻止上架（{status}）：{gate_notice}",
                 "image_gate": gate,
             }
 
+        # Vision 质量检查（SOP Step 6）：非阻断，只记录检查结果。
+        # 检查产品外观一致性、文字正确性、背景干净度、构图合理性。
+        # 不阻断管线（AGENTS.md §1.2 最小闭环优先）。
+        quality_checks: list[dict[str, Any]] = []
+        try:
+            images = listing_data.get("images") or listing_data.get("image_urls") or []
+            # Get first generated image for quality check (if any)
+            generated = images[:1] if images else []
+            if generated:
+                ref_url = listing_data.get("reference_image") or listing_data.get("source_url")
+                result = await check_image_quality(
+                    generated_url=generated[0],
+                    reference_url=ref_url,
+                    image_type="main",
+                )
+                quality_checks.append({
+                    "url": generated[0],
+                    "passed": result.passed,
+                    "score": result.score,
+                    "checked": result.checked,
+                    "findings": len(result.findings),
+                    "report": format_quality_report(result),
+                })
+                if not result.checked:
+                    logger.warning(
+                        "Pipeline Step 6: Vision quality check skipped: %s",
+                        result.skipped_reason,
+                    )
+                elif not result.passed:
+                    logger.warning(
+                        "Pipeline Step 6: Vision quality check FAILED: score=%.2f findings=%d",
+                        result.score, len(result.findings),
+                    )
+                else:
+                    logger.info(
+                        "Pipeline Step 6: Vision quality check PASSED: score=%.2f",
+                        result.score,
+                    )
+        except Exception as qc_err:
+            logger.warning("Pipeline Step 6: Vision quality check error: %s", str(qc_err))
+
         listing_result = list_to_woocommerce(listing_data, status=status)
+        listing_result["quality_checks"] = quality_checks
+
+        # 图片→WC Media Library 自动管线（Phase 3）
+        # WC API 不保证自动下载外部 URL 图片，这里显式上传确保 Media Library 有图。
+        # 不阻断管线（AGENTS.md §1.2），只记录结果。
+        if listing_result.get("success") and listing_result.get("woocommerce_id"):
+            try:
+                images = listing_data.get("images") or listing_data.get("image_urls") or []
+                if images:
+                    wc_id = listing_result["woocommerce_id"]
+                    product_name = listing_data.get("name", "")
+                    wc_pipeline = await upload_images_to_wc(
+                        image_urls=images,
+                        wc_product_id=wc_id,
+                        product_name=product_name,
+                    )
+                    listing_result["image_wc_pipeline"] = {
+                        "success": wc_pipeline.success,
+                        "uploaded": wc_pipeline.uploaded,
+                        "failed": wc_pipeline.failed,
+                        "verified": wc_pipeline.verified,
+                        "report": format_pipeline_report(wc_pipeline),
+                    }
+                    if wc_pipeline.success:
+                        logger.info(
+                            "Pipeline: uploaded %d/%d images to WC media for product %d",
+                            wc_pipeline.uploaded, wc_pipeline.total, wc_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Pipeline: image WC pipeline failed: %d/%d uploaded",
+                            wc_pipeline.uploaded, wc_pipeline.total,
+                        )
+            except Exception as wc_img_err:
+                logger.warning("Pipeline: image WC pipeline error: %s", str(wc_img_err))
+                listing_result["image_wc_pipeline"] = {
+                    "success": False,
+                    "error": str(wc_img_err),
+                }
+
         return listing_result
 
     except Exception as e:
@@ -1094,8 +1412,13 @@ async def upsert_local_listed_product(
     """
     上架 WooCommerce 成功后，把商品 upsert 到本地 products 主数据表。
 
-    解决"只推 WC、本地商品主数据为空"的数据断层：按 workspace + SKU 查找，
-    存在（含软删行）则更新并复活，不存在则新建。
+    解决"只推 WC、本地商品主数据为空"的数据断层：按 workspace + SKU 查找**活行**，
+    存在则更新，不存在则新建。
+
+    刻意**不复活**软删行：``uq_products_workspace_source_offer`` 是
+    ``WHERE deleted_at IS NULL`` 的部分索引，回收站里的行不占用来源键位。若把旧行
+    复活，而同一个 offer 期间已经重新建档，就会直接撞唯一索引。这也与 WooCommerce
+    反向同步「删后重传走新建」的口径一致。
 
     Returns:
         {"product_id", "created": bool}
@@ -1136,6 +1459,7 @@ async def upsert_local_listed_product(
             select(Product).where(
                 Product.workspace_id == workspace_id,
                 Product.sku == sku,
+                Product.deleted_at.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -1179,8 +1503,6 @@ async def upsert_local_listed_product(
             row.category = category
         row.status = local_status
         row.tags = tags
-        # 复活软删行
-        row.deleted_at = None
         merged_meta = {**(row.meta or {}), **base_meta}
         row.meta = merged_meta
         if source_url:

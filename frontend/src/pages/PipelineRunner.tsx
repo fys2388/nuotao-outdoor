@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+﻿import { useState, useEffect } from 'react'
 import {
   Card, Button, Space, Typography, Steps, Tag, Alert, Row, Col,
   Spin, message, Input, Select, Descriptions, List, Empty, Progress, Statistic,
@@ -148,7 +148,10 @@ export default function PipelineRunner() {
     setCandidatesLoading(true)
     setCandidatesError(null)
     try {
-      const resp = await fetch('/api/v1/products?limit=200&status=draft')
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const resp = await fetch('/api/v1/products?limit=200&status=draft', { headers })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
         setCandidatesError(`HTTP ${resp.status}：${body.detail || body.error || resp.statusText}`)
@@ -159,7 +162,7 @@ export default function PipelineRunner() {
       const filtered = all.filter((p) => p.candidate_status != null)
       // 若 status=draft 无候选，回退加载不带 status 的全量
       if (filtered.length === 0) {
-        const resp2 = await fetch('/api/v1/products?limit=200')
+        const resp2 = await fetch('/api/v1/products?limit=200', { headers })
         if (resp2.ok) {
           const list2 = await resp2.json()
           const all2: Product[] = Array.isArray(list2) ? list2 : ((list2 as any).list ?? [])
@@ -189,10 +192,11 @@ export default function PipelineRunner() {
       return
     }
     setImportLoading(true)
+    const token = localStorage.getItem('admin_token') || ''
     try {
       const resp = await fetch('/api/v1/product-pipeline/import-from-1688', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
         body: JSON.stringify({
           url_or_id: importUrl.trim(),
           auto_run_pipeline: autoRunAfterImport,
@@ -271,9 +275,10 @@ export default function PipelineRunner() {
     setConfirmSuccess(null)
     setConfirmError(null)
     try {
+      const runToken = localStorage.getItem('admin_token') || ''
       const resp = await fetch('/api/v1/product-pipeline/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(runToken && { Authorization: `Bearer ${runToken}` }) },
         body: JSON.stringify({
           product_info: buildProductInfo(),
           auto_list: false,
@@ -312,9 +317,10 @@ export default function PipelineRunner() {
     setConfirmError(null)
     setConfirmSuccess(null)
     try {
+      const confirmToken = localStorage.getItem('admin_token') || ''
       const resp = await fetch('/api/v1/product-pipeline/confirm-list', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(confirmToken && { Authorization: `Bearer ${confirmToken}` }) },
         body: JSON.stringify({
           pipeline_result: pipelineResult,
           status: confirmStatus,

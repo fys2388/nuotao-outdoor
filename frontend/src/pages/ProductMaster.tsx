@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Product Master — 生命周期阶段 ⑨⑪ 单一详情视图。
  *
  * ADR IDENTITY-002 §5：`Products` + `ProductListing` → `ProductMaster`。
@@ -230,7 +230,10 @@ export default function ProductMaster() {
         offset: String((page - 1) * pageSize),
       })
       if (statusFilter !== 'all') params.append('status', statusFilter)
-      const resp = await fetch(`/api/v1/products?${params}`)
+      const token = localStorage.getItem('admin_token') || ''
+      const headers: HeadersInit = {}
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const resp = await fetch(`/api/v1/products?${params}`, { headers })
       if (!resp.ok) {
         message.error(`加载产品列表失败：${resp.statusText}`)
         return
@@ -302,7 +305,10 @@ export default function ProductMaster() {
     try {
       setGateLoading(true)
       setGateError(null)
-      const resp = await fetch(`/api/v1/products/${productId}/listing-gate`)
+      const gateToken = localStorage.getItem('admin_token') || ''
+      const gateHeaders: HeadersInit = {}
+      if (gateToken) gateHeaders['Authorization'] = `Bearer ${gateToken}`
+      const resp = await fetch(`/api/v1/products/${productId}/listing-gate`, { headers: gateHeaders })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}))
         setGateError(typeof err.detail === 'string' ? err.detail : resp.statusText)
@@ -325,7 +331,10 @@ export default function ProductMaster() {
     try {
       setWcSyncing(true)
       message.loading({ content: '正在从 WooCommerce 反向同步…', key: 'wc-sync' })
-      const resp = await fetch('/api/v1/products/sync-woocommerce', { method: 'POST' })
+      const syncToken = localStorage.getItem('admin_token') || ''
+      const syncHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+      if (syncToken) syncHeaders['Authorization'] = `Bearer ${syncToken}`
+      const resp = await fetch('/api/v1/products/sync-woocommerce', { method: 'POST', headers: syncHeaders })
       const data = await resp.json().catch(() => ({}))
       if (resp.ok) {
         const created = data.created ?? data.imported ?? 0
@@ -354,9 +363,12 @@ export default function ProductMaster() {
     try {
       setBatchPushing(true)
       message.loading({ content: `批量推送 ${ids.length} 个产品…`, key: 'batch-push' })
+      const pushToken = localStorage.getItem('admin_token') || ''
+      const pushHeaders: HeadersInit = { 'Content-Type': 'application/json' }
+      if (pushToken) pushHeaders['Authorization'] = `Bearer ${pushToken}`
       const resp = await fetch('/api/v1/products/push-woocommerce', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: pushHeaders,
         body: JSON.stringify({ product_ids: ids }),
       })
       const data = await resp.json().catch(() => ({}))
@@ -458,8 +470,12 @@ export default function ProductMaster() {
     if (!drawerProduct) return
     try {
       setCopyLoading(true)
+      const copyToken = localStorage.getItem('admin_token') || ''
+      const copyHeaders: HeadersInit = {}
+      if (copyToken) copyHeaders['Authorization'] = `Bearer ${copyToken}`
       const resp = await fetch(`/api/v1/products/${drawerProduct.id}/generate-copy`, {
         method: 'POST',
+        headers: copyHeaders,
       })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}))
@@ -482,10 +498,13 @@ export default function ProductMaster() {
       setPushing(true)
       setPushError(null)
       setPushResult(null)
+      const pushToken = localStorage.getItem('admin_token') || ''
+      const pushHeaders: HeadersInit = {}
+      if (pushToken) pushHeaders['Authorization'] = `Bearer ${pushToken}`
       const url = force
         ? `/api/v1/products/${drawerProduct.id}/push-woocommerce?force=true`
         : `/api/v1/products/${drawerProduct.id}/push-woocommerce`
-      const resp = await fetch(url, { method: 'POST' })
+      const resp = await fetch(url, { method: 'POST', headers: pushHeaders })
       const data = await resp.json().catch(() => ({}))
       if (resp.ok) {
         setPushResult(data)

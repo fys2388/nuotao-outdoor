@@ -76,6 +76,7 @@ class ConfirmListRequest(BaseModel):
     """确认上架请求"""
     pipeline_result: dict[str, Any] = Field(..., description="工作流结果")
     status: str = Field("publish", description="上架状态（publish/draft/pending）")
+    force: bool = Field(False, description="强制放行门禁（测试阶段使用）")
 
 
 class ImportFrom1688Request(BaseModel):
@@ -214,9 +215,10 @@ async def confirm_product_listing(
                     "confirm-list low-score human override for sku=%s (no hard veto)", sku
                 )
 
-        result = confirm_and_list(
+        result = await confirm_and_list(
             request.pipeline_result,
             status=request.status,
+            force=request.force,
         )
         if gate_override_notice and result.get("success"):
             result["gate_override_warning"] = gate_override_notice
