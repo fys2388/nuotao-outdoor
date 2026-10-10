@@ -286,17 +286,22 @@ class Settings(BaseSettings):
     cache_default_ttl: int = 300  # 5 鍒嗛挓
 
     # --- Supply Chain / Procurement 渚涘簲閾句笌閲囪喘鎴愭湰 -----------------------
-    # 浜у搧鎴愭湰琛ㄧ己澶辨椂鐨勫厹搴曢噰璐垚鏈瘮渚嬶紙鍞环鐨勭櫨鍒嗘瘮锛夛紝浠呯敤浜庢棤鎴愭湰璁板綍鐨勫晢鍝?    procurement_fallback_cost_ratio: Decimal = Decimal("0.40")
+    # 浜у搧鎴愭湰琛ㄧ己澶辨椂鐨勫厹搴曢噰璐垚鏈瘮渚嬶紙鍞环鐨勭櫨鍒嗘瘮锛夛紝浠呯敤浜庢棤鎴愭湰璁板綍鐨勫晢鍝?
+    procurement_fallback_cost_ratio: Decimal = Decimal("0.40")
     # 榛樿鍥藉唴杩愯垂锛堥噰璐崟缁村害锛屼骇鍝佹垚鏈〃涓棤 domestic_shipping 鏃朵娇鐢級
     procurement_default_domestic_shipping: Decimal = Decimal("5.00")
-    # 閲囪喘鍗曡嚜鍔ㄧ敓鎴愬紑鍏筹紙璁㈠崟鏀粯鍚庢槸鍚﹁嚜鍔ㄥ垱寤洪噰璐崟锛?    procurement_auto_create_on_payment: bool = True
+    # 閲囪喘鍗曡嚜鍔ㄧ敓鎴愬紑鍏筹紙璁㈠崟鏀粯鍚庢槸鍚﹁嚜鍔ㄥ垱寤洪噰璐崟锛?
+    procurement_auto_create_on_payment: bool = True
 
     # --- EDM / Email Marketing 閭欢钀ラ攢瀹夊叏鎺у埗 ---------------------------
-    # 鍏ㄥ眬钀ラ攢閭欢鍙戦€佸紑鍏筹紝榛樿鍏抽棴锛圙DPR鍚堣锛氶粯璁ょ姝㈠彂閫佽惀閿€閭欢锛?    edm_send_enabled: bool = False
+    # 鍏ㄥ眬钀ラ攢閭欢鍙戦€佸紑鍏筹紝榛樿鍏抽棴锛圙DPR鍚堣锛氶粯璁ょ姝㈠彂閫佽惀閿€閭欢锛?
+    edm_send_enabled: bool = False
     # EDM 榛樿 dry-run 妯″紡锛堝彧璁板綍涓嶅疄闄呭彂閫侊級
     edm_dry_run_default: bool = True
-    # 24灏忔椂鍘婚噸绐楀彛锛堝皬鏃讹級锛屽悓涓€鏀朵欢浜哄悓涓€娲诲姩24灏忔椂鍐呬笉閲嶅鍙戦€?    edm_dedup_window_hours: int = 24
-    # EDM 鍙戦€佹渶澶ч噸璇曟鏁?    edm_max_retries: int = 3
+    # 24灏忔椂鍘婚噸绐楀彛锛堝皬鏃讹級锛屽悓涓€鏀朵欢浜哄悓涓€娲诲姩24灏忔椂鍐呬笉閲嶅鍙戦€?
+    edm_dedup_window_hours: int = 24
+    # EDM 鍙戦€佹渶澶ч噸璇曟鏁?
+    edm_max_retries: int = 3
     # EDM 閭欢鏈嶅姟鎻愪緵鍟嗭紙smtp/sendgrid/mailgun/resend锛屾湭閰嶇疆鏃朵笉鍙戦€侊級
     edm_provider: str = ""
 
