@@ -20,7 +20,7 @@ from app.services.product_listing_service import list_to_woocommerce
 
 
 def _wc_post_mock(*responses: MagicMock) -> MagicMock:
-    """Return a MagicMock whose .post() pops a response from the given list.
+    """Return a MagicMock whose .request() pops a response from the given list.
 
     Each `responses` entry is a MagicMock with `.raise_for_status()` and
     `.json()`; when a raise_for_status call is expected to fail, the mock
@@ -29,15 +29,15 @@ def _wc_post_mock(*responses: MagicMock) -> MagicMock:
     queue = list(responses)
     calls = []
 
-    def post(url, auth=None, json=None, timeout=30):
-        calls.append({"url": url, "json": json})
+    def request(method, url, auth=None, json=None, timeout=30):
+        calls.append({"method": method, "url": url, "json": json})
         if not queue:
-            raise AssertionError(f"too many requests.post calls ({len(calls)})")
+            raise AssertionError(f"too many requests.request calls ({len(calls)})")
         return queue.pop(0)
 
     mock = MagicMock()
-    mock.post.side_effect = post
-    mock.post.call_count = 0
+    mock.request.side_effect = request
+    mock.request.call_count = 0
     return mock
 
 
@@ -68,12 +68,15 @@ def test_bug19_retries_on_500_then_succeeds() -> None:
     resp_ok = _mock_response(200, ok_payload, raise_for_status=False)
 
     with patch(
-        "app.services.product_listing_service.requests.post",
+        "app.services.product_listing_service.requests.request",
         side_effect=[resp_500_1, resp_500_2, resp_ok],
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_KEY", "k",
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_SECRET", "s",
+    ), patch(
+        "app.services.product_listing_service._find_existing_wc_id",
+        return_value=None,
     ), patch(
         "app.services.product_listing_service.evaluate_gate_from_dict",
         return_value={"status": "passed", "reasons": []},
@@ -95,12 +98,15 @@ def test_bug19_400_returns_without_retry() -> None:
     resp_400 = _mock_response(400, {"message": "bad sku"}, raise_for_status=True)
 
     with patch(
-        "app.services.product_listing_service.requests.post",
+        "app.services.product_listing_service.requests.request",
         return_value=resp_400,
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_KEY", "k",
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_SECRET", "s",
+    ), patch(
+        "app.services.product_listing_service._find_existing_wc_id",
+        return_value=None,
     ), patch(
         "app.services.product_listing_service.evaluate_gate_from_dict",
         return_value={"status": "passed", "reasons": []},
@@ -118,12 +124,15 @@ def test_bug19_400_returns_without_retry() -> None:
 def test_bug19_network_error_exhausts_all_attempts() -> None:
     """Network exception (ConnectionError) exhausts retries and returns retryable=True."""
     with patch(
-        "app.services.product_listing_service.requests.post",
+        "app.services.product_listing_service.requests.request",
         side_effect=requests.exceptions.ConnectionError("boom"),
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_KEY", "k",
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_SECRET", "s",
+    ), patch(
+        "app.services.product_listing_service._find_existing_wc_id",
+        return_value=None,
     ), patch(
         "app.services.product_listing_service.evaluate_gate_from_dict",
         return_value={"status": "passed", "reasons": []},
@@ -147,12 +156,15 @@ def test_bug19_429_retries() -> None:
     resp_ok = _mock_response(200, ok_payload, raise_for_status=False)
 
     with patch(
-        "app.services.product_listing_service.requests.post",
+        "app.services.product_listing_service.requests.request",
         side_effect=[resp_429, resp_ok],
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_KEY", "k",
     ), patch(
         "app.services.product_listing_service.WC_CONSUMER_SECRET", "s",
+    ), patch(
+        "app.services.product_listing_service._find_existing_wc_id",
+        return_value=None,
     ), patch(
         "app.services.product_listing_service.evaluate_gate_from_dict",
         return_value={"status": "passed", "reasons": []},
