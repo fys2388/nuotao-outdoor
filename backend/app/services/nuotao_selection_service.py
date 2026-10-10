@@ -765,7 +765,7 @@ async def check_data_integrity(
     product.data_integrity_checked_at = datetime.now(UTC)
     product.data_integrity_trace_id = gate_trace_id
     product.data_integrity_version = INTEGRITY_VERSION
-    await session.flush()
+    await session.commit()
 
     return {
         "product_id": str(product_id),
