@@ -591,19 +591,26 @@ def upgrade() -> None:
                     candidate_status, funnel_stage, source,
                     target_market, weight_kg, attributes, tags, meta,
                     created_at, updated_at
-                ) VALUES (
+                )
+                SELECT
                     gen_random_uuid(), CAST(:workspace_id AS uuid), :sku, :name, :category, :status,
                     :candidate_status, :funnel_stage, :source,
                     :target_market, :weight_kg, CAST(:attributes AS jsonb), CAST(:tags AS jsonb), CAST(:meta AS jsonb),
                     now(), now()
+                -- 幂等：若这些产品已由脚本或其他环境预置，跳过而不是让部署失败。
+                -- 用 WHERE NOT EXISTS 而不是 ON CONFLICT，因为生产库的 products 表
+                -- 上没有 (workspace_id, sku) 唯一约束可依赖。
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM products p
+                    WHERE p.workspace_id = CAST(:workspace_id_check AS uuid)
+                      AND p.sku = :sku_check
                 )
-                -- 幂等：同一 workspace 内 SKU 唯一（uq_products_workspace_sku）。
-                -- 若这些产品已由脚本/其他环境预置，跳过而不是让整个部署失败。
-                ON CONFLICT (workspace_id, sku) DO NOTHING
                 """
             ).bindparams(
                 workspace_id=WORKSPACE_ID,
+                workspace_id_check=WORKSPACE_ID,
                 sku=product["sku"],
+                sku_check=product["sku"],
                 name=product["name"],
                 category=product["category"],
                 status=product["status"],
