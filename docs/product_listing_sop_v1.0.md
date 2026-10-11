@@ -1201,10 +1201,30 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 - ✅ 参数表：添加产品参数表
 - ✅ FAQ：添加常见问题部分
 
+**图片上传（自动）**:
+- ✅ 脚本：`backend/scripts/upload_images_to_product.py`
+- ✅ 模块：`backend/app/services/image_wc_pipeline.py`
+- ✅ 流程：下载图片 → 上传WC媒体库 → 关联到产品
+- ✅ 认证：使用WP应用密码（wp/v2/media API）
+
 **手动修复项**（WC API不支持）:
-- ❌ 图片上传：需要通过WP媒体库API或手动上传
 - ❌ SEO字段：需要通过Yoast SEO插件或WP REST API
 - ❌ 运费类别：需要先在WC后台创建运费类别
+
+**图片上传使用示例**:
+```bash
+# 上传图片到WC产品
+python scripts/upload_images_to_product.py 2378 \
+  https://example.com/image1.jpg \
+  https://example.com/image2.jpg \
+  https://example.com/image3.jpg
+```
+
+**图片要求**:
+- 数量：建议6张以上（主图+细节图+场景图+参数图）
+- 分辨率：≥1024x1024像素
+- 格式：JPG/PNG/WebP
+- Alt文本：必须包含产品名称和关键词
 
 **评估脚本**: `backend/scripts/wc_quality_assessment.py`
 
