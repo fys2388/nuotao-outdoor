@@ -404,13 +404,14 @@ async def update_wordpress_seo(
     2. 更新 excerpt 作为 fallback（Rank Math 默认使用 excerpt 作为 meta description）
     """
     wp_username = os.getenv("WP_USERNAME", "")
-    wp_app_password = os.getenv("WP_APP_PASSWORD", "")
+    # 支持两个环境变量名（向后兼容）
+    wp_app_password = os.getenv("WP_APP_PASSWORD", "") or os.getenv("WP_APPLICATION_PASSWORD", "")
     wp_site_url = os.getenv("WP_SITE_URL", "https://nuotaooutdoor.com")
     
     if not wp_username or not wp_app_password:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="WordPress 凭证未配置：需要设置 WP_USERNAME 和 WP_APP_PASSWORD 环境变量",
+            detail="WordPress 凭证未配置：需要设置 WP_USERNAME 和 WP_APP_PASSWORD（或 WP_APPLICATION_PASSWORD）环境变量",
         )
     
     # 构建 Basic Auth header
