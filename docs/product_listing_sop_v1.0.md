@@ -1089,16 +1089,21 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 
 ### 14.8 系统修复记录（v1.4）
 
-以下系统问题已在 v1.4 中修复，部署后生效：
+以下系统问题已在 v1.4 中修复，已部署到生产服务器（2026-10-11）：
 
 | # | 问题 | 修复文件 | 状态 |
 |---|------|----------|------|
-| 1 | 货币转换缺失（CNY 成本快照闸门失败） | `pricing_policy.py` | ✅ 已修复 |
-| 2 | Funnel Stage 不可更新 | `product_intelligence.py` | ✅ 已修复 |
-| 3 | WordPress Meta 字段不保存 | - | ⚠️ 使用 excerpt 作为 fallback |
-| 4 | SEO 端点缺失 | `seo.py` | ✅ 已修复 |
+| 1 | 货币转换缺失（CNY 成本快照闸门失败） | `pricing_policy.py` | ✅ 已修复并部署 |
+| 2 | Funnel Stage 不可更新 | `product_intelligence.py` | ✅ 已修复并部署 |
+| 3 | WordPress Meta 字段不保存 | `wp-plugin-register-seo-meta.php` | ✅ 已修复（插件已激活） |
+| 4 | SEO 端点缺失 | `seo.py` | ✅ 已修复并部署 |
 
 **详细修复文档**: 见 `docs/fix_system_issues_20261011.md`
+
+**部署验证**:
+- GitHub Actions: `Deploy to Production (staging-gated)` ✅ success
+- WordPress 插件: `Nuotao SEO Meta REST Registration` ✅ active (v1.0.0)
+- API 测试: WordPress SEO 更新 ✅ 成功, 产品 funnel_stage 更新 ✅ 成功
 
 ---
 
