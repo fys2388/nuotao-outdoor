@@ -704,7 +704,8 @@ async def sync_products_to_db(
                     existing.name = data["name"]
                     existing.description = data["description"]
                     existing.category = data["category"]
-                    existing.source_url = data["source_url"]
+                    # 不覆盖 source_url —— 保留原始选品来源（如 1688 链接）
+                    # WC 的 URL 存在 meta["woocommerce_url"] 中
                     existing.tags = data["tags"]
                     existing.attributes = data["attributes"]
                     # meta 里合并 WC 端当前状态，保留原有其他键
