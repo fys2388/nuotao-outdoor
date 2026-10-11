@@ -1182,62 +1182,237 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 | **图片质量** | 20分 | 主图(10)、补充图(10) |
 | **SEO优化** | 20分 | SEO Title(5)、Meta Description(5)、Focus Keyword(5)、robots(5) |
 
-**修复循环流程**:
+---
 
+#### 完整执行步骤
+
+**步骤 1: 初次评估**
+
+```bash
+cd backend
+python scripts/wc_quality_assessment.py <product_id>
 ```
-1. 评估产品质量 (wc_quality_assessment.py)
-2. 检查分数是否 ≥ 95
-3. 如果通过 → 完成
-4. 如果未通过 → 应用修复 (wc_quality_fix_loop.py)
-5. 等待2秒
-6. 回到步骤1
-7. 最多循环10次
+
+**输出示例**:
+```json
+{
+  "product_id": 2378,
+  "total_score": 43,
+  "pass": false,
+  "issues": ["状态为draft", "缺少运费类别", ...],
+  "suggestions": ["将产品状态改为publish", ...]
+}
+```
+
+**步骤 2: 检查分数**
+
+- 如果 `total_score >= 95` → 进入步骤 7（完成）
+- 如果 `total_score < 95` → 进入步骤 3
+
+**步骤 3: 自动修复**
+
+```bash
+python scripts/wc_quality_fix_loop.py <product_id>
 ```
 
 **自动修复项**:
-- ✅ 状态：draft → publish
-- ✅ 运费：添加重量(0.8kg)
-- ✅ 简短描述：扩展到100-200字符
-- ✅ 参数表：添加产品参数表
-- ✅ FAQ：添加常见问题部分
+| 修复项 | 说明 | 分值 |
+|--------|------|------|
+| ✅ 状态 | draft → publish | +5 |
+| ✅ 运费重量 | 添加重量(0.8kg) | +3 |
+| ✅ 简短描述 | 扩展到100-200字符 | +2 |
+| ✅ 参数表 | 添加产品参数表 | +5 |
+| ✅ FAQ | 添加常见问题部分 | +5 |
+| ✅ 描述扩展 | 确保≥600字符 | +10 |
 
-**图片上传（自动）**:
-- ✅ 脚本：`backend/scripts/upload_images_to_product.py`
-- ✅ 模块：`backend/app/services/image_wc_pipeline.py`
-- ✅ 流程：下载图片 → 上传WC媒体库 → 关联到产品
-- ✅ 认证：使用WP应用密码（wp/v2/media API）
+**步骤 4: 上传图片（自动）**
 
-**手动修复项**（WC API不支持）:
-- ❌ SEO字段：需要通过Yoast SEO插件或WP REST API
-- ❌ 运费类别：需要先在WC后台创建运费类别
-
-**图片上传使用示例**:
 ```bash
-# 上传图片到WC产品
-python scripts/upload_images_to_product.py 2378 \
-  https://example.com/image1.jpg \
-  https://example.com/image2.jpg \
-  https://example.com/image3.jpg
+python scripts/upload_images_to_product.py <product_id> \
+  <image_url_1> <image_url_2> <image_url_3> ...
 ```
 
 **图片要求**:
-- 数量：建议6张以上（主图+细节图+场景图+参数图）
+- 数量：6张以上（主图+细节图+场景图+参数图）
 - 分辨率：≥1024x1024像素
 - 格式：JPG/PNG/WebP
 - Alt文本：必须包含产品名称和关键词
 
-**评估脚本**: `backend/scripts/wc_quality_assessment.py`
+**步骤 5: 手动修复SEO字段**
 
-**修复循环脚本**: `backend/scripts/wc_quality_fix_loop.py`
+WC API不支持直接更新Yoast SEO字段，需要通过以下方式：
 
-**使用示例**:
+**方式A: WP REST API**
 ```bash
-# 评估产品质量
-python scripts/wc_quality_assessment.py 2378
-
-# 执行修复循环（自动评估-修复-再评估）
-python scripts/wc_quality_fix_loop.py 2378
+# 使用WP应用密码更新Yoast字段
+curl -X PUT "https://nuotaooutdoor.com/wp-json/wp/v2/product/2378" \
+  -H "Authorization: Basic base64(username:app_password)" \
+  -d '{
+    "yoast_wpseo_title": "Ultra-Light Aluminum Folding Table - Nuotao Outdoor",
+    "yoast_wpseo_metadesc": "Ultra-light 1.2kg aluminum folding table for camping...",
+    "yoast_wpseo_focuskw": "aluminum folding table"
+  }'
 ```
+
+**方式B: WordPress后台**
+1. 登录 https://nuotaooutdoor.com/wp-admin/
+2. 进入产品编辑页面
+3. 找到Yoast SEO元框
+4. 填写SEO Title、Meta Description、Focus Keyword
+5. 保存产品
+
+**步骤 6: 手动配置运费类别**
+
+1. 登录WC后台
+2. 进入 产品 → 运费类别
+3. 创建新类别（如：Outdoor Gear）
+4. 返回产品编辑页面
+5. 选择运费类别
+6. 保存产品
+
+**步骤 7: 最终评估**
+
+```bash
+python scripts/wc_quality_assessment.py <product_id>
+```
+
+**完成标准**:
+- `total_score >= 95`
+- `pass = true`
+- 无关键问题
+
+**步骤 8: 记录结果**
+
+在SOP执行案例中记录：
+- 初始分数
+- 最终分数
+- 修复项列表
+- 循环次数
+- 剩余问题
+
+---
+
+#### 循环执行机制
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    开始执行                              │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  1. 评估产品质量 (wc_quality_assessment.py)             │
+│     输出: total_score, issues, suggestions               │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  2. 检查分数                                             │
+│     total_score >= 95 ?                                 │
+│     YES → 完成 ✓                                        │
+│     NO  → 继续修复                                       │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  3. 应用自动修复 (wc_quality_fix_loop.py)               │
+│     - 状态、运费、描述、参数表、FAQ                      │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  4. 上传图片 (upload_images_to_product.py)              │
+│     - 下载图片 → 上传WC媒体库 → 关联产品                │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  5. 手动修复（如需）                                     │
+│     - SEO字段（WP REST API或后台）                       │
+│     - 运费类别（WC后台）                                  │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  6. 检查循环次数                                         │
+│     < 10次 → 回到步骤1                                   │
+│     >= 10次 → 停止，报告最终分数                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 脚本清单
+
+| 脚本 | 功能 | 用途 |
+|------|------|------|
+| `wc_quality_assessment.py` | 质量评估 | 评估产品，输出分数和问题列表 |
+| `wc_quality_fix_loop.py` | 修复循环 | 自动评估-修复-再评估，最多10次 |
+| `upload_images_to_product.py` | 图片上传 | 上传图片到WC媒体库并关联产品 |
+
+#### 环境变量配置
+
+```bash
+# WooCommerce API
+export WOOCOMMERCE_URL="https://nuotaooutdoor.com"
+export WOOCOMMERCE_CONSUMER_KEY="ck_xxx"
+export WOOCOMMERCE_CONSUMER_SECRET="cs_xxx"
+
+# WordPress API（图片上传用）
+export WP_USERNAME="fys2388@gmail.com"
+export WP_APP_PASSWORD="xxxx xxxx xxxx xxxx xxxx"
+```
+
+#### 示例：完整执行流程
+
+```bash
+# 1. 初次评估
+python scripts/wc_quality_assessment.py 2378
+# 输出: 43/100 (FAIL)
+
+# 2. 自动修复循环
+python scripts/wc_quality_fix_loop.py 2378
+# 输出: 65/100 (FAIL) - 自动修复了状态、描述、参数表、FAQ
+
+# 3. 上传图片
+python scripts/upload_images_to_product.py 2378 \
+  https://example.com/image1.jpg \
+  https://example.com/image2.jpg \
+  https://example.com/image3.jpg \
+  https://example.com/image4.jpg \
+  https://example.com/image5.jpg \
+  https://example.com/image6.jpg
+# 输出: 6/6 uploaded
+
+# 4. 手动修复SEO（WP REST API或后台）
+# ... 手动操作 ...
+
+# 5. 最终评估
+python scripts/wc_quality_assessment.py 2378
+# 输出: 95/100 (PASS) ✓
+```
+
+---
+
+#### NT-610901081609 执行记录（2026-10-11）
+
+| 步骤 | 操作 | 分数 | 状态 |
+|------|------|------|------|
+| 初始 | 推送WC | 43/100 | FAIL |
+| 自动修复 | 状态、描述、参数表、FAQ | 60/100 | FAIL |
+| 自动修复 | 运费重量、简短描述 | 65/100 | FAIL |
+| 图片上传 | 待执行 | 65/100 | FAIL |
+| SEO修复 | 待手动 | 65/100 | FAIL |
+| 运费类别 | 待手动 | 65/100 | FAIL |
+
+**剩余问题**:
+- 图片缺失（需6张）- 10分
+- SEO字段缺失 - 15分
+- 运费类别缺失 - 5分
+
+**预计完成分数**: 65 + 10 + 15 + 5 = 95/100 ✓
+
+---
 
 ### 15.7 NT-610901081609 SOP 闭环执行案例（2026-10-11）
 
