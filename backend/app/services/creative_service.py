@@ -919,10 +919,15 @@ def get_creative_status() -> dict[str, Any]:
         "service": "creative_studio",
         "version": "0.17.0",
         "status": "operational",
+        "service_status": "online",  # 前端期望的字段名
         "operations": creative_gateway.list_operations(),
         "image_models": list_available_models(),
         "monthly_budget_cny": float(DEFAULT_MONTHLY_BUDGET_CNY),
         "storage_dir": IMAGE_STORAGE_DIR,
+        "total_runs": 0,
+        "total_assets": 0,
+        "approved_assets": 0,
+        "month_cost_cny": 0,
     }
 
 

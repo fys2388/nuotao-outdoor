@@ -7,6 +7,14 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+# Fix Windows GBK encoding issue when reading .env file
+import starlette.config
+_original_read_file = starlette.config.Config._read_file
+def _fixed_read_file(self, env_file):
+    with open(env_file, 'r', encoding='utf-8', errors='replace') as f:
+        return f.readlines()
+starlette.config.Config._read_file = _fixed_read_file
+
 # Rate limits:
 # - Default: 100 requests per minute per IP
 # - Auth endpoints: 10 requests per minute (brute force protection)

@@ -158,3 +158,8 @@ releases/
 *.tgz
 *.xlsx
 *.bak-*
+
+# Large directories - not needed in git repo
+_archive/
+woo_images/
+
