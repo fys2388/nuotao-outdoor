@@ -125,10 +125,21 @@ def landed_cost_or_estimate(purchase_usd, cost_row=None) -> tuple[Decimal | None
     ``basis`` is ``"measured"`` when a valid ``ProductCost`` row supplies
     ``total_landed_cost`` (P2-9 effective-cost semantics: purchase > 0 AND
     landed > 0), else ``"estimated"``.
+
+    If the cost_row has a currency field and it's CNY, the values are converted
+    to USD using the configured exchange rate.
     """
     if cost_row is not None:
+        currency = str(getattr(cost_row, "currency", "USD") or "USD").upper()
         landed = _money_amount(getattr(cost_row, "total_landed_cost", None))
         purchase = _money_amount(getattr(cost_row, "purchase_cost", None))
+        
+        # Convert CNY to USD if needed
+        if currency == "CNY" and landed is not None:
+            landed = to_usd(landed, "CNY")
+        if currency == "CNY" and purchase is not None:
+            purchase = to_usd(purchase, "CNY")
+        
         if landed and landed > 0 and purchase and purchase > 0:
             return landed, "measured"
     return estimate_landed_cost(purchase_usd), "estimated"

@@ -4,9 +4,12 @@ SEO 基建 API 端点
 """
 from __future__ import annotations
 
+import base64
 import logging
+import os
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -364,4 +367,139 @@ async def seo_audit_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"SEO audit failed: {e!s}",
+        )
+
+
+# ============================================
+# WordPress SEO 同步端点
+# ============================================
+
+class WordPressSEOUpdateRequest(BaseModel):
+    """WordPress SEO 更新请求"""
+    post_id: int = Field(..., description="WordPress 文章/产品 ID")
+    seo_title: str | None = Field(None, description="SEO 标题")
+    meta_description: str | None = Field(None, description="Meta 描述")
+    focus_keyword: str | None = Field(None, description="焦点关键词")
+    noindex: bool = Field(False, description="是否禁用索引")
+    excerpt: str | None = Field(None, description="文章摘要（作为 fallback meta description）")
+
+
+@router.post(
+    "/wordpress/update",
+    summary="更新 WordPress 产品 SEO 设置（Rank Math）",
+)
+async def update_wordpress_seo(
+    request: WordPressSEOUpdateRequest,
+) -> dict[str, Any]:
+    """
+    通过 WordPress REST API 更新产品的 Rank Math SEO 设置
+    
+    需要环境变量配置：
+    - WP_USERNAME: WordPress 用户名或邮箱
+    - WP_APP_PASSWORD: WordPress 应用密码（用空格分隔的四段）
+    - WP_SITE_URL: WordPress 站点 URL（默认 https://nuotaooutdoor.com）
+    
+    注意：WordPress REST API 默认不暴露 meta 字段，本端点会尝试两种方式：
+    1. 直接更新 meta 字段（_rank_math_*）
+    2. 更新 excerpt 作为 fallback（Rank Math 默认使用 excerpt 作为 meta description）
+    """
+    wp_username = os.getenv("WP_USERNAME", "")
+    wp_app_password = os.getenv("WP_APP_PASSWORD", "")
+    wp_site_url = os.getenv("WP_SITE_URL", "https://nuotaooutdoor.com")
+    
+    if not wp_username or not wp_app_password:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="WordPress 凭证未配置：需要设置 WP_USERNAME 和 WP_APP_PASSWORD 环境变量",
+        )
+    
+    # 构建 Basic Auth header
+    auth_string = f"{wp_username}:{wp_app_password}"
+    auth_b64 = base64.b64encode(auth_string.encode()).decode()
+    
+    headers = {
+        "Authorization": f"Basic {auth_b64}",
+        "Content-Type": "application/json",
+    }
+    
+    post_url = f"{wp_site_url}/wp-json/wp/v2/product/{request.post_id}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 构建更新数据
+            update_data = {}
+            
+            if request.excerpt is not None:
+                update_data["excerpt"] = request.excerpt
+            
+            # 尝试更新 meta 字段（Rank Math 字段）
+            meta_updates = []
+            if request.seo_title is not None:
+                meta_updates.append({
+                    "key": "_rank_math_title_web",
+                    "value": request.seo_title,
+                })
+            if request.meta_description is not None:
+                meta_updates.append({
+                    "key": "_rank_math_description_web",
+                    "value": request.meta_description,
+                })
+            if request.focus_keyword is not None:
+                meta_updates.append({
+                    "key": "_rank_math_focus_keyphrase",
+                    "value": request.focus_keyword,
+                })
+            meta_updates.append({
+                "key": "_rank_math_robots_noindex_web",
+                "value": "1" if request.noindex else "0",
+            })
+            
+            if meta_updates:
+                update_data["meta"] = meta_updates
+            
+            # 发送更新请求
+            response = await client.post(post_url, headers=headers, json=update_data)
+            
+            if response.status_code != 200:
+                error_detail = response.text
+                logger.error(
+                    "WordPress SEO update failed: status=%s, body=%s",
+                    response.status_code,
+                    error_detail[:500],
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"WordPress API 更新失败 (HTTP {response.status_code}): {error_detail[:200]}",
+                )
+            
+            result = response.json()
+            
+            return {
+                "success": True,
+                "post_id": request.post_id,
+                "updated_fields": list(update_data.keys()),
+                "message": "WordPress SEO 设置更新成功",
+                "wordpress_response": {
+                    "id": result.get("id"),
+                    "status": result.get("status"),
+                    "link": result.get("link"),
+                },
+            }
+            
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="WordPress API 请求超时",
+        )
+    except httpx.HTTPError as e:
+        logger.exception("WordPress API request failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"WordPress API 请求失败: {e!s}",
+        )
+    except Exception as e:
+        logger.exception("SEO update failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"SEO 更新失败: {e!s}",
         )

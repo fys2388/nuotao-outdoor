@@ -1280,6 +1280,7 @@ class ProductFullUpdateRequest(BaseModel):
     brand: str | None = None
     price: str | None = None
     status: str | None = None
+    funnel_stage: str | None = None
     weight_kg: float | None = None
     dimensions: dict[str, Any] | None = None
     tags: list[str] | None = None
@@ -1345,6 +1346,9 @@ async def full_update_product(
     if body.status is not None:
         product.status = body.status
         updated_fields.append("status")
+    if body.funnel_stage is not None:
+        product.funnel_stage = body.funnel_stage
+        updated_fields.append("funnel_stage")
     if body.weight_kg is not None:
         product.weight_kg = body.weight_kg
         updated_fields.append("weight_kg")
