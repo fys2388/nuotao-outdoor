@@ -695,16 +695,25 @@ export default function ProductListingPage() {
 
             {/* 商品图片 */}
             <Card size="small" title="商品图片" style={{ marginBottom: 16 }}>
-              <Row gutter={[8, 8]}>
-                {viewingProduct.images.map((img, idx) => (
-                  <Col span={6} key={idx}>
-                    <div style={{ width: '100%', aspectRatio: '1', background: '#f5f5f5', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <PictureOutlined style={{ fontSize: 32, color: '#ccc' }} />
-                    </div>
-                    <div style={{ textAlign: 'center', fontSize: 10, color: '#999', marginTop: 4 }}>图{idx + 1}</div>
-                  </Col>
-                ))}
-              </Row>
+              {viewingProduct.images.length > 0 ? (
+                <Row gutter={[8, 8]}>
+                  {viewingProduct.images.map((img, idx) => (
+                    <Col span={6} key={idx}>
+                      <div style={{ width: '100%', aspectRatio: '1', borderRadius: 6, overflow: 'hidden', background: '#f5f5f5' }}>
+                        <img 
+                          src={img} 
+                          alt={`图${idx + 1}`} 
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onError={(e) => { e.currentTarget.style.display = 'none' }}
+                        />
+                      </div>
+                      <div style={{ textAlign: 'center', fontSize: 10, color: '#999', marginTop: 4 }}>图{idx + 1}</div>
+                    </Col>
+                  ))}
+                </Row>
+              ) : (
+                <Empty description="暂无图片" />
+              )}
             </Card>
 
             {/* 商品描述 */}

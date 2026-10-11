@@ -1,12 +1,12 @@
-# 商品上架 SOP v1.4
+﻿# 商品上架 SOP v1.8
 
 > **文档编号**: SOP-PL-001
-> **版本**: 1.4
+> **版本**: 1.8
 > **创建日期**: 2026-10-11
 > **最后更新**: 2026-10-11
 > **负责人**: 产品经理 / AI Agent
 > **适用范围**: 所有 B2C 商品上架流程
-> **参考案例**: NT-OS-002 40L Waterproof Camping Backpack, NT-OUTDOOR-10110609 户外折叠月亮椅
+> **参考案例**: NT-OS-002 40L Waterproof Camping Backpack, NT-OUTDOOR-10110609 户外折叠月亮椅, NT-610901081609 Ultra-Light Aluminum Folding Table
 > **合并来源**: `product_selection_logic_v2.0.md`、`nuotao_product_score_v3.0.md`、`amazon-product-selection-five-gates.md`、`selection_to_woocommerce_operation_workflow.md`、`wc-ai-content-sop-v1.0.md`、`wc-ai-image-sop-v2.0.md`
 
 ---
@@ -1019,7 +1019,7 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 
 ### 14.6 实际执行经验（2026-10-11）
 
-**产品**: NT-OUTDOOR-10110609 户外折叠月亮椅
+**产品**: NT-OUTDOOR-10110609 户外折叠月亮椅, NT-610901081609 Ultra-Light Aluminum Folding Table
 
 **执行步骤**:
 1. 创建产品: `POST /api/v1/products` (或系统自动创建)
@@ -1058,7 +1058,7 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 - [ ] SKU 已设置，与 WC 一致
 - [ ] candidate_status = "approved"
 - [ ] status = "published" (或 "draft" 如未发布)
-- [ ] funnel_stage = "published" (需 v1.4+ 后端)
+- [ ] funnel_stage = "published" (需 v1.8+ 后端)
 - [ ] English copy status = "approved"
 - [ ] 零售价已设置 (meta.regular_price)
 - [ ] 成本快照已创建 (currency="USD")
@@ -1087,9 +1087,9 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 - [ ] SKU 在两个系统中一致
 - [ ] 价格在两个系统中一致
 
-### 14.8 系统修复记录（v1.4）
+### 14.8 系统修复记录（v1.8）
 
-以下系统问题已在 v1.4 中修复，已部署到生产服务器（2026-10-11）：
+以下系统问题已在 v1.8 中修复，已部署到生产服务器（2026-10-11）：
 
 | # | 问题 | 修复文件 | 状态 |
 |---|------|----------|------|
@@ -1515,3 +1515,5 @@ python scripts/wc_quality_assessment.py 2378
 | `wc-ai-content-sop-v1.0.md` | 内容生成 SOP | §5, §12 |
 | `wc-ai-image-sop-v2.0.md` | 图片生成 SOP | §6 |
 | `ai_image_generation_sop.md` | 生图方法论（已被 v3.0 取代） | §6.3-6.4 |
+
+
