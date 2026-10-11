@@ -570,13 +570,26 @@ async def push_product_to_woocommerce_gated(
             wc_id = new_wc_id
             # 同时写入 product_mappings：该表有唯一约束却从不被写入，导致「meta 与
             # 映射表」两套机制口径不一致，下架/删除路径也读不到权威关联。
-            await remember_wc_product(
-                session,
-                product=product,
-                wc_id=int(new_wc_id),
-                slug=meta.get("woocommerce_slug") or None,
-            )
-            await session.commit()
+            try:
+                await remember_wc_product(
+                    session,
+                    product=product,
+                    wc_id=int(new_wc_id),
+                    slug=meta.get("woocommerce_slug") or None,
+                )
+                await session.commit()
+            except Exception as persist_exc:
+                # 持久化失败不阻断推送结果：WC 端已创建成功，本地映射表
+                # 下次推送会再次尝试补写；若 commit 已失败，回滚 session
+                # 保证后续操作不会在脏事务上继续。
+                await session.rollback()
+                logger.warning(
+                    "WooCommerce push succeeded (id=%s) but local persistence "
+                    "failed for sku=%s: %s",
+                    new_wc_id,
+                    product.sku,
+                    persist_exc,
+                )
             logger.info(
                 "Linked WooCommerce product id=%s to sku=%s via %s",
                 new_wc_id,

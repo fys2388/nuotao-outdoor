@@ -248,6 +248,38 @@ jobs:
               echo "[wc] WC secrets not configured in this repo, skipping injection"
             fi
 
+            echo "=== 2.7 Injecting WordPress application password (media upload) ==="
+            WP_USER='${{ secrets.WP_USERNAME }}'
+            WP_PASS='${{ secrets.WP_APPLICATION_PASSWORD }}'
+            if [ -n "$WP_USER" ] && [ -n "$WP_PASS" ]; then
+              sed -i '/^WP_USERNAME=/d;/^WP_APPLICATION_PASSWORD=/d' "$ENV_FILE"
+              {
+                echo "WP_USERNAME=${WP_USER}"
+                echo "WP_APPLICATION_PASSWORD=${WP_PASS}"
+              } >> "$ENV_FILE"
+              echo "[wp] application password credentials injected into $ENV_FILE (user=${WP_USER})"
+            else
+              echo "[wp] WP application password secrets not configured, media upload will fall back to WC keys (may fail)"
+            fi
+
+            echo "=== 2.8 Injecting image generation API keys ==="
+            OPENAI_KEY='${{ secrets.OPENAI_API_KEY }}'
+            OPENAI_URL='${{ secrets.OPENAI_BASE_URL }}'
+            VOLC_KEY='${{ secrets.VOLCENGINE_API_KEY }}'
+            DASHSCOPE_KEY='${{ secrets.DASHSCOPE_API_KEY }}'
+            DASHSCOPE_WS='${{ secrets.DASHSCOPE_WORKSPACE_ID }}'
+            if [ -n "$OPENAI_KEY" ] || [ -n "$VOLC_KEY" ] || [ -n "$DASHSCOPE_KEY" ]; then
+              sed -i '/^OPENAI_API_KEY=/d;/^OPENAI_BASE_URL=/d;/^VOLCENGINE_API_KEY=/d;/^DASHSCOPE_API_KEY=/d;/^DASHSCOPE_WORKSPACE_ID=/d' "$ENV_FILE"
+              [ -n "$OPENAI_KEY" ] && echo "OPENAI_API_KEY=${OPENAI_KEY}" >> "$ENV_FILE"
+              [ -n "$OPENAI_URL" ] && echo "OPENAI_BASE_URL=${OPENAI_URL}" >> "$ENV_FILE"
+              [ -n "$VOLC_KEY" ] && echo "VOLCENGINE_API_KEY=${VOLC_KEY}" >> "$ENV_FILE"
+              [ -n "$DASHSCOPE_KEY" ] && echo "DASHSCOPE_API_KEY=${DASHSCOPE_KEY}" >> "$ENV_FILE"
+              [ -n "$DASHSCOPE_WS" ] && echo "DASHSCOPE_WORKSPACE_ID=${DASHSCOPE_WS}" >> "$ENV_FILE"
+              echo "[imggen] keys injected (openai=$([ -n "$OPENAI_KEY" ] && echo yes || echo no), volc=$([ -n "$VOLC_KEY" ] && echo yes || echo no), dash=$([ -n "$DASHSCOPE_KEY" ] && echo yes || echo no))"
+            else
+              echo "[imggen] No image gen API keys in GitHub Secrets (may already be in server .env)"
+            fi
+
             echo "=== 3. Running database migrations ==="
             if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
               echo "[db] 杩炴帴閰嶇疆(瀵嗙爜宸查殣钘?: $DBURL"

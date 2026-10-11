@@ -1027,6 +1027,19 @@ async def generate_product_copy(
         target_market=product.target_market or "US",
         trace_id=get_trace_id(),
     )
+    # Guard: the service silently degrades to a Chinese-title + empty-description
+    # placeholder when the LLM returns invalid JSON. Writing that over a previous
+    # good localization is worse than failing loudly.
+    if result.get("_meta", {}).get("fallback"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "copy_generation_degraded",
+                "message": "文案生成失败：LLM 返回非法 JSON，已拒绝写入降级占位内容",
+                "error": result.get("_meta", {}).get("error", ""),
+                "action": "请重试。如持续失败，检查 LLM 网关配置。",
+            },
+        )
     meta = dict(product.meta or {})
     localizations = meta.get("localizations")
     localizations = dict(localizations) if isinstance(localizations, dict) else {}
@@ -1402,6 +1415,53 @@ async def full_update_product(
         "missing_fields": missing_fields,
         "data_integrity_score": data_integrity_score,
         "data_integrity_status": data_integrity_status,
+    }
+
+
+@product_router.post(
+    "/{product_id}/activate",
+    summary="激活产品（candidate → active），使 WC 推送产出 publish 而非 draft",
+)
+async def activate_product(
+    product_id: UUID,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> dict[str, Any]:
+    """Set product.status='active' so build_wc_payload emits publish.
+
+    The WC push gate treats only status=='active' as publishable; a candidate
+    product is pushed as draft. This is the dedicated lifecycle transition
+    instead of routing through the generic full-update endpoint.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    result = await db.execute(
+        select(Product).where(
+            Product.workspace_id == workspace_id,
+            Product.id == product_id,
+        )
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    old_status = product.status
+    product.status = "active"
+
+    meta = dict(product.meta or {})
+    meta["activated_at"] = utc_now_iso()
+    meta["activated_from"] = old_status
+    product.meta = meta
+    flag_modified(product, "meta")
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "product_id": str(product_id),
+        "previous_status": old_status,
+        "new_status": "active",
+        "message": "产品已激活，下次 WC 推送将产出 publish 状态",
     }
 
 

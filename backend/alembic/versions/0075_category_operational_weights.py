@@ -158,7 +158,7 @@ def downgrade() -> None:
         sa.text(
             """
             DELETE FROM strategy_versions
-            WHERE strategy_type LIKE 'category_weights_%'
+            WHERE strategy_type LIKE 'cat_wts_%'
               AND changed_by = :changed_by
             """
         ).bindparams(changed_by=CHANGED_BY)

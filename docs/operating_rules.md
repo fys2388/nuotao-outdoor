@@ -140,7 +140,7 @@ flowchart LR
 | 规则 ID | 类型 | 规则内容 | 参数（v1） | 审批 |
 |---|---|---|---|---|
 | PRICE-001 | soft | 层级价带：引流 $10–25 / 主力 $25–60 / Hero $40–120 / 高端 $100+ | 四层上下限 | 自动 |
-| PRICE-002 | hard | 售价 = 落地成本 ÷ (1 − 目标毛利率)，须同时满足层级目标毛利率 | 引流 20% / 主力 35% / Hero 40% / 高端 45% | 自动 |
+| PRICE-002 | hard | 售价 = 落地成本 ÷ (1 − 目标毛利率)，须同时满足层级目标毛利率 | 引流 20% / 主力 35% / Hero 40% / 高端 45% | 自动（已实现，见下注） |
 | PRICE-003 | hard | 最终定价须落在市场价带区间，不高出竞品上限 30% | 市场价带数据 | L1 调价 |
 | PRICE-004 | soft | 心理定价：尾数 .99（$X.99） | 尾数规则 | 自动 |
 | PRICE-005 | flow | 多币种：EUR = USD 价 × 汇率 × 市场系数（含税显示） | 市场系数 1.05–1.15 | 自动 |
@@ -149,6 +149,25 @@ flowchart LR
 | PRICE-008 | flow | 调价审批：日常调价 ≤10% 自动记录；>10% 或 Hero 调价需 L1 | 10% | L1 |
 
 - 价格变更全部走 `price_change_log`，含旧价、新价、规则版本、审批人。
+
+> **PRICE-002 实现状态（2026-10-06）**：此前该 hard 规则**从未在代码中实现**——
+> `listing_gate` 只校验「有无价格」「有无成本」，从不校验价格是否覆盖成本，导致
+> 商品 2230 以 $5.83 售价（采购成本 $6.30）通过门禁上架，每单亏损。根目录的
+> `pricing_policy.py` 是孤儿文件，`backend/` 内无任何模块 import 它，故从未生效。
+>
+> 现已实现：`backend/app/services/pricing_policy.py`（被 `listing_gate` 引用）+
+> `evaluate_gate` / `evaluate_gate_from_dict` 两条路径的毛利校验 +
+> `backend/tests/test_listing_gate_margin.py`（25 例回归）。
+> - `negative_margin`（售价 < 落地成本）→ **HARD_BLOCK**，`force` 不可放行；
+> - `below_margin_target`（净利未达下限）→ REVIEW_REQUIRED，人工可 force（引流/清仓是合法业务决策）。
+>
+> **口径差异（需 Owner 校准）**：本行文档写的是「层级**毛利率** 20/35/40/45%」，
+> 而实现按 Owner 2026-10-06 指令采用**统一净利率下限 25%**（`pricing_min_net_margin`，
+> 净利 = 扣支付/营销/售后后）。净利 25% 严于引流款毛利 20%，故当前以净利下限为约束项；
+> 若需回归「按层级毛利率」，改 `config.py` 配置并扩展为层级映射即可，无需改门禁结构。
+>
+> **price_change_log**：本行所述价格变更日志表在 `backend/` 中**尚不存在**（仅文档约定），
+> 调价审计目前依赖 WC 商品修订 + 本仓库备份 JSON。登记 `TODO(tech-debt)`。
 
 ---
 

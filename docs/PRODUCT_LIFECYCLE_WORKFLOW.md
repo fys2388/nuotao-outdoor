@@ -1,7 +1,7 @@
 # 产品生命周期工作流 (Product Lifecycle Workflow)
 
-> **版本**: v1.0  
-> **最后更新**: 2026-09-28  
+> **版本**: v1.1  
+> **最后更新**: 2026-10-03  
 > **状态**: Active
 
 ---
@@ -26,6 +26,7 @@
 | **Product Master** | `product_master` | 中间态 | 产品主数据已创建 |
 | **B2C Listing** | `listing` | 中间态 | Listing 正在同步到 WooCommerce |
 | **WC 已发布** | `wc_published` | 终态 | 产品已在 WooCommerce 前台发布 |
+| **已下架** | `unpublished` | 中间态 | 产品已从 WooCommerce 前台撤下（WC `draft`），商品数据保留、可再次上架；详见 `wc_unpublish_design.md` |
 | **已淘汰** | `rejected` | 终态 | 产品被拒绝/淘汰 |
 
 ### 2.2 阶段优先级
@@ -60,7 +61,7 @@ unknown (兜底)
 
 | 字段 | 类型 | 值域 | 说明 |
 |------|------|------|------|
-| `status` | VARCHAR | `draft`, `active`, `inactive`, `pending` | 产品基础状态 |
+| `status` | VARCHAR | `draft`, `active`, `inactive`, `pending` | 产品基础状态；`inactive` = 已下架（WC `draft`，前台不可见） |
 | `candidate_status` | VARCHAR | `candidate`, `approved`, `testing`, `winner`, `rejected`, `NULL` | 候选审批状态 |
 | `funnel_stage` | VARCHAR | `recalled`, `screened`, `deep_candidate`, `test_candidate`, `testing`, `hero`, `rejected`, `NULL` | AI 漏斗阶段 |
 | `mastered_at` | TIMESTAMP | `NULL` 或时间戳 | Product Master 创建时间 |
@@ -223,3 +224,16 @@ GET /api/v1/products/{product_id}/wc-status
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | v1.0 | 2026-09-28 | 初始版本，定义 8 个阶段和状态转换 |
+| v1.1 | 2026-10-03 | 补充「已下架」阶段与 `inactive` 状态语义；关联 `wc_unpublish_design.md` |
+
+---
+
+## 8. 下架与撤销发布
+
+原设计缺少可逆的渠道撤下动作（只有"发布"没有"下架"）。现补充：
+
+- **下架（unpublish）**：本地 `status` → `inactive`，WooCommerce 商品 → `draft`。商品数据保留，可再次上架。
+- **删除联动下架**：前端删除商品时先下架 WC 商品，成功后再执行本地软删除，避免「系统已删、店铺仍在售」。
+- **闸门豁免**：下架**不经过** V3.0 选品闸门。闸门用于阻止不合格商品上架；下架是降低风险方向，若被闸门阻断会导致「想下架却下架不了」。
+
+完整设计、失败处理与审计事件见 `wc_unpublish_design.md`。

@@ -1958,17 +1958,43 @@ async def push_asset_to_woocommerce(
     if not product:
         raise CreativeServiceError(f"Product not found: {product_id}")
 
-    # Check for WooCommerce credentials in product meta
+    # Resolve WooCommerce credentials: product meta takes precedence,
+    # then fall back to the global Settings (populated by deploy.yml).
     meta = product.meta or {}
-    wc_base_url = meta.get("wc_base_url")
-    wc_consumer_key = meta.get("wc_consumer_key")
-    wc_consumer_secret = meta.get("wc_consumer_secret")
-    wc_product_id = meta.get("wc_product_id")
+    wc_base_url = meta.get("wc_base_url") or getattr(
+        __import__("app.core.config", fromlist=["settings"]).settings,
+        "woocommerce_base_url",
+        "",
+    ) or ""
+    wc_consumer_key = meta.get("wc_consumer_key") or getattr(
+        __import__("app.core.config", fromlist=["settings"]).settings,
+        "woocommerce_consumer_key",
+        "",
+    ) or ""
+    wc_consumer_secret = meta.get("wc_consumer_secret") or getattr(
+        __import__("app.core.config", fromlist=["settings"]).settings,
+        "woocommerce_consumer_secret",
+        "",
+    ) or ""
 
-    if not all([wc_base_url, wc_consumer_key, wc_consumer_secret, wc_product_id]):
+    # WC product id: meta may use "wc_product_id" or "woocommerce_id"
+    wc_product_id = (
+        meta.get("wc_product_id")
+        or meta.get("woocommerce_id")
+    )
+
+    if not wc_base_url:
         raise CreativeServiceError(
-            "Product missing WooCommerce credentials (wc_base_url, wc_consumer_key, "
-            "wc_consumer_secret, wc_product_id) in meta"
+            "WooCommerce base_url is not configured (neither in product meta nor in Settings)"
+        )
+    if not (wc_consumer_key and wc_consumer_secret):
+        raise CreativeServiceError(
+            "WooCommerce consumer key/secret is not configured "
+            "(neither in product meta nor in Settings)"
+        )
+    if not wc_product_id:
+        raise CreativeServiceError(
+            "Product missing WooCommerce product id (wc_product_id or woocommerce_id) in meta"
         )
 
     # Read the image file
@@ -2054,15 +2080,37 @@ async def _upload_image_to_woocommerce(
     consumer_secret: str,
     image_path: str,
     alt_text: str = "",
+    wp_username: str | None = None,
+    wp_app_password: str | None = None,
 ) -> tuple[int | None, str | None]:
     """Upload an image to WooCommerce media library.
 
     Uses the WordPress REST API v2 media endpoint.
+    The WC consumer key/secret is NOT valid for this endpoint; it requires
+    a WP user + application password (Basic Auth). Falls back to the
+    WC credentials if no WP credentials are provided (for backwards
+    compatibility with older deployments that may have used WP-JSON-OAuth).
+
     Returns (media_id, media_url) or (None, None) on failure.
     """
     import httpx
+    from app.core.config import settings as app_settings
 
     endpoint = f"{base_url.rstrip('/')}/wp-json/wp/v2/media"
+
+    # Resolve WP application password auth; fall back to Settings when not passed.
+    wp_user = wp_username or getattr(app_settings, "wp_username", "") or ""
+    wp_pass = wp_app_password or getattr(app_settings, "wp_application_password", "") or ""
+
+    if wp_user and wp_pass:
+        auth_pair = (wp_user, wp_pass)
+    else:
+        logger.warning(
+            "[creative] No WP application password configured; falling back to "
+            "WC consumer key for media upload (may return 401). Set wp_username "
+            "and wp_application_password in settings or pass them explicitly."
+        )
+        auth_pair = (consumer_key, consumer_secret)
 
     try:
         with open(image_path, "rb") as f:
@@ -2074,11 +2122,10 @@ async def _upload_image_to_woocommerce(
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 endpoint,
-                auth=(consumer_key, consumer_secret),
+                auth=auth_pair,
                 files={"file": (filename, file_content, content_type)},
                 data={
                     "alt": alt_text,
-                    "source_url": f"{base_url.rstrip('/')}/wp-content/uploads/{filename}",
                 },
             )
 
@@ -2087,9 +2134,10 @@ async def _upload_image_to_woocommerce(
             return data.get("id"), data.get("source_url")
         else:
             logger.warning(
-                "[creative] WC media upload failed: status=%d body=%s",
+                "[creative] WC media upload failed: status=%d body=%s auth_used=%s",
                 response.status_code,
                 response.text[:500],
+                "wp_app_password" if wp_user else "wc_consumer_key",
             )
             return None, None
 

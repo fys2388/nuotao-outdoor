@@ -1,4 +1,4 @@
-﻿"""Application settings loaded from environment variables / .env files."""
+"""Application settings loaded from environment variables / .env files."""
 
 from decimal import Decimal
 from functools import lru_cache
@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     woocommerce_base_url: str = ""
     woocommerce_consumer_key: str = ""
     woocommerce_consumer_secret: str = ""
+
+    # WordPress application password for the WP REST API v2 media endpoint.
+    # The WC consumer key/secret is NOT valid for /wp-json/wp/v2/media;
+    # that endpoint requires a WP user + application password (Basic Auth).
+    # Generated in WP Admin → Users → Profile → Application Passwords.
+    wp_username: str = ""
+    wp_application_password: str = ""
 
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
     # MUST be overridden in staging/production environments.
