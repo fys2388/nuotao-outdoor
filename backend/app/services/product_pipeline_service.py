@@ -428,10 +428,14 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
         prompt = (
             "You are an e-commerce localization expert for a US outdoor gear DTC brand. "
             "Translate and adapt the following Chinese product listing into natural, SEO-friendly "
-            "American English. Keep brand names and model names as-is. Do NOT add marketing fluff "
-            "not supported by the source. Return ONLY a JSON object with keys: "
-            "name (max 80 chars), short_description (max 300 chars plain text), "
-            "description (HTML allowed, 200-600 words), tags (array of 5-8 short English keywords).\n\n"
+            "American English. Keep brand names and model names as-is ONLY if they are already in Latin characters. "
+            "If any Chinese characters appear in brand names, TRANSLATE them to English. "
+            "Do NOT add marketing fluff not supported by the source. "
+            "Return ONLY a JSON object with keys: "
+            "name (max 80 chars, NO Chinese characters allowed), "
+            "short_description (max 300 chars plain text, NO Chinese characters), "
+            "description (HTML allowed, 200-600 words, NO Chinese characters), "
+            "tags (array of 5-8 short English keywords).\n\n"
             f"SOURCE_NAME: {name}\n"
             f"SOURCE_SHORT: {short_desc}\n"
             f"SOURCE_LONG: {long_desc}\n"
@@ -451,8 +455,36 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
         localized = _json.loads(resp.content)
 
         if isinstance(localized, dict):
-            if localized.get("name"):
-                listing_data["name"] = str(localized["name"])[:120]
+            # === 翻译后验证：确保没有中文残留 ===
+            localized_name = str(localized.get("name", ""))[:120]
+            localized_short = str(localized.get("short_description", ""))[:500]
+            localized_long = str(localized.get("description", ""))
+            localized_tags = localized.get("tags", [])
+
+            # 检查翻译结果是否还有中文
+            if _has_cjk(localized_name):
+                logger.warning("Localized name still contains CJK: %s", localized_name)
+                # 尝试移除中文，只保留 ASCII 字符
+                localized_name = re.sub(r'[\u4e00-\u9fff]+', '', localized_name).strip()
+                # 如果移除后为空，使用原始名称的 ASCII 部分
+                if not localized_name:
+                    localized_name = re.sub(r'[^A-Za-z0-9\s\-]', '', name).strip()[:120]
+
+            if _has_cjk(localized_short):
+                logger.warning("Localized short_description still contains CJK")
+                localized_short = re.sub(r'[\u4e00-\u9fff]+', '', localized_short).strip()
+
+            if _has_cjk(localized_long):
+                logger.warning("Localized description still contains CJK")
+                localized_long = re.sub(r'[\u4e00-\u9fff]+', '', localized_long).strip()
+
+            if isinstance(localized_tags, list) and localized_tags:
+                # 过滤掉包含中文的标签
+                localized_tags = [t for t in localized_tags if not _has_cjk(str(t))]
+
+            # 应用翻译结果
+            if localized_name:
+                listing_data["name"] = localized_name
                 # 英文标题确定后，重新生成纯 ASCII SKU，覆盖 Step5 基于中文名生成的 SKU
                 try:
                     from app.services.product_source_identity import (
@@ -464,9 +496,6 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                         meta=listing_data if isinstance(listing_data, dict) else None,
                     )
                     if offer_id:
-                        # 有来源键时 SKU 完全由 offer id 决定，**不能**再做后缀搬运：
-                        # offer id 本身就是长数字，会被下面那个「时间戳后缀」正则
-                        # 当成时间戳替换掉，把确定性 SKU 改回漂移值。
                         listing_data["sku"] = _generate_sku(
                             listing_data["name"],
                             listing_data.get("categories_label", ""),
@@ -474,7 +503,6 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                         )
                     else:
                         old_sku = str(listing_data.get("sku") or "")
-                        # 保留原 SKU 的时间戳后缀（若有），避免同次运行时间戳漂移
                         ts_match = re.search(r"(\d{6,})$", old_sku)
                         new_sku = _generate_sku(
                             listing_data["name"], listing_data.get("categories_label", "")
@@ -484,12 +512,14 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                         listing_data["sku"] = new_sku
                 except Exception:  # noqa: BLE001
                     pass
-            if localized.get("short_description"):
-                listing_data["short_description"] = str(localized["short_description"])[:500]
-            if localized.get("description"):
-                listing_data["description"] = str(localized["description"])
-            if isinstance(localized.get("tags"), list) and localized["tags"]:
-                listing_data["tags"] = [{"name": str(t)[:80]} for t in localized["tags"][:10]]
+
+            if localized_short:
+                listing_data["short_description"] = localized_short
+            if localized_long:
+                listing_data["description"] = localized_long
+            if isinstance(localized_tags, list) and localized_tags:
+                listing_data["tags"] = [{"name": str(t)[:80]} for t in localized_tags[:10]]
+
             listing_data.setdefault("_localization", {
                 "status": "localized",
                 "provider": resp.provider,
