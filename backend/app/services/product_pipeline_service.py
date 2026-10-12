@@ -561,6 +561,15 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
             "Translate and adapt the following Chinese product listing into natural, SEO-friendly "
             "American English. Keep brand names and model names as-is ONLY if they are already in Latin characters. "
             "If any Chinese characters appear in brand names, TRANSLATE them to English. "
+            # BUG-30 (2026-10-12): 真机前台核对发现，同一个 1688 商品三次本地化分别
+            # 得到 Lightwild / TuoTu / Wild Fun 三个不同的品牌名，而且标题里没有品牌、
+            # 描述正文里却出现 "Wild Fun ..." —— 前台看起来像另一个商品，也让品牌资产
+            # 无法沉淀。品牌名必须确定且一致，不允许每次由模型即兴发明。
+            "BRAND RULE (mandatory): if the source brand is written in Chinese characters and has no "
+            "established Latin-script name in the source, OMIT the brand entirely - do NOT invent, "
+            "transliterate or anglicize a brand. When you do mention the product inside the description, "
+            "use exactly the same product name as the 'name' value you return, with no brand prefix "
+            "that does not appear in the source. "
             "Do NOT add marketing fluff not supported by the source. "
             "Return ONLY a JSON object with keys: "
             + ", ".join(keys)
@@ -2150,16 +2159,24 @@ async def upsert_local_listed_product(
     ).scalar_one_or_none()
 
     wc_id = wc_result.get("woocommerce_id")
+    # BUG-31 (2026-10-12): 「渠道与上架」页的零售价读 meta.localizations.en.price，
+    # 再退化到 meta.price；这里只写了 meta.regular_price 与 en.{title,description,...}，
+    # 两个键都没有 → 刚成功推送到 WC 的商品在该页显示「零售价 缺失」，
+    # 运营据此判断商品没定价，甚至会重复推送。三个键一起写，口径统一。
+    price_str = str(regular_price) if regular_price is not None else None
+    localization_en = {
+        "title": name,
+        "description": listing_data.get("description", ""),
+        "short_description": listing_data.get("short_description", ""),
+        "price": price_str,
+        "status": "approved",
+    }
     base_meta = {
         "woocommerce_id": wc_id,
         "woocommerce_permalink": wc_result.get("permalink"),
-        "regular_price": str(regular_price) if regular_price is not None else None,
-        "localizations": {"en": {
-            "title": name,
-            "description": listing_data.get("description", ""),
-            "short_description": listing_data.get("short_description", ""),
-            "status": "approved",
-        }},
+        "regular_price": price_str,
+        "price": price_str,
+        "localizations": {"en": localization_en},
     }
 
     if row is None:
