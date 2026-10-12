@@ -416,6 +416,16 @@ export default function ProductPipeline() {
         message.info('工作流已自动运行完成')
       }
 
+      // BUG-22 (2026-10-12): 导入成功但自动运行管线失败时，后端把原因放在
+      // pipeline_error（例如「同一链接禁止重复上架」），前端此前完全忽略，
+      // 运营只看到表单被填好、进度区空白，无法判断发生了什么。必须显式提示。
+      if (completedData.pipeline_error) {
+        message.error({
+          content: `商品已导入，但自动运行管线失败：${completedData.pipeline_error}`,
+          duration: 10,
+        })
+      }
+
       setImportUrl('')
     } catch (e: any) {
       console.error('Import from 1688 error:', e)

@@ -1068,8 +1068,6 @@ async def _hydrate_product_info(
     """
     needs_price = _is_blank(product_info.get("price"))
     needs_variations = _is_blank(product_info.get("variations"))
-    if not needs_price and not needs_variations:
-        return product_info
 
     source_url = str(product_info.get("source_url") or "").strip()
     source_id = str(product_info.get("source_id") or "").strip()
@@ -1153,6 +1151,14 @@ async def _hydrate_product_info(
                     product_info.get("name"), ",".join(snap_filled),
                     len(merged.get("variations") or []), merged.get("price"),
                 )
+
+    # BUG-23 (2026-10-12): 「定位自己是哪一行」必须在「是否需要回填」判断之前完成。
+    # 导入链路传入的 product_info 已带齐 price 与 variations，原先函数开头的提前
+    # 返回让 _hydrated_product_id 从未写入，紧接着的「同一链接只能上架一次」去重
+    # 就把本次导入刚建/刚更新的那一行当成重复记录并抛 PipelineError —— 前端表现
+    # 为「导入成功、表单已填，但工作流毫无反应」。自我识别与回填是两件事，不能耦合。
+    if not needs_price and not needs_variations:
+        return merged
 
     # 二级：快照仍不足以回答问题时才重抓 1688
     if not _is_blank(merged.get("price")) and not _is_blank(merged.get("variations")):
