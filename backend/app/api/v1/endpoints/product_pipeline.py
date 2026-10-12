@@ -77,6 +77,10 @@ class ProductInfoRequest(BaseModel):
     source_url: str = Field("", description="1688商品链接")
     source_id: str = Field("", description="1688商品ID")
     sku: str = Field("", description="商品 SKU（导入时由 offer id 确定性派生）")
+    product_id: str = Field(
+        "",
+        description="本地产品行主键；从候选池选商品运行时传入，用于回填价格与 SKU 变体",
+    )
     # —— 多规格商品的关键数据：漏掉任一字段都会退化为单 SKU 简单商品 ——
     variations: list[dict[str, Any]] = Field(
         default_factory=list,

@@ -917,6 +917,28 @@ async def run_v3_gate(
     if listing_dims and not product.dimensions:
         product.dimensions = listing_dims
 
+    # BUG-15: 把本次进入管线的原始商品输入（价格/SKU 变体/属性/原图）随产品行落库。
+    # 此前只留了 source_url/source_id，导致从候选池重跑管线时拿不到变体，
+    # 多规格商品退化成单 SKU；只能靠重新抓 1688 补救（1-2 分钟且依赖上游可用）。
+    # 落库后回填是纯本地读取，稳定且瞬时。
+    pipeline_input_snapshot = {
+        "price": product_info.get("price"),
+        "variations": product_info.get("variations") or [],
+        "attributes": product_info.get("attributes") or [],
+        "images": product_info.get("images") or [],
+        "dimensions": product_info.get("dimensions"),
+        "weight": product_info.get("weight"),
+    }
+    has_snapshot_value = bool(
+        pipeline_input_snapshot["variations"] or pipeline_input_snapshot["price"]
+    )
+    if has_snapshot_value:
+        product.meta = {
+            **(product.meta or {}),
+            "pipeline_input": pipeline_input_snapshot,
+        }
+        flag_modified(product, "meta")
+
     # The products JSON columns are plain JSON with no MutableDict, so plain
     # reassignment is not reliably flushed. Flag each column we actually touched
     # - this is the pattern that verifiably persisted in production.
@@ -1008,13 +1030,16 @@ async def _hydrate_product_info(
     """补齐 ``product_info`` 中缺失的价格与 SKU 变体。
 
     BUG-15 (2026-10-12): 前端「管线执行」页从**既有候选行**运行时，请求体只是
-    按产品行拼出的薄壳（name/category/description），``price`` 为空且没有
-    ``variations``；而候选行的 ``meta`` 只留了 ``source_url``/``source_id``，
-    没有保存原始变体。结果多规格 1688 商品退化成单 SKU 简单商品、售价为空。
+    按产品行拼出的薄壳（name/category/sku/source_url），``price`` 为空且没有
+    ``variations``。结果多规格 1688 商品退化成单 SKU 简单商品、售价为空。
 
-    这里按来源键回查产品行拿到来源链接，再走一次带缓存的 1688 抓取，用抓取
-    结果**只补空字段**。调用方显式传入的值优先，绝不被覆盖 —— 人工改过的价格
-    或规格不会被回填冲掉。任何失败都降级返回原值，不阻塞主管线。
+    回填分两级，先便宜后昂贵：
+
+    1. 读产品行 ``meta.pipeline_input`` 快照（首次跑管线时落库），纯本地读取；
+    2. 快照缺失时才按来源键重抓 1688（带缓存，1-2 分钟且依赖上游可用）。
+
+    无论如何都**只补空字段**：调用方显式传入的值优先，人工改过的价格或规格
+    不会被回填冲掉。任何失败都降级返回原值，绝不阻塞主管线。
     """
     needs_price = _is_blank(product_info.get("price"))
     needs_variations = _is_blank(product_info.get("variations"))
@@ -1023,29 +1048,50 @@ async def _hydrate_product_info(
 
     source_url = str(product_info.get("source_url") or "").strip()
     source_id = str(product_info.get("source_id") or "").strip()
+    # 前端选中候选时带上的本地产品行主键，定位最可靠（来源键/SKU 都可能漂移）。
+    explicit_id = str(product_info.get("product_id") or "").strip()
 
-    # 请求体没带来源时，按来源键 / SKU 回查产品行
-    if (not source_url and not source_id) and session is not None:
+    # 定位产品行，优先级：显式主键 → 来源键 → SKU。
+    row = None
+    if session is not None:
+        from sqlalchemy import select as sa_select
+
         from app.core.workspace import DEFAULT_WORKSPACE_ID
+        from app.models.product import Product as ProductModel
         from app.services.product_source_identity import (
             find_live_by_source,
             resolve_source_offer_id,
         )
 
         ws = workspace_id or DEFAULT_WORKSPACE_ID
-        offer_id = resolve_source_offer_id(
-            source_url=product_info.get("source_url"),
-            source_id=product_info.get("source_id"),
-            meta=product_info if isinstance(product_info, dict) else None,
-        )
-        row = await find_live_by_source(session, workspace_id=ws, source_offer_id=offer_id) if offer_id else None
+        if explicit_id:
+            try:
+                row = (
+                    await session.execute(
+                        sa_select(ProductModel)
+                        .where(
+                            ProductModel.id == uuid.UUID(explicit_id),
+                            ProductModel.deleted_at.is_(None),
+                        )
+                        .limit(1)
+                    )
+                ).scalars().first()
+            except (ValueError, AttributeError, TypeError):
+                logger.warning("Ignoring non-UUID product_id=%r in hydrate", explicit_id)
+
+        if row is None:
+            offer_id = resolve_source_offer_id(
+                source_url=product_info.get("source_url"),
+                source_id=product_info.get("source_id"),
+                meta=product_info if isinstance(product_info, dict) else None,
+            )
+            if offer_id:
+                row = await find_live_by_source(
+                    session, workspace_id=ws, source_offer_id=offer_id
+                )
         if row is None:
             sku = str(product_info.get("sku") or "").strip()
             if sku:
-                from sqlalchemy import select as sa_select
-
-                from app.models.product import Product as ProductModel
-
                 row = (
                     await session.execute(
                         sa_select(ProductModel)
@@ -1057,13 +1103,35 @@ async def _hydrate_product_info(
                         .limit(1)
                     )
                 ).scalars().first()
-        if row is not None:
-            row_meta = row.meta if isinstance(row.meta, dict) else {}
-            source_url = source_url or str(row.source_url or row_meta.get("source_url") or "").strip()
-            source_id = source_id or str(row.source_offer_id or row_meta.get("source_id") or "").strip()
-            # 记下这一行是谁：随后的「同链接只能上架一次」去重必须排除它自己，
-            # 否则对既有候选重跑管线会被自己的记录判为重复而直接失败。
-            product_info.setdefault("_hydrated_product_id", str(row.id))
+
+    merged = dict(product_info)
+    if row is not None:
+        row_meta = row.meta if isinstance(row.meta, dict) else {}
+        source_url = source_url or str(row.source_url or row_meta.get("source_url") or "").strip()
+        source_id = source_id or str(row.source_offer_id or row_meta.get("source_id") or "").strip()
+        # 记下这一行是谁：随后的「同链接只能上架一次」去重必须排除它自己，
+        # 否则对既有候选重跑管线会被自己的记录判为重复而直接失败。
+        merged["_hydrated_product_id"] = str(row.id)
+
+        # 一级：用落库快照直接补，不再打扰 1688
+        snapshot = row_meta.get("pipeline_input")
+        if isinstance(snapshot, dict):
+            snap_filled: list[str] = []
+            for key, value in snapshot.items():
+                if _is_blank(merged.get(key)) and not _is_blank(value):
+                    merged[key] = value
+                    snap_filled.append(key)
+            if snap_filled:
+                logger.info(
+                    "Hydrated product_info for %s from meta.pipeline_input; filled=%s "
+                    "(variations=%d, price=%s)",
+                    product_info.get("name"), ",".join(snap_filled),
+                    len(merged.get("variations") or []), merged.get("price"),
+                )
+
+    # 二级：快照仍不足以回答问题时才重抓 1688
+    if not _is_blank(merged.get("price")) and not _is_blank(merged.get("variations")):
+        return merged
 
     lookup = source_url or source_id
     if not lookup:
@@ -1071,36 +1139,37 @@ async def _hydrate_product_info(
             "Hydrate skipped: no 1688 source for product %s (price=%s, variations=%s)",
             product_info.get("name"), needs_price, needs_variations,
         )
-        return product_info
+        return merged
 
     try:
         fetched = await _cached_fetch_1688_product(lookup)
     except Exception as exc:  # 回填是尽力而为，绝不能拖垮主管线
         logger.warning("Hydrate fetch failed for %s: %s", lookup, exc)
-        return product_info
+        return merged
 
     if not fetched.get("success"):
         logger.warning(
             "Hydrate fetch unsuccessful for %s: %s", lookup, fetched.get("error")
         )
-        return product_info
+        return merged
 
     fresh = (fetched.get("data") or {}).get("product_info") or {}
     if not fresh:
-        return product_info
+        return merged
 
-    merged = dict(product_info)
     filled: list[str] = []
     for key, value in fresh.items():
         if _is_blank(merged.get(key)) and not _is_blank(value):
             merged[key] = value
             filled.append(key)
 
-    logger.info(
-        "Hydrated product_info for %s from %s; filled=%s (variations=%d, price=%s)",
-        product_info.get("name"), lookup, ",".join(filled) or "none",
-        len(merged.get("variations") or []), merged.get("price"),
-    )
+    if filled:
+        logger.info(
+            "Hydrated product_info for %s from %s (network); filled=%s "
+            "(variations=%d, price=%s)",
+            product_info.get("name"), lookup, ",".join(filled),
+            len(merged.get("variations") or []), merged.get("price"),
+        )
     return merged
 
 

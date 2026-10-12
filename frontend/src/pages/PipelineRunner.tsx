@@ -255,6 +255,11 @@ export default function PipelineRunner() {
       target_audience: '',
       usage_scenarios: [] as string[],
       product_features: [] as string[],
+      // BUG-15: 必须带上 SKU、来源链接与本地主键，否则后端无法按来源键回查
+      // 产品行，也就补不回真实采购价和 N 个 SKU 变体（多规格商品会退化成单 SKU）。
+      sku: selectedCandidate?.sku || '',
+      source_url: selectedCandidate?.source_url || '',
+      product_id: selectedCandidate?.id || '',
     }
     if (importedInfo) {
       return { ...base, ...importedInfo }
