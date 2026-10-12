@@ -2212,22 +2212,40 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
             )
             product_detail = extract_1688_product(url_or_id, product_id)
             data_source = product_detail.get("source", "newton_agent")
-
-        # 牛顿 Agent 失败时，降级到 1688 官方 API
-        if not product_detail or not product_detail.get("success"):
+        
+        # 检查 Newton Agent 是否返回了 SKU 变体数据
+        # 如果没有 SKU 数据，降级到 1688 官方 API 获取完整 SKU 列表
+        product_data = product_detail.get("product", {}) if product_detail else {}
+        sku_list = product_data.get("sku_list", []) or product_data.get("skuInfos", [])
+        has_sku_data = len(sku_list) > 0
+        
+        # 牛顿 Agent 失败或没有 SKU 数据时，降级到 1688 官方 API
+        if not product_detail or not product_detail.get("success") or not has_sku_data:
+            reason = "failed" if not product_detail or not product_detail.get("success") else "no_sku_data"
             logger.info(
-                "1688 import %s: Newton Agent failed, fallback to open API",
+                "1688 import %s: Newton Agent %s, fallback to open API",
                 import_id,
+                reason,
             )
             from app.services.sourcing_1688_service import get_product_detail
-            product_detail = get_product_detail(product_id)
-            data_source = product_detail.get("source", "1688_open_api")
-            if product_detail.get("error"):
-                logger.warning(
-                    "1688 import %s: open API error: %s",
+            api_detail = get_product_detail(product_id)
+            # 如果 1688 API 成功且返回了 SKU 数据，使用它
+            if api_detail.get("success") and api_detail.get("product", {}).get("sku_list"):
+                product_detail = api_detail
+                data_source = product_detail.get("source", "1688_open_api")
+                logger.info(
+                    "1688 import %s: using open API SKU data (%d variations)",
                     import_id,
-                    product_detail.get("error"),
+                    len(product_detail.get("product", {}).get("sku_list", [])),
                 )
+            else:
+                # 1688 API 也失败，保留 Newton Agent 的结果（即使没有 SKU）
+                if api_detail.get("error"):
+                    logger.warning(
+                        "1688 import %s: open API error: %s",
+                        import_id,
+                        api_detail.get("error"),
+                    )
 
         open_api_error = product_detail.get("error")
 
