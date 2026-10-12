@@ -1964,17 +1964,31 @@ def convert_1688_to_pipeline_input(
 
     # 提取价格（优先保留完整价格区间）
     # 价格：只保留纯数值。1688 常返回 "¥20" 或 "6.7-19.7" 区间字符串，
-    # 直接带入 number 输入框会造成解析失败；区间取最低价（采购成本口径）。
+    # 直接带入 number 输入框会造成解析失败；区间取最高价（太阳能/充电款配置）。
     raw_price = str(product.get("price", "")).strip()
     if not raw_price:
         price_info = product.get("price_range") or product.get("priceRange") or []
         if isinstance(price_info, list) and price_info:
-            first_price = price_info[0]
-            raw_price = (
-                str(first_price.get("price", ""))
-                if isinstance(first_price, dict)
-                else str(first_price)
-            )
+            # 取最高价格（太阳能/充电款配置），而不是最低价格
+            max_price = 0.0
+            for p in price_info:
+                p_val = p.get("price", 0) if isinstance(p, dict) else p
+                try:
+                    parsed = float(str(p_val).replace("¥", "").replace(",", ""))
+                    if parsed > max_price:
+                        max_price = parsed
+                except (ValueError, TypeError):
+                    pass
+            if max_price > 0:
+                raw_price = str(max_price)
+            else:
+                # Fallback to first price
+                first_price = price_info[0]
+                raw_price = (
+                    str(first_price.get("price", ""))
+                    if isinstance(first_price, dict)
+                    else str(first_price)
+                )
     parsed_price = _parse_decimal(raw_price)
     price = str(parsed_price) if parsed_price is not None else ""
 
@@ -2081,14 +2095,30 @@ def convert_1688_to_pipeline_input(
 
     # 提取SKU信息
     sku_info = product.get("sku_list") or product.get("skuInfos") or []
+    sku = ""
     if isinstance(sku_info, list) and sku_info:
-        first_sku = sku_info[0] if isinstance(sku_info[0], dict) else {}
-        sku = first_sku.get("skuCode", first_sku.get("skuId", ""))
+        best_sku = None
+        max_price = 0.0
+        for s in sku_info:
+            if isinstance(s, dict):
+                sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
+                is_solar = any(kw in sku_name for kw in ["太阳能", "充电", "solar", "charging", "USB"])
+                try:
+                    sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))
+                except (ValueError, TypeError):
+                    sku_price = 0.0
+                if is_solar or sku_price > max_price:
+                    max_price = sku_price
+                    best_sku = s
+        if best_sku:
+            sku = best_sku.get("skuCode", best_sku.get("skuId", ""))
+        else:
+            first_sku = sku_info[0] if isinstance(sku_info[0], dict) else {}
+            sku = first_sku.get("skuCode", first_sku.get("skuId", ""))
     else:
         sku = ""
 
-    # 如果没有SKU，生成一个
-    if not sku:
+    # 如果没有 SKUsku:
         sku = _generate_sku(name)
 
     return {
