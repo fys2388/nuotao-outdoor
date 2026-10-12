@@ -27,7 +27,7 @@ ALI1688_ACCESS_TOKEN = os.getenv("ALI1688_ACCESS_TOKEN", "") or os.getenv("ALIBA
 ALI1688_BASE_URL = "https://gw.open.1688.com/openapi"
 
 # 请求超时
-DEFAULT_TIMEOUT = 15
+DEFAULT_TIMEOUT = 30  # 增加到 30 秒，1688 API 调用可能需要更长时间
 
 # 官方 API 元数据。路径必须同时包含 namespace 和 name，不能只传方法名。
 API_METADATA: dict[str, dict[str, str | int]] = {

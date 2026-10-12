@@ -68,7 +68,7 @@ NEWTON_APP_SECRET = _get_newton_app_secret()
 NEWTON_ACCESS_TOKEN = _get_newton_access_token()
 
 # 请求超时
-DEFAULT_TIMEOUT = 30
+DEFAULT_TIMEOUT = 60  # 增加到 60 秒，Newton Agent 任务通常需要 30-50 秒
 # 轮询间隔（秒）
 POLL_INTERVAL = 3
 # 最大轮询次数（约5分钟）
