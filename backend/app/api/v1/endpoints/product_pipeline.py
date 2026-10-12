@@ -26,6 +26,7 @@ from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product
 from app.services import product_import_job_service
 from app.services import product_listing_job_service
+from app.services import product_pipeline_job_service
 from app.services.product_pipeline_service import (
     FUNNEL_REJECTED,
     PIPELINE_STEPS,
@@ -528,3 +529,69 @@ async def get_import_from_1688_job(
             detail="导入任务不存在或已过期",
         )
     return {"success": True, "data": job, "error": None}
+
+
+@router.post(
+    "/run-async",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="异步提交工作流任务（避免网关超时）",
+)
+async def run_product_pipeline_async(
+    request: RunPipelineRequest,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """
+    异步运行工作流：立即返回任务 ID，前端轮询获取结果。
+
+    适用于包含 AI 分析、图片生成等耗时操作的场景，避免 Cloudflare 100s 超时。
+    """
+    try:
+        product_info = request.product_info.model_dump()
+        job = await product_pipeline_job_service.create_job(
+            redis,
+            product_info=product_info,
+            auto_list=request.auto_list,
+            include_images=request.include_images,
+        )
+        return {
+            "success": True,
+            "data": {
+                "job_id": job["job_id"],
+                "status": job["status"],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        logger.error("Create pipeline run job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法创建后台工作流任务，请检查 Redis 服务",
+        ) from e
+
+
+@router.get(
+    "/run-async/{job_id}",
+    summary="查询异步工作流任务状态",
+)
+async def get_pipeline_run_job(
+    job_id: str,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """查询异步工作流任务的执行状态和结果。"""
+    job = await product_pipeline_job_service.get_job(redis, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+
+    return {
+        "success": True,
+        "data": {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "created_at": job.get("created_at"),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "data": job.get("data"),
+            "error": job.get("error"),
+        },
+        "error": None,
+    }
