@@ -375,28 +375,65 @@ def _generate_listing_data(
         len(approved_images), len(all_images),
     )
 
-    return {
-        "name": product_name,
-        "type": "simple",
-        "regular_price": regular_price,
-        "description": product_description,
-        "short_description": short_description,
-        "sku": sku,
-        "manage_stock": True,
-        "stock_quantity": 100,  # 默认库存
-        "status": "draft",  # 默认草稿，人工确认后发布
-        "categories": categories,
-        "tags": tags,
-        "images": images,
-        "main_images": main_images,
-        "detail_images": detail_images,
-        "meta_data": [
-            {"key": "source", "value": "1688"},
-            {"key": "source_price", "value": price_str},
-            {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {regular_price}" if regular_price else ""},
-            {"key": "pipeline_id", "value": str(uuid.uuid4())},
-        ],
-    }
+    # 检查是否有 SKU 变体（用于 WooCommerce 变量产品）
+    variations = product_info.get("variations") or []
+    has_variations = isinstance(variations, list) and len(variations) > 0
+
+    # 如果有 variations，生成变量产品；否则生成简单产品
+    if has_variations:
+        # 变量产品：使用 variations[0] 的价格作为主价格，SKU 为基础 SKU
+        first_var = variations[0] if variations else {}
+        base_sku = first_var.get("sku") or sku
+        base_price = first_var.get("price") or regular_price
+        base_stock = int(first_var.get("stock_quantity") or 100)
+
+        return {
+            "name": product_name,
+            "type": "variable",  # 变量产品
+            "regular_price": base_price,
+            "description": product_description,
+            "short_description": short_description,
+            "sku": base_sku,
+            "manage_stock": True,
+            "stock_quantity": base_stock,
+            "status": "draft",
+            "categories": categories,
+            "tags": tags,
+            "images": images,
+            "main_images": main_images,
+            "detail_images": detail_images,
+            "variations": variations,  # 所有 SKU 变体
+            "meta_data": [
+                {"key": "source", "value": "1688"},
+                {"key": "source_price", "value": price_str},
+                {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {base_price}" if base_price else ""},
+                {"key": "pipeline_id", "value": str(uuid.uuid4())},
+                {"key": "variation_count", "value": str(len(variations))},
+            ],
+        }
+    else:
+        return {
+            "name": product_name,
+            "type": "simple",
+            "regular_price": regular_price,
+            "description": product_description,
+            "short_description": short_description,
+            "sku": sku,
+            "manage_stock": True,
+            "stock_quantity": 100,  # 默认库存
+            "status": "draft",  # 默认草稿，人工确认后发布
+            "categories": categories,
+            "tags": tags,
+            "images": images,
+            "main_images": main_images,
+            "detail_images": detail_images,
+            "meta_data": [
+                {"key": "source", "value": "1688"},
+                {"key": "source_price", "value": price_str},
+                {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {regular_price}" if regular_price else ""},
+                {"key": "pipeline_id", "value": str(uuid.uuid4())},
+            ],
+        }
 
 
 
