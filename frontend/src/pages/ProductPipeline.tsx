@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Card, Form, Input, Button, Space, Typography, Steps, Tag, Alert,
   Row, Col, Spin, message, Tabs, Divider, Select, Descriptions, Collapse,
-  Statistic, Progress, Empty, Tooltip, Modal, List, Badge, Switch, InputNumber
+  Statistic, Progress, Empty, Tooltip, Modal, List, Badge, Switch, InputNumber, Table
 } from 'antd'
 import {
   ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -998,6 +998,7 @@ export default function ProductPipeline() {
                         </Space>
                       }>
                         {getListingData() ? (
+                          <>
                           <Descriptions column={2} size="small" bordered>
                             <Descriptions.Item label="商品名称" span={2}>{getListingData().name}</Descriptions.Item>
                             <Descriptions.Item label="SKU">{getListingData().sku}</Descriptions.Item>
@@ -1009,6 +1010,47 @@ export default function ProductPipeline() {
                             <Descriptions.Item label="短描述" span={2}><Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{getListingData().short_description}</Paragraph></Descriptions.Item>
                             <Descriptions.Item label="完整描述" span={2}><Paragraph ellipsis={{ rows: 4 }} style={{ margin: 0 }}>{getListingData().description}</Paragraph></Descriptions.Item>
                           </Descriptions>
+                          {/* BUG-28 (2026-10-12): 多规格商品此前在这里只显示父商品的一个
+                              「售价」，18 个变体的规格名与各自价格完全不可见。人工确认
+                              是上架前的唯一闸门，操作员看不到要发布的规格就只能盲签。
+                              这里补上变体表：规格名 / SKU / 美元价 / 库存。 */}
+                          {Array.isArray(getListingData().variations) && getListingData().variations.length > 0 && (
+                            <div style={{ marginTop: 12 }}>
+                              <Space align="center" style={{ marginBottom: 8 }}>
+                                <Text strong>规格明细</Text>
+                                <Tag color={getListingData().type === 'variable' ? 'blue' : 'default'}>
+                                  {getListingData().type === 'variable' ? '变量商品' : '简单商品'}
+                                </Tag>
+                                <Text type="secondary">共 {getListingData().variations.length} 个规格</Text>
+                              </Space>
+                              <Table
+                                size="small"
+                                rowKey={(row: any, idx?: number) => `${row.sku || 'var'}-${idx}`}
+                                pagination={getListingData().variations.length > 10 ? { pageSize: 10 } : false}
+                                dataSource={getListingData().variations}
+                                columns={[
+                                  { title: '规格名称', dataIndex: 'name', key: 'name', ellipsis: true },
+                                  { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 220, ellipsis: true },
+                                  {
+                                    title: '美元价',
+                                    dataIndex: 'regular_price',
+                                    key: 'regular_price',
+                                    width: 100,
+                                    render: (v: any) => (v ? `$${v}` : '待设置'),
+                                  },
+                                  {
+                                    title: '源价(CNY)',
+                                    dataIndex: 'source_price_cny',
+                                    key: 'source_price_cny',
+                                    width: 110,
+                                    render: (v: any) => (v ? `¥${v}` : '—'),
+                                  },
+                                  { title: '库存', dataIndex: 'stock_quantity', key: 'stock_quantity', width: 90 },
+                                ]}
+                              />
+                            </div>
+                          )}
+                          </>
                         ) : (
                           <Empty description="无上架数据" />
                         )}
