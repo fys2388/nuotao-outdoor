@@ -1973,7 +1973,18 @@ def convert_1688_to_pipeline_input(
     if isinstance(sku_info, list) and sku_info:
         for s in sku_info:
             if isinstance(s, dict):
+                # 兼容 1688 API attributes 字段：SKU 名称可能在 attributes 数组里
                 sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
+                if not sku_name.strip():
+                    attrs = s.get("attributes") or []
+                    if isinstance(attrs, list):
+                        parts = []
+                        for a in attrs:
+                            if isinstance(a, dict):
+                                av = str(a.get("attributeValue") or a.get("value") or "").strip()
+                                if av:
+                                    parts.append(av)
+                        sku_name = " / ".join(parts)
                 is_solar = any(kw in sku_name for kw in ["太阳能", "充电", "solar", "charging", "USB"])
                 try:
                     sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))

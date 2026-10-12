@@ -701,8 +701,51 @@ def _normalize_extracted_product(
 
     # SKU 变体：Newton 返回的 sku_list，每项含 skuName/skuCode/price/stock
     # 同时保留 amountOnSale 兼容 1688 API 字段。
+    # 价格推断规则：LLM 可能只返回基础价（默认选中 SKU 的价格），
+    # 需要根据 SKU 名称关键词（干电池/充电/太阳能）和 price_min/price_max 推断每个变体的实际价格。
     sku_list = []
     sku_raw = data.get("sku_list") or data.get("skuList") or []
+
+    # 预处理：识别所有 SKU 名称里的关键词，确定价格档位
+    price_tiers = {}  # keyword -> (min_price, max_price)
+    if isinstance(sku_raw, list):
+        names_by_tier = {"battery": [], "charging": [], "solar": []}
+        for s in sku_raw:
+            if not isinstance(s, dict):
+                continue
+            n = str(
+                s.get("skuName") or s.get("name") or s.get("属性") or s.get("spec") or ""
+            ).strip().lower()
+            if "太阳能" in n or "solar" in n:
+                names_by_tier["solar"].append(n)
+            elif "充电" in n or "usb" in n or "charging" in n:
+                names_by_tier["charging"].append(n)
+            elif "干电池" in n or "battery" in n:
+                names_by_tier["battery"].append(n)
+        # 根据 tier 数量确定价格档位
+        tiers_present = [t for t in names_by_tier if names_by_tier[t]]
+        if len(tiers_present) >= 3 and price_min is not None and price_max is not None and str(price_min) != str(price_max):
+            # 三档价格：干电池=低，充电=中，太阳能=高
+            mid = (float(price_min) + float(price_max)) / 2
+            price_tiers["battery"] = (float(price_min), float(price_min))
+            price_tiers["charging"] = (mid, mid)
+            price_tiers["solar"] = (float(price_max), float(price_max))
+        elif len(tiers_present) >= 2 and price_min is not None and price_max is not None and str(price_min) != str(price_max):
+            # 两档价格
+            if "battery" in names_by_tier and "solar" in names_by_tier:
+                price_tiers["battery"] = (float(price_min), float(price_min))
+                price_tiers["solar"] = (float(price_max), float(price_max))
+            elif "battery" in names_by_tier and "charging" in names_by_tier:
+                price_tiers["battery"] = (float(price_min), float(price_min))
+                price_tiers["charging"] = (float(price_max), float(price_max))
+            elif "charging" in names_by_tier and "solar" in names_by_tier:
+                price_tiers["charging"] = (float(price_min), float(price_min))
+                price_tiers["solar"] = (float(price_max), float(price_max))
+        elif price_min is not None:
+            # 单价格：所有 tier 都用 price_min
+            for t in ["battery", "charging", "solar"]:
+                price_tiers[t] = (float(price_min), float(price_min))
+    
     if isinstance(sku_raw, list):
         for s in sku_raw:
             if not isinstance(s, dict):
@@ -716,15 +759,25 @@ def _normalize_extracted_product(
             )
             sku_code = s.get("skuCode") or s.get("skuId") or s.get("id") or ""
             raw_price = s.get("price")
-            if raw_price is None:
+            if raw_price in (None, ""):
                 raw_price = s.get("skuPrice")
-            if raw_price is None and isinstance(s.get("priceRange"), list) and s["priceRange"]:
+            if raw_price in (None, "") and isinstance(s.get("priceRange"), list) and s["priceRange"]:
                 first_range = s["priceRange"][0]
                 raw_price = first_range.get("price") if isinstance(first_range, dict) else None
             try:
                 sku_price = str(raw_price).strip() if raw_price not in (None, "") else ""
             except Exception:
                 sku_price = ""
+            # 价格推断：当 SKU 价格为空时，根据 SKU 名称关键词推断
+            if not sku_price and sku_name and sku_name.lower():
+                n_lower = sku_name.lower()
+                for tier, prices in price_tiers.items():
+                    if tier in n_lower:
+                        sku_price = str(prices[0])
+                        break
+                # 如果上面没匹配到，用 price_min 作为兜底
+                if not sku_price and price_min is not None:
+                    sku_price = str(price_min)
             stock_raw = s.get("stock")
             if stock_raw is None:
                 stock_raw = s.get("amountOnSale")
