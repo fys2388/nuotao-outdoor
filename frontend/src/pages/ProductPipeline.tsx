@@ -493,9 +493,10 @@ export default function ProductPipeline() {
       if (confirmToken) confirmHeaders['Authorization'] = `Bearer ${confirmToken}`
 
       progressKey = 'listing_progress'
-      message.loading({ content: '正在推送到WooCommerce...', key: progressKey, duration: 0 })
+      message.loading({ content: '正在提交上架任务...', key: progressKey, duration: 0 })
 
-      const resp = await fetch('/api/v1/product-pipeline/confirm-list', {
+      // 使用异步端点，避免网关超时
+      const resp = await fetch('/api/v1/product-pipeline/confirm-list-async', {
         method: 'POST',
         headers: confirmHeaders,
         body: JSON.stringify({
@@ -505,32 +506,31 @@ export default function ProductPipeline() {
       })
       const data = await resp.json()
 
-      message.destroy(progressKey)
+      if (!data.success || !data.data?.job_id) {
+        message.destroy(progressKey)
+        message.error(data.error || '提交上架任务失败')
+        setListingLoading(false)
+        return
+      }
 
-      // 后端自动生图场景：show loading + retry
-      if (!data.success && data.image_gate && data.auto_generated) {
-        const gen = data.auto_generated
-        message.loading({
-          content: `🎨 正在自动生成补图（主图${gen.generated_main}张+详情图${gen.generated_detail}张）...`,
-          key: progressKey,
-          duration: 0,
-        })
-        // 等待图片生成完成后自动重试
-        setTimeout(async () => {
-          try {
-            const resp2 = await fetch('/api/v1/product-pipeline/confirm-list', {
-              method: 'POST',
-              headers: confirmHeaders,
-              body: JSON.stringify({
-                pipeline_result: pipelineResult,
-                status: status,
-              }),
-            })
-            const data2 = await resp2.json()
+      const jobId = data.data.job_id
+      message.loading({ content: '正在推送到WooCommerce...', key: progressKey, duration: 0 })
+
+      // 轮询任务状态
+      const pollInterval = setInterval(async () => {
+        try {
+          const pollResp = await fetch(`/api/v1/product-pipeline/confirm-list-async/${jobId}`, {
+            headers: confirmHeaders,
+          })
+          const pollData = await pollResp.json()
+
+          if (pollData.success && pollData.data?.status === 'completed') {
+            clearInterval(pollInterval)
             message.destroy(progressKey)
-            if (data2.success) {
-              const wcId = data2.data?.woocommerce_id || '—'
-              const sku = data2.data?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
+            const resultData = pollData.data.data
+            if (resultData?.success) {
+              const wcId = resultData?.woocommerce_id || '—'
+              const sku = resultData?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
               message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`)
               setListingModalOpen(false)
               setPipelineResult(prev => prev ? {
@@ -539,43 +539,35 @@ export default function ProductPipeline() {
                   ...prev.data,
                   steps: {
                     ...prev.data.steps,
-                    listing: { status: 'completed', data: data2.data }
+                    listing: { status: 'completed', data: resultData }
                   }
                 }
               } : null)
               setTimeout(() => { navigate('/products/listing') }, 2000)
             } else {
-              message.error(data2.error || '图片生成后仍无法上架，请检查图片质量或手动上传')
+              message.error(resultData?.error || '上架失败')
             }
-          } catch (e2: any) {
+            setListingLoading(false)
+          } else if (pollData.success && pollData.data?.status === 'failed') {
+            clearInterval(pollInterval)
             message.destroy(progressKey)
-            message.error(e2.message || '重试失败')
-          } finally {
+            message.error(pollData.data?.error || '上架任务失败')
             setListingLoading(false)
           }
-        }, 5000)
-        return
-      }
+          // pending/running: continue polling
+        } catch (e: any) {
+          console.error('Poll error:', e)
+        }
+      }, 3000)
 
-      if (data.success) {
-        const wcId = data.data?.woocommerce_id || '—'
-        const sku = data.data?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
-        message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`)
-        setListingModalOpen(false)
-        setPipelineResult(prev => prev ? {
-          ...prev,
-          data: {
-            ...prev.data,
-            steps: {
-              ...prev.data.steps,
-              listing: { status: 'completed', data: data.data }
-            }
-          }
-        } : null)
-        setTimeout(() => { navigate('/products/listing') }, 2000)
-      } else {
-        message.error(data.error || '上架失败')
-      }
+      // 设置最大轮询时间（5分钟）
+      const maxPollTime = setTimeout(() => {
+        clearInterval(pollInterval)
+        message.destroy(progressKey)
+        message.error('上架任务超时，请稍后在商品列表查看')
+        setListingLoading(false)
+      }, 300000)
+
     } catch (e: any) {
       message.destroy(progressKey)
       message.error(e.message || '上架失败')

@@ -25,6 +25,7 @@ from app.core.redis import get_redis
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product
 from app.services import product_import_job_service
+from app.services import product_listing_job_service
 from app.services.product_pipeline_service import (
     FUNNEL_REJECTED,
     PIPELINE_STEPS,
@@ -262,6 +263,71 @@ async def confirm_product_listing(
             "data": None,
             "error": str(e),
         }
+
+
+@router.post(
+    "/confirm-list-async",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="异步提交上架任务（避免网关超时）",
+)
+async def confirm_product_listing_async(
+    request: ConfirmListRequest,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """
+    异步上架：立即返回任务 ID，前端轮询获取结果。
+
+    适用于包含 AI 生图、Vision 检查等耗时操作的场景，避免 Cloudflare 100s 超时。
+    """
+    try:
+        job = await product_listing_job_service.create_job(
+            redis,
+            pipeline_result=request.pipeline_result,
+            status=request.status,
+            force=request.force,
+        )
+        return {
+            "success": True,
+            "data": {
+                "job_id": job["job_id"],
+                "status": job["status"],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        logger.error("Create listing job failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法创建后台上架任务，请检查 Redis 服务",
+        ) from e
+
+
+@router.get(
+    "/confirm-list-async/{job_id}",
+    summary="查询异步上架任务状态",
+)
+async def get_confirm_listing_job(
+    job_id: str,
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, Any]:
+    """查询异步上架任务的执行状态和结果。"""
+    job = await product_listing_job_service.get_job(redis, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+
+    return {
+        "success": True,
+        "data": {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "created_at": job.get("created_at"),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "data": job.get("data"),
+            "error": job.get("error"),
+        },
+        "error": None,
+    }
 
 
 @router.post("/import-from-1688", summary="从1688商品URL/ID一键导入")
