@@ -349,11 +349,37 @@ export default function ProductPipeline() {
       const steps = ['创建Agent任务', '抓取商品数据', '解析商品信息', '完成']
       let lastStep = 0
 
+      // BUG-26 (2026-10-12): 轮询期间一次瞬时网络故障（实测出现过
+      // net::ERR_ABORTED）会抛异常冲出循环，被外层 catch 当成「导入失败」，
+      // 从而丢弃后端已经成功的结果 —— 真机验证中导入任务 status=succeeded、
+      // 数据齐全，页面却显示什么都没发生，就是这么来的。
+      // 轮询必须容忍抖动：连续失败达阈值才判定失败。
+      let consecutivePollErrors = 0
+      const MAX_CONSECUTIVE_POLL_ERRORS = 5
+
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS))
         elapsed = Math.round((Date.now() - (deadline - TIMEOUT_MS)) / 1000)
 
-        const jobResponse = await api.getImportFrom1688Job(jobId)
+        let jobResponse: any
+        try {
+          jobResponse = await api.getImportFrom1688Job(jobId)
+        } catch (pollError: any) {
+          consecutivePollErrors += 1
+          if (consecutivePollErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+            completedError = `轮询任务状态连续失败 ${consecutivePollErrors} 次：${
+              pollError?.message || '网络错误'
+            }`
+            break
+          }
+          message.loading({
+            content: `网络抖动，正在重试读取任务状态… (${elapsed}s)`,
+            key: 'import1688',
+            duration: 0,
+          })
+          continue
+        }
+        consecutivePollErrors = 0
         const job = jobResponse.data
 
         if (!jobResponse.success || !job) {

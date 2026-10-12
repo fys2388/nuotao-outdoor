@@ -454,6 +454,21 @@ def _generate_listing_data(
             "images": images,
             "main_images": main_images,
             "detail_images": detail_images,
+            # G3 (2026-10-12): 显式给出可变属性轴，交由上架层直接使用。
+            # 英文店铺不允许出现中文属性名；选项顺序即前台展示顺序，故去重且保序。
+            "attributes": [
+                {
+                    "name": "Style",
+                    "position": 0,
+                    "visible": True,
+                    "variation": True,
+                    "options": list(
+                        dict.fromkeys(
+                            v["name"] for v in wc_variations if v.get("name")
+                        )
+                    ),
+                }
+            ],
             "variations": wc_variations,  # 所有 SKU 变体（美元价）
             "meta_data": [
                 {"key": "source", "value": "1688"},
@@ -501,18 +516,45 @@ def _has_cjk(text: str) -> bool:
 
 
 async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[str, Any]:
-    """把上架数据中的 name / short_description / description / tags 本地化到英文。"""
+    """把上架数据中的 name / short_description / description / tags 本地化到英文。
+
+    G1 (2026-10-12): 同时本地化变体（规格）名。此前只翻译了标题/描述/标签，
+    18 个变体名仍是中文（「黑色折叠椅」「小方桌三件套（黑色）」），
+    在英文店铺前台会直接暴露成中文规格选项 —— 可见的上架质量缺陷。
+    """
     try:
         name = listing_data.get("name", "") or ""
         short_desc = listing_data.get("short_description", "") or ""
         long_desc = listing_data.get("description", "") or ""
         tags = [t.get("name", "") for t in listing_data.get("tags", []) if isinstance(t, dict)]
+        # 变体名（规格选项）：数组顺序必须与 variations 严格对齐
+        variations = listing_data.get("variations") or []
+        variation_names = [
+            str(v.get("name") or "") for v in variations if isinstance(v, dict)
+        ]
+        needs_variation_localization = any(_has_cjk(n) for n in variation_names)
 
         # 不需要本地化就跳过
         if not (_has_cjk(name) or _has_cjk(short_desc) or _has_cjk(long_desc)
-                 or any(_has_cjk(t) for t in tags)):
+                 or any(_has_cjk(t) for t in tags)
+                 or needs_variation_localization):
             listing_data.setdefault("_localization", {"status": "skipped", "reason": "no CJK content"})
             return listing_data
+
+        keys = [
+            "name (max 80 chars, NO Chinese characters allowed)",
+            "short_description (max 300 chars plain text, NO Chinese characters)",
+            "description (HTML allowed, 200-600 words, NO Chinese characters)",
+            "tags (array of 5-8 short English keywords)",
+        ]
+        if needs_variation_localization:
+            keys.append(
+                "variation_names (array of strings, EXACTLY the same length and order as "
+                "SOURCE_VARIANTS; each entry is the English spec/variant option label, "
+                "max 60 chars, NO Chinese characters, keep size/number and color wording, "
+                'e.g. "Black Folding Chair", "Small Square Table (Beige)", '
+                '"95cm Long Table 5-Piece Set (Black)")'
+            )
 
         prompt = (
             "You are an e-commerce localization expert for a US outdoor gear DTC brand. "
@@ -521,22 +563,23 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
             "If any Chinese characters appear in brand names, TRANSLATE them to English. "
             "Do NOT add marketing fluff not supported by the source. "
             "Return ONLY a JSON object with keys: "
-            "name (max 80 chars, NO Chinese characters allowed), "
-            "short_description (max 300 chars plain text, NO Chinese characters), "
-            "description (HTML allowed, 200-600 words, NO Chinese characters), "
-            "tags (array of 5-8 short English keywords).\n\n"
+            + ", ".join(keys)
+            + ".\n\n"
             f"SOURCE_NAME: {name}\n"
             f"SOURCE_SHORT: {short_desc}\n"
             f"SOURCE_LONG: {long_desc}\n"
             f"SOURCE_TAGS: {', '.join(tags)}\n"
         )
+        if needs_variation_localization:
+            import json as _json_src
+            prompt += f"SOURCE_VARIANTS: {_json_src.dumps(variation_names, ensure_ascii=False)}\n"
 
         resp = await llm_complete(
             LLMRequest(
                 messages=[{"role": "user", "content": prompt}],
                 task_type="listing_localization",
                 temperature=0.3,
-                max_tokens=1500,
+                max_tokens=2500,
                 response_format="json_object",
             ),
         )
@@ -608,6 +651,35 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                 listing_data["description"] = localized_long
             if isinstance(localized_tags, list) and localized_tags:
                 listing_data["tags"] = [{"name": str(t)[:80]} for t in localized_tags[:10]]
+
+            # G1: 回填英文变体名。长度必须与源一致 —— 不一致说明模型漏项或多项，
+            # 此时宁可保留中文也不能错位（错位会把 A 规格的英文名安到 B 规格上，
+            # 变成价格与规格对不上的错误商品）。
+            localized_variants = localized.get("variation_names")
+            if needs_variation_localization and isinstance(localized_variants, list):
+                if len(localized_variants) == len(variation_names):
+                    applied = 0
+                    for i, var in enumerate(variations):
+                        if not isinstance(var, dict):
+                            continue
+                        new_label = str(localized_variants[i] or "").strip()
+                        if _has_cjk(new_label):
+                            new_label = re.sub(r'[\u4e00-\u9fff]+', '', new_label).strip()
+                        if new_label:
+                            var["name"] = new_label[:80]
+                            applied += 1
+                    logger.info(
+                        "Localized %d/%d variation labels for %s",
+                        applied, len(variation_names), localized_name or name,
+                    )
+                else:
+                    logger.warning(
+                        "variation_names length mismatch (%d returned vs %d source); "
+                        "keeping source labels to avoid price/spec mismatch",
+                        len(localized_variants), len(variation_names),
+                    )
+            elif needs_variation_localization:
+                logger.warning("Localization response missing variation_names; labels stay CJK")
 
             listing_data.setdefault("_localization", {
                 "status": "localized",

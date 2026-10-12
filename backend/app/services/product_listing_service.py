@@ -97,6 +97,33 @@ WC_CATEGORY_KEYWORD_MAP: list[tuple[tuple[str, ...], int]] = [
 # 无法判断品类时的户外兜底分类（避免落入 Uncategorized=15）
 WC_DEFAULT_CATEGORY_ID = 58  # Outdoor Accessories
 
+# G3 (2026-10-12): 可变属性（规格轴）名称。店铺前台是英文站，属性名必须是英文；
+# 且 1688 的规格常常混合颜色与尺寸/套装，用中性的 Style 比「颜色」更贴合语义。
+# 数据层若在 listing_data.attributes 里给出属性名，则以其为准。
+DEFAULT_VARIATION_ATTR_NAME = "Style"
+
+
+def _dedupe_preserve_order(values: list[Any]) -> list[Any]:
+    """去重并保持原始顺序（WooCommerce 的 options 顺序即前台展示顺序）。"""
+    seen: set[Any] = set()
+    result: list[Any] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _resolve_variation_attr_name(product: dict[str, Any]) -> str:
+    """取可变属性名：优先用 listing_data 提供的英文属性名，兜底 Style。"""
+    for attr in product.get("attributes") or []:
+        if isinstance(attr, dict):
+            name = str(attr.get("name") or "").strip()
+            if name:
+                return name
+    return DEFAULT_VARIATION_ATTR_NAME
+
 
 def map_category_to_wc(product_name: str = "", internal_category: str = "") -> list[dict[str, int]]:
     """按商品名 + 内部类目关键词映射到 WooCommerce 分类 term id。
@@ -350,8 +377,29 @@ def list_to_woocommerce(
         # 检查是否有 SKU 变体（用于变量产品）
         variations = product.get("variations", [])
         is_variable = len(variations) > 1
-        
+        # 父商品与变体必须共用同一个可变属性名（见 G3 说明）
+        variation_attr_name = _resolve_variation_attr_name(product)
+
         if is_variable:
+            # G3 (2026-10-12): 可变属性名此前硬编码为中文「颜色」，而 1688 的规格
+            # 选项常常混合颜色与尺寸/套装（如「小方桌三件套（黑色）」「95cm长桌（米色）」），
+            # 用一个中文「颜色」轴承载它们，在英文店铺里既不可读也语义错误。
+            # 改为优先采用 listing_data 给出的属性定义，兜底用英文中性名。
+            product_attributes = product.get("attributes")
+            if not isinstance(product_attributes, list) or not product_attributes:
+                # 去重且保持顺序（原实现用 set() 会打乱选项展示顺序）
+                opts = _dedupe_preserve_order(
+                    [v.get("name") for v in variations if v.get("name")]
+                )
+                product_attributes = [
+                    {
+                        "name": variation_attr_name,
+                        "position": 0,
+                        "visible": True,
+                        "variation": True,
+                        "options": opts,
+                    }
+                ]
             # 变量产品
             data = {
                 "name": product["name"],
@@ -364,15 +412,7 @@ def list_to_woocommerce(
                 "status": status,
                 "categories": product.get("categories", [{"id": 15}]),
                 "tags": product.get("tags", []),
-                "attributes": [
-                    {
-                        "name": "颜色",
-                        "position": 0,
-                        "visible": True,
-                        "variation": True,
-                        "options": list(set([v["name"] for v in variations if v.get("name")]))
-                    }
-                ],
+                "attributes": product_attributes,
             }
             if product.get("images"):
                 data["images"] = _normalize_wc_images(product["images"])
@@ -522,10 +562,11 @@ def list_to_woocommerce(
                         }
                         # 变体必须声明与父商品同名的可变属性，否则 WC 报
                         # product_invalid_variation_attribute。
+                        # G3: 属性名与父商品使用的轴名保持一致（不再硬编码「颜色」）。
                         var_name = str(var.get("name") or "").strip()
                         if var_name:
                             variation_data["attributes"] = [
-                                {"name": "颜色", "option": var_name}
+                                {"name": variation_attr_name, "option": var_name}
                             ]
 
                         existing_var_id = existing_variations.get(var_sku)
