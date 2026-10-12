@@ -94,7 +94,7 @@ export default function ProductPipeline() {
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0)
   const [importUrl, setImportUrl] = useState('')
   const [importLoading, setImportLoading] = useState(false)
-  const [autoRunPipeline, setAutoRunPipeline] = useState(false)
+  const [autoRunPipeline, setAutoRunPipeline] = useState(true)
   // 智能定价参数
   const [priceMarkup, setPriceMarkup] = useState(6.0)
   const [usdCnyRate, setUsdCnyRate] = useState(7.2)
@@ -413,7 +413,7 @@ export default function ProductPipeline() {
     }
   }
 
-  // 运行工作流（后端同步返回，直接单次请求）
+  // 运行工作流（异步提交，轮询获取结果，避免网关超时）
   const handleRunPipeline = async () => {
     try {
       const values = await form.validateFields()
@@ -442,9 +442,10 @@ export default function ProductPipeline() {
       const runHeaders: HeadersInit = { 'Content-Type': 'application/json' }
       if (runToken) runHeaders['Authorization'] = `Bearer ${runToken}`
 
-      message.loading({ content: '🔄 AI工作流运行中...', key: 'pipeline_progress', duration: 0 })
+      message.loading({ content: '正在提交工作流任务...', key: 'pipeline_progress', duration: 0 })
 
-      const resp = await fetch('/api/v1/product-pipeline/run', {
+      // 提交异步任务
+      const resp = await fetch('/api/v1/product-pipeline/run-async', {
         method: 'POST',
         headers: runHeaders,
         body: JSON.stringify({
@@ -453,30 +454,64 @@ export default function ProductPipeline() {
           include_images: false,
         }),
       })
+      const submitData = await resp.json()
 
-      message.destroy('pipeline_progress')
-
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
-
-      const data = await resp.json()
-
-      if (data.success || data.data) {
-        setPipelineResult(data as PipelineResult)
-        setHistory(prev => [data, ...prev].slice(0, 10))
-        const completed = data.data?.completed_steps || 0
-        const total = data.data?.total_steps || 6
-        const elapsed = data.data?.elapsed_time_seconds || 0
-        message.success(`✅ 工作流完成：${completed}/${total}步成功，耗时 ${elapsed}s`)
-        if (data.data?.steps?.listing_data?.data) {
-          setListingModalOpen(true)
-        }
-      } else {
-        message.error(data.error || '工作流执行失败')
+      if (!submitData.success || !submitData.data?.job_id) {
+        message.destroy('pipeline_progress')
+        message.error(submitData.error || '提交工作流任务失败')
+        setLoading(false)
+        return
       }
+
+      const jobId = submitData.data.job_id
+      message.loading({ content: '🔄 AI工作流运行中...', key: 'pipeline_progress', duration: 0 })
+
+      // 轮询任务状态
+      const TIMEOUT_MS = 10 * 60 * 1000 // 10分钟
+      const POLL_MS = 3000
+      const deadline = Date.now() + TIMEOUT_MS
+
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS))
+
+        const pollResp = await fetch(`/api/v1/product-pipeline/run-async/${jobId}`, {
+          headers: runHeaders,
+        })
+        const pollData = await pollResp.json()
+
+        if (pollData.success && pollData.data?.status === 'completed') {
+          message.destroy('pipeline_progress')
+          const resultData = pollData.data.data
+          if (resultData?.success) {
+            setPipelineResult(resultData as PipelineResult)
+            setHistory(prev => [resultData, ...prev].slice(0, 10))
+            const completed = resultData?.completed_steps || 0
+            const total = resultData?.total_steps || 6
+            const elapsed = resultData?.elapsed_time_seconds || 0
+            message.success(`✅ 工作流完成：${completed}/${total}步成功，耗时 ${elapsed}s`)
+            if (resultData?.steps?.listing_data?.data) {
+              setListingModalOpen(true)
+            }
+          } else {
+            message.error(resultData?.error || '工作流执行失败')
+          }
+          setLoading(false)
+          return
+        } else if (pollData.success && pollData.data?.status === 'failed') {
+          message.destroy('pipeline_progress')
+          message.error(pollData.data?.error || '工作流任务失败')
+          setLoading(false)
+          return
+        }
+      }
+
+      // 超时
+      message.destroy('pipeline_progress')
+      message.error('工作流任务超时，请稍后在历史记录查看')
+      setLoading(false)
     } catch (e: any) {
       message.destroy('pipeline_progress')
       message.error(e.message || '工作流执行失败')
-    } finally {
       setLoading(false)
     }
   }
