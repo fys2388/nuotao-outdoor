@@ -132,11 +132,12 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
         "default": False,
     },
     # --- Agnes AI (OpenAI-compatible T2I + I2I, verified 2026-10-05) ---
+    # PRIMARY provider: Agnes AI is the default for both main and detail images.
     "agnes-image-2.5-flash": {
         "cost_cny": 0.08,
         "provider": "agnes",
         "quality": "high",
-        "default": False,
+        "default": True,
         "free_quota": "platform-dependent",
         "api_style": "openai_images",
         "i2i_supported": True,
@@ -149,7 +150,10 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
     },
 }
 
-# Fallback chain: Seedream 5.0 pro (default) -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image.
+# Fallback chain: Agnes AI (primary) -> Seedream 5.0 pro -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image.
+#
+# Agnes AI is the PRIMARY provider for both main and detail images.
+# Fallbacks are used only when Agnes AI fails (API key missing, rate limit, etc.)
 #
 # P0-3: ``mock`` is deliberately NOT in this chain. A placeholder must never be
 # the terminal fallback of a production image request: when every real backend
@@ -157,12 +161,12 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
 # failure instead of an SVG that looks like a success. Tests that need a
 # placeholder must opt in explicitly with ``model="mock"``.
 FALLBACK_CHAIN: list[str] = [
+    "agnes-image-2.5-flash",
     "doubao-seedream-5-0-pro-260628",
     "doubao-seedream-5-0-260128",
     "doubao-seedream-4-5-251128",
     "doubao-seedream-4-0-250828",
     "qwen-image-3.0",
-    "agnes-image-2.5-flash",
 ]
 
 #: Placeholder backend, test/dev only. Never a production success path (P0-3).
@@ -170,7 +174,7 @@ MOCK_MODEL = "mock"
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_RETRIES = 2
-DEFAULT_MODEL = "doubao-seedream-5-0-pro-260628"
+DEFAULT_MODEL = "agnes-image-2.5-flash"
 
 
 def list_available_models() -> list[dict[str, Any]]:
