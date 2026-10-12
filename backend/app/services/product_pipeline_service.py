@@ -1,14 +1,21 @@
-﻿"""
-浜у搧绔埌绔伐浣滄祦鏈嶅姟锛圥2-2锛?
-涓茶仈閫夊搧鈫掍骇鍝佸垎鏋愨啋涓诲浘鐢熶骇鈫掔敓鍥綪rompt鈫掍笂鏋禬ooCommerce鐨勪竴閿祦杞€?
-宸ヤ綔娴佹楠わ細
-Step 1: 鍟嗗搧淇℃伅杈撳叆锛堜粠鐗涢】閫夊搧缁撴灉瀵煎叆鎴栨墜鍔ㄨ緭鍏ワ級
-Step 2: AI浜у搧鍒嗘瀽锛?0瀛楁璇嗗埆 + 17瀛楁浜у搧鎶ュ憡锛?Step 3: 涓诲浘鐢熶骇锛?濂楁柟鍚?+ 鐭枃妗?+ 10涓彉浣擄級
-Step 4: 鐢熷浘Prompt鐢熸垚锛堜富鍥綪rompt + 璇︽儏椤礟rompt锛?Step 5: 涓婃灦鏁版嵁鐢熸垚锛堝悕绉?鎻忚堪/浠锋牸/SKU/鍒嗙被/鏍囩锛?Step 6: 涓婃灦WooCommerce锛堝彲閫夛紝浜哄伐纭鍚庢墽琛岋級
+"""
+产品端到端工作流服务（P2-2）
 
-閬靛惊AGENTS.md瑙勮寖锛?- 涓氬姟瑙勫垯闆嗕腑鍦ㄦ湇鍔″眰
-- Agent绂佹鐩磋繛鏁版嵁搴擄紝閫氳繃services灞傝闂?- 鍏ㄩ摼璺彲瀹¤
-- Human-in-the-loop锛氫笂鏋跺墠蹇呴』浜哄伐纭
+串联选品→产品分析→主图生产→生图Prompt→上架WooCommerce的一键流转。
+
+工作流步骤：
+Step 1: 商品信息输入（从牛顿选品结果导入或手动输入）
+Step 2: AI产品分析（10字段识别 + 17字段产品报告）
+Step 3: 主图生产（3套方向 + 短文案 + 10个变体）
+Step 4: 生图Prompt生成（主图Prompt + 详情页Prompt）
+Step 5: 上架数据生成（名称/描述/价格/SKU/分类/标签）
+Step 6: 上架WooCommerce（可选，人工确认后执行）
+
+遵循AGENTS.md规范：
+- 业务规则集中在服务层
+- Agent禁止直连数据库，通过services层访问
+- 全链路可审计
+- Human-in-the-loop：上架前必须人工确认
 """
 
 from __future__ import annotations
@@ -56,11 +63,12 @@ from app.services.llm_gateway import LLMRequest, complete as llm_complete
 
 logger = logging.getLogger(__name__)
 
-# 鏈嶅姟閰嶇疆
+# 服务配置
 SERVICE_NAME = "product_pipeline"
 SERVICE_VERSION = "1.0.0"
 
-# 宸ヤ綔娴佺姸鎬?PIPELINE_STATUS = {
+# 工作流状态
+PIPELINE_STATUS = {
     "PENDING": "pending",
     "RUNNING": "running",
     "COMPLETED": "completed",
@@ -68,35 +76,39 @@ SERVICE_VERSION = "1.0.0"
     "PARTIAL": "partial",
 }
 
-# 姝ラ瀹氫箟
+# 步骤定义
 PIPELINE_STEPS = [
-    {"id": "input", "name": "鍟嗗搧淇℃伅杈撳叆", "description": "浠庣墰椤块€夊搧缁撴灉瀵煎叆鎴栨墜鍔ㄨ緭鍏ュ晢鍝佷俊鎭?},
-    {"id": "analysis", "name": "AI浜у搧鍒嗘瀽", "description": "10瀛楁AI璇嗗埆 + 17瀛楁浜у搧淇℃伅鎶ュ憡"},
-    {"id": "readiness", "name": "鏁版嵁灏辩华闂ㄧ", "description": "SOP Step 1.5: 妫€鏌ラ噸閲?灏哄/鏉愯川/鍏呯數鍙ｇ瓑涓婃灦鍏抽敭瀛楁瀹屾暣鎬?},
-    {"id": "main_image", "name": "涓诲浘鐢熶骇", "description": "3濂椾富鍥炬柟鍚?+ 鐭枃妗?+ 10涓彉浣?},
-    {"id": "prompt", "name": "鐢熷浘Prompt鐢熸垚", "description": "涓诲浘Prompt + 璇︽儏椤礟rompt"},
-    {"id": "listing_data", "name": "涓婃灦鏁版嵁鐢熸垚", "description": "鍚嶇О/鎻忚堪/浠锋牸/SKU/鍒嗙被/鏍囩"},
-    {"id": "v3_gate", "name": "V3.0閫夊搧闂搁棬", "description": "Nuotao Score 鍏淮璇勫垎 + V1-V12 涓€绁ㄥ惁鍐?+ 婕忔枟闃舵鍒ゅ畾"},
-    {"id": "listing", "name": "涓婃灦WooCommerce", "description": "浜哄伐纭鍚庝笂鏋跺埌WooCommerce"},
+    {"id": "input", "name": "商品信息输入", "description": "从牛顿选品结果导入或手动输入商品信息"},
+    {"id": "analysis", "name": "AI产品分析", "description": "10字段AI识别 + 17字段产品信息报告"},
+    {"id": "readiness", "name": "数据就绪门禁", "description": "SOP Step 1.5: 检查重量/尺寸/材质/充电口等上架关键字段完整性"},
+    {"id": "main_image", "name": "主图生产", "description": "3套主图方向 + 短文案 + 10个变体"},
+    {"id": "prompt", "name": "生图Prompt生成", "description": "主图Prompt + 详情页Prompt"},
+    {"id": "listing_data", "name": "上架数据生成", "description": "名称/描述/价格/SKU/分类/标签"},
+    {"id": "v3_gate", "name": "V3.0选品闸门", "description": "Nuotao Score 六维评分 + V1-V12 一票否决 + 漏斗阶段判定"},
+    {"id": "listing", "name": "上架WooCommerce", "description": "人工确认后上架到WooCommerce"},
 ]
 
-# V3.0 闂搁棬鍒ゅ畾闃堝€硷細11 缁磋繍钀ュ垎瑕嗙洊鐜囦綆浜庢鍊兼椂锛屽鏁板搧鐗岀淮搴﹀彇鐨勬槸涓€?# 榛樿鍒嗭紝姝ゆ椂绠楀嚭鐨?Reject 绛夌骇鏄€屾暟鎹笉瓒炽€嶇殑浜х墿鑰岄潪鐪熷疄浣庡垎锛岃浆浜哄伐
-# 澶嶆牳鑰屼笉鏄‖闃绘柇锛岄伩鍏嶉椄闂ㄥ湪缂烘暟鎹樁娈佃鏉€鍏ㄩ儴鍊欓€夈€?GATE_MIN_COVERAGE_RATIO = 0.30
+# V3.0 闸门判定阈值：11 维运营分覆盖率低于此值时，多数品牌维度取的是中性
+# 默认分，此时算出的 Reject 等级是「数据不足」的产物而非真实低分，转人工
+# 复核而不是硬阻断，避免闸门在缺数据阶段误杀全部候选。
+GATE_MIN_COVERAGE_RATIO = 0.30
 
-# 闂搁棬涓夌缁撹锛歜locked 鏈変竴绁ㄥ惁鍐崇殑纭畾鎬ц瘉鎹紝蹇呴』闃绘柇涓婃灦锛沶eeds_review
-# 鏃犲惁鍐充絾璇勫垎涓嶈冻浠ヨ嚜鍔ㄦ斁琛岋紱passed 鍙嚜鍔ㄦ斁琛屻€?GATE_BLOCKED = "blocked"
+# 闸门三种结论：blocked 有一票否决的确定性证据，必须阻断上架；needs_review
+# 无否决但评分不足以自动放行；passed 可自动放行。
+GATE_BLOCKED = "blocked"
 GATE_NEEDS_REVIEW = "needs_review"
 GATE_PASSED = "passed"
 
-# 婕忔枟闃舵鍙栧€硷紙涓?nuotao_selection_service 鍐欏叆 products.funnel_stage 涓€鑷达級銆?FUNNEL_REJECTED = "rejected"
+# 漏斗阶段取值（与 nuotao_selection_service 写入 products.funnel_stage 一致）。
+FUNNEL_REJECTED = "rejected"
 
 
 class PipelineError(Exception):
-    """宸ヤ綔娴佸紓甯?""
+    """工作流异常"""
 
 
 def get_pipeline_status() -> dict[str, Any]:
-    """鑾峰彇宸ヤ綔娴佹湇鍔＄姸鎬?""
+    """获取工作流服务状态"""
     return {
         "service": SERVICE_NAME,
         "version": SERVICE_VERSION,
@@ -107,15 +119,15 @@ def get_pipeline_status() -> dict[str, Any]:
 
 
 def _safe_get(data: dict[str, Any], key: str, default: str = "") -> str:
-    """瀹夊叏鑾峰彇瀛楀吀鍊?""
+    """安全获取字典值"""
     value = data.get(key, default)
     if isinstance(value, list):
-        return "銆?.join(str(v) for v in value)
+        return "、".join(str(v) for v in value)
     return str(value) if value else default
 
 
 def _safe_get_list(data: dict[str, Any], key: str, default: list[str] | None = None) -> list[str]:
-    """瀹夊叏鑾峰彇鍒楄〃鍊?""
+    """安全获取列表值"""
     value = data.get(key, default or [])
     if isinstance(value, list):
         return [str(v) for v in value]
@@ -125,19 +137,29 @@ def _safe_get_list(data: dict[str, Any], key: str, default: list[str] | None = N
 def _generate_sku(
     product_name: str, category: str = "", offer_id: str | None = None
 ) -> str:
-    """鐢熸垚绾?ASCII 鐨?SKU锛堣法澧冩笭閬撹姹傦細鏃犱腑鏂囥€佹棤绌烘牸銆佹棤绌烘锛夈€?
-    瑙勫垯锛?
-    - **鏈?1688 offer id**锛歚`NT-<offer_id>``銆傚畬鍏ㄧ敱鏉ユ簮鍐冲畾锛?*鍒绘剰涓嶅惈鏍囬璇?*
-      鈥斺€旀爣棰樻潵鑷?LLM锛屾帾杈炰細婕傜Щ銆係KU 閲屼竴鏃︽幒杩涗細婕傜Щ鐨勬枃鏈紝鍚屼竴涓?offer 鍦?      涓嶅悓杩愯閲屽氨浼氬緱鍒颁笉鍚?SKU锛屼簬鏄?SKU 鏌ラ噸澶辨晥锛學ooCommerce 渚х殑 SKU 鍞竴鎬?      涔熸嫤涓嶄綇閲嶅寤哄晢鍝併€?    - **鏃?offer id**锛歚`NT-<鍏抽敭璇?-<MMDDHHMM>``銆傛病鏈夌ǔ瀹氭爣璇嗘椂鍙兘闈犳椂闂存埑锛?      姝ゆ椂淇濈暀鏍囬璇嶈嚦灏戣繕鏈夊彲璇绘€с€?
-    闈?ASCII 瀛楃锛堝惈涓枃锛夋暣浣撳墧闄わ紱鑻ュ墧闄ゅ悗娌℃湁鍙敤鎷変竵璇嶏紙绾腑鏂囧悕锛夛紝閫€鍥炲埌
-    鑻辨枃绫荤洰璇嶆垨 OUTDOOR锛屾渶鍚庣粺涓€娓呮礂杩炵画杩炲瓧绗︿笌绌烘锛屾潨缁濆弻杩炲瓧绗︺€?    """
-    if offer_id:
-        # 纭畾鎬?SKU锛氬悓涓€涓?1688 offer 姘歌繙鏄犲皠鍒板悓涓€涓?SKU锛屼笖涓?LLM 鏍囬鏃犲叧銆?        return f"NT-{offer_id}"
+    """生成纯 ASCII 的 SKU（跨境渠道要求：无中文、无空格、无空段）。
 
-    # 鍙繚鐣?ASCII 瀛楁瘝/鏁板瓧锛屽叾浣欏叏閮ㄨ浆鎴愬垎闅旂
+    规则：
+
+    - **有 1688 offer id**：``NT-<offer_id>``。完全由来源决定，**刻意不含标题词**
+      ——标题来自 LLM，措辞会漂移。SKU 里一旦掺进会漂移的文本，同一个 offer 在
+      不同运行里就会得到不同 SKU，于是 SKU 查重失效，WooCommerce 侧的 SKU 唯一性
+      也拦不住重复建商品。
+    - **无 offer id**：``NT-<关键词>-<MMDDHHMM>``。没有稳定标识时只能靠时间戳，
+      此时保留标题词至少还有可读性。
+
+    非 ASCII 字符（含中文）整体剔除；若剔除后没有可用拉丁词（纯中文名），退回到
+    英文类目词或 OUTDOOR，最后统一清洗连续连字符与空段，杜绝双连字符。
+    """
+    if offer_id:
+        # 确定性 SKU：同一个 1688 offer 永远映射到同一个 SKU，且与 LLM 标题无关。
+        return f"NT-{offer_id}"
+
+    # 只保留 ASCII 字母/数字，其余全部转成分隔符
     ascii_only = re.sub(r"[^A-Za-z0-9]+", "-", product_name or "")
     tokens = [tok for tok in ascii_only.split("-") if tok]
-    # 鍙栧墠涓や釜鏈夋剰涔夌殑鑻辨枃璇嶏紝姣忚瘝鏈€澶?6 瀛楃锛岄伩鍏嶈繃闀?    stop = {"THE", "AND", "FOR", "WITH", "HIGH", "BACK", "PORTABLE", "FOLDING", "CHAIR"}
+    # 取前两个有意义的英文词，每词最多 6 字符，避免过长
+    stop = {"THE", "AND", "FOR", "WITH", "HIGH", "BACK", "PORTABLE", "FOLDING", "CHAIR"}
     picked: list[str] = []
     for tok in tokens:
         up = tok.upper()
@@ -149,14 +171,14 @@ def _generate_sku(
     core = "-".join(picked) if picked else ""
 
     if not core:
-        # 绾腑鏂囧悕绛夋棤鎷変竵璇嶅満鏅細鐢ㄨ嫳鏂囩被鐩垨鍥哄畾鍓嶇紑
+        # 纯中文名等无拉丁词场景：用英文类目或固定前缀
         cat_ascii = re.sub(r"[^A-Za-z0-9]+", "-", category or "")
         cat_tokens = [t.upper()[:6] for t in cat_ascii.split("-") if t]
         core = "-".join(cat_tokens[:2]) if cat_tokens else "OUTDOOR"
 
     timestamp = datetime.now().strftime("%m%d%H%M")
     sku = f"NT-{core}-{timestamp}"
-    # 鍏滃簳锛氬啀娆″帇缂╄繛缁繛瀛楃銆佸幓鎺夐灏捐繛瀛楃锛屼繚璇佹棤绌烘
+    # 兜底：再次压缩连续连字符、去掉首尾连字符，保证无空段
     sku = re.sub(r"-+", "-", sku).strip("-")
     return sku
 
@@ -225,37 +247,41 @@ def _generate_listing_data(
     main_image_result: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    鐢熸垚涓婃灦鏁版嵁
+    生成上架数据
 
     Args:
-        product_info: 鍟嗗搧淇℃伅
-        product_report: 浜у搧鎶ュ憡
-        main_image_result: 涓诲浘鐢熶骇缁撴灉
+        product_info: 商品信息
+        product_report: 产品报告
+        main_image_result: 主图生产结果
 
     Returns:
-        涓婃灦鏁版嵁
+        上架数据
     """
-    # 浜у搧鍚嶇О锛堜紭鍖栧悗鐨勭數鍟嗗悕绉帮級
-    product_name = _safe_get(product_report, "product_name", _safe_get(product_info, "name", "浜у搧"))
+    # 产品名称（优化后的电商名称）
+    product_name = _safe_get(product_report, "product_name", _safe_get(product_info, "name", "产品"))
 
-    # 浜у搧鎻忚堪锛堥暱鎻忚堪锛?    product_description = _safe_get(product_report, "product_description", "")
+    # 产品描述（长描述）
+    product_description = _safe_get(product_report, "product_description", "")
     if not product_description:
-        # 浠庡崠鐐瑰拰鍔熻兘鎷兼帴鎻忚堪
+        # 从卖点和功能拼接描述
         selling_points = _safe_get_list(product_report, "core_selling_points", [])
         features = _safe_get_list(product_report, "product_features", [])
         desc_parts = []
         if selling_points:
-            desc_parts.append("銆愭牳蹇冨崠鐐广€慭n" + "\n".join(f"鈥?{sp}" for sp in selling_points))
+            desc_parts.append("【核心卖点】\n" + "\n".join(f"• {sp}" for sp in selling_points))
         if features:
-            desc_parts.append("銆愪骇鍝佸姛鑳姐€慭n" + "\n".join(f"鈥?{f}" for f in features))
+            desc_parts.append("【产品功能】\n" + "\n".join(f"• {f}" for f in features))
         product_description = "\n\n".join(desc_parts)
 
-    # 鐭弿杩?    short_description = _safe_get(product_info, "description", "")
+    # 短描述
+    short_description = _safe_get(product_info, "description", "")
     if not short_description:
         short_description = product_description[:100] + "..." if len(product_description) > 100 else product_description
 
-    # 浠锋牸锛堜粠1688浠锋牸鎺ㄧ畻锛屼娇鐢?Nuotao 瀹氫环绛栫暐锛?    # 绛栫暐锛氶噰璐环(CNY) / 姹囩巼 脳 鍊嶆暟 = 缇庡厓鍞环
-    # 榛樿姹囩巼 7.2锛岄粯璁ゅ€嶆暟 6.0锛堜繚璇佸叏鎴愭湰鍒╂鼎鐜?> 60%锛?    PRICE_MARKUP_MULTIPLIER = float(_safe_get(product_info, "price_markup", "6.0"))
+    # 价格（从1688价格推算，使用 Nuotao 定价策略）
+    # 策略：采购价(CNY) / 汇率 × 倍数 = 美元售价
+    # 默认汇率 7.2，默认倍数 6.0（保证全成本利润率 > 60%）
+    PRICE_MARKUP_MULTIPLIER = float(_safe_get(product_info, "price_markup", "6.0"))
     USD_CNY_RATE = float(_safe_get(product_info, "usd_cny_rate", "7.2"))
 
     price_str = _safe_get(product_info, "price", "")
@@ -265,7 +291,7 @@ def _generate_listing_data(
         price_match = re.search(r'[\d.]+', price_str)
         if price_match:
             source_price_cny = float(price_match.group())
-            # CNY 鈫?USD锛屽啀涔樹互瀹氫环鍊嶆暟
+            # CNY → USD，再乘以定价倍数
             regular_price = f"{source_price_cny / USD_CNY_RATE * PRICE_MARKUP_MULTIPLIER:.2f}"
             logger.info(
                 "Price calculated: CNY %.2f / %.2f * %.1f = USD %s",
@@ -274,7 +300,8 @@ def _generate_listing_data(
     except Exception:
         pass
 
-    # SKU锛氭湁 1688 offer id 鏃剁敤纭畾鎬?SKU锛屽悓涓€涓摼鎺ヤ笉浼氬洜瀵煎叆鏃堕棿涓嶅悓鑰屾崲 SKU銆?    from app.services.product_source_identity import resolve_source_offer_id
+    # SKU：有 1688 offer id 时用确定性 SKU，同一个链接不会因导入时间不同而换 SKU。
+    from app.services.product_source_identity import resolve_source_offer_id
 
     sku = _generate_sku(
         product_name,
@@ -285,11 +312,14 @@ def _generate_listing_data(
         ),
     )
 
-    # 鍒嗙被锛氭寜鍟嗗搧鍚?+ 鍐呴儴绫荤洰鏄犲皠鍒?WooCommerce 鐪熷疄鍒嗙被 term id
-    # 锛堟棫閫昏緫纭紪鐮佸唴閮?id 15锛屾伆濂界瓑浜?WC 鐨?Uncategorized锛屽鑷村叏閮ㄥ綊鍒版湭鍒嗙被锛?    category = _safe_get(product_info, "category", "")
+    # 分类：按商品名 + 内部类目映射到 WooCommerce 真实分类 term id
+    # （旧逻辑硬编码内部 id 15，恰好等于 WC 的 Uncategorized，导致全部归到未分类）
+    category = _safe_get(product_info, "category", "")
     categories = map_category_to_wc(product_name, category)
 
-    # 鏍囩锛氫繚鐣欏畬鏁存枃鏈€傛棫瀹炵幇鎴柇鍒?10 瀛楃锛屼腑鏂囨爣绛惧叆搴撳嵆娈嬬己锛?    # 鐩存帴褰卞搷 WooCommerce 绔悳绱笌杩囨护锛涢暱搴︿笂闄愭斁瀹藉埌 60 瀛楃闃叉瀬绔暱鍙ャ€?    tags = []
+    # 标签：保留完整文本。旧实现截断到 10 字符，中文标签入库即残缺，
+    # 直接影响 WooCommerce 端搜索与过滤；长度上限放宽到 60 字符防极端长句。
+    tags = []
     selling_points = _safe_get_list(product_report, "core_selling_points", [])
     for sp in selling_points[:3]:
         tags.append({"name": sp.strip()[:60]})
@@ -297,16 +327,25 @@ def _generate_listing_data(
     for scenario in usage_scenarios[:2]:
         tags.append({"name": scenario.strip()[:60]})
 
-    # 涓婃灦浼樺厛浣跨敤宸插鍏ョ殑 1688 鍘熷浘锛汚I 鐢熷浘缁撴灉闇€瀹℃牳鍚庡啓鍥炲晢鍝佸獟浣撳瓧娈点€?    # A-3 fix (2026-09-18): 鎶婂浘鐗囨媶鎴?main_images / detail_images 涓や釜瀛楁锛?    # 涓?check_image_gate 鐨勪富鍥?5 + 璇︽儏鍥?6 璇箟瀵归綈銆?688 鍘熷浘榛樿褰掑叆
-    # main_images锛堝彇鍓?5 寮狅級锛宒etail_images 鐣欑┖鐢辨壒閲忕敓鍥惧～鍏咃紱
-    # images 淇濈暀鎵佸钩鍚堝苟鏁扮粍鍋氬悜鍚庡吋瀹癸紙WC API 涓庢棫鍓嶇浠嶈姝ゅ瓧娈碉級銆?    # P0-6: 宸插鎵圭殑 Creative Asset 鐢?attach_approved_image 鍐欏叆
-    # product.meta["media"]["images"]锛屾鍓嶄粠鏈繘鍏?listing data锛屽鑷?    # check_image_gate 鐨?5+6 闂ㄧ姘歌繙鏃犳硶閫氳繃銆傚鎵瑰悗鐨勭湡瀹炲浘鐗囩幇鍦ㄥ苟鍏?    # 鍥剧墖闆嗭紙1688 鍘熷浘鍦ㄥ墠锛屼繚鎸佸師鏈夋帓搴忥級锛屼笖鍏ㄩ儴杩囨护涓哄彲鎶撳彇鐨勭湡瀹?    # HTTP(S) URL 鈥斺€?data: URI / mock 鍗犱綅鍥?/ 鏈湴璺緞涓€寰嬩涪寮冦€?    approved_images = _collect_approved_media_urls(product_info)
+    # 上架优先使用已导入的 1688 原图；AI 生图结果需审核后写回商品媒体字段。
+    # A-3 fix (2026-09-18): 把图片拆成 main_images / detail_images 两个字段，
+    # 与 check_image_gate 的主图 5 + 详情图 6 语义对齐。1688 原图默认归入
+    # main_images（取前 5 张），detail_images 留空由批量生图填充；
+    # images 保留扁平合并数组做向后兼容（WC API 与旧前端仍读此字段）。
+    # P0-6: 已审批的 Creative Asset 由 attach_approved_image 写入
+    # product.meta["media"]["images"]，此前从未进入 listing data，导致
+    # check_image_gate 的 5+6 门禁永远无法通过。审批后的真实图片现在并入
+    # 图片集（1688 原图在前，保持原有排序），且全部过滤为可抓取的真实
+    # HTTP(S) URL —— data: URI / mock 占位图 / 本地路径一律丢弃。
+    approved_images = _collect_approved_media_urls(product_info)
     all_1688_images = [
         {"src": url}
         for url in _dedupe_real_image_urls(product_info.get("images"))
     ]
 
-    # BUG #5 fix: 鍚堝苟 AI 鐢熸垚鍥剧墖銆傝法鏉ユ簮鍏ㄥ眬鍘婚噸 鈥斺€?鍚屼竴 URL 鍑虹幇鍦?    # 1688 鍘熷浘涓庣敓鎴愮粨鏋滀腑鏃跺彧淇濈暀棣栨鍑虹幇锛岄伩鍏?WC 閲嶅鍥剧墖涓庤櫄澧炶鏁般€?    generated_images: list[dict[str, str]] = []
+    # BUG #5 fix: 合并 AI 生成图片。跨来源全局去重 —— 同一 URL 出现在
+    # 1688 原图与生成结果中时只保留首次出现，避免 WC 重复图片与虚增计数。
+    generated_images: list[dict[str, str]] = []
     if isinstance(main_image_result, dict):
         generated_images = [
             {"src": url}
@@ -326,7 +365,10 @@ def _generate_listing_data(
         seen_urls.add(url)
         all_images.append({"src": url})
 
-    main_images = all_images[:5]  # 鏈€澶氬彇 5 寮犱綔涓轰富鍥?    detail_images: list[dict[str, str]] = all_images[5:]  # 鍓╀綑浣滀负璇︽儏鍥?    images = main_images + detail_images  # 鎵佸钩鍚堝苟锛屽悜鍚庡吋瀹?
+    main_images = all_images[:5]  # 最多取 5 张作为主图
+    detail_images: list[dict[str, str]] = all_images[5:]  # 剩余作为详情图
+    images = main_images + detail_images  # 扁平合并，向后兼容
+
     logger.info(
         "Listing: %d 1688 + %d generated + %d approved = %d total",
         len(all_1688_images), len(generated_images),
@@ -341,8 +383,8 @@ def _generate_listing_data(
         "short_description": short_description,
         "sku": sku,
         "manage_stock": True,
-        "stock_quantity": 100,  # 榛樿搴撳瓨
-        "status": "draft",  # 榛樿鑽夌锛屼汉宸ョ‘璁ゅ悗鍙戝竷
+        "stock_quantity": 100,  # 默认库存
+        "status": "draft",  # 默认草稿，人工确认后发布
         "categories": categories,
         "tags": tags,
         "images": images,
@@ -351,7 +393,7 @@ def _generate_listing_data(
         "meta_data": [
             {"key": "source", "value": "1688"},
             {"key": "source_price", "value": price_str},
-            {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} 脳 {PRICE_MARKUP_MULTIPLIER} = USD {regular_price}" if regular_price else ""},
+            {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {regular_price}" if regular_price else ""},
             {"key": "pipeline_id", "value": str(uuid.uuid4())},
         ],
     }
@@ -359,22 +401,26 @@ def _generate_listing_data(
 
 
 
-# 鐩爣甯傚満榛樿缇庡浗鈥斺€斾笂鏋?WooCommerce 鐨勫晢鍝佹枃妗堝繀椤讳负鑻辨枃銆?# 璇ュ嚱鏁版妸 Step 5 鐢熸垚鐨勪腑鏂?涓嫳娣锋帓 listing 浜ょ粰 LLM 鍋氫竴娆¤嫳鏂囨湰鍦板寲锛?# 澶辫触鏃堕檷绾т繚鐣欏師鏂囧苟鍦?warnings 閲屾爣娉紝涓嶉樆濉炰富娴佺▼銆?def _has_cjk(text: str) -> bool:
-    """绮楀垽鏂囨湰鏄惁鍚腑鏂囧瓧绗︺€?""
+# 目标市场默认美国——上架 WooCommerce 的商品文案必须为英文。
+# 该函数把 Step 5 生成的中文/中英混排 listing 交给 LLM 做一次英文本地化，
+# 失败时降级保留原文并在 warnings 里标注，不阻塞主流程。
+def _has_cjk(text: str) -> bool:
+    """粗判文本是否含中文字符。"""
     if not text:
         return False
     return any('\u4e00' <= ch <= '\u9fff' for ch in text)
 
 
 async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[str, Any]:
-    """鎶婁笂鏋舵暟鎹腑鐨?name / short_description / description / tags 鏈湴鍖栧埌鑻辨枃銆?""
+    """把上架数据中的 name / short_description / description / tags 本地化到英文。"""
     try:
         name = listing_data.get("name", "") or ""
         short_desc = listing_data.get("short_description", "") or ""
         long_desc = listing_data.get("description", "") or ""
         tags = [t.get("name", "") for t in listing_data.get("tags", []) if isinstance(t, dict)]
 
-        # 涓嶉渶瑕佹湰鍦板寲灏辫烦杩?        if not (_has_cjk(name) or _has_cjk(short_desc) or _has_cjk(long_desc)
+        # 不需要本地化就跳过
+        if not (_has_cjk(name) or _has_cjk(short_desc) or _has_cjk(long_desc)
                  or any(_has_cjk(t) for t in tags)):
             listing_data.setdefault("_localization", {"status": "skipped", "reason": "no CJK content"})
             return listing_data
@@ -409,17 +455,18 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
         localized = _json.loads(resp.content)
 
         if isinstance(localized, dict):
-            # === 缈昏瘧鍚庨獙璇侊細纭繚娌℃湁涓枃娈嬬暀 ===
+            # === 翻译后验证：确保没有中文残留 ===
             localized_name = str(localized.get("name", ""))[:120]
             localized_short = str(localized.get("short_description", ""))[:500]
             localized_long = str(localized.get("description", ""))
             localized_tags = localized.get("tags", [])
 
-            # 妫€鏌ョ炕璇戠粨鏋滄槸鍚﹁繕鏈変腑鏂?            if _has_cjk(localized_name):
+            # 检查翻译结果是否还有中文
+            if _has_cjk(localized_name):
                 logger.warning("Localized name still contains CJK: %s", localized_name)
-                # 灏濊瘯绉婚櫎涓枃锛屽彧淇濈暀 ASCII 瀛楃
+                # 尝试移除中文，只保留 ASCII 字符
                 localized_name = re.sub(r'[\u4e00-\u9fff]+', '', localized_name).strip()
-                # 濡傛灉绉婚櫎鍚庝负绌猴紝浣跨敤鍘熷鍚嶇О鐨?ASCII 閮ㄥ垎
+                # 如果移除后为空，使用原始名称的 ASCII 部分
                 if not localized_name:
                     localized_name = re.sub(r'[^A-Za-z0-9\s\-]', '', name).strip()[:120]
 
@@ -432,13 +479,13 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                 localized_long = re.sub(r'[\u4e00-\u9fff]+', '', localized_long).strip()
 
             if isinstance(localized_tags, list) and localized_tags:
-                # 杩囨护鎺夊寘鍚腑鏂囩殑鏍囩
+                # 过滤掉包含中文的标签
                 localized_tags = [t for t in localized_tags if not _has_cjk(str(t))]
 
-            # 搴旂敤缈昏瘧缁撴灉
+            # 应用翻译结果
             if localized_name:
                 listing_data["name"] = localized_name
-                # 鑻辨枃鏍囬纭畾鍚庯紝閲嶆柊鐢熸垚绾?ASCII SKU锛岃鐩?Step5 鍩轰簬涓枃鍚嶇敓鎴愮殑 SKU
+                # 英文标题确定后，重新生成纯 ASCII SKU，覆盖 Step5 基于中文名生成的 SKU
                 try:
                     from app.services.product_source_identity import (
                         resolve_source_offer_id,
@@ -486,15 +533,16 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
     return listing_data
 
 
-# 涓诲浘鏂瑰悜 鈫?鑻辨枃鑳屾櫙/鐢婚潰鎻忚堪锛堢敓鍥?prompt 蹇呴』鑻辨枃鍖栵紝涓讳綋涓嶅厑璁镐繚鐣欎腑鏂囧悕锛?_EN_BG_BY_KEY: dict[str, str] = {
+# 主图方向 → 英文背景/画面描述（生图 prompt 必须英文化，主体不允许保留中文名）
+_EN_BG_BY_KEY: dict[str, str] = {
     "white_background": "pure white background, clean and minimal e-commerce studio shot, soft even lighting, product centered",
     "real_scene": "realistic outdoor lifestyle scene in nature, natural daylight, immersive usage context, product clearly visible",
     "promotion_conversion": "vibrant promotional background with strong visual impact, sale campaign mood, bold composition",
 }
 _EN_BG_BY_NAME: dict[str, str] = {
-    "鐧藉簳娓呯埥": _EN_BG_BY_KEY["white_background"],
-    "鐪熷疄鍦烘櫙": _EN_BG_BY_KEY["real_scene"],
-    "淇冮攢杞寲": _EN_BG_BY_KEY["promotion_conversion"],
+    "白底清爽": _EN_BG_BY_KEY["white_background"],
+    "真实场景": _EN_BG_BY_KEY["real_scene"],
+    "促销转化": _EN_BG_BY_KEY["promotion_conversion"],
 }
 
 
@@ -503,19 +551,25 @@ def _english_subject_prompt(english_name: str) -> str:
 
 
 def localize_main_image_prompts(main_image_data: dict[str, Any], english_name: str) -> dict[str, Any]:
-    """鎶婁富鍥剧敓浜х粨鏋滈噷鐢ㄤ簬鐢熷浘鐨勬柟鍚?prompt 涓讳綋/鑳屾櫙鏀瑰啓涓鸿嫳鏂囥€?
-    Step3 涓诲浘鐢熶骇鍦?Step5 鑻辨枃鍖栦箣鍓嶈繍琛岋紝鏂瑰悜 prompt 鐨勪富浣撳師鏈槸涓枃鍚嶃€?    鍦ㄦ嬁鍒拌嫳鏂?listing 鏍囬鍚庡洖濉紝淇濊瘉鏈€缁堥€佽繘鐢熷浘妯″瀷鐨?prompt 鍏ㄨ嫳鏂囥€?    灏卞湴鏇存柊骞惰繑鍥?main_image_data銆?    """
+    """把主图生产结果里用于生图的方向 prompt 主体/背景改写为英文。
+
+    Step3 主图生产在 Step5 英文化之前运行，方向 prompt 的主体原本是中文名。
+    在拿到英文 listing 标题后回填，保证最终送进生图模型的 prompt 全英文。
+    就地更新并返回 main_image_data。
+    """
     if not main_image_data or not english_name:
         return main_image_data
     subject_en = _english_subject_prompt(english_name)
     try:
-        # 1) 椤跺眰鎵佸钩 directions 鏁扮粍锛堝墠绔洿鎺ヨ鍙?鐢ㄤ簬鐢熷浘锛?        for d in main_image_data.get("directions", []) or []:
+        # 1) 顶层扁平 directions 数组（前端直接读取/用于生图）
+        for d in main_image_data.get("directions", []) or []:
             if not isinstance(d, dict):
                 continue
             bg_en = _EN_BG_BY_NAME.get(str(d.get("name", ""))) or _EN_BG_BY_KEY["white_background"]
             d["prompt"] = f"Subject: {subject_en} | Background: {bg_en}"
             prompt_block = d.get("prompt")
-        # 2) 搴曞眰 step02 涓夋柟鍚戠粨鏋?        workflow = main_image_data.get("workflow", {}) or {}
+        # 2) 底层 step02 三方向结构
+        workflow = main_image_data.get("workflow", {}) or {}
         step02 = workflow.get("step02_three_directions", {}) or {}
         for key, d in (step02.get("directions", {}) or {}).items():
             if not isinstance(d, dict):
@@ -533,9 +587,13 @@ def localize_main_image_prompts(main_image_data: dict[str, Any], english_name: s
 
 
 def evaluate_v3_gate(evaluation: dict[str, Any]) -> dict[str, Any]:
-    """鎶婁竴娆?V3.0 璇勪及缁撴灉鍒ゅ畾涓洪椄闂ㄧ粨璁猴紙绾嚱鏁帮紝鏃犲壇浣滅敤锛夈€?
-    闂搁棬鍙銆屾湁涓€绁ㄥ惁鍐崇‘瀹氭€ц瘉鎹€嶇殑浜у搧纭樆鏂€傝瘎鍒嗙瓑绾т负 Reject 浣?11 缁?    瑕嗙洊鐜囦笉瓒虫椂锛屽鏁扮淮搴﹀彇鐨勬槸涓€ч粯璁ゅ垎锛岃繖绉?Reject 鏄暟鎹己澶辩殑浜х墿鑰岄潪
-    鐪熷疄浣庡垎锛屾寜 needs_review 浜や汉宸ュ鐞嗭紝涓嶈兘鎹璇潃鍊欓€?    锛坉ocs/nuotao_product_score_v3.0.md 搂2.3銆伮?锛夈€?    """
+    """把一次 V3.0 评估结果判定为闸门结论（纯函数，无副作用）。
+
+    闸门只对「有一票否决确定性证据」的产品硬阻断。评分等级为 Reject 但 11 维
+    覆盖率不足时，多数维度取的是中性默认分，这种 Reject 是数据缺失的产物而非
+    真实低分，按 needs_review 交人工处理，不能据此误杀候选
+    （docs/nuotao_product_score_v3.0.md §2.3、§3）。
+    """
     veto = evaluation.get("veto") or {}
     failed = [str(item) for item in (veto.get("failed") or [])]
     pending = [str(item) for item in (veto.get("pending") or [])]
@@ -546,22 +604,22 @@ def evaluate_v3_gate(evaluation: dict[str, Any]) -> dict[str, Any]:
 
     if failed:
         verdict = GATE_BLOCKED
-        reason = f"瑙﹀彂涓€绁ㄥ惁鍐筹細{'銆?.join(failed)}"
+        reason = f"触发一票否决：{'、'.join(failed)}"
     elif grade == "reject" and (
         coverage_ratio is None or float(coverage_ratio) < GATE_MIN_COVERAGE_RATIO
     ):
         verdict = GATE_NEEDS_REVIEW
         reason = (
-            f"Nuotao Score {total} 涓?Reject锛屼絾 11 缁磋繍钀ュ垎瑕嗙洊鐜囦粎 {coverage_ratio}"
-            f"锛堥槇鍊?{GATE_MIN_COVERAGE_RATIO}锛夛紝澶氭暟缁村害涓轰腑鎬ч粯璁ゅ垎锛?
-            "闇€琛ュ叏鎴愭湰/渚涘簲鍟嗙瓑鏁版嵁鍚庨噸璇勶紝鎴栦汉宸ュ鏍告斁琛?
+            f"Nuotao Score {total} 为 Reject，但 11 维运营分覆盖率仅 {coverage_ratio}"
+            f"（阈值 {GATE_MIN_COVERAGE_RATIO}），多数维度为中性默认分；"
+            "需补全成本/供应商等数据后重评，或人工复核放行"
         )
     elif grade == "reject":
         verdict = GATE_NEEDS_REVIEW
-        reason = f"Nuotao Score {total} 浣庝簬 65锛圧eject 绛夌骇锛夛紝涓嶅缓璁笂鏋?
+        reason = f"Nuotao Score {total} 低于 65（Reject 等级），不建议上架"
     else:
         verdict = GATE_PASSED
-        reason = f"鏃犱竴绁ㄥ惁鍐筹紝Nuotao Score {total}锛坽grade}锛?
+        reason = f"无一票否决，Nuotao Score {total}（{grade}）"
 
     return {
         "verdict": verdict,
@@ -584,12 +642,20 @@ async def check_product_push_gate(
     workspace_id: UUID | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """涓婃灦鎺ㄩ€佸墠鐨?V3.0 闂搁棬妫€鏌ワ紙瀵瑰凡钀藉簱鍟嗗搧锛夈€?
-    涓?run_v3_gate 鐨勫尯鍒細閭ｉ噷涓烘祦姘寸嚎闃舵鐨勫晢鍝佸缓妗ｅ苟璇勪及锛岃繖閲岀洿鎺ヨ瘎浼?    鏃㈡湁 Product 琛岋紝鐢ㄤ簬娓犻亾涓庝笂鏋堕〉鐨勬帹閫侀€氶亾锛坉ocs/sop_audit_selection_to_
-    listing.md 搂3.1 璁板綍鐨勩€岄€氶亾鈶¤８濂斻€嶏級銆?
-    鍒ゅ畾瑙勫垯锛?    - blocked锛堣Е鍙戜竴绁ㄥ惁鍐筹級锛氱‖闃绘柇锛宖orce 涔熶笉鏀捐锛?    - needs_review锛堜綆鍒?/ 瑕嗙洊鐜囦笉瓒?/ 璇勪及澶辫触锛夛細闇€浜哄伐鏄惧紡纭鍚?force 鏀捐锛?      绗﹀悎 AGENTS.md 3.1銆孉I 鍙缓璁€佸叧閿姩浣滀汉瀹°€嶏紱
-    - passed锛氱洿鎺ユ斁琛屻€?
-    璇勪及寮傚父锛圠LM 缃戝叧涓嶅彲鐢ㄧ瓑锛夋寜 needs_review 澶勭悊锛岀粷涓嶉潤榛樻斁琛屻€?    """
+    """上架推送前的 V3.0 闸门检查（对已落库商品）。
+
+    与 run_v3_gate 的区别：那里为流水线阶段的商品建档并评估，这里直接评估
+    既有 Product 行，用于渠道与上架页的推送通道（docs/sop_audit_selection_to_
+    listing.md §3.1 记录的「通道②裸奔」）。
+
+    判定规则：
+    - blocked（触发一票否决）：硬阻断，force 也不放行；
+    - needs_review（低分 / 覆盖率不足 / 评估失败）：需人工显式确认后 force 放行，
+      符合 AGENTS.md 3.1「AI 只建议、关键动作人审」；
+    - passed：直接放行。
+
+    评估异常（LLM 网关不可用等）按 needs_review 处理，绝不静默放行。
+    """
     from app.core.workspace import DEFAULT_WORKSPACE_ID
     from app.models.product import Product
     from app.services.nuotao_selection_service import evaluate_product
@@ -603,7 +669,7 @@ async def check_product_push_gate(
             "verdict": GATE_NEEDS_REVIEW,
             "blocked": True,
             "force_required": True,
-            "reason": f"浜у搧涓嶅瓨鍦? {product_id}",
+            "reason": f"产品不存在: {product_id}",
         }
 
     try:
@@ -612,14 +678,15 @@ async def check_product_push_gate(
         )
         gate = evaluate_v3_gate(evaluation)
     except Exception as e:  # noqa: BLE001
-        # 璇勪及涓嶅彲鐢ㄦ椂涓嶉樆鏂篃涓嶆斁琛岋紝杞汉宸ョ‘璁?        logger.warning(
-            "V3.0 闂搁棬璇勪及澶辫触锛岃浆浜哄伐纭: product=%s, error=%s", product_id, e
+        # 评估不可用时不阻断也不放行，转人工确认
+        logger.warning(
+            "V3.0 闸门评估失败，转人工确认: product=%s, error=%s", product_id, e
         )
         return {
             "verdict": GATE_NEEDS_REVIEW,
             "blocked": False,
             "force_required": True,
-            "reason": f"V3.0 閫夊搧闂搁棬璇勪及澶辫触锛坽e}锛夛紝闇€浜哄伐澶嶆牳纭鍚庣户缁?,
+            "reason": f"V3.0 选品闸门评估失败（{e}），需人工复核确认后继续",
             "product_id": str(product.id),
             "sku": product.sku,
         }
@@ -632,30 +699,32 @@ async def check_product_push_gate(
 
 
 def _parse_weight_kg(raw: Any) -> Decimal | None:
-    """浠?'500g' / '0.5kg' / '1.2 鍗冨厠' 瑙ｆ瀽鍏枻鏁帮紱瑙ｆ瀽涓嶅嚭杩斿洖 None銆?""
+    """从 '500g' / '0.5kg' / '1.2 千克' 解析公斤数；解析不出返回 None。"""
     if raw is None:
         return None
     if isinstance(raw, Decimal):
         return raw
     matches = re.findall(
-        r"(\d+(?:\.\d+)?)\s*(kg|kgs|鍗冨厠|鍏枻|g|鍏??", str(raw).strip().lower()
+        r"(\d+(?:\.\d+)?)\s*(kg|kgs|千克|公斤|g|克)?", str(raw).strip().lower()
     )
     if not matches:
         return None
     unit = next((m[1] for m in reversed(matches) if m[1]), "kg")
-    # ROUND-4D: 鑼冨洿鍊硷紙濡?"1462-2100g"锛夋寜涓婄晫璁¤垂锛屽彇棣栨暟瀛椾細浣庝及杩愯垂銆?    # 浠呭湪鏄庣‘鐨勬暟瀛?鏁板瓧鑼冨洿鍐呭彇涓婄晫锛岄伩鍏嶈浼?"1800g 鍨嬪彿X2" 杩欑被鍊笺€?    text = str(raw).strip().lower()
+    # ROUND-4D: 范围值（如 "1462-2100g"）按上界计费，取首数字会低估运费。
+    # 仅在明确的数字-数字范围内取上界，避免误伤 "1800g 型号X2" 这类值。
+    text = str(raw).strip().lower()
     try:
-        if re.search(r"\d\s*[-~鈥撯€擼\s*\d", text):
+        if re.search(r"\d\s*[-~–—]\s*\d", text):
             value = max(Decimal(m[0]) for m in matches)
         else:
             value = Decimal(matches[0][0])
     except (ArithmeticError, ValueError):
         return None
-    return (value / Decimal("1000")).quantize(Decimal("0.001")) if unit in ("g", "鍏?) else value
+    return (value / Decimal("1000")).quantize(Decimal("0.001")) if unit in ("g", "克") else value
 
 
 def _parse_decimal(raw: Any) -> Decimal | None:
-    """浠?'楼6.7' / '6.7-19.7' 鍙栫涓€涓暟鍊硷紱鍙栦笉鍒拌繑鍥?None銆?""
+    """从 '¥6.7' / '6.7-19.7' 取第一个数值；取不到返回 None。"""
     if raw is None:
         return None
     match = re.search(r"-?\d+(?:\.\d+)?", str(raw))
@@ -675,11 +744,15 @@ async def run_v3_gate(
     workspace_id: UUID | None = None,
     trace_id: str | None = None,
 ) -> dict[str, Any]:
-    """钀藉簱鍊欓€変骇鍝佸苟鎵ц V3.0 璇勪及锛岃繑鍥為椄闂ㄧ粨璁恒€?
-    娴佹按绾块樁娈典骇鍝佸皻鏈惤搴擄紝鑰?V3.0 璇勪及浠?Product 琛屼负杈撳叆锛屽洜姝ら椄闂ㄥ厛鐢ㄤ笂鏋?    鏁版嵁鍒涘缓 candidate 琛岋紙鍚?SKU 宸插瓨鍦ㄥ垯澶嶇敤锛岄伩鍏嶉噸澶嶅缓妗ｏ級锛屽啀璇勪及銆備骇鍝佺敱
-    姝よ繘鍏?V3.0 婕忔枟锛屽悗缁彲鍦ㄥ€欓€夐〉琛ュ叏鎴愭湰/渚涘簲鍟嗘暟鎹噸璇勩€?
-    闂搁棬涓嶄吉閫犳垚鏈暟鎹細娴佹按绾块樁娈垫病鏈夌湡瀹炶惤鍦版垚鏈紝瀹佺己鍕块€狅紝鍥犳涓嶅啓
-    ProductCost锛孷9/V10 淇濇寔 pending锛圓GENTS.md 搂1.2.5銆伮?.1 鏄惧紡绌哄€煎鐞嗭級銆?    """
+    """落库候选产品并执行 V3.0 评估，返回闸门结论。
+
+    流水线阶段产品尚未落库，而 V3.0 评估以 Product 行为输入，因此闸门先用上架
+    数据创建 candidate 行（同 SKU 已存在则复用，避免重复建档），再评估。产品由
+    此进入 V3.0 漏斗，后续可在候选页补全成本/供应商数据重评。
+
+    闸门不伪造成本数据：流水线阶段没有真实落地成本，宁缺勿造，因此不写
+    ProductCost，V9/V10 保持 pending（AGENTS.md §1.2.5、§2.1 显式空值处理）。
+    """
     from app.core.workspace import DEFAULT_WORKSPACE_ID
     from app.models.product import Product
     from app.services.nuotao_selection_service import evaluate_product
@@ -689,16 +762,18 @@ async def run_v3_gate(
     )
 
     workspace_id = workspace_id or DEFAULT_WORKSPACE_ID
-    # 鏉ユ簮閿厛绠楀嚭鏉ワ細SKU 鐢熸垚涓庡箓绛夊缓妗ｉ兘瑕佺敤瀹冦€?    source_offer_id = resolve_source_offer_id(
+    # 来源键先算出来：SKU 生成与幂等建档都要用它。
+    source_offer_id = resolve_source_offer_id(
         source_url=product_info.get("source_url"),
         source_id=product_info.get("source_id"),
         meta=product_info if isinstance(product_info, dict) else None,
     )
-    # 鏈夋潵婧愰敭鏃?SKU 鐢?offer id 纭畾鎬ф淳鐢燂紱listing_data 宸插甫 SKU 鍒欐部鐢ㄣ€?    sku = str(
+    # 有来源键时 SKU 由 offer id 确定性派生；listing_data 已带 SKU 则沿用。
+    sku = str(
         listing_data.get("sku")
         or _generate_sku(str(listing_data.get("name") or ""), offer_id=source_offer_id)
     )
-    name = str(listing_data.get("name") or product_info.get("name") or "鏈懡鍚嶅晢鍝?)
+    name = str(listing_data.get("name") or product_info.get("name") or "未命名商品")
 
     source_price = _parse_decimal(product_info.get("price"))
     sale_price = _parse_decimal(listing_data.get("regular_price"))
@@ -711,7 +786,8 @@ async def run_v3_gate(
         "pipeline_trace_id": trace_id,
     }
 
-    # 銆屽悓涓€涓?1688 閾炬帴鍙兘鏈変竴鏉℃椿鍊欓€夈€嶇敱 source_offer_id 淇濊瘉锛屼笉鍐嶅彧闈?SKU銆?
+    # 「同一个 1688 链接只能有一条活候选」由 source_offer_id 保证，不再只靠 SKU。
+
     def _build_candidate() -> Product:
         return Product(
             workspace_id=workspace_id,
@@ -737,7 +813,8 @@ async def run_v3_gate(
         fallback_sku=sku,
     )
     if not created:
-        # 鍛戒腑宸叉湁鍊欓€夛紙鎸夋潵婧愰敭鎴栧巻鍙?SKU锛夛細鍚屾鏈杩愯鐨勬渶鏂颁俊鎭紝涓嶉噸澶嶅缓妗ｃ€?        product.name = name
+        # 命中已有候选（按来源键或历史 SKU）：同步本次运行的最新信息，不重复建档。
+        product.name = name
         product.category = product.category or product_info.get("category") or None
         product.meta = {
             **(product.meta or {}),
@@ -810,11 +887,14 @@ async def _remember_listed_product(
     sku: str | None,
     wc_id: Any,
 ) -> None:
-    """涓婃灦鎴愬姛鍚庢妸 WooCommerce 鍟嗗搧 ID 鍐欏洖鏈湴涓绘暟鎹紙骞傜瓑锛夈€?
-    Step 7 ``auto_list`` 姝ゅ墠**涓嶅洖鍐?*锛氬彧鏈?``/product-pipeline/confirm-list`` 浼氶€氳繃
-    ``upsert_local_listed_product`` 鍐欍€備簬鏄繖鏉¤矾寰勪笂鏋剁殑鏈湴鍟嗗搧姘歌繙娌℃湁
-    ``meta.woocommerce_id``锛屼箣鍚庝换浣曚竴娆℃帹閫侀兘浼氭妸瀹冨綋鎴愭柊鍟嗗搧鍐?POST 涓€娆°€?
-    鍥炲啓澶辫触涓嶅奖鍝嶆祦姘寸嚎缁撴灉鈥斺€斿晢鍝佺‘瀹炲凡缁忓湪 WooCommerce 涓婃灦浜嗭紝杩欓噷鍙ˉ鏈湴鍏宠仈銆?    """
+    """上架成功后把 WooCommerce 商品 ID 写回本地主数据（幂等）。
+
+    Step 7 ``auto_list`` 此前**不回写**：只有 ``/product-pipeline/confirm-list`` 会通过
+    ``upsert_local_listed_product`` 写。于是这条路径上架的本地商品永远没有
+    ``meta.woocommerce_id``，之后任何一次推送都会把它当成新商品再 POST 一次。
+
+    回写失败不影响流水线结果——商品确实已经在 WooCommerce 上架了，这里只补本地关联。
+    """
     from app.models.product import Product
     from app.services.wc_product_link_service import remember_wc_product
 
@@ -836,12 +916,12 @@ async def _remember_listed_product(
             .first()
         )
         if product is None:
-            logger.warning("涓婃灦鎴愬姛浣嗘湰鍦版壘涓嶅埌瀵瑰簲鍟嗗搧锛岃烦杩囧叧鑱斿洖鍐?sku=%s", normalized)
+            logger.warning("上架成功但本地找不到对应商品，跳过关联回写 sku=%s", normalized)
             return
         await remember_wc_product(session, product=product, wc_id=int(wc_id))
         await session.flush()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("鍥炲啓 WooCommerce 鍏宠仈澶辫触 sku=%s: %s", normalized, exc)
+        logger.warning("回写 WooCommerce 关联失败 sku=%s: %s", normalized, exc)
 
 
 async def run_pipeline(
@@ -854,15 +934,20 @@ async def run_pipeline(
     trace_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    杩愯瀹屾暣鐨勪骇鍝佺鍒扮宸ヤ綔娴?
+    运行完整的产品端到端工作流
+
     Args:
-        product_info: 鍟嗗搧淇℃伅
-        auto_list: 鏄惁鑷姩涓婃灦锛堥粯璁alse锛岄渶瑕佷汉宸ョ‘璁わ級
-        include_images: 鏄惁鍖呭惈鍥剧墖鐢熸垚锛堥渶瑕佹暟鎹簱session锛岄粯璁alse锛?        session: 鏁版嵁搴撲細璇濄€備紶鍏ユ椂鎵ц V3.0 閫夊搧闂搁棬锛堣惤搴撳€欓€夊苟璇勪及鍚﹀喅锛夛紝
-            涓?None 鏃堕椄闂ㄦ爣璁?skipped銆佷笉璇勪及涔熶笉闃绘柇锛屼繚鎸佹棫璋冪敤鏂硅涓轰笉鍙樸€?        workspace_id: 宸ヤ綔绌洪棿 ID锛岄椄闂ㄨ惤搴撲娇鐢紱缂虹渷鐢ㄩ粯璁ゅ伐浣滅┖闂?        trace_id: 鍏ㄩ摼璺拷韪?ID
+        product_info: 商品信息
+        auto_list: 是否自动上架（默认False，需要人工确认）
+        include_images: 是否包含图片生成（需要数据库session，默认False）
+        session: 数据库会话。传入时执行 V3.0 选品闸门（落库候选并评估否决），
+            为 None 时闸门标记 skipped、不评估也不阻断，保持旧调用方行为不变。
+        workspace_id: 工作空间 ID，闸门落库使用；缺省用默认工作空间
+        trace_id: 全链路追踪 ID
 
     Returns:
-        宸ヤ綔娴佺粨鏋?    """
+        工作流结果
+    """
     pipeline_id = str(uuid.uuid4())
     start_time = time.time()
     steps_result: dict[str, Any] = {}
@@ -870,7 +955,7 @@ async def run_pipeline(
 
     logger.info("Pipeline %s started for product: %s", pipeline_id, product_info.get("name", "unknown"))
 
-    # ===== 1688閾炬帴鍘婚噸妫€鏌ワ紙涓氬姟瑙勫垯锛氬悓涓€閾炬帴鍙兘涓婃灦涓€娆★級 =====
+    # ===== 1688链接去重检查（业务规则：同一链接只能上架一次） =====
     if session is not None:
         source_url = product_info.get("source_url", "").strip()
         source_offer_id = product_info.get("source_id", "").strip()
@@ -888,14 +973,14 @@ async def run_pipeline(
             duplicate = existing.scalar_one_or_none()
             if duplicate:
                 raise PipelineError(
-                    f"璇?688鍟嗗搧宸插瓨鍦ㄧ郴缁熶腑锛圛D: {duplicate.id}锛孲KU: {duplicate.sku}锛岀姸鎬? {duplicate.status}锛夈€?
-                    f"鍚屼竴閾炬帴绂佹閲嶅涓婃灦銆傚闇€閲嶆柊涓婃灦锛岃鍏堝垹闄ゅ師鏈夎褰曘€?
+                    f"该1688商品已存在系统中（ID: {duplicate.id}，SKU: {duplicate.sku}，状态: {duplicate.status}）。"
+                    f"同一链接禁止重复上架。如需重新上架，请先删除原有记录。"
                 )
             logger.info("Pipeline %s passed duplicate check: source_url=%s source_offer_id=%s",
                        pipeline_id, source_url, source_offer_id)
 
     try:
-        # Step 1: 鍟嗗搧淇℃伅杈撳叆
+        # Step 1: 商品信息输入
         steps_result["input"] = {
             "status": "completed",
             "data": product_info,
@@ -903,7 +988,7 @@ async def run_pipeline(
         }
         logger.info("Pipeline %s Step 1 (input) completed", pipeline_id)
 
-        # Step 2: AI浜у搧鍒嗘瀽
+        # Step 2: AI产品分析
         try:
             analysis_result = await analyze_and_generate_report(product_info)
             if analysis_result["success"]:
@@ -923,12 +1008,12 @@ async def run_pipeline(
             steps_result["analysis"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 2 (analysis) failed: %s", pipeline_id, str(e))
 
-        # 鑾峰彇浜у搧鎶ュ憡锛堝鏋滃垎鏋愭垚鍔燂級
+        # 获取产品报告（如果分析成功）
         product_report = steps_result.get("analysis", {}).get("data", {}).get("product_report", {})
 
-        # Step 2.5: 浜у搧鏁版嵁灏辩华闂ㄧ (SOP Step 1.5)
+        # Step 2.5: 产品数据就绪门禁 (SOP Step 1.5)
         # Validates weight, dimensions, material, etc. before image generation.
-        # Does NOT block 鈥?logs warnings and continues, but marks readiness in result.
+        # Does NOT block — logs warnings and continues, but marks readiness in result.
         try:
             readiness = check_readiness(product_info, trace_id=trace_id or pipeline_id)
             steps_result["readiness"] = {
@@ -955,13 +1040,14 @@ async def run_pipeline(
             steps_result["readiness"] = {"status": "skipped", "error": str(e)}
             logger.warning("Pipeline %s Step 2.5 (readiness) skipped: %s", pipeline_id, str(e))
 
-        # Step 3: 涓诲浘鐢熶骇
+        # Step 3: 主图生产
         try:
             main_image_result = run_main_image_workflow(product_info)
             if main_image_result["success"]:
                 main_image_data = main_image_result["data"]
                 
-                # BUG #5 fix: 鐢熸垚瀹為檯鍥剧墖锛堜娇鐢?Pollinations.ai 鍏嶈垂妯″瀷锛?                if session and main_image_data.get("directions"):
+                # BUG #5 fix: 生成实际图片（使用 Pollinations.ai 免费模型）
+                if session and main_image_data.get("directions"):
                     try:
                         from app.services.image_generation_service import generate_image_and_save
                         import random
@@ -969,39 +1055,41 @@ async def run_pipeline(
                         generated_images = []
                         directions = main_image_data.get("directions", [])
                         
-                        # 涓烘瘡涓柟鍚戠敓鎴愪竴寮犲浘鐗囷紙鏈€澶?3 寮狅級
+                        # 为每个方向生成一张图片（最多 3 张）
                         for i, direction in enumerate(directions[:3]):
                             direction_name = direction.get("direction", "")
                             description = direction.get("description", "")
                             
-                            # 鏋勫缓鑻辨枃 Prompt锛堝皢涓枃缈昏瘧涓鸿嫳鏂囷紝鐢ㄤ簬 AI 鍥剧墖鐢熸垚锛?                            # 绠€鍗曠炕璇戯細绉婚櫎涓枃锛屼繚鐣欒嫳鏂囧叧閿瘝
+                            # 构建英文 Prompt（将中文翻译为英文，用于 AI 图片生成）
+                            # 简单翻译：移除中文，保留英文关键词
                             name_en = product_info.get('name', 'product')
-                            # 灏濊瘯鎻愬彇鑻辨枃閮ㄥ垎锛堝鏋滄湁锛?                            import re
+                            # 尝试提取英文部分（如果有）
+                            import re
                             en_parts = re.findall(r'[a-zA-Z]+', name_en)
                             if en_parts:
                                 name_en = ' '.join(en_parts[:10])
                             else:
-                                name_en = 'outdoor folding chair'  # 榛樿鑻辨枃鎻忚堪
+                                name_en = 'outdoor folding chair'  # 默认英文描述
                             
                             direction_en = direction_name
-                            # 缈昏瘧甯歌鏂瑰悜鍚嶇О
+                            # 翻译常见方向名称
                             direction_map = {
-                                '鐧藉簳娓呯埥': 'white background clean',
-                                '鐪熷疄鍦烘櫙': 'realistic outdoor scene',
-                                '淇冮攢杞寲': 'promotional sale',
-                                '鐢熸椿鏂瑰紡': 'lifestyle scene',
-                                '缁嗚妭灞曠ず': 'product detail closeup'
+                                '白底清爽': 'white background clean',
+                                '真实场景': 'realistic outdoor scene',
+                                '促销转化': 'promotional sale',
+                                '生活方式': 'lifestyle scene',
+                                '细节展示': 'product detail closeup'
                             }
                             direction_en = direction_map.get(direction_name, 'product photography')
                             
                             description_en = description
-                            # 绠€鍗曠Щ闄や腑鏂囧瓧绗︼紝淇濈暀鑻辨枃
+                            # 简单移除中文字符，保留英文
                             description_en = re.sub(r'[\u4e00-\u9fff]+', ' ', description_en)
-                            description_en = ' '.join(description_en.split())  # 娓呯悊澶氫綑绌烘牸
+                            description_en = ' '.join(description_en.split())  # 清理多余空格
                             
                             prompt = f"{name_en}, {direction_en}, {description_en}, premium quality, e-commerce photography, high detail"
                             
-                            # 浣跨敤 Pollinations.ai 鍏嶈垂妯″瀷
+                            # 使用 Pollinations.ai 免费模型
                             gen_task = await generate_image_and_save(
                                 session,
                                 prompt=prompt,
@@ -1035,12 +1123,12 @@ async def run_pipeline(
             steps_result["main_image"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 3 (main_image) failed: %s", pipeline_id, str(e))
 
-        # Step 4: 鐢熷浘Prompt鐢熸垚
+        # Step 4: 生图Prompt生成
         try:
             if product_report:
-                # 鐢熸垚涓诲浘Prompt锛堢櫧搴曟竻鐖芥柟鍚戯級
+                # 生成主图Prompt（白底清爽方向）
                 main_prompt_result = generate_full_prompt(product_report, page_type="brand_scene")
-                # 鐢熸垚璇︽儏椤礟rompt
+                # 生成详情页Prompt
                 detail_prompt_result = generate_full_prompt(product_report, page_type="feature_selling")
 
                 steps_result["prompt"] = {
@@ -1060,11 +1148,12 @@ async def run_pipeline(
             steps_result["prompt"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 4 (prompt) failed: %s", pipeline_id, str(e))
 
-        # Step 5: 涓婃灦鏁版嵁鐢熸垚锛堝惈鑻辨枃鏈湴鍖栵紝鐩爣甯傚満榛樿 US锛?        try:
+        # Step 5: 上架数据生成（含英文本地化，目标市场默认 US）
+        try:
             main_image_data = steps_result.get("main_image", {}).get("data", {})
             listing_data = _generate_listing_data(product_info, product_report, main_image_data)
             listing_data = await _english_localize_listing_data(listing_data)
-            # 鐢ㄨ嫳鏂囨爣棰樺洖濉富鍥炬柟鍚?prompt 鐨勪富浣?鑳屾櫙锛屼繚璇侀€佺敓鍥炬ā鍨嬪叏鑻辨枃
+            # 用英文标题回填主图方向 prompt 的主体/背景，保证送生图模型全英文
             try:
                 english_name = listing_data.get("name", "")
                 if english_name and not _has_cjk(english_name):
@@ -1084,12 +1173,15 @@ async def run_pipeline(
             steps_result["listing_data"] = {"status": "failed", "error": str(e)}
             logger.error("Pipeline %s Step 5 (listing_data) failed: %s", pipeline_id, str(e))
 
-        # Step 6: V3.0 閫夊搧闂搁棬锛堝叚缁磋瘎鍒?+ V1-V12 涓€绁ㄥ惁鍐?+ 婕忔枟闃舵锛?        # 闂搁棬蹇呴』鍦ㄤ笂鏋朵箣鍓嶏細琚竴绁ㄥ惁鍐崇殑浜у搧涓嶅厑璁歌繘鍏?WooCommerce锛屽惁鍒?        # 銆屼富鍔ㄦ嫆缁濅笉閫傚悎 Nuotao 鐨勫晢鍝併€嶈繖鏉?V3.0 鏍稿績绛栫暐褰㈠悓铏氳銆?        gate: dict[str, Any] | None = None
+        # Step 6: V3.0 选品闸门（六维评分 + V1-V12 一票否决 + 漏斗阶段）
+        # 闸门必须在上架之前：被一票否决的产品不允许进入 WooCommerce，否则
+        # 「主动拒绝不适合 Nuotao 的商品」这条 V3.0 核心策略形同虚设。
+        gate: dict[str, Any] | None = None
         if session is not None:
             try:
                 gate_listing_data = steps_result.get("listing_data", {}).get("data", {})
                 if not gate_listing_data:
-                    raise PipelineError("鏃犱笂鏋舵暟鎹紝鏃犳硶鎵ц V3.0 闂搁棬")
+                    raise PipelineError("无上架数据，无法执行 V3.0 闸门")
                 gate = await run_v3_gate(
                     session,
                     product_info,
@@ -1114,22 +1206,24 @@ async def run_pipeline(
         else:
             steps_result["v3_gate"] = {
                 "status": "skipped",
-                "reason": "鏈彁渚涙暟鎹簱浼氳瘽锛孷3.0 閫夊搧闂搁棬鏈墽琛?,
+                "reason": "未提供数据库会话，V3.0 选品闸门未执行",
             }
             logger.warning(
                 "Pipeline %s Step 6 (v3_gate) skipped: no DB session supplied", pipeline_id
             )
 
-        # Step 7: 涓婃灦WooCommerce锛堝彲閫夛紝闇€瑕佷汉宸ョ‘璁わ紱琚椄闂ㄥ惁鍐冲垯闃绘柇锛?        # 闂搁棬鍚﹀喅瑕佸湪浜哄伐纭鍓嶅氨鏆撮湶锛氳嫢浠嶆彁绀恒€岃纭涓婃灦銆嶏紝琚惁鍐崇殑浜у搧
-        # 浼氳浜哄伐鏀捐锛岄椄闂ㄧ瓑浜庢病瑁呫€?        gate_blocked = bool(gate and gate.get("blocked"))
+        # Step 7: 上架WooCommerce（可选，需要人工确认；被闸门否决则阻断）
+        # 闸门否决要在人工确认前就暴露：若仍提示「请确认上架」，被否决的产品
+        # 会被人工放行，闸门等于没装。
+        gate_blocked = bool(gate and gate.get("blocked"))
         gate_needs_review = bool(gate and gate.get("verdict") == GATE_NEEDS_REVIEW)
 
         if gate_blocked:
             steps_result["listing"] = {
                 "status": "blocked",
-                "error": f"V3.0 闂搁棬鍚﹀喅锛岀姝笂鏋讹細{(gate or {}).get('reason')}",
+                "error": f"V3.0 闸门否决，禁止上架：{(gate or {}).get('reason')}",
                 "gate": gate,
-                "message": "浜у搧瑙﹀彂涓€绁ㄥ惁鍐筹紝涓嶅厑璁镐笂鏋讹紱濡傞渶涓婃灦椤讳汉宸ュ鏍稿苟鐣欐。",
+                "message": "产品触发一票否决，不允许上架；如需上架须人工复核并留档",
             }
             logger.warning(
                 "Pipeline %s Step 7 (listing) blocked by V3.0 gate: %s",
@@ -1143,13 +1237,14 @@ async def run_pipeline(
             steps_result["listing"] = {
                 "status": "pending_review",
                 "gate": gate,
-                "message": f"V3.0 闂搁棬寰呬汉宸ュ鏍革細{(gate or {}).get('reason')}",
+                "message": f"V3.0 闸门待人工复核：{(gate or {}).get('reason')}",
             }
         elif auto_list:
             try:
                 listing_data = steps_result.get("listing_data", {}).get("data", {})
                 if listing_data:
-                    # 妫€鏌ユ槸鍚︾鍒剁墿鍝?                    restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
+                    # 检查是否管制物品
+                    restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
                     if restricted:
                         raise PipelineError(f"Product is restricted: {reason}")
 
@@ -1161,8 +1256,9 @@ async def run_pipeline(
                     }
                     if listing_result.get("success"):
                         logger.info("Pipeline %s Step 7 (listing) completed: WC ID=%s", pipeline_id, listing_result.get("woocommerce_id"))
-                        # 涓婃灦鎴愬姛蹇呴』鍥炲啓鏈湴鍏宠仈锛屽惁鍒欐湰鍦拌姘歌繙娌℃湁
-                        # meta.woocommerce_id锛屽悗缁换浣曚竴娆℃帹閫侀兘浼氶噸鏂?POST 寤烘柊鍟嗗搧銆?                        if session is not None and listing_result.get("woocommerce_id"):
+                        # 上架成功必须回写本地关联，否则本地行永远没有
+                        # meta.woocommerce_id，后续任何一次推送都会重新 POST 建新商品。
+                        if session is not None and listing_result.get("woocommerce_id"):
                             from app.core.workspace import DEFAULT_WORKSPACE_ID
 
                             await _remember_listed_product(
@@ -1182,11 +1278,12 @@ async def run_pipeline(
             steps_result["listing"] = {
                 "status": "pending_confirmation",
                 "gate": gate,
-                "message": "涓婃灦鏁版嵁宸茬敓鎴愶紝璇蜂汉宸ョ‘璁ゅ悗鎵ц涓婃灦",
+                "message": "上架数据已生成，请人工确认后执行上架",
             }
 
-        # 璁＄畻鎬讳綋鐘舵€併€傞椄闂ㄥ惁鍐虫槸鏄庣‘鐨勪笟鍔＄粨璁猴紝涓嶆槸鎶€鏈敊璇細鍗曠嫭缁欏嚭
-        # blocked 鐘舵€侊紝璁╄皟鐢ㄦ柟鑳藉尯鍒嗐€岃窇澶辫触浜嗐€嶅拰銆岃閫夊搧绛栫暐鎷掔粷浜嗐€嶃€?        completed_steps = sum(1 for s in steps_result.values() if s.get("status") == "completed")
+        # 计算总体状态。闸门否决是明确的业务结论，不是技术错误：单独给出
+        # blocked 状态，让调用方能区分「跑失败了」和「被选品策略拒绝了」。
+        completed_steps = sum(1 for s in steps_result.values() if s.get("status") == "completed")
         total_steps = len(PIPELINE_STEPS)
         gate_verdict = (gate or {}).get("verdict")
         if gate_blocked:
@@ -1211,7 +1308,7 @@ async def run_pipeline(
                 "errors": errors,
                 "product_name": _safe_get(product_info, "name", ""),
                 "sku": steps_result.get("listing_data", {}).get("data", {}).get("sku", ""),
-                # V3.0 闂搁棬缁撹锛氳皟鐢ㄦ柟鎹鍐冲畾鏄惁鍏佽纭涓婃灦
+                # V3.0 闸门结论：调用方据此决定是否允许确认上架
                 "v3_gate": gate,
                 "gate_verdict": gate_verdict,
                 "gate_blocked": gate_blocked,
@@ -1220,7 +1317,7 @@ async def run_pipeline(
             "error": None if not errors else f"{len(errors)} errors occurred",
         }
         if gate_blocked:
-            result["error"] = f"V3.0 閫夊搧闂搁棬鍚﹀喅锛岀姝笂鏋讹細{(gate or {}).get('reason')}"
+            result["error"] = f"V3.0 选品闸门否决，禁止上架：{(gate or {}).get('reason')}"
 
         logger.info("Pipeline %s finished: status=%s, completed=%d/%d, errors=%d",
                     pipeline_id, overall_status, completed_steps, total_steps, len(errors))
@@ -1241,7 +1338,7 @@ async def run_pipeline(
         }
 
 
-# ============ 鑷姩琛ラ綈鍥剧墖 ============
+# ============ 自动补齐图片 ============
 
 _MAIN_IMG_PROMPTS = [
     "pure white background, professional e-commerce product photography, {product_name}, front view, studio lighting, high detail",
@@ -1266,7 +1363,8 @@ async def _auto_generate_missing_images(
     listing_data: dict[str, Any],
     pipeline_result: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """褰撳浘鐗囬綈濂楅棬绂佹湭閫氳繃鏃讹紝鑷姩璋冪敤 AI 鐢熷浘琛ラ綈缂哄け鐨勪富鍥惧拰璇︽儏鍥俱€?
+    """当图片齐套门禁未通过时，自动调用 AI 生图补齐缺失的主图和详情图。
+
     Returns:
         (updated_listing_data, gen_stats)
         gen_stats: {"generated_main": int, "generated_detail": int, "total_generated": int, "errors": list}
@@ -1279,12 +1377,13 @@ async def _auto_generate_missing_images(
 
     gen_stats = {"generated_main": 0, "generated_detail": 0, "total_generated": 0, "errors": []}
 
-    # 鏀堕泦宸叉湁鍥剧墖
+    # 收集已有图片
     existing_main = _dedupe_real_image_urls(listing_data.get("main_images"))
     existing_detail = _dedupe_real_image_urls(listing_data.get("detail_images"))
-    # 涔熺湅鎵佸钩 images 閲屾湁娌℃湁宸茶鍒嗙被鐨?    existing_all = _dedupe_real_image_urls(listing_data.get("images"))
+    # 也看扁平 images 里有没有已被分类的
+    existing_all = _dedupe_real_image_urls(listing_data.get("images"))
 
-    # ---- 琛ラ綈涓诲浘 (need 5) ----
+    # ---- 补齐主图 (need 5) ----
     needed_main = REQUIRED_MAIN_IMAGES - len(existing_main)
     new_main_urls: list[str] = []
     for i in range(needed_main):
@@ -1309,7 +1408,7 @@ async def _auto_generate_missing_images(
             gen_stats["errors"].append(f"main_image_gen_{i}: {str(e)[:100]}")
             logger.warning("Auto-generate main image failed: %s", str(e))
 
-    # ---- 琛ラ綈璇︽儏鍥?(need 6) ----
+    # ---- 补齐详情图 (need 6) ----
     needed_detail = REQUIRED_DETAIL_IMAGES - len(existing_detail)
     new_detail_urls: list[str] = []
     for i in range(needed_detail):
@@ -1336,12 +1435,12 @@ async def _auto_generate_missing_images(
 
     gen_stats["total_generated"] = gen_stats["generated_main"] + gen_stats["generated_detail"]
 
-    # 鍚堝苟鍥?listing_data
+    # 合并回 listing_data
     all_main = existing_main + new_main_urls
     all_detail = existing_detail + new_detail_urls
     listing_data["main_images"] = [{"src": u} for u in all_main]
     listing_data["detail_images"] = [{"src": u} for u in all_detail]
-    # 鏇存柊鎵佸钩 images 淇濇寔鍏煎
+    # 更新扁平 images 保持兼容
     all_flat = all_main + all_detail
     listing_data["images"] = [{"src": u} for u in all_flat]
 
@@ -1362,45 +1461,54 @@ async def confirm_and_list(
     session: "AsyncSession" | None = None,
 ) -> dict[str, Any]:
     """
-    浜哄伐纭鍚庢墽琛屼笂鏋?
+    人工确认后执行上架
+
     Args:
-        pipeline_result: 宸ヤ綔娴佺粨鏋滐紙鍖呭惈listing_data锛?        status: 涓婃灦鐘舵€侊紙publish/draft/pending锛?
+        pipeline_result: 工作流结果（包含listing_data）
+        status: 上架状态（publish/draft/pending）
+
     Returns:
-        涓婃灦缁撴灉
+        上架结果
     """
     try:
         listing_data = pipeline_result.get("data", {}).get("steps", {}).get("listing_data", {}).get("data", {})
         if not listing_data:
             return {"success": False, "error": "No listing data found in pipeline result"}
 
-        # 妫€鏌ユ槸鍚︾鍒剁墿鍝?        restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
+        # 检查是否管制物品
+        restricted, reason = is_restricted(listing_data.get("name", ""), listing_data.get("sku", ""))
         if restricted:
             return {"success": False, "error": f"Product is restricted: {reason}"}
 
-        # 鍥剧墖榻愬闂ㄧ锛堢‖闂ㄧ锛夛細姝ｅ紡鍙戝竷鏃跺己鍒惰姹備富鍥?+璇︽儏6榻愬锛?        # 鑽夌妯″紡鍏佽涓嶅畬鏁存暟鎹紙鐢ㄦ埛鍚庣画鍙ˉ鍥惧啀鍙戝竷锛夈€?        # force=True 鏃惰烦杩囷紙娴嬭瘯/浜哄伐纭鍦烘櫙锛夈€?        # 闂ㄧ鏈€氳繃鏃讹紝鑷姩璋冪敤 AI 鐢熷浘琛ラ綈缂哄け鍥剧墖鍚庡啀閲嶈瘯銆?        gate = check_image_gate(listing_data)
-        gate_notice = "锛?.join(gate.get("reasons", []))
+        # 图片齐套门禁（硬门禁）：正式发布时强制要求主图5+详情6齐套；
+        # 草稿模式允许不完整数据（用户后续可补图再发布）。
+        # force=True 时跳过（测试/人工确认场景）。
+        # 门禁未通过时，自动调用 AI 生图补齐缺失图片后再重试。
+        gate = check_image_gate(listing_data)
+        gate_notice = "；".join(gate.get("reasons", []))
         if not gate.get("passed") and not force and status != "draft":
             logger.info(
                 "Image gate failed for sku=%s, auto-generating missing images: %s",
                 listing_data.get("sku", ""), gate_notice,
             )
-            # 浠?pipeline_result 鎻愬彇 product_info 鐢ㄤ簬鐢熷浘 prompt
+            # 从 pipeline_result 提取 product_info 用于生图 prompt
             product_info = (
                 (pipeline_result.get("data") or {}).get("product_info") or {}
             )
             listing_data, gen_stats = await _auto_generate_missing_images(
                 session, listing_data, pipeline_result,
             )
-            # 閲嶆柊妫€鏌ラ棬绂?            gate2 = check_image_gate(listing_data)
+            # 重新检查门禁
+            gate2 = check_image_gate(listing_data)
             if not gate2.get("passed"):
-                notice2 = "锛?.join(gate2.get("reasons", []))
+                notice2 = "；".join(gate2.get("reasons", []))
                 logger.warning(
                     "Image gate still failed after auto-generation: %s (gen_stats=%s)",
                     notice2, gen_stats,
                 )
                 return {
                     "success": False,
-                    "error": f"鍥剧墖鐢熸垚鍚庝粛鏈揪鏍囷紝璇锋墜鍔ㄨˉ鍏咃細{notice2}",
+                    "error": f"图片生成后仍未达标，请手动补充：{notice2}",
                     "image_gate": gate2,
                     "auto_generated": gen_stats,
                 }
@@ -1409,7 +1517,10 @@ async def confirm_and_list(
                 gate2["main_count"], gate2["detail_count"], gen_stats,
             )
 
-        # Vision 璐ㄩ噺妫€鏌ワ紙SOP Step 6锛夛細闈為樆鏂紝鍙褰曟鏌ョ粨鏋溿€?        # 妫€鏌ヤ骇鍝佸瑙備竴鑷存€с€佹枃瀛楁纭€с€佽儗鏅共鍑€搴︺€佹瀯鍥惧悎鐞嗘€с€?        # 涓嶉樆鏂绾匡紙AGENTS.md 搂1.2 鏈€灏忛棴鐜紭鍏堬級銆?        quality_checks: list[dict[str, Any]] = []
+        # Vision 质量检查（SOP Step 6）：非阻断，只记录检查结果。
+        # 检查产品外观一致性、文字正确性、背景干净度、构图合理性。
+        # 不阻断管线（AGENTS.md §1.2 最小闭环优先）。
+        quality_checks: list[dict[str, Any]] = []
         try:
             images = listing_data.get("images") or listing_data.get("image_urls") or []
             # Get first generated image for quality check (if any)
@@ -1450,7 +1561,10 @@ async def confirm_and_list(
         listing_result = list_to_woocommerce(listing_data, status=status)
         listing_result["quality_checks"] = quality_checks
 
-        # 鍥剧墖鈫扺C Media Library 鑷姩绠＄嚎锛圥hase 3锛?        # WC API 涓嶄繚璇佽嚜鍔ㄤ笅杞藉閮?URL 鍥剧墖锛岃繖閲屾樉寮忎笂浼犵‘淇?Media Library 鏈夊浘銆?        # 涓嶉樆鏂绾匡紙AGENTS.md 搂1.2锛夛紝鍙褰曠粨鏋溿€?        if listing_result.get("success") and listing_result.get("woocommerce_id"):
+        # 图片→WC Media Library 自动管线（Phase 3）
+        # WC API 不保证自动下载外部 URL 图片，这里显式上传确保 Media Library 有图。
+        # 不阻断管线（AGENTS.md §1.2），只记录结果。
+        if listing_result.get("success") and listing_result.get("woocommerce_id"):
             try:
                 images = listing_data.get("images") or listing_data.get("image_urls") or []
                 if images:
@@ -1502,10 +1616,16 @@ async def upsert_local_listed_product(
     source_url: str = "",
 ) -> dict[str, Any]:
     """
-    涓婃灦 WooCommerce 鎴愬姛鍚庯紝鎶婂晢鍝?upsert 鍒版湰鍦?products 涓绘暟鎹〃銆?
-    瑙ｅ喅"鍙帹 WC銆佹湰鍦板晢鍝佷富鏁版嵁涓虹┖"鐨勬暟鎹柇灞傦細鎸?workspace + SKU 鏌ユ壘**娲昏**锛?    瀛樺湪鍒欐洿鏂帮紝涓嶅瓨鍦ㄥ垯鏂板缓銆?
-    鍒绘剰**涓嶅娲?*杞垹琛岋細``uq_products_workspace_source_offer`` 鏄?    ``WHERE deleted_at IS NULL`` 鐨勯儴鍒嗙储寮曪紝鍥炴敹绔欓噷鐨勮涓嶅崰鐢ㄦ潵婧愰敭浣嶃€傝嫢鎶婃棫琛?    澶嶆椿锛岃€屽悓涓€涓?offer 鏈熼棿宸茬粡閲嶆柊寤烘。锛屽氨浼氱洿鎺ユ挒鍞竴绱㈠紩銆傝繖涔熶笌 WooCommerce
-    鍙嶅悜鍚屾銆屽垹鍚庨噸浼犺蛋鏂板缓銆嶇殑鍙ｅ緞涓€鑷淬€?
+    上架 WooCommerce 成功后，把商品 upsert 到本地 products 主数据表。
+
+    解决"只推 WC、本地商品主数据为空"的数据断层：按 workspace + SKU 查找**活行**，
+    存在则更新，不存在则新建。
+
+    刻意**不复活**软删行：``uq_products_workspace_source_offer`` 是
+    ``WHERE deleted_at IS NULL`` 的部分索引，回收站里的行不占用来源键位。若把旧行
+    复活，而同一个 offer 期间已经重新建档，就会直接撞唯一索引。这也与 WooCommerce
+    反向同步「删后重传走新建」的口径一致。
+
     Returns:
         {"product_id", "created": bool}
     """
@@ -1516,11 +1636,11 @@ async def upsert_local_listed_product(
     if not sku or not name:
         return {"product_id": None, "created": False, "error": "missing sku/name"}
 
-    # WC status 鏄犲皠鍒版湰鍦?commerce status
+    # WC status 映射到本地 commerce status
     wc_status = (wc_result.get("status") or listing_data.get("status") or "draft").lower()
     local_status = "active" if wc_status == "publish" else "draft"
 
-    # tags: listing 閲屽彲鑳芥槸 [{"name":...}] 鎴?["tag",...]
+    # tags: listing 里可能是 [{"name":...}] 或 ["tag",...]
     raw_tags = listing_data.get("tags") or []
     tags: list[str] = []
     for t in raw_tags:
@@ -1530,13 +1650,14 @@ async def upsert_local_listed_product(
         elif t:
             tags.append(str(t))
 
-    # category锛氬彇绗竴涓垎绫?id/鍚?    raw_cats = listing_data.get("categories") or []
+    # category：取第一个分类 id/名
+    raw_cats = listing_data.get("categories") or []
     category = None
     if raw_cats:
         first = raw_cats[0]
         category = str(first.get("name") or first.get("id")) if isinstance(first, dict) else str(first)
 
-    # 浠锋牸
+    # 价格
     regular_price = listing_data.get("regular_price") or listing_data.get("price")
 
     row = (
@@ -1604,28 +1725,36 @@ async def upsert_local_listed_product(
 
 
 # ============================================
-# 1688 鍟嗗搧涓€閿鍏?# ============================================
+# 1688 商品一键导入
+# ============================================
 
 
 # ---------------------------------------------------------------------------
-# 1688 鎶撳彇缁撴灉缂撳瓨锛圔UG-20锛?#
-# 鐗涢】 Agent 鍗曟鎶撳彇瀹炴祴 53s/114s/174s/208s锛岃秴杩囧叆鍙ｇ綉鍏筹紙Cloudflare锛夌害 100s
-# 鐨勮姹備笂闄愶紝娴忚鍣ㄤ細鏀跺埌 499銆佽繛鎺ヨ鎺愭柇锛屼絾鍚庣浠嶅湪缁х画鎵ц銆備负璁╂搷浣滆€呰兘澶?# 閲嶈瘯鎴愬姛锛岃繖閲屾寜 1688 鍟嗗搧 ID 缂撳瓨鎶撳彇缁撴灉锛氶娆¤皟鐢ㄥ彲鑳借秴鏃讹紝閲嶅瀵煎叆绉掑洖銆?# 骞傜瓑閲嶈瘯璺緞锛岀鍚?AGENTS.md 2.4銆屾墍鏈夊閮ㄨ皟鐢ㄥ繀椤绘湁瓒呮椂銆侀噸璇曪紙骞傜瓑鎺ュ彛锛夈€?# 鐔旀柇涓庨檷绾с€嶃€?# ---------------------------------------------------------------------------
+# 1688 抓取结果缓存（BUG-20）
+#
+# 牛顿 Agent 单次抓取实测 53s/114s/174s/208s，超过入口网关（Cloudflare）约 100s
+# 的请求上限，浏览器会收到 499、连接被掐断，但后端仍在继续执行。为让操作者能够
+# 重试成功，这里按 1688 商品 ID 缓存抓取结果：首次调用可能超时，重复导入秒回。
+# 幂等重试路径，符合 AGENTS.md 2.4「所有外部调用必须有超时、重试（幂等接口）、
+# 熔断与降级」。
+# ---------------------------------------------------------------------------
 _IMPORT_CACHE_PREFIX = "nuotao:1688-fetch:"
 _IMPORT_CACHE_TTL_SECONDS = 3600
-_IMPORT_CACHE_TTL_SPARSE = 300  # 绋€鐤忕粨鏋滅煭 TTL锛氳涓嬩竴娆″鍏ラ噸鏂版娊鍙?
+_IMPORT_CACHE_TTL_SPARSE = 300  # 稀疏结果短 TTL：让下一次导入重新抽取
+
 _cache_redis: Any = None
 
 
 def _get_cache_redis() -> Any:
-    """鎯版€у崟渚嬶細閬垮厤姣忔璋冪敤閮芥柊寤轰竴鏉?Redis 杩炴帴銆備笉鍙敤鏃惰繑鍥?None锛堢紦瀛橀檷绾т负鍏抽棴锛夈€?""
+    """惰性单例：避免每次调用都新建一条 Redis 连接。不可用时返回 None（缓存降级为关闭）。"""
     global _cache_redis
     if _cache_redis is None:
         try:
             from app.core.redis import create_redis_client
 
             _cache_redis = create_redis_client()
-        except Exception as exc:  # Redis 涓嶅彲鐢ㄤ笉搴旈樆鏂鍏?            logger.warning("1688 import cache: Redis unavailable: %s", exc)
+        except Exception as exc:  # Redis 不可用不应阻断导入
+            logger.warning("1688 import cache: Redis unavailable: %s", exc)
             _cache_redis = False
     return _cache_redis or None
 
@@ -1636,7 +1765,7 @@ def _import_cache_key(url_or_id: str) -> str:
 
 
 def _extract_richness(info: dict[str, Any]) -> int:
-    """缁撴灉涓板瘜搴︼細灞炴€ф潯鏁?+ 鏄惁甯﹂噸閲?+ 鏄惁甯﹀昂瀵搞€傜敤浜庡湪澶氭鎶藉彇闂存嫨浼樸€?""
+    """结果丰富度：属性条数 + 是否带重量 + 是否带尺寸。用于在多次抽取间择优。"""
     if not isinstance(info, dict):
         return -1
     attrs = info.get("attributes") or []
@@ -1649,7 +1778,7 @@ def _extract_richness(info: dict[str, Any]) -> int:
 
 
 def _is_sparse_fetch(result: dict[str, Any]) -> bool:
-    """鐗涢】杩斿洖鎴愬姛浣嗘病鏈夊睘鎬ц〃銆侀噸閲忓拰灏哄锛氳涓虹█鐤忥紝鍊煎緱閲嶈瘯涓€娆°€?""
+    """牛顿返回成功但没有属性表、重量和尺寸：视为稀疏，值得重试一次。"""
     info = ((result or {}).get("data") or {}).get("product_info") or {}
     return (
         (not (info.get("attributes") or []))
@@ -1659,53 +1788,63 @@ def _is_sparse_fetch(result: dict[str, Any]) -> bool:
 
 
 def _has_minimal_data(result: dict[str, Any]) -> bool:
-    """缁撴灉鏄惁宸插叿澶囨渶灏忓彲鐢ㄦ暟鎹細鍚嶇О + 浠锋牸 + 鈮? 寮犲浘鐗囥€?
-    绋€鐤忛噸璇曪紙ROUND-4F锛夌殑鐩殑鏄粠灞炴€ц〃涓虹┖鐨勭墰椤跨粨鏋滀腑鑾峰彇鏇村缁村害銆?    浣嗗綋棣栨缁撴灉宸插惈鏍稿績瀛楁锛堝悕绉般€佷环鏍笺€佸浘鐗囷級鏃讹紝閲嶈瘯澶ф鐜囧彧鏄?    鐢?300s 瓒呮椂鎹㈠彇鏃犳敹鐩娾€斺€斿疄娴嬮噸璇?KILL 鐜?> 50%銆傛鏃惰烦杩囬噸璇曪紝
-    鐩存帴杩斿洖绋€鐤忕粨鏋滐紝TTL 淇濇寔鐭€间互渚垮悗缁墜鍔ㄦ垨鑷姩閲嶆柊鎶藉彇銆?    """
+    """结果是否已具备最小可用数据：名称 + 价格 + ≥1 张图片。
+
+    稀疏重试（ROUND-4F）的目的是从属性表为空的牛顿结果中获取更多维度。
+    但当首次结果已含核心字段（名称、价格、图片）时，重试大概率只是
+    用 300s 超时换取无收益——实测重试 KILL 率 > 50%。此时跳过重试，
+    直接返回稀疏结果，TTL 保持短值以便后续手动或自动重新抽取。
+    """
     info = ((result or {}).get("data") or {}).get("product_info") or {}
     has_name = bool(str(info.get("name") or "").strip())
     has_price = bool(info.get("price"))
     has_image = bool((info.get("images") or []))
     return has_name and has_price and has_image
 
-# 1688 寮€鏀惧钩鍙伴敊璇爜 鈫?鐢ㄦ埛鍙鎻愮ず鐨勭炕璇戣〃銆?# 鍛戒腑閿紙瀛愪覆鍖归厤锛屽ぇ灏忓啓涓嶆晱鎰燂級鍗宠繑鍥?(鐢ㄦ埛鍙涓枃, 绋冲畾鐨?error_code 閿?銆?# 鏈懡涓繑鍥?(None, None) 璁╀笂灞傛部鐢ㄥ師鏂囥€?_1688_ERROR_TRANSLATIONS: list[tuple[str, str, str]] = [
-    # (鍖归厤瀛愪覆, 鐢ㄦ埛鍙鎻愮ず, error_code)
+# 1688 开放平台错误码 → 用户可读提示的翻译表。
+# 命中键（子串匹配，大小写不敏感）即返回 (用户可读中文, 稳定的 error_code 键)。
+# 未命中返回 (None, None) 让上层沿用原文。
+_1688_ERROR_TRANSLATIONS: list[tuple[str, str, str]] = [
+    # (匹配子串, 用户可读提示, error_code)
     (
         "APIACLDecline",
-        "1688 寮€鏀惧钩鍙?AppKey 鏈姞鍏ョ櫧鍚嶅崟锛屾棤娉曟媺鍙栬鍟嗗搧銆傝璁╃鐞嗗憳鍦?1688 寮€鏀惧钩鍙板悗鍙板皢褰撳墠 AppKey 鎺堟潈璁块棶璇ュ晢鍝佹墍灞炲晢瀹?绫荤洰鍚庨噸璇曘€?,
+        "1688 开放平台 AppKey 未加入白名单，无法拉取该商品。请让管理员在 1688 开放平台后台将当前 AppKey 授权访问该商品所属商家/类目后重试。",
         "APPKEY_ACL_DECLINE",
     ),
     (
         "UserNotLogin",
-        "1688 璐︽埛鏈櫥褰曟垨鐧诲綍鎬佸凡杩囨湡锛岃閲嶆柊鎺堟潈鍚庨噸璇曘€?,
+        "1688 账户未登录或登录态已过期，请重新授权后重试。",
         "USER_NOT_LOGIN",
     ),
     (
         "AppKey is not allowed",
-        "1688 AppKey 鏃犺闂潈闄愶紙ACL 鎷掔粷锛夈€傝鑱旂郴绠＄悊鍛樺湪 1688 寮€鏀惧钩鍙颁负褰撳墠 AppKey 鎺堟潈瀵瑰簲鍟嗗搧鍟嗗/绫荤洰銆?,
+        "1688 AppKey 无访问权限（ACL 拒绝）。请联系管理员在 1688 开放平台为当前 AppKey 授权对应商品商家/类目。",
         "APPKEY_ACL_DECLINE",
     ),
     (
         "forbidden",
-        "1688 鎷掔粷璁块棶璇ュ晢鍝侊紙鍙兘鏄晢鍝佷笅鏋躲€佸晢瀹跺叧闂€佹垨 AppKey 鏃犳潈闄愶級銆傝妫€鏌ュ晢鍝侀摼鎺ユ槸鍚︽湁鏁堬紝鎴栬仈绯荤鐞嗗憳纭 AppKey 鎺堟潈鑼冨洿銆?,
+        "1688 拒绝访问该商品（可能是商品下架、商家关闭、或 AppKey 无权限）。请检查商品链接是否有效，或联系管理员确认 AppKey 授权范围。",
         "FORBIDDEN",
     ),
     (
         "timeout",
-        "1688 鏈嶅姟鍝嶅簲瓒呮椂锛岃绋嶅悗閲嶈瘯銆傝嫢鎸佺画鍑虹幇璇疯仈绯荤鐞嗗憳妫€鏌ヤ笂娓告湇鍔＄姸鎬併€?,
+        "1688 服务响应超时，请稍后重试。若持续出现请联系管理员检查上游服务状态。",
         "UPSTREAM_TIMEOUT",
     ),
     (
         "IllegalParam",
-        "1688 杩斿洖鍙傛暟閿欒銆傝妫€鏌ヨ緭鍏ョ殑鍟嗗搧 URL 鏄惁涓哄悎娉曠殑 detail.1688.com/offer/xxx.html 鏍煎紡銆?,
+        "1688 返回参数错误。请检查输入的商品 URL 是否为合法的 detail.1688.com/offer/xxx.html 格式。",
         "ILLEGAL_PARAM",
     ),
 ]
 
 
 def _translate_1688_error(error: str | None) -> tuple[str | None, str | None]:
-    """鎶?1688 寮€鏀惧钩鍙板師濮嬮敊璇俊鎭炕璇戞垚鐢ㄦ埛鍙鎻愮ず銆?
-    杩斿洖 (friendly_message, error_code)銆傛湭鍛戒腑缈昏瘧琛ㄨ繑鍥?(None, None)銆?    鍖归厤閲囩敤瀛愪覆鍖呭惈锛屽ぇ灏忓啓涓嶆晱鎰燂紝閬垮厤涓婃父鎺緸缁嗗井宸紓婕忔帀銆?    """
+    """把 1688 开放平台原始错误信息翻译成用户可读提示。
+
+    返回 (friendly_message, error_code)。未命中翻译表返回 (None, None)。
+    匹配采用子串包含，大小写不敏感，避免上游措辞细微差异漏掉。
+    """
     if not error:
         return None, None
     lowered = error.lower()
@@ -1716,8 +1855,8 @@ def _translate_1688_error(error: str | None) -> tuple[str | None, str | None]:
 
 
 async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
-    """甯?Redis 骞傜瓑缂撳瓨鐨?1688 鍟嗗搧鎶撳彇銆傚懡涓椂闄勫甫 from_cache 鏍囪銆?""
-    import json  # 鏈ā鍧楁湭椤跺眰瀵煎叆 json
+    """带 Redis 幂等缓存的 1688 商品抓取。命中时附带 from_cache 标记。"""
+    import json  # 本模块未顶层导入 json
 
     key = _import_cache_key(url_or_id)
     redis = _get_cache_redis()
@@ -1732,13 +1871,17 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("1688 import cache read failed for %s: %s", key, exc)
 
-    # ROUND-4F: 鐗涢】鏄?LLM Agent锛屽睘鎬ц〃鎻愬彇涓嶇ǔ瀹氾紙鍚屼竴 offer 瀹炴祴 23 鏉?/ 0 鏉?/ 0 鏉★級銆?    # 绋€鐤忕粨鏋滈噸璇曚竴娆″苟淇濈暀杈冧赴瀵岃€咃紱绋€鐤忕粨鏋滅敤鐭?TTL锛岄伩鍏嶆妸鍗曡杽鏁版嵁缂撳瓨涓€灏忔椂銆?    # ROUND-4G: 鑻ラ娆＄█鐤忕粨鏋滃凡鍚牳蹇冨瓧娈碉紙鍚嶇О+浠锋牸+鍥剧墖锛夛紝璺宠繃閲嶈瘯鈥斺€?    # 瀹炴祴閲嶈瘯 KILL 鐜?> 50%锛屽钩鍧囨氮璐?~297s 浣嗘棤鏁版嵁鏀剁泭銆?    result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+    # ROUND-4F: 牛顿是 LLM Agent，属性表提取不稳定（同一 offer 实测 23 条 / 0 条 / 0 条）。
+    # 稀疏结果重试一次并保留较丰富者；稀疏结果用短 TTL，避免把单薄数据缓存一小时。
+    # ROUND-4G: 若首次稀疏结果已含核心字段（名称+价格+图片），跳过重试——
+    # 实测重试 KILL 率 > 50%，平均浪费 ~297s 但无数据收益。
+    result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
     if _is_sparse_fetch(result) and not _has_minimal_data(result):
         logger.info("1688 fetch sparse (no attributes/weight/dims), no minimal data, retrying once")
         retry = await asyncio.to_thread(_fetch_1688_product, url_or_id)
         first_info = ((result.get("data") or {}).get("product_info") or {})
         retry_info = ((retry.get("data") or {}).get("product_info") or {})
-        # 濡傛灉棣栨澶辫触浣嗛噸璇曟垚鍔燂紝鏃犺涓板瘜搴﹀浣曢兘淇濈暀閲嶈瘯缁撴灉
+        # 如果首次失败但重试成功，无论丰富度如何都保留重试结果
         if (not result.get("success")) and retry.get("success"):
             retry["merged_from_retry"] = True
             result = retry
@@ -1763,24 +1906,27 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
 
 def parse_1688_url(url: str) -> str:
     """
-    浠?688鍟嗗搧URL涓彁鍙栧晢鍝両D
+    从1688商品URL中提取商品ID
 
-    鏀寔鐨刄RL鏍煎紡锛?    - https://detail.1688.com/offer/123456789.html
+    支持的URL格式：
+    - https://detail.1688.com/offer/123456789.html
     - https://detail.1688.com/offer/123456789.html?spm=...
-    - 123456789锛堢洿鎺ヨ緭鍏ュ晢鍝両D锛?
+    - 123456789（直接输入商品ID）
+
     Args:
-        url: 1688鍟嗗搧URL鎴栧晢鍝両D
+        url: 1688商品URL或商品ID
 
     Returns:
-        鍟嗗搧ID
+        商品ID
     """
     import re
 
-    # 濡傛灉鏄函鏁板瓧锛岀洿鎺ヨ繑鍥?    if url.isdigit():
+    # 如果是纯数字，直接返回
+    if url.isdigit():
         return url
 
-    # 浠嶶RL涓彁鍙杘ffer ID
-    # 鍖归厤 /offer/鏁板瓧.html 鎴?offerId=鏁板瓧
+    # 从URL中提取offer ID
+    # 匹配 /offer/数字.html 或 offerId=数字
     patterns = [
         r'/offer/(\d+)\.html',
         r'offerId=(\d+)',
@@ -1792,7 +1938,7 @@ def parse_1688_url(url: str) -> str:
         if match:
             return match.group(1)
 
-    raise ValueError(f"鏃犳硶浠嶶RL涓彁鍙?688鍟嗗搧ID: {url}")
+    raise ValueError(f"无法从URL中提取1688商品ID: {url}")
 
 
 def convert_1688_to_pipeline_input(
@@ -1801,54 +1947,44 @@ def convert_1688_to_pipeline_input(
     source_id: str = "",
 ) -> dict[str, Any]:
     """
-    灏?688鍟嗗搧璇︽儏杞崲涓轰骇鍝佸伐浣滄祦杈撳叆鏍煎紡
+    将1688商品详情转换为产品工作流输入格式
 
     Args:
-        product_detail: 1688鍟嗗搧璇︽儏锛堟潵鑷猻ourcing_1688_service.get_product_detail锛?        source_url: 1688鍟嗗搧閾炬帴
-        source_id: 1688鍟嗗搧ID
+        product_detail: 1688商品详情（来自sourcing_1688_service.get_product_detail）
+        source_url: 1688商品链接
+        source_id: 1688商品ID
 
     Returns:
-        浜у搧宸ヤ綔娴佽緭鍏ユ牸寮忕殑鍟嗗搧淇℃伅
+        产品工作流输入格式的商品信息
     """
     product = product_detail.get("product", {}) if product_detail.get("success") else {}
 
-    # 鎻愬彇鍟嗗搧鍚嶇О
-    name = product.get("subject", product.get("title", "鏈懡鍚嶅晢鍝?))
+    # 提取商品名称
+    name = product.get("subject", product.get("title", "未命名商品"))
 
-    # 鎻愬彇浠锋牸锛堜紭鍏堜繚鐣欏畬鏁翠环鏍煎尯闂达級
-    # 浠锋牸锛氬彧淇濈暀绾暟鍊笺€?688 甯歌繑鍥?"楼20" 鎴?"6.7-19.7" 鍖洪棿瀛楃涓诧紝
-    # 鐩存帴甯﹀叆 number 杈撳叆妗嗕細閫犳垚瑙ｆ瀽澶辫触锛涘尯闂村彇鏈€楂樹环锛堝お闃宠兘/鍏呯數娆鹃厤缃級銆?    raw_price = str(product.get("price", "")).strip()
+    # 提取价格（优先保留完整价格区间）
+    # 价格：只保留纯数值。1688 常返回 "¥20" 或 "6.7-19.7" 区间字符串，
+    # 直接带入 number 输入框会造成解析失败；区间取最低价（采购成本口径）。
+    raw_price = str(product.get("price", "")).strip()
     if not raw_price:
         price_info = product.get("price_range") or product.get("priceRange") or []
         if isinstance(price_info, list) and price_info:
-            # 鍙栨渶楂樹环鏍硷紙澶槼鑳?鍏呯數娆鹃厤缃級锛岃€屼笉鏄渶浣庝环鏍?            max_price = 0.0
-            for p in price_info:
-                p_val = p.get("price", 0) if isinstance(p, dict) else p
-                try:
-                    parsed = float(str(p_val).replace("楼", "").replace(",", ""))
-                    if parsed > max_price:
-                        max_price = parsed
-                except (ValueError, TypeError):
-                    pass
-            if max_price > 0:
-                raw_price = str(max_price)
-            else:
-                # Fallback to first price
-                first_price = price_info[0]
-                raw_price = (
-                    str(first_price.get("price", ""))
-                    if isinstance(first_price, dict)
-                    else str(first_price)
-                )
+            first_price = price_info[0]
+            raw_price = (
+                str(first_price.get("price", ""))
+                if isinstance(first_price, dict)
+                else str(first_price)
+            )
     parsed_price = _parse_decimal(raw_price)
     price = str(parsed_price) if parsed_price is not None else ""
 
-    # 鎻愬彇鎻忚堪
+    # 提取描述
     description = product.get("description", "")
     if not description:
         description = product.get("detail", "")
 
-    # 鎻愬彇鏍稿績鍗栫偣锛堜粠鏍囬鍜屽睘鎬т腑鎻愬彇锛?    core_selling_points = []
+    # 提取核心卖点（从标题和属性中提取）
+    core_selling_points = []
     attributes = product.get("attributes", [])
     if isinstance(attributes, list):
         for attr in attributes[:5]:
@@ -1858,18 +1994,18 @@ def convert_1688_to_pipeline_input(
                 if attr_name and attr_value:
                     core_selling_points.append(f"{attr_name}: {attr_value}")
 
-    # 鎻愬彇鏉愯川
+    # 提取材质
     materials = []
     for attr in attributes if isinstance(attributes, list) else []:
         if isinstance(attr, dict):
             attr_name = (
                 attr.get("name") or attr.get("attributeName") or ""
             ).lower()
-            if "鏉愯川" in attr_name or "material" in attr_name:
+            if "材质" in attr_name or "material" in attr_name:
                 materials.append(attr.get("value", ""))
 
-    # 鎻愬彇灏哄锛圧OUND-4C: 浼樺厛鍖呰灏哄鈥斺€旇繍璐规寜澶栧寘瑁呰璐癸紱
-    # 浜у搧瑙勬牸 47x47x90 涓庡寘瑁?92x16x16 宸害 20 鍊嶏級
+    # 提取尺寸（ROUND-4C: 优先包装尺寸——运费按外包装计费；
+    # 产品规格 47x47x90 与包装 92x16x16 差约 20 倍）
     dimensions = ""
     pack = {}
     for attr in attributes if isinstance(attributes, list) else []:
@@ -1878,33 +2014,35 @@ def convert_1688_to_pipeline_input(
                 attr.get("name") or attr.get("attributeName") or ""
             )
             attr_name = attr_name_raw.lower()
-            for axis in ("闀?, "瀹?, "楂?):
-                if attr_name.startswith("鍖呰" + axis):
+            for axis in ("长", "宽", "高"):
+                if attr_name.startswith("包装" + axis):
                     pack[axis] = str(attr.get("value", "")).strip()
-    if all(pack.get(a) for a in ("闀?, "瀹?, "楂?)):
-        dimensions = f"{pack['闀?]}*{pack['瀹?]}*{pack['楂?]}"
+    if all(pack.get(a) for a in ("长", "宽", "高")):
+        dimensions = f"{pack['长']}*{pack['宽']}*{pack['高']}"
     if not dimensions:
         for attr in attributes if isinstance(attributes, list) else []:
             if isinstance(attr, dict):
                 attr_name = (
                     attr.get("name") or attr.get("attributeName") or ""
                 ).lower()
-                if "灏哄" in attr_name or "dimension" in attr_name or "瑙勬牸" in attr_name:
+                if "尺寸" in attr_name or "dimension" in attr_name or "规格" in attr_name:
                     dimensions = attr.get("value", "")
                     break
 
-    # 鎻愬彇閲嶉噺锛圧OUND-4C: 鍗曚綅鍦ㄥ睘鎬у悕閲岋紝濡傘€岄噸閲?g)銆嶃€?    # 鍙彇 value 浼氭妸 1800 g 褰撴垚 1800 kg锛岃繍璐归敊涓€鍗冨€嶏紱鏍囧噯缁熶竴 kg锛?    weight = ""
+    # 提取重量（ROUND-4C: 单位在属性名里，如「重量(g)」。
+    # 只取 value 会把 1800 g 当成 1800 kg，运费错一千倍；标准统一 kg）
+    weight = ""
     for attr in attributes if isinstance(attributes, list) else []:
         if isinstance(attr, dict):
             attr_name_raw = str(
                 attr.get("name") or attr.get("attributeName") or ""
             )
             attr_name = attr_name_raw.lower()
-            if "閲嶉噺" in attr_name or "weight" in attr_name:
-                unit_match = re.search(r"[(锛圿([^)锛塢{1,6})[)锛塢", attr_name_raw)
+            if "重量" in attr_name or "weight" in attr_name:
+                unit_match = re.search(r"[(（]([^)）]{1,6})[)）]", attr_name_raw)
                 unit_hint = unit_match.group(1).strip() if unit_match else ""
                 raw_value = str(attr.get("value", ""))
-                # ROUND-4D: 鍊兼湰韬凡甯﹀崟浣嶆椂涓嶈閲嶅杩藉姞
+                # ROUND-4D: 值本身已带单位时不要重复追加
                 if unit_hint and not re.search(
                     r"\d\s*" + re.escape(unit_hint), raw_value, re.I
                 ):
@@ -1913,7 +2051,7 @@ def convert_1688_to_pipeline_input(
                     weight = raw_value
                 break
 
-    # 鎻愬彇鍟嗗搧鍥剧墖
+    # 提取商品图片
     images = product.get("images", [])
     if not images:
         images = product.get("imageUrls", [])
@@ -1933,7 +2071,7 @@ def convert_1688_to_pipeline_input(
     else:
         image_urls = []
 
-    # 鎻愬彇绫荤洰
+    # 提取类目
     category = (
         product.get("category_name")
         or product.get("categoryName")
@@ -1941,7 +2079,7 @@ def convert_1688_to_pipeline_input(
         or ""
     )
 
-    # 鎻愬彇SKU淇℃伅
+    # 提取SKU信息
     sku_info = product.get("sku_list") or product.get("skuInfos") or []
     if isinstance(sku_info, list) and sku_info:
         first_sku = sku_info[0] if isinstance(sku_info[0], dict) else {}
@@ -1949,7 +2087,8 @@ def convert_1688_to_pipeline_input(
     else:
         sku = ""
 
-    # 濡傛灉娌℃湁SKU锛岀敓鎴愪竴涓?    if not sku:
+    # 如果没有SKU，生成一个
+    if not sku:
         sku = _generate_sku(name)
 
     return {
@@ -1967,7 +2106,8 @@ def convert_1688_to_pipeline_input(
         "source_url": source_url,
         "source_id": source_id,
         "sku": sku,
-        "images": image_urls[:10],  # 鏈€澶?0寮犲浘鐗?        "attributes": attributes,  # ROUND-4A: 淇濈暀鍘熷灞炴€ц〃渚?listing_gate 娑堣垂
+        "images": image_urls[:10],  # 最多10张图片
+        "attributes": attributes,  # ROUND-4A: 保留原始属性表供 listing_gate 消费
         "supplier": product.get("supplier") or {
             "company_name": product.get("company_name", ""),
             "login_id": product.get("supplier_login_id", ""),
@@ -1976,17 +2116,21 @@ def convert_1688_to_pipeline_input(
 
 
 def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
-    """1688 鍟嗗搧鎶撳彇涓庢牸寮忚浆鎹紙Step 1-3锛夛紝鍚屾闃诲瀹炵幇銆?
-    寮€鏀惧钩鍙颁笌鐗涢】 Agent 閮芥槸鍚屾 HTTP 璋冪敤锛孮A 瀹炴祴鍗曟鍙揪 42s锛屽洜姝ゆ暣娈?    蹇呴』鏀惧埌绾跨▼姹犳墽琛岋紝涓嶈兘鐩存帴鍦ㄤ簨浠跺惊鐜噷璋冪敤锛屽惁鍒欎細鎷栧灝鎵€鏈夊苟鍙戣姹傘€?    """
+    """1688 商品抓取与格式转换（Step 1-3），同步阻塞实现。
+
+    开放平台与牛顿 Agent 都是同步 HTTP 调用，QA 实测单次可达 42s，因此整段
+    必须放到线程池执行，不能直接在事件循环里调用，否则会拖垮所有并发请求。
+    """
     import_id = str(uuid.uuid4())
     start_time = time.time()
 
     try:
-        # Step 1: 瑙ｆ瀽URL鎻愬彇鍟嗗搧ID
+        # Step 1: 解析URL提取商品ID
         product_id = parse_1688_url(url_or_id)
         logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
 
-        # Step 2: 浼樺厛浣跨敤鐗涢】 Agent 璇诲彇鍟嗗搧锛?688 瀹樻柟 API 鏉冮檺涓嶈冻锛?        from app.services.newton_agent_service import (
+        # Step 2: 优先使用牛顿 Agent 读取商品（1688 官方 API 权限不足）
+        from app.services.newton_agent_service import (
             extract_1688_product,
             is_configured as newton_is_configured,
         )
@@ -2002,7 +2146,7 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
             product_detail = extract_1688_product(url_or_id, product_id)
             data_source = product_detail.get("source", "newton_agent")
 
-        # 鐗涢】 Agent 澶辫触鏃讹紝闄嶇骇鍒?1688 瀹樻柟 API
+        # 牛顿 Agent 失败时，降级到 1688 官方 API
         if not product_detail or not product_detail.get("success"):
             logger.info(
                 "1688 import %s: Newton Agent failed, fallback to open API",
@@ -2024,19 +2168,21 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
             not product_detail.get("success")
             or product_detail.get("source") == "mock"
         ):
-            # 鎶?1688 寮€鏀惧钩鍙扮殑鍘熷閿欒鐮佺炕璇戞垚鐢ㄦ埛鍙銆佸彲鑷姪淇鐨勪腑鏂囨彁绀恒€?            # 甯歌閿欒鐮侊細
-            #   gw.APIACLDecline: AppKey is not allowed(acl)  -> AppKey 鏈櫧鍚嶅崟
-            #   gw.UserNotLogin / 401 / 403                     -> 鏈巿鏉?/ 鏃犳潈闄?            #   gw.Timeout / connect timeout / read timeout      -> 1688 鏈嶅姟瓒呮椂
-            #   gw.IllegalParam / param error                   -> 鍙傛暟閿欒
+            # 把 1688 开放平台的原始错误码翻译成用户可读、可自助修复的中文提示。
+            # 常见错误码：
+            #   gw.APIACLDecline: AppKey is not allowed(acl)  -> AppKey 未白名单
+            #   gw.UserNotLogin / 401 / 403                     -> 未授权 / 无权限
+            #   gw.Timeout / connect timeout / read timeout      -> 1688 服务超时
+            #   gw.IllegalParam / param error                   -> 参数错误
             error_msg = (
                 product_detail.get("error")
-                or "鏈幏寰楃湡瀹?1688 鍟嗗搧鏁版嵁锛屽凡鎷掔粷浣跨敤绀轰緥鏁版嵁"
+                or "未获得真实 1688 商品数据，已拒绝使用示例数据"
             )
             friendly, error_code = _translate_1688_error(error_msg)
             if friendly:
                 error_msg = friendly
             if open_api_error and open_api_error != error_msg:
-                error_msg = f"{error_msg}锛堝紑鏀惧钩鍙板師濮嬭繑鍥烇細{open_api_error}锛?
+                error_msg = f"{error_msg}（开放平台原始返回：{open_api_error}）"
             logger.error(
                 "1688 import %s: get product detail failed (code=%s): %s",
                 import_id,
@@ -2055,7 +2201,7 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
                 },
             }
 
-        # Step 3: 杞崲涓轰骇鍝佸伐浣滄祦杈撳叆鏍煎紡
+        # Step 3: 转换为产品工作流输入格式
         product_info = convert_1688_to_pipeline_input(
             product_detail,
             source_url=url_or_id,
@@ -2083,7 +2229,7 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
         logger.error("1688 import %s: URL parse error: %s", import_id, str(e))
         return {
             "success": False,
-            "error": f"URL瑙ｆ瀽澶辫触: {str(e)}",
+            "error": f"URL解析失败: {str(e)}",
             "data": {"import_id": import_id, "source_url": url_or_id},
         }
     except Exception as e:
@@ -2105,39 +2251,51 @@ async def import_from_1688(
     trace_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    浠?688鍟嗗搧URL鎴朓D涓€閿鍏ュ晢鍝佷俊鎭?
-    娴佺▼锛?    1. 瑙ｆ瀽URL鎻愬彇鍟嗗搧ID
-    2. 浼樺厛璋冪敤1688寮€鏀惧钩鍙帮紝鏈巿鏉冩垨鏃犻摵璐у叧绯绘椂闄嶇骇鍒扮墰椤?Agent
-    3. 杞崲涓轰骇鍝佸伐浣滄祦杈撳叆鏍煎紡
-    4. 鍙€夛細鑷姩杩愯宸ヤ綔娴侊紙鍚?V3.0 閫夊搧闂搁棬锛?    5. 鍙€夛細鑷姩涓婃灦WooCommerce
+    从1688商品URL或ID一键导入商品信息
+
+    流程：
+    1. 解析URL提取商品ID
+    2. 优先调用1688开放平台，未授权或无铺货关系时降级到牛顿 Agent
+    3. 转换为产品工作流输入格式
+    4. 可选：自动运行工作流（含 V3.0 选品闸门）
+    5. 可选：自动上架WooCommerce
 
     Args:
-        url_or_id: 1688鍟嗗搧URL鎴栧晢鍝両D
-        auto_run_pipeline: 鏄惁鑷姩杩愯瀹屾暣宸ヤ綔娴?        auto_list: 鏄惁鑷姩涓婃灦锛堜粎鍦╝uto_run_pipeline=True鏃剁敓鏁堬級
-        session: 鏁版嵁搴撲細璇濄€備紶鍏ユ椂宸ヤ綔娴佹墽琛?V3.0 閫夊搧闂搁棬锛涗负 None 鏃堕椄闂ㄨ烦杩?        workspace_id: 宸ヤ綔绌洪棿 ID锛岄椄闂ㄨ惤搴撲娇鐢?        trace_id: 鍏ㄩ摼璺拷韪?ID
+        url_or_id: 1688商品URL或商品ID
+        auto_run_pipeline: 是否自动运行完整工作流
+        auto_list: 是否自动上架（仅在auto_run_pipeline=True时生效）
+        session: 数据库会话。传入时工作流执行 V3.0 选品闸门；为 None 时闸门跳过
+        workspace_id: 工作空间 ID，闸门落库使用
+        trace_id: 全链路追踪 ID
 
     Returns:
-        瀵煎叆缁撴灉锛屽寘鍚晢鍝佷俊鎭拰鍙€夌殑宸ヤ綔娴佺粨鏋?    """
+        导入结果，包含商品信息和可选的工作流结果
+    """
     logger.info("1688 import started: url=%s, auto_run=%s, auto_list=%s",
                 url_or_id, auto_run_pipeline, auto_list)
 
-    # Step 1-3锛氶樆濉炴姄鍙栨斁绾跨▼姹狅紝閬垮厤鍗℃浜嬩欢寰幆
-    # ROUND-4E: 鐗涢】鎶撳彇鍙兘瓒呰繃鍏ュ彛缃戝叧瓒呮椂瀵艰嚧瀹㈡埛绔?499锛岀紦瀛樹緵骞傜瓑閲嶈瘯
+    # Step 1-3：阻塞抓取放线程池，避免卡死事件循环
+    # ROUND-4E: 牛顿抓取可能超过入口网关超时导致客户端 499，缓存供幂等重试
     result = await _cached_fetch_1688_product(url_or_id)
     if not result.get("success") or not auto_run_pipeline:
         return result
 
-    # Step 4: 鑷姩杩愯瀹屾暣宸ヤ綔娴?    product_info = result["data"]["product_info"]
+    # Step 4: 自动运行完整工作流
+    product_info = result["data"]["product_info"]
     logger.info("1688 import: auto running pipeline for %s", url_or_id)
     try:
-        # run_pipeline 鏄崗绋嬶細蹇呴』 await锛屽惁鍒?pipeline_result 浼氭槸鍗忕▼瀵硅薄锛?        # 闅忓悗 .get() 鐩存帴 AttributeError锛屾暣鏉¤嚜鍔ㄦ祦杞潤榛樺け鏁堛€?        pipeline_result = await run_pipeline(
+        # run_pipeline 是协程：必须 await，否则 pipeline_result 会是协程对象，
+        # 随后 .get() 直接 AttributeError，整条自动流转静默失效。
+        pipeline_result = await run_pipeline(
             product_info=product_info,
             auto_list=auto_list,
-            include_images=False,  # 鍥剧墖鐢熸垚闇€瑕侀澶栨椂闂达紝榛樿涓嶈嚜鍔ㄧ敓鎴?            session=session,
+            include_images=False,  # 图片生成需要额外时间，默认不自动生成
+            session=session,
             workspace_id=workspace_id,
             trace_id=trace_id,
         )
-    except Exception as e:  # 瀵煎叆鎴愬姛浣嗘祦杞け璐ワ細闄嶇骇杩斿洖瀵煎叆缁撴灉锛屼笉鍚炲紓甯?        logger.error("1688 import: pipeline failed for %s: %s", url_or_id, str(e))
+    except Exception as e:  # 导入成功但流转失败：降级返回导入结果，不吞异常
+        logger.error("1688 import: pipeline failed for %s: %s", url_or_id, str(e))
         result["data"]["pipeline_error"] = str(e)
         return result
 
@@ -2156,10 +2314,15 @@ async def import_and_analyze_from_1688(
     max_tokens: int = 2000,
 ) -> dict[str, Any]:
     """
-    瀵煎叆鍗曚釜 1688 鍟嗗搧骞剁珛鍗虫墽琛?AI 鍒嗘瀽涓庝骇鍝佹姤鍛娿€?
-    璇ュ嚱鏁扮敤浜庣鐞嗙鎵归噺瀵煎叆鐨勯€愭潯宸ヤ綔鍗曞厓銆傞樆濉炵殑 1688 鎶撳彇宸茬敱
-    ``import_from_1688`` 鍐呴儴鍒囨崲鍒扮嚎绋嬫墽琛岋紝杩欓噷鐩存帴 await 鍗冲彲锛屼笉浼氶樆濉?    FastAPI 浜嬩欢寰幆銆?    """
-    # import_from_1688 宸叉槸鍗忕▼锛堝唴閮ㄨ嚜琛屾妸闃诲鎶撳彇鏀惧埌绾跨▼姹狅級锛岃繖閲岀洿鎺?    # await锛涘啀鐢?to_thread 鍖呰鍙細鎷垮埌鏈墽琛岀殑鍗忕▼瀵硅薄锛岄殢鍚?.get() 宕╂簝銆?    import_result = await import_from_1688(
+    导入单个 1688 商品并立即执行 AI 分析与产品报告。
+
+    该函数用于管理端批量导入的逐条工作单元。阻塞的 1688 抓取已由
+    ``import_from_1688`` 内部切换到线程执行，这里直接 await 即可，不会阻塞
+    FastAPI 事件循环。
+    """
+    # import_from_1688 已是协程（内部自行把阻塞抓取放到线程池），这里直接
+    # await；再用 to_thread 包装只会拿到未执行的协程对象，随后 .get() 崩溃。
+    import_result = await import_from_1688(
         url_or_id,
         auto_run_pipeline=False,
         auto_list=False,
@@ -2187,7 +2350,7 @@ async def import_and_analyze_from_1688(
         logger.error("1688 import analysis failed for %s: %s", url_or_id, str(e))
         return {
             "success": False,
-            "error": f"鍟嗗搧宸插鍏ワ紝浣?AI 鍒嗘瀽澶辫触: {e!s}",
+            "error": f"商品已导入，但 AI 分析失败: {e!s}",
             "data": {
                 **import_result.get("data", {}),
                 "product_info": product_info,
@@ -2205,4 +2368,3 @@ async def import_and_analyze_from_1688(
         },
         "error": None,
     }
-
