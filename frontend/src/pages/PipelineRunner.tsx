@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Button, Space, Typography, Steps, Tag, Alert, Row, Col,
   Spin, message, Input, Select, Descriptions, List, Empty, Progress, Statistic,
@@ -377,6 +377,34 @@ export default function PipelineRunner() {
       }
 
       setConfirmSuccess(data.data)
+      // BUG-18 (2026-10-12): 确认上架成功后只设置了 confirmSuccess，没有回写
+      // pipelineResult，于是「上架 WC」步骤永远停在 pending_confirmation，
+      // 界面看起来像点了没反应、流程没闭环。这里把该步骤标记为 completed
+      // 并把 WC 返回结果挂上去，让进度、状态标签与真实结果一致。
+      setPipelineResult((prev) => {
+        if (!prev?.data?.steps) return prev
+        const steps: Record<string, any> = { ...prev.data.steps }
+        steps.listing = {
+          ...(steps.listing || {}),
+          status: 'completed',
+          data: { ...(steps.listing?.data || {}), ...(data.data || {}) },
+          timestamp: new Date().toISOString(),
+        }
+        const completed = Object.values(steps).filter(
+          (s: any) => s?.status === 'completed'
+        ).length
+        const total = prev.data.total_steps || 1
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            steps,
+            completed_steps: completed,
+            status: completed >= total ? 'completed' : prev.data.status,
+            progress: Math.round((completed / total) * 1000) / 10,
+          },
+        }
+      })
       const wcId = data.data?.woocommerce_id
       message.success(wcId ? `上架成功，WooCommerce ID: #${wcId}` : '上架成功')
     } catch (e: any) {

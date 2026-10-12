@@ -358,6 +358,9 @@ def list_to_woocommerce(
                 "type": "variable",
                 "description": product.get("description", ""),
                 "short_description": product.get("short_description", ""),
+                # 父商品也带 SKU：_find_existing_wc_id 靠它做幂等反查，
+                # 缺了它重推时会再建一个重复的父商品。
+                "sku": product.get("sku", ""),
                 "status": status,
                 "categories": product.get("categories", [{"id": 15}]),
                 "tags": product.get("tags", []),
@@ -474,38 +477,105 @@ def list_to_woocommerce(
 
         if result is not None:
             # 如果是变量产品，创建变体
+            variations_created = 0
+            variations_failed: list[str] = []
             if is_variable and result.get("id"):
                 wc_product_id = result.get("id")
+                # 幂等：同一商品重复推送时不能重复创建变体，否则 WC 端规格会翻倍。
+                # 先按 SKU 拉取已存在的变体，命中则 PUT 更新，未命中才 POST 新建。
+                existing_variations: dict[str, int] = {}
+                try:
+                    ex_resp = requests.get(
+                        f"{base_url}/{wc_product_id}/variations",
+                        auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                        params={"per_page": 100},
+                        timeout=30,
+                    )
+                    if ex_resp.status_code == 200:
+                        for ex in ex_resp.json():
+                            ex_sku = str(ex.get("sku") or "").strip()
+                            if ex_sku and ex.get("id"):
+                                existing_variations[ex_sku] = int(ex["id"])
+                except Exception as e:
+                    logger.warning(
+                        "Failed to list existing variations for WC product %s: %s",
+                        wc_product_id, str(e),
+                    )
+
                 for i, var in enumerate(variations):
+                    var_sku = str(
+                        var.get("sku") or f"{product.get('sku', 'SKU')}-{i + 1}"
+                    ).strip()
                     try:
+                        # BUG-17 (2026-10-12): 变体价字段此前只读 var["price"]（人民币
+                        # 直传）。listing_data 现在给的是已换算的美元价，字段名为
+                        # regular_price；两者都接受以保持向后兼容。
+                        var_price = str(
+                            var.get("regular_price") or var.get("price") or ""
+                        ).strip()
                         variation_data = {
-                            "sku": var.get("sku", f"{product.get('sku', 'SKU')}-{i+1}"),
-                            "regular_price": var.get("price", ""),
+                            "sku": var_sku,
+                            "regular_price": var_price,
                             "manage_stock": True,
-                            "stock_quantity": var.get("stock_quantity", 100),
+                            "stock_quantity": int(var.get("stock_quantity") or 100),
                             "status": "publish",
                         }
-                        # 添加属性（颜色/规格）
-                        if var.get("name"):
+                        # 变体必须声明与父商品同名的可变属性，否则 WC 报
+                        # product_invalid_variation_attribute。
+                        var_name = str(var.get("name") or "").strip()
+                        if var_name:
                             variation_data["attributes"] = [
-                                {
-                                    "name": "颜色",
-                                    "option": var.get("name", "")
-                                }
+                                {"name": "颜色", "option": var_name}
                             ]
-                        
+
+                        existing_var_id = existing_variations.get(var_sku)
                         var_url = f"{base_url}/{wc_product_id}/variations"
-                        var_resp = requests.post(
-                            var_url,
-                            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-                            json=variation_data,
-                            timeout=30,
-                        )
+                        if existing_var_id:
+                            var_resp = requests.put(
+                                f"{var_url}/{existing_var_id}",
+                                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                                json=variation_data,
+                                timeout=30,
+                            )
+                        else:
+                            var_resp = requests.post(
+                                var_url,
+                                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                                json=variation_data,
+                                timeout=30,
+                            )
                         var_resp.raise_for_status()
-                        logger.info("Created variation %d/%d for WC product %d", i+1, len(variations), wc_product_id)
+                        variations_created += 1
+                        logger.info(
+                            "Upserted variation %d/%d for WC product %d (sku=%s price=%s)",
+                            i + 1, len(variations), wc_product_id, var_sku, var_price,
+                        )
                     except Exception as e:
-                        logger.warning("Failed to create variation %d: %s", i+1, str(e))
-            
+                        # BUG-17: 原来只 logger.warning 就吞掉，商品仍返回 success=True，
+                        # 运营看到「上架成功」却只有 1 个 SKU（实测 18 变体只剩 1 个）。
+                        # 现在收集失败明细并在返回值里显式暴露。
+                        detail = str(e)
+                        try:
+                            detail = e.response.json().get("message", detail)
+                        except Exception:
+                            pass
+                        variations_failed.append(f"{var_sku}: {detail}")
+                        logger.warning(
+                            "Failed to upsert variation %d/%d (sku=%s): %s",
+                            i + 1, len(variations), var_sku, detail,
+                        )
+
+            # 变体全军覆没时不能报成功：父商品是 variable，没有任何变体在 WC 端
+            # 是不可售的残缺商品。
+            if is_variable and variations_created == 0 and variations_failed:
+                return {
+                    "success": False,
+                    "sku": product.get("sku"),
+                    "woocommerce_id": result.get("id"),
+                    "error": "变量产品变体创建全部失败",
+                    "variations_failed": variations_failed,
+                }
+
             return {
                 "success": True,
                 "sku": product.get("sku"),
@@ -516,6 +586,8 @@ def list_to_woocommerce(
                 "attempts": attempts,
                 "action": "update" if existing_wc_id else "create",
                 "variations_count": len(variations) if is_variable else 0,
+                "variations_created": variations_created,
+                "variations_failed": variations_failed,
             }
         logger.error(
             "WooCommerce listing exhausted %d attempts for %s: %s",

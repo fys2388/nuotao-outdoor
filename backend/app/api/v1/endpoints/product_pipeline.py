@@ -14,7 +14,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,7 +51,18 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 class ProductInfoRequest(BaseModel):
-    """商品信息请求"""
+    """商品信息请求
+
+    BUG-14 (2026-10-12): 该模型此前只有 12 个字段，1688 导入返回的
+    ``variations`` / ``images`` / ``attributes`` / ``supplier`` 在 API 边界被
+    Pydantic 静默丢弃（默认忽略未知字段）。后果是上架数据永远生成
+    ``type="simple"`` 的单 SKU 商品，多规格 1688 商品的 N 个变体全部丢失，
+    ``check_image_gate`` 也拿不到 1688 原图。这里显式声明这些字段并允许
+    额外字段透传，保证「导入 → 运行管线」链路上的商品数据不被截断。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
     name: str = Field(..., description="商品名称", min_length=1)
     category: str = Field("", description="商品类目")
     price: str = Field("", description="商品价格")
@@ -65,6 +76,21 @@ class ProductInfoRequest(BaseModel):
     weight: str = Field("", description="重量")
     source_url: str = Field("", description="1688商品链接")
     source_id: str = Field("", description="1688商品ID")
+    sku: str = Field("", description="商品 SKU（导入时由 offer id 确定性派生）")
+    # —— 多规格商品的关键数据：漏掉任一字段都会退化为单 SKU 简单商品 ——
+    variations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="SKU 变体列表（sku/name/price/stock_quantity），决定 WC 变量产品",
+    )
+    attributes: list[dict[str, Any]] = Field(
+        default_factory=list, description="1688 原始属性表（重量/尺寸/材质来源）"
+    )
+    images: list[Any] = Field(
+        default_factory=list, description="1688 原始图片 URL 列表"
+    )
+    supplier: dict[str, Any] | None = Field(None, description="供应商信息")
+    price_markup: str = Field("", description="定价倍数（默认 6.0）")
+    usd_cny_rate: str = Field("", description="美元人民币汇率（默认 7.2）")
 
 
 class RunPipelineRequest(BaseModel):

@@ -379,12 +379,39 @@ def _generate_listing_data(
     variations = product_info.get("variations") or []
     has_variations = isinstance(variations, list) and len(variations) > 0
 
-    # 如果有 variations，生成变量产品；否则生成简单产品
+    # BUG-16 (2026-10-12): 1688 变体价格是人民币（如 "12.0"），而 WC 售价是美元。
+    # 变体价必须走与主价完全相同的换算（CNY ÷ 汇率 × 倍数），否则 WooCommerce
+    # 会收到 "12.00" 这种人民币数字当美元卖，价格错约 5 倍。
+    def _to_usd(raw: Any) -> str:
+        parsed = _parse_decimal(raw)
+        if parsed is None or parsed <= 0:
+            return ""
+        return f"{float(parsed) / USD_CNY_RATE * PRICE_MARKUP_MULTIPLIER:.2f}"
+
     if has_variations:
-        # 变量产品：使用 variations[0] 的价格作为主价格，SKU 为基础 SKU
-        first_var = variations[0] if variations else {}
-        base_sku = first_var.get("sku") or sku
-        base_price = first_var.get("price") or regular_price
+        # 变量产品：主 SKU 落在外层商品，变体各自带自己的 SKU 与美元价。
+        wc_variations: list[dict[str, Any]] = []
+        for var in variations:
+            if not isinstance(var, dict):
+                continue
+            var_price_usd = _to_usd(var.get("price"))
+            wc_variations.append(
+                {
+                    "sku": str(var.get("sku") or "").strip(),
+                    "name": str(var.get("name") or "").strip(),
+                    "regular_price": var_price_usd,
+                    # 源价保留人民币，便于对账与后续重算
+                    "source_price_cny": str(var.get("price") or ""),
+                    "manage_stock": True,
+                    "stock_quantity": int(var.get("stock_quantity") or 100),
+                }
+            )
+
+        priced = [v for v in wc_variations if v["regular_price"]]
+        # 主价取变体中的最低美元价：显示价与实际可购价一致，避免搜索列表虚高。
+        base_price = min((v["regular_price"] for v in priced), key=float) if priced else regular_price
+        first_var = variations[0] if isinstance(variations[0], dict) else {}
+        base_sku = str(first_var.get("sku") or "").strip() or sku
         base_stock = int(first_var.get("stock_quantity") or 100)
 
         return {
@@ -402,13 +429,13 @@ def _generate_listing_data(
             "images": images,
             "main_images": main_images,
             "detail_images": detail_images,
-            "variations": variations,  # 所有 SKU 变体
+            "variations": wc_variations,  # 所有 SKU 变体（美元价）
             "meta_data": [
                 {"key": "source", "value": "1688"},
                 {"key": "source_price", "value": price_str},
-                {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {base_price}" if base_price else ""},
+                {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER}" if price_str else ""},
                 {"key": "pipeline_id", "value": str(uuid.uuid4())},
-                {"key": "variation_count", "value": str(len(variations))},
+                {"key": "variation_count", "value": str(len(wc_variations))},
             ],
         }
     else:
@@ -961,6 +988,122 @@ async def _remember_listed_product(
         logger.warning("回写 WooCommerce 关联失败 sku=%s: %s", normalized, exc)
 
 
+def _is_blank(value: Any) -> bool:
+    """判断 product_info 字段是否「未提供」：None/空串/空列表都算空。"""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) == 0
+    return False
+
+
+async def _hydrate_product_info(
+    product_info: dict[str, Any],
+    *,
+    session: AsyncSession | None,
+    workspace_id: UUID | None,
+) -> dict[str, Any]:
+    """补齐 ``product_info`` 中缺失的价格与 SKU 变体。
+
+    BUG-15 (2026-10-12): 前端「管线执行」页从**既有候选行**运行时，请求体只是
+    按产品行拼出的薄壳（name/category/description），``price`` 为空且没有
+    ``variations``；而候选行的 ``meta`` 只留了 ``source_url``/``source_id``，
+    没有保存原始变体。结果多规格 1688 商品退化成单 SKU 简单商品、售价为空。
+
+    这里按来源键回查产品行拿到来源链接，再走一次带缓存的 1688 抓取，用抓取
+    结果**只补空字段**。调用方显式传入的值优先，绝不被覆盖 —— 人工改过的价格
+    或规格不会被回填冲掉。任何失败都降级返回原值，不阻塞主管线。
+    """
+    needs_price = _is_blank(product_info.get("price"))
+    needs_variations = _is_blank(product_info.get("variations"))
+    if not needs_price and not needs_variations:
+        return product_info
+
+    source_url = str(product_info.get("source_url") or "").strip()
+    source_id = str(product_info.get("source_id") or "").strip()
+
+    # 请求体没带来源时，按来源键 / SKU 回查产品行
+    if (not source_url and not source_id) and session is not None:
+        from app.core.workspace import DEFAULT_WORKSPACE_ID
+        from app.services.product_source_identity import (
+            find_live_by_source,
+            resolve_source_offer_id,
+        )
+
+        ws = workspace_id or DEFAULT_WORKSPACE_ID
+        offer_id = resolve_source_offer_id(
+            source_url=product_info.get("source_url"),
+            source_id=product_info.get("source_id"),
+            meta=product_info if isinstance(product_info, dict) else None,
+        )
+        row = await find_live_by_source(session, workspace_id=ws, source_offer_id=offer_id) if offer_id else None
+        if row is None:
+            sku = str(product_info.get("sku") or "").strip()
+            if sku:
+                from sqlalchemy import select as sa_select
+
+                from app.models.product import Product as ProductModel
+
+                row = (
+                    await session.execute(
+                        sa_select(ProductModel)
+                        .where(
+                            ProductModel.workspace_id == ws,
+                            ProductModel.sku == sku,
+                            ProductModel.deleted_at.is_(None),
+                        )
+                        .limit(1)
+                    )
+                ).scalars().first()
+        if row is not None:
+            row_meta = row.meta if isinstance(row.meta, dict) else {}
+            source_url = source_url or str(row.source_url or row_meta.get("source_url") or "").strip()
+            source_id = source_id or str(row.source_offer_id or row_meta.get("source_id") or "").strip()
+            # 记下这一行是谁：随后的「同链接只能上架一次」去重必须排除它自己，
+            # 否则对既有候选重跑管线会被自己的记录判为重复而直接失败。
+            product_info.setdefault("_hydrated_product_id", str(row.id))
+
+    lookup = source_url or source_id
+    if not lookup:
+        logger.info(
+            "Hydrate skipped: no 1688 source for product %s (price=%s, variations=%s)",
+            product_info.get("name"), needs_price, needs_variations,
+        )
+        return product_info
+
+    try:
+        fetched = await _cached_fetch_1688_product(lookup)
+    except Exception as exc:  # 回填是尽力而为，绝不能拖垮主管线
+        logger.warning("Hydrate fetch failed for %s: %s", lookup, exc)
+        return product_info
+
+    if not fetched.get("success"):
+        logger.warning(
+            "Hydrate fetch unsuccessful for %s: %s", lookup, fetched.get("error")
+        )
+        return product_info
+
+    fresh = (fetched.get("data") or {}).get("product_info") or {}
+    if not fresh:
+        return product_info
+
+    merged = dict(product_info)
+    filled: list[str] = []
+    for key, value in fresh.items():
+        if _is_blank(merged.get(key)) and not _is_blank(value):
+            merged[key] = value
+            filled.append(key)
+
+    logger.info(
+        "Hydrated product_info for %s from %s; filled=%s (variations=%d, price=%s)",
+        product_info.get("name"), lookup, ",".join(filled) or "none",
+        len(merged.get("variations") or []), merged.get("price"),
+    )
+    return merged
+
+
 async def run_pipeline(
     product_info: dict[str, Any],
     *,
@@ -992,6 +1135,12 @@ async def run_pipeline(
 
     logger.info("Pipeline %s started for product: %s", pipeline_id, product_info.get("name", "unknown"))
 
+    # BUG-15: 从既有候选行运行时请求体是薄壳（无价格/无变体），先按来源键回填，
+    # 否则多规格商品会退化成单 SKU 简单商品、售价为空。
+    product_info = await _hydrate_product_info(
+        product_info, session=session, workspace_id=workspace_id
+    )
+
     # ===== 1688链接去重检查（业务规则：同一链接只能上架一次） =====
     if session is not None:
         source_url = product_info.get("source_url", "").strip()
@@ -1000,14 +1149,27 @@ async def run_pipeline(
             from sqlalchemy import select as sa_select
             from app.models.product import Product as ProductModel
             from app.core.workspace import DEFAULT_WORKSPACE_ID
+            conditions = [
+                ProductModel.workspace_id == (workspace_id or DEFAULT_WORKSPACE_ID),
+                (ProductModel.source_url == source_url) if source_url else False,
+                ProductModel.status.notin_(["deleted", "trash"]),
+            ]
+            # 对既有候选重跑管线时，这一行就是来源本身，必须排除自己，
+            # 否则「同一链接只能上架一次」会把自己的记录判为重复而阻断重跑。
+            hydrated_id = str(product_info.get("_hydrated_product_id") or "").strip()
+            current_sku = str(product_info.get("sku") or "").strip()
+            if hydrated_id:
+                try:
+                    conditions.append(ProductModel.id != uuid.UUID(hydrated_id))
+                except (ValueError, AttributeError, TypeError):
+                    logger.warning("Invalid _hydrated_product_id=%r, skipping self-exclusion", hydrated_id)
             existing = await session.execute(
-                sa_select(ProductModel).where(
-                    ProductModel.workspace_id == (workspace_id or DEFAULT_WORKSPACE_ID),
-                    (ProductModel.source_url == source_url) if source_url else False,
-                    ProductModel.status.notin_(["deleted", "trash"]),
-                ).limit(1)
+                sa_select(ProductModel).where(*conditions).limit(1)
             )
             duplicate = existing.scalar_one_or_none()
+            if duplicate and current_sku and duplicate.sku == current_sku:
+                # 同一个 SKU 的自身记录（历史运行的幂等重跑），不是重复上架
+                duplicate = None
             if duplicate:
                 raise PipelineError(
                     f"该1688商品已存在系统中（ID: {duplicate.id}，SKU: {duplicate.sku}，状态: {duplicate.status}）。"

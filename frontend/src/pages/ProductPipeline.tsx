@@ -101,8 +101,13 @@ export default function ProductPipeline() {
 
   // 智能定价预览：根据采购价实时计算建议售价
   const calculateSuggestedPrice = (cnyPrice: string): string => {
-    if (!cnyPrice || isNaN(Number(cnyPrice))) return ''
-    const price = parseFloat(cnyPrice.replace(/[¥￥]/g, ''))
+    if (!cnyPrice) return ''
+    // BUG-19 (2026-10-12): 原来先做 Number(cnyPrice) 判空，而 1688 导入的采购价
+    // 常带货币符号或区间（"¥20" / "6.7-19.7"），Number() 直接是 NaN，于是预览
+    // 永远显示 "$—"，运营以为公式坏了。改为先提取数字再判断。
+    const match = String(cnyPrice).match(/\d+(?:\.\d+)?/)
+    if (!match) return ''
+    const price = parseFloat(match[0])
     if (isNaN(price) || price <= 0) return ''
     return `$${(price / usdCnyRate * priceMarkup).toFixed(2)}`
   }
