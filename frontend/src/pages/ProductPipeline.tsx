@@ -1,8 +1,9 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Card, Form, Input, Button, Space, Typography, Steps, Tag, Alert,
   Row, Col, Spin, message, Tabs, Divider, Select, Descriptions, Collapse,
-  Statistic, Progress, Empty, Tooltip, Modal, List, Badge, Switch
+  Statistic, Progress, Empty, Tooltip, Modal, List, Badge, Switch, InputNumber
 } from 'antd'
 import {
   ThunderboltOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -77,6 +78,7 @@ interface PipelineResult {
 }
 
 export default function ProductPipeline() {
+  const navigate = useNavigate()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [pipelineResult, setPipelineResult] = useState<PipelineResult | null>(null)
@@ -93,6 +95,17 @@ export default function ProductPipeline() {
   const [importUrl, setImportUrl] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [autoRunPipeline, setAutoRunPipeline] = useState(false)
+  // 智能定价参数
+  const [priceMarkup, setPriceMarkup] = useState(6.0)
+  const [usdCnyRate, setUsdCnyRate] = useState(7.2)
+
+  // 智能定价预览：根据采购价实时计算建议售价
+  const calculateSuggestedPrice = (cnyPrice: string): string => {
+    if (!cnyPrice || isNaN(Number(cnyPrice))) return ''
+    const price = parseFloat(cnyPrice.replace(/[¥￥]/g, ''))
+    if (isNaN(price) || price <= 0) return ''
+    return `$${(price / usdCnyRate * priceMarkup).toFixed(2)}`
+  }
 
   // 取 1688 原图作为 I2I 参考图（上架标准：生成图必须还原原图产品）
   const getReferenceImage = (): string => {
@@ -400,7 +413,7 @@ export default function ProductPipeline() {
     }
   }
 
-  // 运行工作流
+  // 运行工作流（后端同步返回，直接单次请求）
   const handleRunPipeline = async () => {
     try {
       const values = await form.validateFields()
@@ -421,11 +434,16 @@ export default function ProductPipeline() {
         target_audience: values.target_audience || '',
         usage_scenarios: values.usage_scenarios?.split('\n').filter(Boolean) || [],
         product_features: values.product_features?.split('\n').filter(Boolean) || [],
+        price_markup: priceMarkup,
+        usd_cny_rate: usdCnyRate,
       }
 
       const runToken = localStorage.getItem('admin_token') || ''
       const runHeaders: HeadersInit = { 'Content-Type': 'application/json' }
       if (runToken) runHeaders['Authorization'] = `Bearer ${runToken}`
+
+      message.loading({ content: '🔄 AI工作流运行中...', key: 'pipeline_progress', duration: 0 })
+
       const resp = await fetch('/api/v1/product-pipeline/run', {
         method: 'POST',
         headers: runHeaders,
@@ -435,16 +453,28 @@ export default function ProductPipeline() {
           include_images: false,
         }),
       })
+
+      message.destroy('pipeline_progress')
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
+
       const data = await resp.json()
 
       if (data.success || data.data) {
-        setPipelineResult(data)
+        setPipelineResult(data as PipelineResult)
         setHistory(prev => [data, ...prev].slice(0, 10))
-        message.success(`工作流完成：${data.data?.completed_steps || 0}/${data.data?.total_steps || 6}步成功`)
+        const completed = data.data?.completed_steps || 0
+        const total = data.data?.total_steps || 6
+        const elapsed = data.data?.elapsed_time_seconds || 0
+        message.success(`✅ 工作流完成：${completed}/${total}步成功，耗时 ${elapsed}s`)
+        if (data.data?.steps?.listing_data?.data) {
+          setListingModalOpen(true)
+        }
       } else {
         message.error(data.error || '工作流执行失败')
       }
     } catch (e: any) {
+      message.destroy('pipeline_progress')
       message.error(e.message || '工作流执行失败')
     } finally {
       setLoading(false)
@@ -455,11 +485,16 @@ export default function ProductPipeline() {
   const handleConfirmListing = async (status: string = 'publish') => {
     if (!pipelineResult) return
 
+    let progressKey = 'listing_progress'
     try {
       setListingLoading(true)
       const confirmToken = localStorage.getItem('admin_token') || ''
       const confirmHeaders: HeadersInit = { 'Content-Type': 'application/json' }
       if (confirmToken) confirmHeaders['Authorization'] = `Bearer ${confirmToken}`
+
+      progressKey = 'listing_progress'
+      message.loading({ content: '正在推送到WooCommerce...', key: progressKey, duration: 0 })
+
       const resp = await fetch('/api/v1/product-pipeline/confirm-list', {
         method: 'POST',
         headers: confirmHeaders,
@@ -470,10 +505,63 @@ export default function ProductPipeline() {
       })
       const data = await resp.json()
 
+      message.destroy(progressKey)
+
+      // 后端自动生图场景：show loading + retry
+      if (!data.success && data.image_gate && data.auto_generated) {
+        const gen = data.auto_generated
+        message.loading({
+          content: `🎨 正在自动生成补图（主图${gen.generated_main}张+详情图${gen.generated_detail}张）...`,
+          key: progressKey,
+          duration: 0,
+        })
+        // 等待图片生成完成后自动重试
+        setTimeout(async () => {
+          try {
+            const resp2 = await fetch('/api/v1/product-pipeline/confirm-list', {
+              method: 'POST',
+              headers: confirmHeaders,
+              body: JSON.stringify({
+                pipeline_result: pipelineResult,
+                status: status,
+              }),
+            })
+            const data2 = await resp2.json()
+            message.destroy(progressKey)
+            if (data2.success) {
+              const wcId = data2.data?.woocommerce_id || '—'
+              const sku = data2.data?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
+              message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`)
+              setListingModalOpen(false)
+              setPipelineResult(prev => prev ? {
+                ...prev,
+                data: {
+                  ...prev.data,
+                  steps: {
+                    ...prev.data.steps,
+                    listing: { status: 'completed', data: data2.data }
+                  }
+                }
+              } : null)
+              setTimeout(() => { navigate('/products/listing') }, 2000)
+            } else {
+              message.error(data2.error || '图片生成后仍无法上架，请检查图片质量或手动上传')
+            }
+          } catch (e2: any) {
+            message.destroy(progressKey)
+            message.error(e2.message || '重试失败')
+          } finally {
+            setListingLoading(false)
+          }
+        }, 5000)
+        return
+      }
+
       if (data.success) {
-        message.success(`上架成功！WooCommerce ID: ${data.data?.woocommerce_id}`)
+        const wcId = data.data?.woocommerce_id || '—'
+        const sku = data.data?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
+        message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`)
         setListingModalOpen(false)
-        // 更新工作流结果中的上架状态
         setPipelineResult(prev => prev ? {
           ...prev,
           data: {
@@ -484,10 +572,12 @@ export default function ProductPipeline() {
             }
           }
         } : null)
+        setTimeout(() => { navigate('/products/listing') }, 2000)
       } else {
         message.error(data.error || '上架失败')
       }
     } catch (e: any) {
+      message.destroy(progressKey)
       message.error(e.message || '上架失败')
     } finally {
       setListingLoading(false)
@@ -646,8 +736,36 @@ export default function ProductPipeline() {
                 </Form.Item>
 
                 <Form.Item name="price" label="1688采购价">
-                  <Input placeholder="例如：¥29.9" />
+                  <Input placeholder="例如：¥29.9" onChange={(e) => {
+                    const val = e.target.value
+                    form.setFieldsValue({ price: val })
+                  }} />
                 </Form.Item>
+
+                {/* 智能定价预览 */}
+                <div style={{ padding: '10px 12px', background: '#f0f5ff', borderRadius: '6px', marginBottom: '12px', border: '1px solid #adc6ff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <Text strong style={{ fontSize: '12px', color: '#1890ff' }}>💰 智能定价预览</Text>
+                    <Space size={8}>
+                      <span style={{ fontSize: '11px' }}>汇率:</span>
+                      <InputNumber size="small" min={6} max={8} step={0.1} value={usdCnyRate}
+                        onChange={(v) => setUsdCnyRate(v || 7.2)} style={{ width: 60 }} formatter={v => `${v}`} parser={v => Number(v)} />
+                      <span style={{ fontSize: '11px' }}>倍数:</span>
+                      <InputNumber size="small" min={3} max={12} step={0.5} value={priceMarkup}
+                        onChange={(v) => setPriceMarkup(v || 6)} style={{ width: 50 }} formatter={v => `${v}`} parser={v => Number(v)} />
+                    </Space>
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#595959' }}>
+                    公式：采购价(CNY) ÷ {usdCnyRate} × {priceMarkup} ={' '}
+                    <Text strong style={{ color: '#52c41a', fontSize: '16px' }}>
+                      {(() => {
+                        const priceStr = form.getFieldValue('price') || ''
+                        return calculateSuggestedPrice(priceStr) || '$—'
+                      })()}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: '11px', marginLeft: '8px' }}>&#xFF08;&#x4FDD;&#x8BC1;&#x5168;&#x6210;&#x672C;&#x5229;&#x6DA6;&#x7387; &gt; 60%&#xFF09;</Text>
+                  </div>
+                </div>
 
                 <Form.Item name="description" label="商品描述">
                   <TextArea rows={3} placeholder="商品简短描述" />

@@ -219,6 +219,7 @@ async def confirm_product_listing(
             request.pipeline_result,
             status=request.status,
             force=request.force,
+            session=db,
         )
         if gate_override_notice and result.get("success"):
             result["gate_override_warning"] = gate_override_notice

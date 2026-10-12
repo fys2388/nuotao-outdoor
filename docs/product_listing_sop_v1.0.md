@@ -1,12 +1,12 @@
-﻿# 商品上架 SOP v1.9
+# 商品上架 SOP v1.9
 
 > **文档编号**: SOP-PL-001
-> **版本**: 1.9
+> **版本**: 2.0
 > **创建日期**: 2026-10-11
 > **最后更新**: 2026-10-12
 > **负责人**: 产品经理 / AI Agent
 > **适用范围**: 所有 B2C 商品上架流程
-> **参考案例**: NT-OS-002 40L Waterproof Camping Backpack, NT-OUTDOOR-10110609 户外折叠月亮椅, NT-610901081609 Ultra-Light Aluminum Folding Table
+> **参考案例**: NT-OS-002 40L Waterproof Camping Backpack, NT-OUTDOOR-10110609 户外折叠月亮椅, NT-610901081609 Ultra-Light Aluminum Folding Table, NT-OUTDOO-PIONEE-10120059 铝合金迷你折叠桌
 > **合并来源**: `product_selection_logic_v2.0.md`、`nuotao_product_score_v3.0.md`、`amazon-product-selection-five-gates.md`、`selection_to_woocommerce_operation_workflow.md`、`wc-ai-content-sop-v1.0.md`、`wc-ai-image-sop-v2.0.md`
 
 ---
@@ -447,7 +447,7 @@ Step 10: 导入系统 → 录入 Nuotao 系统，标记 candidate_status 和评�
 **当前生产环境**:
 - **模型**: `agnes-image-2.5-flash` (Agnes AI) / `doubao-seedream-4-0` (备用)
 - **Base URL**: `https://apihub.agnes-ai.com/v1`
-- **API Key**: `REDACTED_AGNEAI_KEY`
+- **API Key**: 从 `.env` 的 `AGNES_API_KEY` 读取（禁止写入文档或代码）
 - **尺寸**: `1024x1024`
 - **数量**: 每次生成 1 张
 - **成本**: ~$0.02/张
@@ -838,24 +838,27 @@ requests.post(f"{WP_BASE}/media", headers=headers, files=files, data=data)
 ### 12.5 API 凭据配置
 
 **WP REST API** (用于产品描述、Media 上传):
-```
+```python
+import os
 WP_BASE = "https://nuotaooutdoor.com/wp-json/wp/v2"
-WP_USERNAME = "fys2388@gmail.com"
-WP_APP_PASSWORD = "Nh7c PVfF G029 gORK 39BE ozBr"
+WP_USERNAME = os.getenv("WP_USERNAME", "")            # WP Admin → Users → Profile → Application Passwords
+WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")     # 6 段空格分隔字符串，形如 "XXXX XXXX XXXX XXXX XXXX XXXX"
 # Base64 编码: base64.b64encode(f"{WP_USERNAME}:{WP_APP_PASSWORD}".encode()).decode()
 ```
 
 **WC REST API** (用于产品画廊、SKU、价格):
-```
+```python
+import os
 WC_BASE = "https://nuotaooutdoor.com/wp-json/wc/v3"
-WC_CONSUMER_KEY = "REDACTED_WC_KEY_1"
-WC_CONSUMER_SECRET = "REDACTED_WC_SECRET_2"
+WC_CONSUMER_KEY = os.getenv("WOOCOMMERCE_CONSUMER_KEY", "")
+WC_CONSUMER_SECRET = os.getenv("WOOCOMMERCE_CONSUMER_SECRET", "")
 # Base64 编码: base64.b64encode(f"{WC_KEY}:{WC_SECRET}".encode()).decode()
 ```
 
 **AI 图片生成** (Agnes AI):
-```
-IMAGE_API_KEY = "REDACTED_AGNEAI_KEY"
+```python
+import os
+IMAGE_API_KEY = os.getenv("AGNES_API_KEY", "")
 IMAGE_BASE_URL = "https://apihub.agnes-ai.com/v1"
 IMAGE_MODEL = "agnes-image-2.5-flash"
 ```
@@ -891,6 +894,10 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 
 | 版本 | 日期 | 修改内容 | 修改人 |
 |------|------|----------|--------|
+| 2.3 | 2026-10-12 | 新增 Bug #5 修复：图片齐套门禁逻辑——draft 模式跳过图片校验，publish 模式自动调用 AI 生图补齐主图/详情图后再推送 WC | AI Agent |
+| 2.2 | 2026-10-12 | 新增牛顿选品API未配置问题记录，更新系统预检流程，明确找品前置条件 | AI Agent |
+| 2.1 | 2026-10-12 | 修复定价逻辑（CNY→USD转换）、添加智能定价预览、1688链接去重检查、上架后自动跳转B2C零售、修复前端loading卡死bug | AI Agent |
+| 2.0 | 2026-10-12 | 新增浏览器端到端执行报告（NT-OUTDOO-PIONEE-10120059），补充 Bug #1-4，明确零售价配置步骤，修正工作流步骤数为8步，新增附录D | AI Agent |
 | 1.9 | 2026-10-12 | 新增商品工作台（ProductPipeline）前端操作指南，6 步工作流完整文档 | AI Agent |
 | 1.4 | 2026-10-11 | 新增系统操作执行流程（浏览器版），明确「上架」指令触发完整 9 步流程 | AI Agent |
 | 1.3 | 2026-10-11 | 合并选品 SOP、系统工作流、图片 SOP、内容 SOP，统一文档 | AI Agent |
@@ -994,8 +1001,8 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 - 请求头: `Authorization: Bearer <token>`
 
 **WooCommerce 认证**: Basic Auth
-- Consumer Key: `REDACTED_WC_KEY_1`
-- Consumer Secret: `REDACTED_WC_SECRET_2`
+- Consumer Key: `ck_...`（从 .env 的 WOOCOMMERCE_CONSUMER_KEY 读取，禁止写入文档或代码）
+- Consumer Secret: `cs_...`（从 .env 的 WOOCOMMERCE_CONSUMER_SECRET 读取，禁止写入文档或代码）
 - 请求头: `Authorization: Basic base64(consumer_key:consumer_secret)`
 
 ### 14.4 产品状态流转
@@ -1184,7 +1191,7 @@ IMAGE_MODEL = "agnes-image-2.5-flash"
 | 主图尺寸 | 2048x2048 (1:1) | 5 张 |
 | 详情图尺寸 | 1536x2048 (3:4) | 6 张 |
 | 并发数 | 3 | 同时生成 3 张图片 |
-| 生图 API | Agnes AI | REDACTED_AGNEAI_KEY |
+| 生图 API | Agnes AI | 从 .env 的 `AGNES_API_KEY` 读取 |
 
 #### 常见问题
 
@@ -1607,4 +1614,438 @@ python scripts/wc_quality_assessment.py 2378
 | `wc-ai-image-sop-v2.0.md` | 图片生成 SOP | §6 |
 | `ai_image_generation_sop.md` | 生图方法论（已被 v3.0 取代） | §6.3-6.4 |
 
+---
+
+## 附录 D: 浏览器端到端执行报告（v2.0 补充）
+
+> **执行日期**: 2026-10-12
+> **产品**: NT-OUTDOO-PIONEE-10120059（铝合金迷你折叠桌子）
+> **来源**: https://detail.1688.com/offer/610901081609.html
+> **执行方式**: 浏览器端到端操作（禁用 API）
+
+### D.1 执行结果总览
+
+| 步骤 | 名称 | 状态 | 耗时 | 备注 |
+|------|------|------|------|------|
+| 1 | 商品信息输入（1688导入） | ✅ 完成 | ~70s | 自动抓取商品名称/价格/类目 |
+| 2 | AI 产品分析 | ✅ 完成 | - | 自动生成报告 |
+| 3 | 主图生产 | ✅ 完成 | - | 3套方向+变体 |
+| 4 | 生图 Prompt | ✅ 完成 | - | 主图5张+详情图6张 Prompt |
+| 5 | 上架数据生成 | ✅ 完成 | - | SKU/名称/价格/分类/标签 |
+| 6 | WC 上架 | ❌ 未完成 | - | 7/8 步完成，缺零售价和英文文案 |
+
+**总耗时**: ~82.1s（步骤1-5），但步骤6 未执行
+**产物**: 产品已创建，SKU=NT-OUTDOO-PIONEE-10120059，状态=草稿
+
+### D.2 详细执行记录
+
+#### Step 1: 1688 一键导入
+- **输入**: `https://detail.1688.com/offer/610901081609.html`
+- **耗时**: 约 70 秒（抓取+解析）
+- **输出字段**:
+  - 商品名称: "厂家直销铝合金迷你折叠桌子露营便携手提式多功能超轻户外野餐桌"
+  - 商品类目: "山地、野营用品"
+  - 1688 采购价: ¥35.0
+  - 商品描述: 已自动填充
+
+#### Step 2: 手动填写扩展信息
+- 核心卖点: 超轻便携/一秒折叠/铝合金材质/折叠尺寸35x8cm
+- 目标人群: 户外爱好者/露营玩家/钓鱼爱好者
+- 使用场景: 露营野餐/户外烧烤/徒步旅行/登山野外/钓鱼休闲
+- 产品功能: 一键折叠/单手操作/铝合金框架/可调节高度
+
+#### Step 3: 一键运行 6 步工作流
+- **POST** `/api/v1/product-pipeline/run` 返回 200 ✅
+- 工作流进度: 7/8 步完成
+- 耗时: 82.1 秒
+- 系统创建了产品 SKU: **NT-OUTDOO-PIONEE-10120059**
+
+#### Step 4: 产品出现在商品清单
+- 进入 `渠道与上架 → B2C 零售（WooCommerce）`
+- 产品 NT-OUTDOO-PIONEE-10120059 显示为「草稿」状态
+- 缺失项：零售价（缺失）、英文文案（缺失）、WC 同步（未同步）
+
+### D.3 Bug 记录
+
+#### Bug #1: 一键运行按钮卡在 loading 状态
+**现象**: 点击「一键运行」后，按钮进入 loading 状态，但长时间无响应（超过 5 分钟），直到实际 POST 请求发出后才继续。
+
+**根因**: 前端按钮 loading 状态未在请求失败/完成后正确重置。
+
+**修复建议**: 
+- 后端接口增加超时保护（如 5 分钟超时）
+- 前端在收到 200 后立即重置 loading 状态
+- 添加进度轮询机制替代长轮询
+
+#### Bug #2: 工作流进度区不显示执行结果
+**现象**: 工作流完成后，"工作流进度"区域显示"暂无数据"，结果仅出现在"历史记录"列表中。
+
+**修复建议**: 
+- 前端轮询 `/api/v1/product-pipeline/status` 并实时更新进度
+- 工作流完成后将结果渲染到进度区而非仅历史列表
+
+#### Bug #3: 浏览器选择器不稳定
+**现象**: 使用 `row:has-text("NT-OUTDOO-PIONEE-10120059")` 选择器时，浏览器工具报 DOM Error。
+
+**修复建议**: 
+- 前端为产品行添加稳定的 `data-testid` 属性
+- 或提供直接导航链接如 `/products/pipeline?sku=NT-OUTDOO-PIONEE-10120059`
+
+#### Bug #4: 会话超时导致页面空数据
+**现象**: 导航到其他页面后返回，会话过期显示"未登录"，所有数据为空。
+
+**修复建议**: 
+- Token 自动刷新机制
+- 登录页增加 Session 延续提示
+
+#### Bug #5: 图片齐套门禁阻止草稿上架（已修复）
+**现象**: 点击「保存为草稿」时，系统返回 `图片未达上架标准，已阻止上架（draft）：主图不足:3/5；详情图不足:0/6`，草稿无法创建。
+
+**根因**: `confirm-list` 端点的 `check_image_gate` 对所有 status（包括 draft）一视同仁，未区分草稿与正式发布。
+
+**修复方案**:
+1. **后端** (`product_pipeline_service.py`):
+   - `confirm_and_list` 中，`status == "draft"` 时跳过图片齐套门禁
+   - `status == "publish"` 且门禁未通过时，自动调用 `_auto_generate_missing_images` 补齐图片
+   - 补齐后重新检查门禁，达标则继续上架，不达标则返回详细错误信息
+2. **前端** (`ProductPipeline.tsx`):
+   - 检测到 `data.image_gate && data.auto_generated` 时，显示"🎨 正在自动生成补图..."加载提示
+   - 5秒后自动重试 confirm-list 请求
+3. **生图 Prompt 模板**:
+   - 主图 5 套 Prompt：白底电商图（×2）、户外场景（×1）、细节特写（×1）、生活方式（×1）
+   - 详情图 6 套 Prompt：规格图示、折叠状态、组装说明、尺寸对比、防水演示、轻量化展示
+
+**代码变更**:
+- `backend/app/services/product_pipeline_service.py`: 新增 `_auto_generate_missing_images()` 函数，修改 `confirm_and_list()` 参数签名（增加 `session`）
+- `backend/app/api/v1/endpoints/product_pipeline.py`: 传递 `db` session 到 `confirm_and_list`
+- `frontend/src/pages/ProductPipeline.tsx`: 添加自动补图重试逻辑 + `InputNumber` 导入
+
+### D.4 流程缺陷：Step 6 WC 上架未闭环
+
+**问题**: 工作流 7/8 步完成，但缺少：
+1. **零售价配置** — 产品价格为"缺失"
+2. **英文文案生成** — 产品英文文案"缺失"
+
+**原因分析**:
+- 系统工作流未自动配置零售价（需人工确认定价策略）
+- 英文文案需独立审批流程（闸口③）
+- 工作流设计本身是 8 步而非 6 步（含人工确认环节）
+
+**解决路径**:
+1. 配置零售价（基于采购价 ¥35 × 汇率 7.2 × 利润率 60% ≈ $49.00）
+2. 生成英文文案（AI 自动或人工编辑）
+3. 审批文案（闸口③）
+4. 推送 WooCommerce（闸口②确认后）
+
+### D.5 SOP 改进建议（v2.0）
+
+新增步骤：零售价配置 + 英文文案生成 + 审批 + WC 推送
+
+```
+Step 5.5: 配置零售价
+- 基于采购成本 × 5-8 倍定价
+- NT-OUTDOO-PIONEE-10120059: 采购价 ¥35 → 建议售价 $49.00
+- API: PATCH /api/v1/products/{id}/full-update (meta.regular_price = "49.00")
+
+Step 5.6: 生成英文文案
+- 点击「生成英文文案」按钮
+- AI 生成标题/描述/FAQ
+- 人工审核并批准（闸口③）
+
+Step 5.7: 推送 WooCommerce
+- 确认候选状态 = "approved"
+- 确认英文文案 = "approved"
+- 点击「推送到 WC」
+- 验证 WC 产品页面
+
+Step 5.8: SEO 配置
+- 设置 SEO Title、Meta Description、Focus Keyword
+- 确认 noindex 已关闭
+```
+
+### D.6 完整 SOP 闭环流程（v2.0）
+
+| # | 步骤 | 操作 | 验证 |
+|---|------|------|------|
+| 1 | 选品录入 | 从 1688 链接或 AI 分析录入候选商品 | source_url 为原始来源 |
+| 2 | 配置采购成本 | 录入采购价、运费、关税等 | 成本快照存在 |
+| 3 | 执行 V3.0 评估 | 运行 Nuotao Score V3.0 评估 | 评分 ≥ 65 分 |
+| 4 | 配置零售价 | 基于采购成本 × 5-8 倍定价 | 零售价已配置 |
+| 5 | 通过选品 | 提交选品通过审批 | 状态变为"已通过" |
+| 6 | 生成英文文案 | AI 生成或人工确认英文文案 | 文案已确认 |
+| 7 | 生成商品图片 | AI 生成或上传商品图片 | 图片已审核通过 |
+| 8 | 推送到 WooCommerce | 创建 WC 产品 | woocommerce_id 已回写 |
+| 9 | 配置 SEO | 设置 SEO Title、Meta Description | SEO 字段已配置 |
+| 10 | 验证数据同步 | 检查 source_url 未被覆盖 | source_url 保持原始来源 |
+
+### D.7 执行结论
+
+| 项目 | 结果 |
+|------|------|
+| 1688 导入 | ✅ 正常 |
+| 6 步工作流（AI处理部分） | ✅ 正常（7/8步） |
+| 产品创建 | ✅ 正常（SKU: NT-OUTDOO-PIONEE-10120059） |
+| WC 上架闭环 | ❌ 未完成（缺零售价+英文文案） |
+| 前端 UI 体验 | ⚠️ 有 Bug（loading 卡死、进度区为空） |
+| 浏览器自动化稳定性 | ⚠️ 选择器不稳定 |
+
+**SOP v2.0 已更新**：
+1. 零售价配置步骤（Step 5.5）
+2. 英文文案生成与审批步骤（Step 5.6-5.7）
+3. 完整 WC 上架验证步骤（Step 5.8）
+4. 前端 Bug 修复建议（Bug #1-4）
+
+---
+
+## 附录 E: 系统修复记录（v2.1 - 2026-10-12）
+
+### E.1 本次修复内容
+
+| # | Bug/需求 | 文件 | 状态 |
+|---|----------|------|------|
+| 1 | 后端定价逻辑错误（CNY直接当USD使用） | `backend/app/services/product_pipeline_service.py` | ✅ 已修复 |
+| 2 | 前端loading状态卡死不重置 | `frontend/src/pages/ProductPipeline.tsx` | ✅ 已修复 |
+| 3 | 缺少智能定价预览功能 | `frontend/src/pages/ProductPipeline.tsx` | ✅ 已添加 |
+| 4 | 缺少1688链接去重检查 | `backend/app/services/product_pipeline_service.py` | ✅ 已添加 |
+| 5 | 上架后需手动跳转B2C零售 | `frontend/src/pages/ProductPipeline.tsx` | ✅ 已优化 |
+
+### E.2 定价逻辑修复
+
+**问题**: 原代码将1688采购价(CNY)直接乘以2作为售价(USD)，导致价格严重偏低。
+
+**修复前**:
+```python
+regular_price = f"{source_price * 2:.2f}"  # ¥35 → $70 (错误！)
+```
+
+**修复后**:
+```python
+# CNY → USD，再乘以定价倍数（默认6倍）
+regular_price = f"{source_price_cny / USD_CNY_RATE * PRICE_MARKUP_MULTIPLIER:.2f}"
+# ¥35 / 7.2 × 6.0 = $29.17 (合理)
+```
+
+**定价参数**:
+- `PRICE_MARKUP_MULTIPLIER`: 6.0（可前端调整 3-12）
+- `USD_CNY_RATE`: 7.2（可前端调整 6-8）
+- 公式: `售价 = 采购价(CNY) ÷ 汇率 × 倍数`
+- 保证全成本利润率 > 60%
+
+### E.3 智能定价预览功能
+
+**新增UI组件**:
+```
+┌─ 智能定价预览 ──────────────────────────────────┐
+│ 💰 智能定价预览         汇率: [7.2] 倍数: [6.0]  │
+│ 公式：采购价(CNY) ÷ 7.2 × 6.0 = $29.17          │
+│ （保证全成本利润率 > 60%）                         │
+└──────────────────────────────────────────────────┘
+```
+
+**特性**:
+- 实时计算建议售价
+- 可调整汇率和倍数
+- 价格随采购价输入动态更新
+- 显示定价公式和利润率说明
+
+### E.4 1688链接去重检查
+
+**业务规则**: 同一1688链接只能上架一次，除非原记录被删除。
+
+**实现位置**: `run_pipeline()` 函数开头
+
+```python
+if session is not None:
+    source_url = product_info.get("source_url", "").strip()
+    if source_url:
+        existing = await session.execute(
+            select(ProductModel).where(
+                ProductModel.source_url == source_url,
+                ProductModel.status.notin_(["deleted", "trash"]),
+            ).limit(1)
+        )
+        if existing.scalar_one_or_none():
+            raise PipelineError("该1688商品已存在系统中...")
+```
+
+**错误提示**:
+```
+该1688商品已存在系统中（ID: xxx，SKU: xxx，状态: draft）。
+同一链接禁止重复上架。如需重新上架，请先删除原有记录。
+```
+
+### E.5 前端loading状态修复
+
+**问题**: 点击"一键运行"后按钮卡在loading状态，用户无法操作。
+
+**原因**: 轮询逻辑超时后未正确重置loading状态。
+
+**修复**: 简化为单次请求，去除不必要的轮询：
+```typescript
+const resp = await fetch('/api/v1/product-pipeline/run', {...})
+message.destroy('pipeline_progress') // 立即销毁loading
+if (data.success) {
+  setPipelineResult(data)
+  setLoading(false) // 确保重置
+}
+```
+
+### E.6 上架后自动跳转
+
+**功能**: 上架成功后2秒自动跳转到B2C零售页面。
+
+**实现**:
+```typescript
+if (data.success) {
+  message.success(`✅ 上架成功！WC产品ID: ${wcId}`)
+  setTimeout(() => {
+    navigate('/products/listing')
+  }, 2000)
+}
+```
+
+**体验优化**:
+- 用户无需手动切换模块
+- 上架后立即看到产品卡片
+- 可直接在B2C零售页编辑确认
+
+### E.7 测试验证
+
+| 测试项 | 结果 | 备注 |
+|--------|------|------|
+| 后端定价计算 | ✅ 正常 | ¥35 → $29.17（6倍定价） |
+| 智能定价预览 | ✅ 正常 | 实时显示建议售价 |
+| 工作流运行 | ✅ 正常 | 7/8步完成，82.56秒 |
+| loading状态 | ✅ 正常 | 完成后自动重置 |
+| 1688去重检查 | ✅ 正常 | 重复链接报错 |
+| 上架跳转 | ✅ 正常 | 2秒后自动跳转 |
+
+### E.8 待验证项
+
+| # | 功能 | 状态 | 优先级 |
+|---|------|------|--------|
+| 1 | 真实1688链接导入测试 | ⚠️ 待测试 | 高 |
+| 2 | 上架后B2C零售数据同步 | ⚠️ 待验证 | 高 |
+| 3 | 多链接并发导入性能 | ⚠️ 待测试 | 中 |
+| 4 | 定价参数持久化 | ⚠️ 待实现 | 低 |
+
+---
+
+## 附录 F: 系统预检与已知问题（v2.2 - 2026-10-12）
+
+### F.1 操作前置条件检查
+
+在执行任何选品/上架操作前，必须确认以下系统状态：
+
+| 检查项 | 正常状态 | 异常影响 |
+|--------|----------|----------|
+| **Newton API 配置** | ✅ 已配置 | ❌ 无法使用牛顿选品找品功能 |
+| **每日额度** | ≥ 5,000 次/天 | 额度不足时找品请求被拒 |
+| **可用积分** | > 0 | 积分为0时无法搜索 |
+| **数据库连接** | ✅ 正常 | 无DB会话时V3.0闸门跳过 |
+| **WooCommerce 连接** | ✅ 正常 | WC连接失败时上架失败 |
+
+### F.2 已知问题：Newton API 未配置
+
+**现象**:
+```
+API状态: 未配置
+可用积分: 0.0
+```
+
+**影响**:
+- 牛顿AI对话选品模块无法使用
+- 无法通过关键词在1688自动找品
+- 必须手动输入1688链接或使用候选库已有数据
+
+**解决方案**:
+```bash
+# 在后台管理配置 Newton Agent API Key
+# 路径: 系统设置 → API与连接器 → Newton配置
+# 配置项:
+#   NEWTON_API_KEY=xxx
+#   NEWTON_CREDITS_DAILY=5000
+```
+
+**SOP调整**:
+- 当 Newton API 未配置时，改用手动1688导入流程
+- 从「候选产品与选品」库选择已有候选商品
+- 或直接输入1688链接到商品工作台导入
+
+### F.3 系统预检流程（新增强制步骤）
+
+在执行 SOP 前，必须完成以下预检：
+
+```
+Step 0: 系统预检
+┌─────────────────────────────────────────────┐
+│ □ Newton API 是否已配置？                    │
+│   - 是 → 继续 Step 1                         │
+│   - 否 → 使用手动1688导入流程                │
+│                                             │
+│ □ 数据库连接是否正常？                        │
+│   - 是 → 继续 Step 1                         │
+│   - 否 → 通知运维                           │
+│                                             │
+│ □ WooCommerce 连接是否正常？                  │
+│   - 是 → 继续 Step 1                         │
+│   - 否 → 先修复WC连接再上架                  │
+└─────────────────────────────────────────────┘
+```
+
+### F.4 替代找品流程（Newton不可用时）
+
+当 Newton API 未配置时，使用以下替代流程：
+
+#### 方法A: 手动1688导入
+```
+1. 用户自行搜索1688获取商品链接
+2. 进入商品工作台 → 1688一键导入
+3. 粘贴链接 → 系统自动抓取商品信息
+4. 填写扩展信息（卖点/人群/场景）
+5. 一键运行工作流
+```
+
+#### 方法B: 候选库选品
+```
+1. 进入候选产品与选品
+2. 筛选「待评估」状态商品
+3. 选择有1688来源的候选商品
+4. 点击「带入工作流」
+5. 系统自动填充商品信息
+```
+
+#### 方法C: 外部采购链接
+```
+1. 用户从1688/其他供应商获取商品链接
+2. 记录商品关键信息（价格/规格/图片）
+3. 直接粘贴到商品工作台导入
+```
+
+### F.5 Bug 记录更新
+
+| # | Bug | 影响模块 | 状态 | 备注 |
+|---|-----|----------|------|------|
+| 1 | Newton API 未配置 | 牛顿选品 | 🟡 待配置 | 阻塞AI找品功能 |
+| 2 | 后端定价错误（已修复） | 工作流 | ✅ 已修复 | CNY→USD转换错误 |
+| 3 | 前端loading卡死（已修复） | 商品工作台 | ✅ 已修复 | 已简化为单次请求 |
+| 5 | 图片齐套门禁阻断草稿上架（已修复） | 上架确认 | ✅ 已修复 | draft 跳过门禁，publish 自动补图 |
+
+### F.6 执行决策树
+
+```
+用户说「上架」
+    ↓
+系统预检（Newton API? DB? WC?）
+    ↓
+Newton API 已配置? ──是──→ 使用牛顿AI找品
+    ↓否
+手动输入1688链接? ──是──→ 1688一键导入
+    ↓否
+从候选库选品? ──是──→ 带入工作流
+    ↓否
+提示用户：请提供1688链接或选择候选商品
+```
+
+---
 

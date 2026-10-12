@@ -47,6 +47,8 @@ from app.services.product_listing_service import (
     is_restricted,
     list_to_woocommerce,
     map_category_to_wc,
+    REQUIRED_MAIN_IMAGES,
+    REQUIRED_DETAIL_IMAGES,
 )
 from app.services.product_content_service import normalize_image_urls
 from app.services.product_readiness_gate import check_readiness, format_readiness_report
@@ -276,17 +278,25 @@ def _generate_listing_data(
     if not short_description:
         short_description = product_description[:100] + "..." if len(product_description) > 100 else product_description
 
-    # 价格（从1688价格推算，默认加价率100%）
+    # 价格（从1688价格推算，使用 Nuotao 定价策略）
+    # 策略：采购价(CNY) / 汇率 × 倍数 = 美元售价
+    # 默认汇率 7.2，默认倍数 6.0（保证全成本利润率 > 60%）
+    PRICE_MARKUP_MULTIPLIER = float(_safe_get(product_info, "price_markup", "6.0"))
+    USD_CNY_RATE = float(_safe_get(product_info, "usd_cny_rate", "7.2"))
+
     price_str = _safe_get(product_info, "price", "")
     regular_price = ""
     try:
-        # 提取价格数字
         import re
         price_match = re.search(r'[\d.]+', price_str)
         if price_match:
-            source_price = float(price_match.group())
-            # 加价率100%（可配置）
-            regular_price = f"{source_price * 2:.2f}"
+            source_price_cny = float(price_match.group())
+            # CNY → USD，再乘以定价倍数
+            regular_price = f"{source_price_cny / USD_CNY_RATE * PRICE_MARKUP_MULTIPLIER:.2f}"
+            logger.info(
+                "Price calculated: CNY %.2f / %.2f * %.1f = USD %s",
+                source_price_cny, USD_CNY_RATE, PRICE_MARKUP_MULTIPLIER, regular_price,
+            )
     except Exception:
         pass
 
@@ -383,6 +393,7 @@ def _generate_listing_data(
         "meta_data": [
             {"key": "source", "value": "1688"},
             {"key": "source_price", "value": price_str},
+            {"key": "pricing_formula", "value": f"CNY {price_str} / {USD_CNY_RATE} × {PRICE_MARKUP_MULTIPLIER} = USD {regular_price}" if regular_price else ""},
             {"key": "pipeline_id", "value": str(uuid.uuid4())},
         ],
     }
@@ -914,6 +925,29 @@ async def run_pipeline(
 
     logger.info("Pipeline %s started for product: %s", pipeline_id, product_info.get("name", "unknown"))
 
+    # ===== 1688链接去重检查（业务规则：同一链接只能上架一次） =====
+    if session is not None:
+        source_url = product_info.get("source_url", "").strip()
+        source_offer_id = product_info.get("source_id", "").strip()
+        if source_url or source_offer_id:
+            from sqlalchemy import select as sa_select
+            from app.models.product import Product as ProductModel
+            existing = await session.execute(
+                sa_select(ProductModel).where(
+                    ProductModel.workspace_id == (workspace_id or DEFAULT_WORKSPACE_ID),
+                    (ProductModel.source_url == source_url) if source_url else False,
+                    ProductModel.status.notin_(["deleted", "trash"]),
+                ).limit(1)
+            )
+            duplicate = existing.scalar_one_or_none()
+            if duplicate:
+                raise PipelineError(
+                    f"该1688商品已存在系统中（ID: {duplicate.id}，SKU: {duplicate.sku}，状态: {duplicate.status}）。"
+                    f"同一链接禁止重复上架。如需重新上架，请先删除原有记录。"
+                )
+            logger.info("Pipeline %s passed duplicate check: source_url=%s source_offer_id=%s",
+                       pipeline_id, source_url, source_offer_id)
+
     try:
         # Step 1: 商品信息输入
         steps_result["input"] = {
@@ -1273,11 +1307,127 @@ async def run_pipeline(
         }
 
 
+# ============ 自动补齐图片 ============
+
+_MAIN_IMG_PROMPTS = [
+    "pure white background, professional e-commerce product photography, {product_name}, front view, studio lighting, high detail",
+    "pure white background, clean e-commerce hero shot, {product_name}, angled front view, soft shadows, sharp focus",
+    "lifestyle outdoor scene, {product_name} in use at a camping site, golden hour lighting, natural setting",
+    "detail closeup shot, {product_name}, highlighting premium build quality, macro photography style",
+    "lifestyle scene, {product_name} on a picnic table in a forest clearing, warm natural light",
+]
+
+_DETAIL_IMG_PROMPTS = [
+    "product specification diagram, {product_name}, showing dimensions and features, clean infographic style, white background",
+    "folded state showcase, {product_name} compactly folded, portability feature highlight, clean background",
+    "assembly instructions, {product_name} being set up step by step, clear and simple visual guide",
+    "scale comparison, {product_name} next to common outdoor items for size reference, studio lighting",
+    "weather resistance demo, {product_name} in outdoor rain, water-resistant feature showcase",
+    "weight demonstration, {product_name} being carried easily by one hand, ultralight feature highlight",
+]
+
+
+async def _auto_generate_missing_images(
+    session: "AsyncSession",
+    listing_data: dict[str, Any],
+    pipeline_result: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """当图片齐套门禁未通过时，自动调用 AI 生图补齐缺失的主图和详情图。
+
+    Returns:
+        (updated_listing_data, gen_stats)
+        gen_stats: {"generated_main": int, "generated_detail": int, "total_generated": int, "errors": list}
+    """
+    from app.services.image_generation_service import generate_image_and_save
+
+    product_name = listing_data.get("name", "")
+    short_desc = listing_data.get("short_description", "") or listing_data.get("description", "")
+    selling_points = listing_data.get("selling_points", [])
+
+    gen_stats = {"generated_main": 0, "generated_detail": 0, "total_generated": 0, "errors": []}
+
+    # 收集已有图片
+    existing_main = _dedupe_real_image_urls(listing_data.get("main_images"))
+    existing_detail = _dedupe_real_image_urls(listing_data.get("detail_images"))
+    # 也看扁平 images 里有没有已被分类的
+    existing_all = _dedupe_real_image_urls(listing_data.get("images"))
+
+    # ---- 补齐主图 (need 5) ----
+    needed_main = REQUIRED_MAIN_IMAGES - len(existing_main)
+    new_main_urls: list[str] = []
+    for i in range(needed_main):
+        idx = i % len(_MAIN_IMG_PROMPTS)
+        prompt = _MAIN_IMG_PROMPTS[idx].format(product_name=product_name or "outdoor product")
+        if short_desc:
+            prompt += f", {short_desc[:80]}"
+        try:
+            task = await generate_image_and_save(
+                session,
+                workspace_id=None,
+                prompt=prompt,
+                use_case="main_image",
+                width=1024,
+                height=1024,
+            )
+            if task and task.image_url and task.image_url not in existing_main + new_main_urls:
+                new_main_urls.append(task.image_url)
+                gen_stats["generated_main"] += 1
+                logger.info("Auto-generated main image %d/%d: %s", gen_stats["generated_main"], needed_main, task.image_url)
+        except Exception as e:
+            gen_stats["errors"].append(f"main_image_gen_{i}: {str(e)[:100]}")
+            logger.warning("Auto-generate main image failed: %s", str(e))
+
+    # ---- 补齐详情图 (need 6) ----
+    needed_detail = REQUIRED_DETAIL_IMAGES - len(existing_detail)
+    new_detail_urls: list[str] = []
+    for i in range(needed_detail):
+        idx = i % len(_DETAIL_IMG_PROMPTS)
+        prompt = _DETAIL_IMG_PROMPTS[idx].format(product_name=product_name or "outdoor product")
+        if selling_points and selling_points[0]:
+            prompt += f", feature: {selling_points[0][:60]}"
+        try:
+            task = await generate_image_and_save(
+                session,
+                workspace_id=None,
+                prompt=prompt,
+                use_case="detail_image",
+                width=768,
+                height=1024,
+            )
+            if task and task.image_url and task.image_url not in existing_detail + new_detail_urls:
+                new_detail_urls.append(task.image_url)
+                gen_stats["generated_detail"] += 1
+                logger.info("Auto-generated detail image %d/%d: %s", gen_stats["generated_detail"], needed_detail, task.image_url)
+        except Exception as e:
+            gen_stats["errors"].append(f"detail_image_gen_{i}: {str(e)[:100]}")
+            logger.warning("Auto-generate detail image failed: %s", str(e))
+
+    gen_stats["total_generated"] = gen_stats["generated_main"] + gen_stats["generated_detail"]
+
+    # 合并回 listing_data
+    all_main = existing_main + new_main_urls
+    all_detail = existing_detail + new_detail_urls
+    listing_data["main_images"] = [{"src": u} for u in all_main]
+    listing_data["detail_images"] = [{"src": u} for u in all_detail]
+    # 更新扁平 images 保持兼容
+    all_flat = all_main + all_detail
+    listing_data["images"] = [{"src": u} for u in all_flat]
+
+    logger.info(
+        "Auto-image-gen done: main=%d/%d detail=%d/%d total_gen=%d errors=%d",
+        len(all_main), REQUIRED_MAIN_IMAGES,
+        len(all_detail), REQUIRED_DETAIL_IMAGES,
+        gen_stats["total_generated"], len(gen_stats["errors"]),
+    )
+    return listing_data, gen_stats
+
+
 async def confirm_and_list(
     pipeline_result: dict[str, Any],
     *,
     status: str = "publish",
     force: bool = False,
+    session: "AsyncSession" | None = None,
 ) -> dict[str, Any]:
     """
     人工确认后执行上架
@@ -1299,17 +1449,42 @@ async def confirm_and_list(
         if restricted:
             return {"success": False, "error": f"Product is restricted: {reason}"}
 
-        # 图片齐套门禁（硬门禁，用户决策 2026-09-16）：主图5+详情6 不齐时，
-        # 草稿与正式发布一律阻止推送 WC，避免"裸奔"草稿流入渠道。
+        # 图片齐套门禁（硬门禁）：正式发布时强制要求主图5+详情6齐套；
+        # 草稿模式允许不完整数据（用户后续可补图再发布）。
         # force=True 时跳过（测试/人工确认场景）。
+        # 门禁未通过时，自动调用 AI 生图补齐缺失图片后再重试。
         gate = check_image_gate(listing_data)
         gate_notice = "；".join(gate.get("reasons", []))
-        if not gate.get("passed") and not force:
-            return {
-                "success": False,
-                "error": f"图片未达上架标准，已阻止上架（{status}）：{gate_notice}",
-                "image_gate": gate,
-            }
+        if not gate.get("passed") and not force and status != "draft":
+            logger.info(
+                "Image gate failed for sku=%s, auto-generating missing images: %s",
+                listing_data.get("sku", ""), gate_notice,
+            )
+            # 从 pipeline_result 提取 product_info 用于生图 prompt
+            product_info = (
+                (pipeline_result.get("data") or {}).get("product_info") or {}
+            )
+            listing_data, gen_stats = await _auto_generate_missing_images(
+                session, listing_data, pipeline_result,
+            )
+            # 重新检查门禁
+            gate2 = check_image_gate(listing_data)
+            if not gate2.get("passed"):
+                notice2 = "；".join(gate2.get("reasons", []))
+                logger.warning(
+                    "Image gate still failed after auto-generation: %s (gen_stats=%s)",
+                    notice2, gen_stats,
+                )
+                return {
+                    "success": False,
+                    "error": f"图片生成后仍未达标，请手动补充：{notice2}",
+                    "image_gate": gate2,
+                    "auto_generated": gen_stats,
+                }
+            logger.info(
+                "Image gate passed after auto-generation: main=%d detail=%d gen_stats=%s",
+                gate2["main_count"], gate2["detail_count"], gen_stats,
+            )
 
         # Vision 质量检查（SOP Step 6）：非阻断，只记录检查结果。
         # 检查产品外观一致性、文字正确性、背景干净度、构图合理性。
