@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://nuotao:REDACTED_DEFAULT_DB@localhost:5432/nuotao"
     redis_url: str = "redis://localhost:6379/0"
 
+    # JWT signing key. 2026-10-11 incident: a hardcoded dev value lived in
+    # app/core/security.py and was committed to a public repo, which let anyone
+    # forge admin access/refresh tokens. The empty default makes production
+    # fail closed (see security.py); set JWT_SECRET_KEY in .env.
+    jwt_secret_key: str = ""
+
     # WooCommerce REST API credentials (read-only consumer). Kept as Settings
     # fields so gates/readiness checks read the SAME .env-backed config as the
     # rest of the app instead of only process environment variables.
@@ -53,6 +59,17 @@ class Settings(BaseSettings):
     # Generated in WP Admin → Users → Profile → Application Passwords.
     wp_username: str = ""
     wp_application_password: str = ""
+
+    # --- House brand ---------------------------------------------------------
+    # 自有品牌名。此前 AI 分析提示词要求「没有明确品牌就根据风格起一个品牌名」，
+    # 结果是同一个 1688 商品每次上架都换一个品牌（实测 Lightwild / TuoTu /
+    # Wild Fun），标题与描述还互相矛盾，品牌资产无法沉淀。
+    # 现改为固定使用本配置；留空表示不使用品牌（宁可没有，也不要编造）。
+    house_brand: str = Field(
+        default="nuotao",
+        validation_alias=AliasChoices("BRAND_NAME", "HOUSE_BRAND"),
+        description="自有品牌名；留空表示上架/文案中不使用品牌",
+    )
 
     # WooCommerce webhook consumer secret (HMAC-SHA256 signature verification).
     # MUST be overridden in staging/production environments.

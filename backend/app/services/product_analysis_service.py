@@ -142,6 +142,8 @@ def get_product_analysis_status() -> dict[str, Any]:
 
 def _build_analysis_prompt(product_info: dict[str, Any]) -> str:
     """构建产品分析Prompt"""
+    from app.core.config import settings
+
     product_name = product_info.get("name", "未知产品")
     product_desc = product_info.get("description", "")
     product_price = product_info.get("price", "")
@@ -149,6 +151,8 @@ def _build_analysis_prompt(product_info: dict[str, Any]) -> str:
     product_images = product_info.get("images", [])
     supplier_name = product_info.get("supplier_name", "")
     additional_info = product_info.get("additional_info", "")
+    # 自有品牌：固定取配置值，留空则不使用品牌（见 Settings.house_brand 说明）
+    house_brand = (settings.house_brand or "").strip() or "（未配置，留空）"
 
     image_desc = ""
     if product_images:
@@ -167,7 +171,7 @@ def _build_analysis_prompt(product_info: dict[str, Any]) -> str:
 
 ## 分析要求
 请分析以下10个维度，并输出JSON：
-1. brand_name: 品牌名称/Logo（如果没有明确品牌，根据产品风格推测一个合适的品牌定位）
+1. brand_name: 品牌名称/Logo（必须使用自有品牌 {house_brand}；该配置为空时留空字符串，绝不允许自行推测或编造品牌名）
 2. product_category: 产品类目（具体到细分品类）
 3. product_appearance: 产品外观描述（形状、颜色、结构、设计特点）
 4. material_texture: 材质质感（推测主要材质和质感）
@@ -189,11 +193,15 @@ def _build_analysis_prompt(product_info: dict[str, Any]) -> str:
 
 def _build_report_prompt(product_info: dict[str, Any], ai_recognition: dict[str, Any] | None = None) -> str:
     """构建产品信息报告Prompt"""
+    from app.core.config import settings
+
     product_name = product_info.get("name", "未知产品")
     product_desc = product_info.get("description", "")
     product_price = product_info.get("price", "")
     product_category = product_info.get("category", "")
     supplier_name = product_info.get("supplier_name", "")
+    # 自有品牌：固定取配置值，留空则不使用品牌
+    house_brand = (settings.house_brand or "").strip() or "（未配置，留空）"
 
     recognition_context = ""
     if ai_recognition:
@@ -215,7 +223,7 @@ def _build_report_prompt(product_info: dict[str, Any], ai_recognition: dict[str,
 ## 报告要求
 请生成包含以下17个字段的产品信息报告，输出JSON：
 
-1. brand_name: 品牌名称（如果没有明确品牌，根据产品风格和定位起一个合适的品牌名）
+1. brand_name: 品牌名称（必须使用自有品牌 {house_brand}；该配置为空时留空字符串，绝不允许自行推测或编造品牌名）
 2. product_name: 产品名称（优化后的电商产品名，包含核心关键词）
 3. product_category: 产品类别（具体到细分品类）
 4. product_dimensions: 产品尺寸（推测合理尺寸，格式如"约Xcm×Ycm×Zcm"）

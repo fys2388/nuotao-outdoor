@@ -125,6 +125,35 @@ def _resolve_variation_attr_name(product: dict[str, Any]) -> str:
     return DEFAULT_VARIATION_ATTR_NAME
 
 
+def _resolve_brand_names(product: dict[str, Any]) -> list[str]:
+    """取要写入 WC product_brand 分类法的品牌名。
+
+    来源优先级：listing 显式给出的 brand_names / brand → 自有品牌配置（默认 nuotao）。
+    配置为空且 listing 未给品牌时返回空列表，即「不填品牌」。
+    """
+    raw = product.get("brand_names") or product.get("brand")
+    names: list[str] = []
+    if isinstance(raw, list):
+        names = [str(n).strip() for n in raw if str(n).strip()]
+    elif isinstance(raw, str) and raw.strip():
+        names = [raw.strip()]
+    if names:
+        return _dedupe_preserve_order(names)
+    try:
+        from app.core.config import settings
+
+        configured = (settings.house_brand or "").strip()
+    except Exception:  # noqa: BLE001 — 配置读取失败按「无品牌」处理
+        configured = ""
+    return [configured] if configured else []
+
+
+def _looks_like_brand_error(error_detail: str) -> bool:
+    """判断 WC 的错误是否由 brands 字段引起（用于决定是否降级重试）。"""
+    text = (error_detail or "").lower()
+    return "brand" in text
+
+
 def map_category_to_wc(product_name: str = "", internal_category: str = "") -> list[dict[str, int]]:
     """按商品名 + 内部类目关键词映射到 WooCommerce 分类 term id。
 
@@ -436,6 +465,13 @@ def list_to_woocommerce(
             if product.get("images"):
                 data["images"] = _normalize_wc_images(product["images"])
 
+        # 自有品牌（product_brand 分类法）。WC 9.4+ 的 products 端点支持 brands 字段，
+        # 但老版本不认识该参数。品牌是营销资产而非可售性前提，因此这里按「尽力而为」
+        # 处理：一旦 WC 因 brands 报错，去掉该字段重试一次，绝不让品牌问题阻断上架。
+        brand_names = _resolve_brand_names(product)
+        if brand_names:
+            data["brands"] = [{"name": b} for b in brand_names]
+
         # 幂等：先按 SKU 反查 WooCommerce 是否已经有这个商品。
         # 原实现无条件 POST —— 同一个 SKU 会被 WooCommerce 以 product_invalid_sku
         # 拒绝（表现为"上架失败"），而 SKU 一旦漂移就真的建出第二个商品。
@@ -485,6 +521,31 @@ def list_to_woocommerce(
                 # 400/422 属于业务错，重试不会成功；429/5xx 才重试
                 status_code = e.response.status_code if e.response is not None else 0
                 if status_code in (400, 422):
+                    # 品牌字段被拒时降级：去掉 brands 重试一次，上架不因品牌失败。
+                    if "brands" in data and _looks_like_brand_error(error_detail):
+                        logger.warning(
+                            "WooCommerce rejected brands field for %s (%s); "
+                            "retrying without brand",
+                            product.get("sku"), error_detail,
+                        )
+                        data.pop("brands", None)
+                        try:
+                            resp = requests.request(
+                                http_method,
+                                url,
+                                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                                json=data,
+                                timeout=120,
+                            )
+                            resp.raise_for_status()
+                            result = resp.json()
+                            brand_names = []
+                            break
+                        except requests.exceptions.RequestException as brand_retry_err:
+                            logger.error(
+                                "WooCommerce retry without brand also failed for %s: %s",
+                                product.get("sku"), brand_retry_err,
+                            )
                     logger.error(
                         "WooCommerce listing rejected (non-retryable %d) for %s: %s",
                         status_code, product.get("sku"), error_detail,

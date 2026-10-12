@@ -556,21 +556,39 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
                 '"95cm Long Table 5-Piece Set (Black)")'
             )
 
+        # BUG-30 (2026-10-12): 真机前台核对发现，同一个 1688 商品三次本地化分别
+        # 得到 Lightwild / TuoTu / Wild Fun 三个不同的品牌名，而且标题里没有品牌、
+        # 描述正文里却出现 "Wild Fun ..." —— 前台看起来像另一个商品，也让品牌资产
+        # 无法沉淀。源头是 AI 分析提示词要求「没有明确品牌就自己起一个」，现已改为
+        # 固定自有品牌；这里再兜一层，保证商标名唯一且标题/描述一致。
+        house_brand = ""
+        try:
+            from app.core.config import settings as _app_settings
+
+            house_brand = (_app_settings.house_brand or "").strip()
+        except Exception:  # noqa: BLE001 — 配置读取失败不应拖垮本地化
+            house_brand = ""
+
+        if house_brand:
+            brand_rule = (
+                f'The store\'s own brand is EXACTLY "{house_brand}". '
+                "Use this exact brand name and no other. Never invent, transliterate or "
+                "anglicize an additional brand. When you refer to the product inside the "
+                "description, use exactly the same product name as the 'name' value you return. "
+            )
+        else:
+            brand_rule = (
+                "The store has no brand name. OMIT any brand entirely - do NOT invent, "
+                "transliterate or anglicize a brand. When you mention the product inside the "
+                "description, use exactly the same product name as the 'name' value you return. "
+            )
+
         prompt = (
             "You are an e-commerce localization expert for a US outdoor gear DTC brand. "
             "Translate and adapt the following Chinese product listing into natural, SEO-friendly "
-            "American English. Keep brand names and model names as-is ONLY if they are already in Latin characters. "
-            "If any Chinese characters appear in brand names, TRANSLATE them to English. "
-            # BUG-30 (2026-10-12): 真机前台核对发现，同一个 1688 商品三次本地化分别
-            # 得到 Lightwild / TuoTu / Wild Fun 三个不同的品牌名，而且标题里没有品牌、
-            # 描述正文里却出现 "Wild Fun ..." —— 前台看起来像另一个商品，也让品牌资产
-            # 无法沉淀。品牌名必须确定且一致，不允许每次由模型即兴发明。
-            "BRAND RULE (mandatory): if the source brand is written in Chinese characters and has no "
-            "established Latin-script name in the source, OMIT the brand entirely - do NOT invent, "
-            "transliterate or anglicize a brand. When you do mention the product inside the description, "
-            "use exactly the same product name as the 'name' value you return, with no brand prefix "
-            "that does not appear in the source. "
-            "Do NOT add marketing fluff not supported by the source. "
+            "American English. Keep model numbers as-is. "
+            + brand_rule
+            + "Do NOT add marketing fluff not supported by the source. "
             "Return ONLY a JSON object with keys: "
             + ", ".join(keys)
             + ".\n\n"
@@ -974,6 +992,16 @@ async def run_v3_gate(
 
     # 「同一个 1688 链接只能有一条活候选」由 source_offer_id 保证，不再只靠 SKU。
 
+    # 自有品牌：固定取配置（默认 nuotao，配置为空则不写）。品牌归因与品牌维度
+    # 报表都依赖 Product.brand，此前候选行从不写该字段，导致全部商品「未绑定品牌」。
+    house_brand = ""
+    try:
+        from app.core.config import settings as _app_settings
+
+        house_brand = (_app_settings.house_brand or "").strip()
+    except Exception:  # noqa: BLE001 — 品牌缺失不应阻断闸门落库
+        house_brand = ""
+
     def _build_candidate() -> Product:
         return Product(
             workspace_id=workspace_id,
@@ -988,6 +1016,7 @@ async def run_v3_gate(
             source_offer_id=source_offer_id,
             weight_kg=_parse_weight_kg(product_info.get("weight")),
             target_market=str(product_info.get("target_market") or "US"),
+            brand=house_brand or None,
             meta=meta,
         )
 
@@ -1002,6 +1031,8 @@ async def run_v3_gate(
         # 命中已有候选（按来源键或历史 SKU）：同步本次运行的最新信息，不重复建档。
         product.name = name
         product.category = product.category or product_info.get("category") or None
+        if house_brand:
+            product.brand = house_brand
         product.meta = {
             **(product.meta or {}),
             **{key: value for key, value in meta.items() if value is not None},
