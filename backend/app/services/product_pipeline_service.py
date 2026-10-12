@@ -681,6 +681,22 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
             elif needs_variation_localization:
                 logger.warning("Localization response missing variation_names; labels stay CJK")
 
+            # G3b: 父商品的属性 options 必须与变体 option 完全一致。
+            # WooCommerce 只接受 option 已存在于父商品 attributes[].options 的变体，
+            # 否则报 product_invalid_variation_attribute 并丢掉该变体。
+            # 变体名刚被换成英文，若 options 仍留中文，18 个变体将被全部拒绝。
+            # 因此用本地化后的变体重建 options：去重且保持原顺序。
+            for attr in listing_data.get("attributes") or []:
+                if not isinstance(attr, dict):
+                    continue
+                attr["options"] = list(
+                    dict.fromkeys(
+                        str(v.get("name")).strip()
+                        for v in variations
+                        if isinstance(v, dict) and str(v.get("name") or "").strip()
+                    )
+                )
+
             listing_data.setdefault("_localization", {
                 "status": "localized",
                 "provider": resp.provider,
@@ -1118,6 +1134,85 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
+def _variation_price_profile(variations: Any) -> tuple[int, int]:
+    """变体价格画像：(有价格的变体数, 不同价格值的个数)。"""
+    if not isinstance(variations, list):
+        return (0, 0)
+    prices = [
+        str(v.get("price")).strip()
+        for v in variations
+        if isinstance(v, dict) and str(v.get("price") or "").strip()
+    ]
+    return (len(prices), len(set(prices)))
+
+
+def _variations_look_degenerate(variations: Any) -> bool:
+    """多变体却只有一个价格（或全部无价），视为抓取退化的可疑数据。
+
+    BUG-27 (2026-10-12): 真机实测同一个 1688 offer 的两次抓取质量差异极大——
+    一次返回各 SKU 真实价（¥12/¥20/¥34…），另一次把 18 个变体全填成基准价 ¥12。
+    后者会让「小方桌五件套」和「折叠椅」卖同一个价，是直接的定价事故。
+    """
+    if not isinstance(variations, list) or len(variations) < 2:
+        return False
+    _priced, distinct = _variation_price_profile(variations)
+    # distinct==0 表示一个价都没抓到，==1 表示多个变体共用同一个价，两者都不可信。
+    return distinct <= 1
+
+
+def _prefer_richer_variations(
+    merged: dict[str, Any], snapshot_variations: Any
+) -> tuple[dict[str, Any], int]:
+    """当本次传入的变体价格退化、而落库快照更丰富时，用快照逐条修正。
+
+    只在「长度一致」且「快照确实更丰富（有多个不同价）」时生效，并按变体名对齐
+    （名字完全对不上则退回按下标对齐）——宁可少修也不能错位，错位会把 A 规格的
+    价格安到 B 规格上，比价格塌缩更难发现。
+    """
+    current = merged.get("variations")
+    if not _variations_look_degenerate(current):
+        return merged, 0
+    if not isinstance(snapshot_variations, list) or len(snapshot_variations) != len(current):
+        return merged, 0
+    snap_priced, snap_distinct = _variation_price_profile(snapshot_variations)
+    if snap_distinct <= 1:
+        return merged, 0
+
+    # 按名字建立快照索引；名字对不上的条目退化为下标对齐。
+    by_name: dict[str, dict[str, Any]] = {}
+    for item in snapshot_variations:
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            by_name.setdefault(str(item["name"]).strip(), item)
+
+    fixed: list[dict[str, Any]] = []
+    repaired = 0
+    for idx, var in enumerate(current):
+        if not isinstance(var, dict):
+            fixed.append(var)
+            continue
+        src = by_name.get(str(var.get("name") or "").strip())
+        if src is None:
+            candidate = snapshot_variations[idx]
+            src = candidate if isinstance(candidate, dict) else None
+        if src is None:
+            fixed.append(var)
+            continue
+        updated = dict(var)
+        snap_price = str(src.get("price") or "").strip()
+        if snap_price and snap_price != str(updated.get("price") or "").strip():
+            updated["price"] = snap_price
+            repaired += 1
+        # 补齐本此抓取缺失的标识字段，但不覆盖已有值
+        for key in ("sku", "name", "stock_quantity"):
+            if _is_blank(updated.get(key)) and not _is_blank(src.get(key)):
+                updated[key] = src.get(key)
+        fixed.append(updated)
+
+    if repaired:
+        merged = {**merged, "variations": fixed}
+    return merged, repaired
+
+
 async def _hydrate_product_info(
     product_info: dict[str, Any],
     *,
@@ -1222,6 +1317,19 @@ async def _hydrate_product_info(
                     "(variations=%d, price=%s)",
                     product_info.get("name"), ",".join(snap_filled),
                     len(merged.get("variations") or []), merged.get("price"),
+                )
+
+            # BUG-27: 快照补空只解决「没有」，解决不了「有但错」。
+            # 本次抓取把 18 个变体全填成同一个价时，快照里各 SKU 的真实价
+            # 必须覆盖回来，否则多规格商品会统一定价。
+            merged, repaired = _prefer_richer_variations(
+                merged, snapshot.get("variations")
+            )
+            if repaired:
+                logger.warning(
+                    "Variation prices looked degenerate for %s; restored %d price(s) "
+                    "from meta.pipeline_input snapshot",
+                    product_info.get("name"), repaired,
                 )
 
     # BUG-23 (2026-10-12): 「定位自己是哪一行」必须在「是否需要回填」判断之前完成。
