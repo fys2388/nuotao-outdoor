@@ -391,14 +391,23 @@ def _generate_listing_data(
     if has_variations:
         # 变量产品：主 SKU 落在外层商品，变体各自带自己的 SKU 与美元价。
         wc_variations: list[dict[str, Any]] = []
-        for var in variations:
+        for idx, var in enumerate(variations):
             if not isinstance(var, dict):
                 continue
             var_price_usd = _to_usd(var.get("price"))
+            var_sku = str(var.get("sku") or "").strip()
+            # 变体必须有属性值，否则 WooCommerce 直接拒绝该变体
+            # （product_invalid_variation_attribute）。1688 偶有个别变体名缺失，
+            # 依次用 SKU、序号兜底，保证每个变体都可用且互不重复。
+            var_name = (
+                str(var.get("name") or "").strip()
+                or var_sku
+                or f"Option {idx + 1}"
+            )
             wc_variations.append(
                 {
-                    "sku": str(var.get("sku") or "").strip(),
-                    "name": str(var.get("name") or "").strip(),
+                    "sku": var_sku or f"{sku}-{idx + 1}",
+                    "name": var_name,
                     "regular_price": var_price_usd,
                     # 源价保留人民币，便于对账与后续重算
                     "source_price_cny": str(var.get("price") or ""),
