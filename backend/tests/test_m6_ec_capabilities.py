@@ -122,7 +122,7 @@ class TestImageGenerationService:
         status = get_image_gen_status()
         assert status["service"] == "image_generation"
         assert status["status"] == "operational"
-        assert status["default_model"] == "doubao-seedream-5-0-pro-260628"
+        assert status["default_model"] == "agnes-image-2.5-flash"
         assert len(status["available_models"]) >= 4
         assert "main_image" in status["use_cases"]
 
