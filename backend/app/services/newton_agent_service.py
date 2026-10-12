@@ -699,6 +699,69 @@ def _normalize_extracted_product(
     description = data.get("description") or data.get("商品描述") or str(title)
     category = data.get("category") or data.get("category_name") or ""
 
+    # SKU 变体：Newton 返回的 sku_list，每项含 skuName/skuCode/price/stock
+    # 同时保留 amountOnSale 兼容 1688 API 字段。
+    sku_list = []
+    sku_raw = data.get("sku_list") or data.get("skuList") or []
+    if isinstance(sku_raw, list):
+        for s in sku_raw:
+            if not isinstance(s, dict):
+                continue
+            sku_name = (
+                s.get("skuName")
+                or s.get("name")
+                or s.get("属性")
+                or s.get("spec")
+                or ""
+            )
+            sku_code = s.get("skuCode") or s.get("skuId") or s.get("id") or ""
+            raw_price = s.get("price")
+            if raw_price is None:
+                raw_price = s.get("skuPrice")
+            if raw_price is None and isinstance(s.get("priceRange"), list) and s["priceRange"]:
+                first_range = s["priceRange"][0]
+                raw_price = first_range.get("price") if isinstance(first_range, dict) else None
+            try:
+                sku_price = str(raw_price).strip() if raw_price not in (None, "") else ""
+            except Exception:
+                sku_price = ""
+            stock_raw = s.get("stock")
+            if stock_raw is None:
+                stock_raw = s.get("amountOnSale")
+            try:
+                stock = int(float(stock_raw)) if stock_raw not in (None, "") else 100
+            except Exception:
+                stock = 100
+            # 跳过完全空白的条目
+            if not sku_name and not sku_code and not sku_price:
+                continue
+            sku_list.append({
+                "skuName": str(sku_name).strip(),
+                "skuCode": str(sku_code).strip(),
+                "skuId": str(sku_code).strip(),
+                "price": sku_price,
+                "stock": stock,
+            })
+    # 兜底：若 Newton 没给 sku_list 但有 attributes，从属性表重建一个变体列表
+    if not sku_list and isinstance(data.get("attributes"), list):
+        attrs = data.get("attributes") or []
+        sku_attr = []
+        for a in attrs:
+            if not isinstance(a, dict):
+                continue
+            an = str(a.get("attributeName") or a.get("name") or "").strip()
+            av = str(a.get("attributeValue") or a.get("value") or "").strip()
+            if an and av:
+                sku_attr.append(av)
+        if sku_attr:
+            sku_list.append({
+                "skuName": " / ".join(sku_attr),
+                "skuCode": "",
+                "skuId": "",
+                "price": str(price_min or "") if price_min is not None else "",
+                "stock": 100,
+            })
+
     return {
         "product_id": str(data.get("product_id") or product_id),
         "subject": str(title).strip(),
@@ -709,7 +772,7 @@ def _normalize_extracted_product(
             if price_min is not None
             else []
         ),
-        "sku_list": [],
+        "sku_list": sku_list,
         "attributes": (
             data.get("attributes")
             if isinstance(data.get("attributes"), list)
@@ -760,13 +823,23 @@ def extract_1688_product(
   "supplier_name": "供应商公司名称",
   "image_urls": ["主图URL"],
   "description": "页面公开商品描述或标题",
-  "category": "商品类目"
+  "category": "商品类目",
+  "sku_list": [
+    {{
+      "skuName": "颜色/规格描述，例如'绿色太阳能款'",
+      "skuCode": "SKU编码",
+      "price": 数字价格或null,
+      "stock": 数字库存或null
+    }}
+  ]
 }}
 
 要求：
 1. 只输出 JSON 对象，不要 Markdown，不要解释。
 2. 禁止猜测；页面无法读取或字段不存在时使用 null 或空数组。
-3. 不要联系供应商，不要下单，不要修改任何数据。
+3. sku_list 必须包含页面展示的所有变体（颜色/规格/电池类型），每个变体单独一项；只有一个规格时也需返回长度为 1 的数组。
+4. skuName 用页面上展示的中文规格名（如"绿色太阳能款"）；price 用该变体对应价格；stock 用页面展示库存，无则 null。
+5. 不要联系供应商，不要下单，不要修改任何数据。
 
 商品ID：{product_id}
 商品链接：{url_or_id}

@@ -2114,25 +2114,88 @@ def convert_1688_to_pipeline_input(
     # 提取SKU信息
     sku_info = product.get("sku_list") or product.get("skuInfos") or []
     sku = ""
+
+    def _extract_sku_name(s: dict) -> str:
+        """从单个 SKU 提取可读名称。
+
+        兼容三种来源：
+        1. Newton Agent 返回的 skuName / name
+        2. 1688 API skuInfos.attributes 数组（颜色/规格）
+        3. 单 SKU 时的属性表兜底
+        """
+        direct = (
+            s.get("skuName")
+            or s.get("name")
+            or s.get("specName")
+            or ""
+        )
+        if str(direct).strip():
+            return str(direct).strip()
+        attrs = s.get("attributes") or []
+        parts = []
+        if isinstance(attrs, list):
+            for a in attrs:
+                if not isinstance(a, dict):
+                    continue
+                av = str(a.get("attributeValue") or a.get("value") or "").strip()
+                if av:
+                    parts.append(av)
+        return " / ".join(parts)
+
+    def _extract_sku_price(s: dict) -> float:
+        """从单个 SKU 提取价格（数字）。"""
+        raw = s.get("price")
+        if raw in (None, ""):
+            raw = s.get("skuPrice")
+        if raw in (None, "") and isinstance(s.get("priceRange"), list) and s["priceRange"]:
+            first = s["priceRange"][0]
+            if isinstance(first, dict):
+                raw = first.get("price")
+        if raw in (None, ""):
+            return 0.0
+        try:
+            return float(str(raw).replace("¥", "").replace(",", "").strip())
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _extract_sku_stock(s: dict) -> int:
+        """从单个 SKU 提取库存。"""
+        raw = s.get("stock")
+        if raw in (None, ""):
+            raw = s.get("amountOnSale")
+        if raw in (None, ""):
+            return 100
+        try:
+            return int(float(raw))
+        except (ValueError, TypeError):
+            return 100
+
+    def _extract_sku_code(s: dict) -> str:
+        """从单个 SKU 提取编码。"""
+        return str(
+            s.get("skuCode")
+            or s.get("skuId")
+            or s.get("id")
+            or ""
+        ).strip()
+
     if isinstance(sku_info, list) and sku_info:
         best_sku = None
         max_price = 0.0
         for s in sku_info:
-            if isinstance(s, dict):
-                sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
-                is_solar = any(kw in sku_name for kw in ["太阳能", "充电", "solar", "charging", "USB"])
-                try:
-                    sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))
-                except (ValueError, TypeError):
-                    sku_price = 0.0
-                if is_solar or sku_price > max_price:
-                    max_price = sku_price
-                    best_sku = s
+            if not isinstance(s, dict):
+                continue
+            sku_name = _extract_sku_name(s)
+            is_solar = any(kw in sku_name for kw in ["太阳能", "充电", "solar", "charging", "USB"])
+            sku_price = _extract_sku_price(s)
+            if is_solar or sku_price > max_price:
+                max_price = sku_price
+                best_sku = s
         if best_sku:
-            sku = best_sku.get("skuCode", best_sku.get("skuId", ""))
+            sku = _extract_sku_code(best_sku)
         else:
             first_sku = sku_info[0] if isinstance(sku_info[0], dict) else {}
-            sku = first_sku.get("skuCode", first_sku.get("skuId", ""))
+            sku = _extract_sku_code(first_sku)
     else:
         sku = ""
 
@@ -2144,18 +2207,14 @@ def convert_1688_to_pipeline_input(
     variations = []
     if isinstance(sku_info, list) and sku_info:
         for s in sku_info:
-            if isinstance(s, dict):
-                sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
-                try:
-                    sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))
-                except (ValueError, TypeError):
-                    sku_price = 0.0
-                variations.append({
-                    "sku": s.get("skuCode", s.get("skuId", "")),
-                    "name": sku_name,
-                    "price": str(sku_price) if sku_price > 0 else "",
-                    "stock_quantity": s.get("stock", 100),
-                })
+            if not isinstance(s, dict):
+                continue
+            variations.append({
+                "sku": _extract_sku_code(s),
+                "name": _extract_sku_name(s),
+                "price": str(_extract_sku_price(s)) if _extract_sku_price(s) > 0 else "",
+                "stock_quantity": _extract_sku_stock(s),
+            })
 
     return {
         "name": name,
