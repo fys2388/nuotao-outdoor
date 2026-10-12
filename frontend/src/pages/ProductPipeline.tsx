@@ -95,6 +95,12 @@ export default function ProductPipeline() {
   const [importUrl, setImportUrl] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [autoRunPipeline, setAutoRunPipeline] = useState(true)
+  // BUG-21 (2026-10-12): 1688 导入得到的完整商品数据。此前只把 name/price 等
+  // 标量回填进表单，运行管线时又从表单重建 product_info，于是 variations /
+  // attributes / images / source_url / sku 全部丢失 —— 多规格商品必然退化成
+  // 单 SKU 简单商品，且后端无法按来源键回查补数。这里保留原始导入结果，
+  // 运行载荷以它为基础、表单值为覆盖。
+  const [importedProductInfo, setImportedProductInfo] = useState<Record<string, any> | null>(null)
   // 智能定价参数
   const [priceMarkup, setPriceMarkup] = useState(6.0)
   const [usdCnyRate, setUsdCnyRate] = useState(7.2)
@@ -379,6 +385,8 @@ export default function ProductPipeline() {
       // Step 3: 填充表单
       const productInfo = completedData.product_info
       if (productInfo) {
+        // 保留完整导入数据（含 variants/来源键），运行管线时要带上
+        setImportedProductInfo(productInfo)
         form.setFieldsValue({
           name: productInfo.name || '',
           category: productInfo.category || '',
@@ -430,15 +438,29 @@ export default function ProductPipeline() {
       setLoading(true)
       setPipelineResult(null)
 
+      // BUG-21: 以完整导入数据为基底，表单值覆盖人工可编辑字段。
+      // 只从表单重建会丢掉 variations/attributes/images/source_url/sku，
+      // 多规格商品必然变成单 SKU，且售价为空（后端也无来源键可回查）。
+      const imported = importedProductInfo || {}
+      const pick = (formValue: any, fallback: any) => {
+        // 表单留空时不要用空值覆盖导入值（运营清空输入框不应等于丢弃采购价）
+        if (formValue === undefined || formValue === null) return fallback
+        if (typeof formValue === 'string' && formValue.trim() === '') return fallback
+        return formValue
+      }
       const productInfo = {
+        ...imported,
         name: values.name,
-        category: values.category || '',
-        price: values.price || '',
-        description: values.description || '',
-        core_selling_points: values.core_selling_points?.split('\n').filter(Boolean) || [],
-        target_audience: values.target_audience || '',
-        usage_scenarios: values.usage_scenarios?.split('\n').filter(Boolean) || [],
-        product_features: values.product_features?.split('\n').filter(Boolean) || [],
+        category: pick(values.category, imported.category || ''),
+        price: pick(values.price, imported.price || ''),
+        description: pick(values.description, imported.description || ''),
+        core_selling_points:
+          values.core_selling_points?.split('\n').filter(Boolean) || [],
+        target_audience: pick(values.target_audience, imported.target_audience || ''),
+        usage_scenarios:
+          values.usage_scenarios?.split('\n').filter(Boolean) || [],
+        product_features:
+          values.product_features?.split('\n').filter(Boolean) || [],
         price_markup: priceMarkup,
         usd_cny_rate: usdCnyRate,
       }

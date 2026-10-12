@@ -107,7 +107,8 @@ interface ContractItem {
 const CONTRACT_ITEMS: readonly ContractItem[] = [
   { endpoint: 'GET /api/v1/products?limit=200&status=draft', desc: '候选池加载', state: 'ready' },
   { endpoint: 'POST /api/v1/product-pipeline/import-from-1688', desc: '1688 导入（可选自动运行）', state: 'ready' },
-  { endpoint: 'POST /api/v1/product-pipeline/run', desc: '管线执行（6 步）', state: 'ready' },
+  { endpoint: 'POST /api/v1/product-pipeline/run-async', desc: '管线执行（6 步，异步提交）', state: 'ready' },
+  { endpoint: 'GET /api/v1/product-pipeline/run-async/{job_id}', desc: '管线执行结果轮询', state: 'ready' },
   { endpoint: 'POST /api/v1/product-pipeline/confirm-list', desc: '人工确认上架（含闸门）', state: 'ready' },
   { endpoint: 'POST /api/v1/products/{id}/push-woocommerce?force=true', desc: '闸门强制放行（产品管理复用）', state: 'ready' },
 ]
@@ -115,6 +116,55 @@ const CONTRACT_ITEMS: readonly ContractItem[] = [
 const stage4 = STAGE_BY_ID.get('analysis')
 const stage10 = STAGE_BY_ID.get('content')
 const stage11 = STAGE_BY_ID.get('wc_sync')
+
+/**
+ * 读取接口响应并转成可读错误，绝不把网关返回的 HTML 变成
+ * "Unexpected token '<'" 这种对运营毫无意义的报错。
+ *
+ * BUG-20：长时间请求会先撞上反代/网关超时，此时响应体是 HTML 错误页而非
+ * JSON，直接 resp.json() 会抛解析异常，掩盖了真实原因（请求耗时过长）。
+ */
+async function readJson(
+  resp: Response
+): Promise<{ ok: true; data: any; status: number } | { ok: false; error: string; status: number }> {
+  const text = await resp.text()
+  const trimmed = text.trim()
+  if (!trimmed) {
+    return {
+      ok: false,
+      status: resp.status,
+      error: `服务返回空响应（HTTP ${resp.status}）`,
+    }
+  }
+  if (trimmed.startsWith('<')) {
+    // 网关/反代错误页：常见 502/504/524
+    return {
+      ok: false,
+      status: resp.status,
+      error:
+        resp.status === 524 || resp.status === 504
+          ? '请求超过网关超时上限（HTTP 524/504），任务可能仍在后台执行，请稍后重试'
+          : `网关返回了非 JSON 响应（HTTP ${resp.status}）`,
+    }
+  }
+  try {
+    const data = JSON.parse(trimmed)
+    if (!resp.ok) {
+      return {
+        ok: false,
+        status: resp.status,
+        error: data?.error || data?.detail || `HTTP ${resp.status}`,
+      }
+    }
+    return { ok: true, data, status: resp.status }
+  } catch {
+    return {
+      ok: false,
+      status: resp.status,
+      error: `响应无法解析为 JSON（HTTP ${resp.status}）`,
+    }
+  }
+}
 
 export default function PipelineRunner() {
   // Step 1: 候选池
@@ -194,16 +244,23 @@ export default function PipelineRunner() {
     setImportLoading(true)
     const token = localStorage.getItem('admin_token') || ''
     try {
+      // BUG-20: 不再让导入接口顺带同步跑管线 —— 导入(含牛顿抓取)本身已接近
+      // 网关上限，再叠加 AI 分析与出图必然 524。改为先只取数据，再异步跑管线。
       const resp = await fetch('/api/v1/product-pipeline/import-from-1688', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
         body: JSON.stringify({
           url_or_id: importUrl.trim(),
-          auto_run_pipeline: autoRunAfterImport,
+          auto_run_pipeline: false,
           auto_list: false,
         }),
       })
-      const result = await resp.json()
+      const parsed = await readJson(resp)
+      if (!parsed.ok) {
+        message.error(`1688 导入失败：${parsed.error}`)
+        return
+      }
+      const result = parsed.data
       if (result.success && result.data?.product_info) {
         const pi = result.data.product_info
         const pseudo: Product = {
@@ -220,19 +277,18 @@ export default function PipelineRunner() {
         }
         setSelectedCandidate(pseudo)
         setImportedInfo(pi)
-        setPipelineResult(result.data.pipeline_result || null)
+        setPipelineResult(null)
         setRunError(null)
         setGateVerdict(null)
         setConfirmSuccess(null)
         setConfirmError(null)
         setImportUrl('')
-        const skipReason = result.data.auto_list_skipped
-        if (skipReason) {
-          message.warning(`已导入商品：${pi.name || '未知商品'}；自动上架被跳过：${skipReason}`)
-        } else if (result.data.pipeline_result) {
-          message.success(`已导入并运行管线：${pi.name || '未知商品'}`)
-        } else {
-          message.success(`已导入商品：${pi.name || '未知商品'}`)
+        message.success(`已导入商品：${pi.name || '未知商品'}`)
+        setImportLoading(false)
+        // 勾选了「导入后自动运行管线」时，接着走异步管线（避免网关超时）
+        if (autoRunAfterImport) {
+          await loadCandidates()
+          await handleRunFor(pi)
         }
       } else {
         message.error(`1688 导入失败：${result.error || '未知错误'}`)
@@ -268,50 +324,131 @@ export default function PipelineRunner() {
   }
 
   // ── 运行管线 ──────────────────────────────────────────────────────────
-  const handleRun = async () => {
-    if (!selectedCandidate) {
-      message.error('请先在第一步选择候选，或从 1688 导入')
-      return
+  // BUG-20 (2026-10-12): 原先直接 POST 同步 /run。回填要重抓 1688（1-2 分钟）
+  // 再叠加 AI 分析与出图，总耗时超过反代/网关上限，网关回的是 HTML 错误页，
+  // 前端 resp.json() 于是抛 "Unexpected token '<'" —— 看起来像未知故障。
+  // 现在统一走异步任务端点 + 轮询（与 ProductPipeline 页一致）。
+  const runPipelineAsync = async (
+    productInfo: Record<string, any>,
+    progressKey: string
+  ): Promise<PipelineResult | null> => {
+    const runToken = localStorage.getItem('admin_token') || ''
+    const headers: HeadersInit = { 'Content-Type': 'application/json' }
+    if (runToken) headers['Authorization'] = `Bearer ${runToken}`
+
+    message.loading({ content: '正在提交工作流任务...', key: progressKey, duration: 0 })
+
+    const resp = await fetch('/api/v1/product-pipeline/run-async', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        product_info: productInfo,
+        auto_list: false,
+        include_images: false,
+      }),
+    })
+
+    const submit = await readJson(resp)
+    if (!submit.ok) {
+      setRunError(submit.error)
+      message.error(`管线执行失败：${submit.error}`)
+      return null
     }
+    const jobId = submit.data?.data?.job_id
+    if (!submit.data?.success || !jobId) {
+      const err = submit.data?.error || '提交工作流任务失败'
+      setRunError(err)
+      message.error(err)
+      return null
+    }
+
+    message.loading({
+      content: '🔄 管线运行中（含 1688 回填，约 1-3 分钟）...',
+      key: progressKey,
+      duration: 0,
+    })
+
+    const TIMEOUT_MS = 10 * 60 * 1000
+    const POLL_MS = 3000
+    const deadline = Date.now() + TIMEOUT_MS
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_MS))
+
+      const pollResp = await fetch(`/api/v1/product-pipeline/run-async/${jobId}`, { headers })
+      const poll = await readJson(pollResp)
+      if (!poll.ok) {
+        // 轮询失败不立刻判死：网络抖动或网关偶发 5xx 都可能，继续重试到超时。
+        continue
+      }
+      const status = poll.data?.data?.status
+      if (status === 'completed') {
+        const resultData = poll.data?.data?.data as PipelineResult | undefined
+        if (!resultData) {
+          setRunError('工作流完成但未返回结果')
+          message.error('工作流完成但未返回结果')
+          return null
+        }
+        return resultData
+      }
+      if (status === 'failed') {
+        const err = poll.data?.data?.error || '管线执行失败'
+        setRunError(err)
+        message.error(err)
+        return null
+      }
+    }
+
+    setRunError('管线执行超时（10 分钟）')
+    message.error('管线执行超时（10 分钟）')
+    return null
+  }
+
+  const applyPipelineResult = (resultData: PipelineResult) => {
+    setPipelineResult(resultData)
+    const st = resultData.data?.status
+    const errs = resultData.data?.errors?.join('；')
+    if (st === 'failed') {
+      setRunError(resultData.error || errs || '管线执行失败')
+      message.error(resultData.error || `管线失败：${errs || '未知错误'}`)
+    } else if (st === 'partial') {
+      message.warning(
+        `管线部分成功：${resultData.data?.completed_steps}/${resultData.data?.total_steps}`
+      )
+    } else {
+      message.success(
+        `管线完成：${resultData.data?.completed_steps}/${resultData.data?.total_steps}步成功`
+      )
+    }
+  }
+
+  const handleRunFor = async (productInfo: Record<string, any>) => {
     setRunning(true)
     setPipelineResult(null)
     setRunError(null)
     setGateVerdict(null)
     setConfirmSuccess(null)
     setConfirmError(null)
+    const progressKey = 'pipeline_runner_progress'
     try {
-      const runToken = localStorage.getItem('admin_token') || ''
-      const resp = await fetch('/api/v1/product-pipeline/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(runToken && { Authorization: `Bearer ${runToken}` }) },
-        body: JSON.stringify({
-          product_info: buildProductInfo(),
-          auto_list: false,
-          include_images: false,
-        }),
-      })
-      const data = await resp.json()
-      if (data.success || data.data) {
-        setPipelineResult(data)
-        const st = data.data?.status
-        if (st === 'failed') {
-          setRunError(data.error || '管线执行失败')
-          message.error(data.error || `管线失败：${data.data?.errors?.join('；') || '未知错误'}`)
-        } else if (st === 'partial') {
-          message.warning(`管线部分成功：${data.data?.completed_steps}/${data.data?.total_steps}`)
-        } else {
-          message.success(`管线完成：${data.data?.completed_steps}/${data.data?.total_steps}步成功`)
-        }
-      } else {
-        setRunError(data.error || '管线执行失败')
-        message.error(data.error || '管线执行失败')
-      }
+      const resultData = await runPipelineAsync(productInfo, progressKey)
+      if (resultData) applyPipelineResult(resultData)
     } catch (e: any) {
       setRunError(e.message || '网络错误')
       message.error(`管线执行失败：${e.message || '网络错误'}`)
     } finally {
+      message.destroy(progressKey)
       setRunning(false)
     }
+  }
+
+  const handleRun = async () => {
+    if (!selectedCandidate) {
+      message.error('请先在第一步选择候选，或从 1688 导入')
+      return
+    }
+    // 注意：buildProductInfo 读取的是 importedInfo state，刚导入时该 state
+    // 尚未刷新，因此导入后自动运行必须直接传 pi（见 handleImport1688）。
+    await handleRunFor(buildProductInfo())
   }
 
   // ── 确认上架（含闸门裁决解析）────────────────────────────────────────
