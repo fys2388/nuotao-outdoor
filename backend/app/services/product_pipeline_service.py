@@ -281,8 +281,24 @@ def _generate_listing_data(
     # 价格（从1688价格推算，使用 Nuotao 定价策略）
     # 策略：采购价(CNY) / 汇率 × 倍数 = 美元售价
     # 默认汇率 7.2，默认倍数 6.0（保证全成本利润率 > 60%）
-    PRICE_MARKUP_MULTIPLIER = float(_safe_get(product_info, "price_markup", "6.0"))
-    USD_CNY_RATE = float(_safe_get(product_info, "usd_cny_rate", "7.2"))
+    def _safe_float(raw: Any, fallback: float, label: str) -> float:
+        """定价参数来自前端输入框，非法值不能让 Step 5 崩掉（上架链会整条中断）。"""
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            logger.warning("Illegal %s=%r, falling back to %s", label, raw, fallback)
+            return fallback
+        if value <= 0:
+            logger.warning("Non-positive %s=%s, falling back to %s", label, value, fallback)
+            return fallback
+        return value
+
+    PRICE_MARKUP_MULTIPLIER = _safe_float(
+        _safe_get(product_info, "price_markup", "6.0"), 6.0, "price_markup"
+    )
+    USD_CNY_RATE = _safe_float(
+        _safe_get(product_info, "usd_cny_rate", "7.2"), 7.2, "usd_cny_rate"
+    )
 
     price_str = _safe_get(product_info, "price", "")
     regular_price = ""
