@@ -932,6 +932,7 @@ async def run_pipeline(
         if source_url or source_offer_id:
             from sqlalchemy import select as sa_select
             from app.models.product import Product as ProductModel
+            from app.core.workspace import DEFAULT_WORKSPACE_ID
             existing = await session.execute(
                 sa_select(ProductModel).where(
                     ProductModel.workspace_id == (workspace_id or DEFAULT_WORKSPACE_ID),
