@@ -101,6 +101,8 @@ export default function ProductPipeline() {
   // 单 SKU 简单商品，且后端无法按来源键回查补数。这里保留原始导入结果，
   // 运行载荷以它为基础、表单值为覆盖。
   const [importedProductInfo, setImportedProductInfo] = useState<Record<string, any> | null>(null)
+  // BUG-25: 导入失败的持久化提示（toast 会消失，长任务需要可回看的失败原因）
+  const [importError, setImportError] = useState<string | null>(null)
   // 智能定价参数
   const [priceMarkup, setPriceMarkup] = useState(6.0)
   const [usdCnyRate, setUsdCnyRate] = useState(7.2)
@@ -321,6 +323,7 @@ export default function ProductPipeline() {
 
     try {
       setImportLoading(true)
+      setImportError(null)
       // Step 1: 提交后台任务
       const submitted = await api.createImportFrom1688Job({
         url_or_id: importUrl.trim(),
@@ -378,9 +381,16 @@ export default function ProductPipeline() {
       message.destroy('import1688')
 
       if (!completedData) {
-        message.error(`导入失败：${completedError || '任务超时'}`)
+        // BUG-25: 导入是 1-5 分钟的长任务，失败后原先只弹一条 3 秒的 toast，
+        // 用户回头再看页面时毫无痕迹，无法判断究竟发生了什么（本轮真机验证中
+        // 就出现过「按钮复位、表单空白、页面像没动过」的困惑）。
+        // 改为同时落一个持久化的错误态，直到下一次导入或手动关闭。
+        const reason = completedError || '任务超时'
+        setImportError(reason)
+        message.error(`导入失败：${reason}`, 10)
         return
       }
+      setImportError(null)
 
       // Step 3: 填充表单
       const productInfo = completedData.product_info
@@ -420,6 +430,7 @@ export default function ProductPipeline() {
       // pipeline_error（例如「同一链接禁止重复上架」），前端此前完全忽略，
       // 运营只看到表单被填好、进度区空白，无法判断发生了什么。必须显式提示。
       if (completedData.pipeline_error) {
+        setImportError(`商品已导入，但自动运行管线失败：${completedData.pipeline_error}`)
         message.error({
           content: `商品已导入，但自动运行管线失败：${completedData.pipeline_error}`,
           duration: 10,
@@ -430,6 +441,7 @@ export default function ProductPipeline() {
     } catch (e: any) {
       console.error('Import from 1688 error:', e)
       message.destroy('import1688')
+      setImportError(e.message || '网络错误')
       message.error(`导入失败：${e.message || '网络错误'}`)
     } finally {
       setImportLoading(false)
@@ -788,6 +800,18 @@ export default function ProductPipeline() {
                     自动获取商品名称/价格/描述/图片/属性，转换为工作流输入格式。异步执行，约1-2分钟
                   </Text>
                 </div>
+                {/* BUG-25: 导入失败原因持久展示，长任务失败后仍可回看 */}
+                {importError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    closable
+                    onClose={() => setImportError(null)}
+                    message="1688 导入未完成"
+                    description={importError}
+                    style={{ marginTop: '8px' }}
+                  />
+                )}
               </div>
 
               <Form form={form} layout="vertical" size="small">
