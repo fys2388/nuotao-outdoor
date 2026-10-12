@@ -346,23 +346,52 @@ def list_to_woocommerce(
 
     try:
         base_url = f"{WC_URL}/wp-json/wc/v3/products"
-        data = {
-            "name": product["name"],
-            "type": "simple",
-            "regular_price": str(product.get("regular_price", "")),
-            "description": product.get("description", ""),
-            "short_description": product.get("short_description", ""),
-            "sku": product.get("sku", ""),
-            "manage_stock": True,
-            "stock_quantity": product.get("stock_quantity", 0),
-            "status": status,
-            "categories": product.get("categories", [{"id": 15}]),
-            "tags": product.get("tags", []),
-        }
-        if product.get("sale_price"):
-            data["sale_price"] = str(product["sale_price"])
-        if product.get("images"):
-            data["images"] = _normalize_wc_images(product["images"])
+        
+        # 检查是否有 SKU 变体（用于变量产品）
+        variations = product.get("variations", [])
+        is_variable = len(variations) > 1
+        
+        if is_variable:
+            # 变量产品
+            data = {
+                "name": product["name"],
+                "type": "variable",
+                "description": product.get("description", ""),
+                "short_description": product.get("short_description", ""),
+                "status": status,
+                "categories": product.get("categories", [{"id": 15}]),
+                "tags": product.get("tags", []),
+                "attributes": [
+                    {
+                        "name": "颜色",
+                        "position": 0,
+                        "visible": True,
+                        "variation": True,
+                        "options": list(set([v["name"] for v in variations if v.get("name")]))
+                    }
+                ],
+            }
+            if product.get("images"):
+                data["images"] = _normalize_wc_images(product["images"])
+        else:
+            # 简单产品
+            data = {
+                "name": product["name"],
+                "type": "simple",
+                "regular_price": str(product.get("regular_price", "")),
+                "description": product.get("description", ""),
+                "short_description": product.get("short_description", ""),
+                "sku": product.get("sku", ""),
+                "manage_stock": True,
+                "stock_quantity": product.get("stock_quantity", 0),
+                "status": status,
+                "categories": product.get("categories", [{"id": 15}]),
+                "tags": product.get("tags", []),
+            }
+            if product.get("sale_price"):
+                data["sale_price"] = str(product["sale_price"])
+            if product.get("images"):
+                data["images"] = _normalize_wc_images(product["images"])
 
         # 幂等：先按 SKU 反查 WooCommerce 是否已经有这个商品。
         # 原实现无条件 POST —— 同一个 SKU 会被 WooCommerce 以 product_invalid_sku
@@ -444,6 +473,39 @@ def list_to_woocommerce(
                     _time.sleep(delay)
 
         if result is not None:
+            # 如果是变量产品，创建变体
+            if is_variable and result.get("id"):
+                wc_product_id = result.get("id")
+                for i, var in enumerate(variations):
+                    try:
+                        variation_data = {
+                            "sku": var.get("sku", f"{product.get('sku', 'SKU')}-{i+1}"),
+                            "regular_price": var.get("price", ""),
+                            "manage_stock": True,
+                            "stock_quantity": var.get("stock_quantity", 100),
+                            "status": "publish",
+                        }
+                        # 添加属性（颜色/规格）
+                        if var.get("name"):
+                            variation_data["attributes"] = [
+                                {
+                                    "name": "颜色",
+                                    "option": var.get("name", "")
+                                }
+                            ]
+                        
+                        var_url = f"{base_url}/{wc_product_id}/variations"
+                        var_resp = requests.post(
+                            var_url,
+                            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                            json=variation_data,
+                            timeout=30,
+                        )
+                        var_resp.raise_for_status()
+                        logger.info("Created variation %d/%d for WC product %d", i+1, len(variations), wc_product_id)
+                    except Exception as e:
+                        logger.warning("Failed to create variation %d: %s", i+1, str(e))
+            
             return {
                 "success": True,
                 "sku": product.get("sku"),
@@ -452,8 +514,8 @@ def list_to_woocommerce(
                 "status": result.get("status"),
                 "permalink": result.get("permalink"),
                 "attempts": attempts,
-                # 调用方据此区分「新建了商品」还是「更新了已有商品」。
                 "action": "update" if existing_wc_id else "create",
+                "variations_count": len(variations) if is_variable else 0,
             }
         logger.error(
             "WooCommerce listing exhausted %d attempts for %s: %s",

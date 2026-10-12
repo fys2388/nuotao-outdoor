@@ -1962,14 +1962,33 @@ def convert_1688_to_pipeline_input(
     # 提取商品名称
     name = product.get("subject", product.get("title", "未命名商品"))
 
-    # 提取价格（优先保留完整价格区间）
+    # 提取价格（优先从 SKU 列表获取太阳能/充电款价格）
     # 价格：只保留纯数值。1688 常返回 "¥20" 或 "6.7-19.7" 区间字符串，
-    # 直接带入 number 输入框会造成解析失败；区间取最高价（太阳能/充电款配置）。
+    # 直接带入 number 输入框会造成解析失败；优先取太阳能/充电款价格。
     raw_price = str(product.get("price", "")).strip()
-    if not raw_price:
+    
+    # 从 SKU 列表提取太阳能/充电款价格（最高价）
+    sku_info = product.get("sku_list") or product.get("skuInfos") or []
+    solar_sku_price = 0.0
+    if isinstance(sku_info, list) and sku_info:
+        for s in sku_info:
+            if isinstance(s, dict):
+                sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
+                is_solar = any(kw in sku_name for kw in ["太阳能", "充电", "solar", "charging", "USB"])
+                try:
+                    sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))
+                    if is_solar and sku_price > solar_sku_price:
+                        solar_sku_price = sku_price
+                except (ValueError, TypeError):
+                    pass
+    
+    # 如果找到太阳能 SKU 价格，使用它
+    if solar_sku_price > 0:
+        raw_price = str(solar_sku_price)
+    elif not raw_price:
+        # Fallback to price_range max price
         price_info = product.get("price_range") or product.get("priceRange") or []
         if isinstance(price_info, list) and price_info:
-            # 取最高价格（太阳能/充电款配置），而不是最低价格
             max_price = 0.0
             for p in price_info:
                 p_val = p.get("price", 0) if isinstance(p, dict) else p
@@ -1982,7 +2001,6 @@ def convert_1688_to_pipeline_input(
             if max_price > 0:
                 raw_price = str(max_price)
             else:
-                # Fallback to first price
                 first_price = price_info[0]
                 raw_price = (
                     str(first_price.get("price", ""))
@@ -2118,8 +2136,26 @@ def convert_1688_to_pipeline_input(
     else:
         sku = ""
 
-    # 如果没有 SKUsku:
+    # 如果没有 SKU，生成一个
+    if not sku:
         sku = _generate_sku(name)
+
+    # 提取所有 SKU 变体（用于 WooCommerce 变量产品）
+    variations = []
+    if isinstance(sku_info, list) and sku_info:
+        for s in sku_info:
+            if isinstance(s, dict):
+                sku_name = str(s.get("skuName", "") or s.get("name", "") or "")
+                try:
+                    sku_price = float(str(s.get("price", 0) or s.get("skuPrice", 0) or 0).replace("¥", "").replace(",", ""))
+                except (ValueError, TypeError):
+                    sku_price = 0.0
+                variations.append({
+                    "sku": s.get("skuCode", s.get("skuId", "")),
+                    "name": sku_name,
+                    "price": str(sku_price) if sku_price > 0 else "",
+                    "stock_quantity": s.get("stock", 100),
+                })
 
     return {
         "name": name,
@@ -2142,6 +2178,7 @@ def convert_1688_to_pipeline_input(
             "company_name": product.get("company_name", ""),
             "login_id": product.get("supplier_login_id", ""),
         },
+        "variations": variations,  # 所有 SKU 变体（用于变量产品）
     }
 
 
