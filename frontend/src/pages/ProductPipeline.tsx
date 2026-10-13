@@ -626,8 +626,18 @@ export default function ProductPipeline() {
       const jobId = data.data.job_id
       message.loading({ content: '正在推送到WooCommerce...', key: progressKey, duration: 0 })
 
-      // 轮询任务状态
+      // 轮询任务状态（2s 间隔，3 分钟超时）
+      let pollCount = 0
       const pollInterval = setInterval(async () => {
+        pollCount++
+        if (pollCount > 90) { // 3 分钟 = 90 * 2s
+          clearInterval(pollInterval)
+          message.destroy(progressKey)
+          message.warning('推送超时，请刷新页面查看结果')
+          setListingModalOpen(false)
+          setListingLoading(false)
+          return
+        }
         try {
           const pollResp = await fetch(`/api/v1/product-pipeline/confirm-list-async/${jobId}`, {
             headers: confirmHeaders,
@@ -641,7 +651,7 @@ export default function ProductPipeline() {
             if (resultData?.success) {
               const wcId = resultData?.woocommerce_id || '—'
               const sku = resultData?.sku || pipelineResult.data?.steps?.listing_data?.data?.sku || ''
-              message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`)
+              message.success(`✅ 上架成功！WC产品ID: ${wcId}，SKU: ${sku}`, 5)
               setListingModalOpen(false)
               setPipelineResult(prev => prev ? {
                 ...prev,
@@ -653,30 +663,24 @@ export default function ProductPipeline() {
                   }
                 }
               } : null)
-              setTimeout(() => { navigate('/products/listing') }, 2000)
             } else {
-              message.error(resultData?.error || '上架失败')
+              message.error(resultData?.error || '上架失败', 5)
+              setListingModalOpen(false)
             }
             setListingLoading(false)
           } else if (pollData.success && pollData.data?.status === 'failed') {
             clearInterval(pollInterval)
             message.destroy(progressKey)
-            message.error(pollData.data?.error || '上架任务失败')
+            message.error(pollData.data?.error || '上架任务失败', 5)
+            setListingModalOpen(false)
             setListingLoading(false)
           }
           // pending/running: continue polling
         } catch (e: any) {
           console.error('Poll error:', e)
+          // 网络错误时继续轮询，不中断
         }
-      }, 3000)
-
-      // 设置最大轮询时间（5分钟）
-      const maxPollTime = setTimeout(() => {
-        clearInterval(pollInterval)
-        message.destroy(progressKey)
-        message.error('上架任务超时，请稍后在商品列表查看')
-        setListingLoading(false)
-      }, 300000)
+      }, 2000)
 
     } catch (e: any) {
       message.destroy(progressKey)

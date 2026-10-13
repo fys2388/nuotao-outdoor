@@ -573,8 +573,10 @@ async def _english_localize_listing_data(listing_data: dict[str, Any]) -> dict[s
             brand_rule = (
                 f'The store\'s own brand is EXACTLY "{house_brand}". '
                 "Use this exact brand name and no other. Never invent, transliterate or "
-                "anglicize an additional brand. When you refer to the product inside the "
-                "description, use exactly the same product name as the 'name' value you return. "
+                "anglicize an additional brand. Do NOT add 'outdoor', 'gear', or any other "
+                "suffix to the brand name — it is just the brand, nothing more. "
+                "When you refer to the product inside the description, use exactly the same "
+                "product name as the 'name' value you return. "
             )
         else:
             brand_rule = (
