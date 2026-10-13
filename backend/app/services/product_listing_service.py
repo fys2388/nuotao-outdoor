@@ -154,6 +154,95 @@ def _looks_like_brand_error(error_detail: str) -> bool:
     return "brand" in text
 
 
+def _assign_wc_brand(
+    wc_product_id: int,
+    brand_names: list[str],
+    base_url: str,
+) -> list[int]:
+    """查找/创建 WC 品牌分类法条目，并绑定到指定商品。
+
+    WC 9.4+ 提供 /products/brands 端点（taxonomy=product_brand）。
+    本函数按品牌名逐个查找，找不到则创建，最后用 PATCH 批量绑定到商品。
+    全程 try/except，失败不影响上架成功。
+
+    Returns:
+        成功绑定的品牌 ID 列表（可能为空）。
+    """
+    brand_ids: list[int] = []
+    brands_url = f"{base_url}/brands"
+
+    for brand_name in brand_names:
+        try:
+            # 1) 按名称查找已有品牌
+            lookup_resp = requests.get(
+                brands_url,
+                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                params={"search": brand_name, "per_page": 1},
+                timeout=15,
+            )
+            existing_id: int | None = None
+            if lookup_resp.status_code == 200:
+                for b in lookup_resp.json():
+                    if str(b.get("name", "")).lower() == brand_name.lower():
+                        existing_id = b.get("id")
+                        break
+
+            if existing_id:
+                brand_ids.append(existing_id)
+                continue
+
+            # 2) 未找到则创建
+            create_resp = requests.post(
+                brands_url,
+                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                json={"name": brand_name},
+                timeout=15,
+            )
+            if create_resp.status_code in (200, 201):
+                new_id = create_resp.json().get("id")
+                if new_id:
+                    brand_ids.append(new_id)
+                    logger.info("Created WC brand %r (id=%s)", brand_name, new_id)
+            else:
+                logger.warning(
+                    "Failed to create WC brand %r: HTTP %d %s",
+                    brand_name, create_resp.status_code,
+                    (create_resp.text or "")[:200],
+                )
+        except Exception as e:
+            logger.warning("Brand lookup/create failed for %r: %s", brand_name, e)
+
+    # 3) 绑定到商品（PATCH products/{id} 的 brands 字段）
+    if brand_ids:
+        try:
+            patch_resp = requests.patch(
+                f"{base_url}/{wc_product_id}",
+                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                json={"brands": brand_ids},
+                timeout=15,
+            )
+            if patch_resp.status_code == 200:
+                logger.info(
+                    "Assigned brands %s to WC product %s",
+                    brand_ids, wc_product_id,
+                )
+            else:
+                logger.warning(
+                    "Failed to assign brands to WC product %s: HTTP %d %s",
+                    wc_product_id, patch_resp.status_code,
+                    (patch_resp.text or "")[:200],
+                )
+                brand_ids = []
+        except Exception as e:
+            logger.warning(
+                "Brand assignment PATCH failed for WC product %s: %s",
+                wc_product_id, e,
+            )
+            brand_ids = []
+
+    return brand_ids
+
+
 def map_category_to_wc(product_name: str = "", internal_category: str = "") -> list[dict[str, int]]:
     """按商品名 + 内部类目关键词映射到 WooCommerce 分类 term id。
 
@@ -465,12 +554,11 @@ def list_to_woocommerce(
             if product.get("images"):
                 data["images"] = _normalize_wc_images(product["images"])
 
-        # 自有品牌（product_brand 分类法）。WC 9.4+ 的 products 端点支持 brands 字段，
-        # 但老版本不认识该参数。品牌是营销资产而非可售性前提，因此这里按「尽力而为」
-        # 处理：一旦 WC 因 brands 报错，去掉该字段重试一次，绝不让品牌问题阻断上架。
-        brand_names = _resolve_brand_names(product)
-        if brand_names:
-            data["brands"] = [{"name": b} for b in brand_names]
+        # 自有品牌（product_brand 分类法）。WC 9.4+ 的 products 端点接受 brands 为
+        # 整数 ID 数组，不支持 [{name:...}]。此处不随父商品一起推送 brands，避免
+        # 格式不匹配导致 WC 部分处理请求（实测 brands 格式错误时变体创建被跳过）。
+        # 改为在父商品+变体全部就绪后，用独立的 brands 端点查找/创建品牌并绑定。
+        # 品牌是营销资产而非可售性前提，此步骤失败不影响上架成功。
 
         # 幂等：先按 SKU 反查 WooCommerce 是否已经有这个商品。
         # 原实现无条件 POST —— 同一个 SKU 会被 WooCommerce 以 product_invalid_sku
@@ -521,31 +609,6 @@ def list_to_woocommerce(
                 # 400/422 属于业务错，重试不会成功；429/5xx 才重试
                 status_code = e.response.status_code if e.response is not None else 0
                 if status_code in (400, 422):
-                    # 品牌字段被拒时降级：去掉 brands 重试一次，上架不因品牌失败。
-                    if "brands" in data and _looks_like_brand_error(error_detail):
-                        logger.warning(
-                            "WooCommerce rejected brands field for %s (%s); "
-                            "retrying without brand",
-                            product.get("sku"), error_detail,
-                        )
-                        data.pop("brands", None)
-                        try:
-                            resp = requests.request(
-                                http_method,
-                                url,
-                                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-                                json=data,
-                                timeout=120,
-                            )
-                            resp.raise_for_status()
-                            result = resp.json()
-                            brand_names = []
-                            break
-                        except requests.exceptions.RequestException as brand_retry_err:
-                            logger.error(
-                                "WooCommerce retry without brand also failed for %s: %s",
-                                product.get("sku"), brand_retry_err,
-                            )
                     logger.error(
                         "WooCommerce listing rejected (non-retryable %d) for %s: %s",
                         status_code, product.get("sku"), error_detail,
@@ -678,6 +741,21 @@ def list_to_woocommerce(
                     "variations_failed": variations_failed,
                 }
 
+            # 品牌绑定：在父商品+变体全部就绪后，独立查找/创建品牌并绑定。
+            # 品牌是营销资产而非可售性前提，此步骤失败不影响上架成功。
+            brand_ids: list[int] = []
+            try:
+                brand_names = _resolve_brand_names(product)
+                if brand_names and result.get("id"):
+                    brand_ids = _assign_wc_brand(
+                        result["id"], brand_names, base_url,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Brand assignment skipped for WC product %s: %s",
+                    result.get("id"), e,
+                )
+
             return {
                 "success": True,
                 "sku": product.get("sku"),
@@ -690,6 +768,7 @@ def list_to_woocommerce(
                 "variations_count": len(variations) if is_variable else 0,
                 "variations_created": variations_created,
                 "variations_failed": variations_failed,
+                "brand_ids": brand_ids,
             }
         logger.error(
             "WooCommerce listing exhausted %d attempts for %s: %s",
