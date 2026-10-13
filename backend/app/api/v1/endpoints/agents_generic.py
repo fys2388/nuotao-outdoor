@@ -131,16 +131,15 @@ AGENT_CONFIGS = {
     "ecom-pdp": {
         "agent_id": "ecom_pdp_skill",
         "agent_name": "Ecom PDP Skill",
-        "prompt_name": "ECOM_PDP_SKILL_V1",
+        "prompt_name": "AGENT_ECOM_PDP_SKILL",
         "task_type": "ecom_pdp",
         "trigger": "api:ecom-pdp:analyze",
         "system_instruction": (
-            "You are the Nuotao Outdoor Ecom PDP Skill Agent, based on the LobeHub "
-            "coolqoo-1click-ecom-detailpage skill. Your task: Build high-converting "
-            "cross-border ecommerce Product Detail Pages (PDP), hero images, product "
-            "image stacks, and AI image prompts. Follow the workflow in the prompt "
-            "and respond with structured markdown output. All copy in US English unless "
-            "localization is requested."
+            "Analyze the product context data provided in the prompt and respond with ONLY a "
+            "valid JSON object containing: conversion_driver, buyer_reason_card, english_baseline, "
+            "localization_notes, offer_cta_architecture, campaign_style_lock, hero_image_sequence, "
+            "pdp_detail_image_sequence, image_prompts, assumptions_defaults, test_priorities, "
+            "self_review_scorecard. Follow the workflow and output format specified in the prompt."
         ),
     },
 }
