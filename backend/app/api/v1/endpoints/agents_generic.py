@@ -128,6 +128,21 @@ AGENT_CONFIGS = {
             "asset requirements, visual style guidelines, and cost estimates."
         ),
     },
+    "ecom-pdp": {
+        "agent_id": "ecom_pdp_skill",
+        "agent_name": "Ecom PDP Skill",
+        "prompt_name": "ECOM_PDP_SKILL_V1",
+        "task_type": "ecom_pdp",
+        "trigger": "api:ecom-pdp:analyze",
+        "system_instruction": (
+            "You are the Nuotao Outdoor Ecom PDP Skill Agent, based on the LobeHub "
+            "coolqoo-1click-ecom-detailpage skill. Your task: Build high-converting "
+            "cross-border ecommerce Product Detail Pages (PDP), hero images, product "
+            "image stacks, and AI image prompts. Follow the workflow in the prompt "
+            "and respond with structured markdown output. All copy in US English unless "
+            "localization is requested."
+        ),
+    },
 }
 
 
@@ -240,6 +255,20 @@ async def analyze_creative(
 ) -> GenericAgentResponse:
     """Analyze product context and generate creative strategy/asset recommendations."""
     return await _run_agent("creative-agent", body, db, workspace_id)
+
+
+@router.post(
+    "/ecom-pdp/analyze",
+    response_model=GenericAgentResponse,
+    summary="Run the Ecom PDP Skill (conversion optimization + image prompts)",
+)
+async def analyze_ecom_pdp(
+    body: GenericAgentRequest,
+    db: DbSession,
+    workspace_id: WorkspaceId,
+) -> GenericAgentResponse:
+    """Analyze product context and generate PDP conversion strategy, image stack, and AI image prompts."""
+    return await _run_agent("ecom-pdp", body, db, workspace_id)
 
 
 @router.post(

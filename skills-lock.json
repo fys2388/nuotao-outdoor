@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skills": {
+    "amazon-product-research": {
+      "source": "nexscope-ai/amazon-skills",
+      "sourceType": "github",
+      "skillPath": "amazon-product-research/SKILL.md",
+      "computedHash": "78f5372b5ee5040d014256f9c39af8e71dce3271140da221ce12adf842fd71ad"
+    },
+    "ecom-pdp": {
+      "source": "coolqoo/1click-ecom-detailpage",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "09d4fd685aaa3aeda1fcb61160bd6104ecd9319c",
+      "promptName": "ECOM_PDP_SKILL_V1",
+      "registered_at": "2026-10-13T08:12:01Z"
+    }
+  }
+}
