@@ -150,7 +150,7 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
     },
 }
 
-# Fallback chain: Agnes AI (primary) -> Seedream 5.0 pro -> 5.0 lite -> 4.5 -> 4.0 -> qwen-image.
+# Fallback chain: Agnes AI (primary) -> Seedream 5.0 -> 4.5 -> 4.0 -> qwen-image.
 #
 # Agnes AI is the PRIMARY provider for both main and detail images.
 # Fallbacks are used only when Agnes AI fails (API key missing, rate limit, etc.)
@@ -160,9 +160,13 @@ BACKEND_PRICING: dict[str, dict[str, Any]] = {
 # fails, ``generate_image`` raises ``ImageGenError`` so the caller sees a real
 # failure instead of an SVG that looks like a success. Tests that need a
 # placeholder must opt in explicitly with ``model="mock"``.
+#
+# NOTE: 5.0-pro was removed from the fallback chain (2026-10-13) because the
+# current VOLCENGINE_API_KEY does not have access to that model — every 5.0-pro
+# attempt 403s and burns a retry slot before landing on 4.0. Re-add it after
+# the key is upgraded or a dedicated ARK endpoint is configured.
 FALLBACK_CHAIN: list[str] = [
     "agnes-image-2.5-flash",
-    "doubao-seedream-5-0-pro-260628",
     "doubao-seedream-5-0-260128",
     "doubao-seedream-4-5-251128",
     "doubao-seedream-4-0-250828",
@@ -324,6 +328,7 @@ async def _dispatch_to_backend(
             width=width,
             height=height,
             negative_prompt=negative_prompt,
+            reference_image=reference_image,
             timeout_seconds=timeout_seconds,
         )
 
@@ -582,6 +587,7 @@ async def _generate_volcengine(
     width: int,
     height: int,
     negative_prompt: str | None,
+    reference_image: str | None,
     timeout_seconds: float,
 ) -> ImageGenResult:
     """Volcengine Ark image generation adapter (Seedream models).
@@ -589,6 +595,10 @@ async def _generate_volcengine(
     Supports two calling modes:
     1. Direct model name (e.g. doubao-seedream-4.0) — no endpoint setup needed.
     2. Inference endpoint ID (VOLCENGINE_ARK_ENDPOINT) — for custom deployments.
+
+    I2I: When ``reference_image`` is provided (URL or data URI), the image is
+    passed to the volcengine API via the ``image`` field for image-to-image
+    generation (product reproduction).
 
     Requires ``VOLCENGINE_API_KEY`` env var (via Settings).
     """
@@ -613,6 +623,9 @@ async def _generate_volcengine(
     }
     if negative_prompt:
         payload["negative_prompt"] = negative_prompt
+    if reference_image:
+        # I2I: pass reference image URL or data:image/...;base64,<b64>
+        payload["image"] = reference_image
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
