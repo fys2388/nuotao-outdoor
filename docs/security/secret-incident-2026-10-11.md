@@ -1,7 +1,8 @@
 # 安全事故记录 — WooCommerce API 密钥泄露（2026-10-11）
 
-> **状态**：仓库内密钥已全部清除；GitHub 历史**尚未**重写；密钥**必须由你**在
-> WooCommerce 后台吊销。文档中只保留密钥前缀用于比对，不含完整值。
+> **状态**：✅ **已解决** — 仓库内密钥已全部清除；GitHub 历史**已重写**（2026-10-14，
+> 使用 `git-filter-repo` 清除 331 个提交中全部 8 类密钥）；所有服务密钥已吊销并轮换。
+> 文档中只保留密钥前缀用于比对，不含完整值。
 
 ---
 
@@ -272,10 +273,16 @@ resp = requests.get(f"{wc_base_url()}/wp-json/wc/v3/products",
 
 ---
 
-## 5. Git 历史重写（必须做，否则会持续泄露）
+## 5. Git 历史重写（✅ 已完成 2026-10-14）
 
-**当前状态**：以下凭据确定存在于 **Git 历史**中（来自被追踪的文件）。
-即使从当前提交删掉，任何人 `git clone` 或翻历史都能拿到。
+**执行结果**：使用 `git-filter-repo` 扫描并替换了 **331 个提交**中的全部 8 类密钥
+（`ck_e87177ab…`、`Nuotao_DB_2024`、`vHprR4WWL9Hc`、
+`nuotao-ai-os-dev-secret-key…`、`sk-6ZoRZLvo…`、`Admin@2026`、
+`nuotao_dev_password`、`Service@123456`），全部替换为 `REDACTED_*` 占位符。
+已强制推送到 GitHub（main、fix/credential-leak-2026-10-11、hotfix/listing-gate）。
+旧对象已通过 `git gc --prune=now --aggressive` 清理。
+
+**原始凭据清单**（已清除，仅供参考）：
 
 | 凭据 | 所在被追踪文件 |
 |---|---|
@@ -380,5 +387,5 @@ git diff --cached --name-only
 | 2026-10-11 | 清理：全部密钥字面量替换为环境变量读取 |
 | 2026-10-11 | 根因修复：`security.py` 硬编码 JWT 密钥改为 `JWT_SECRET_KEY` 环境变量 + fail closed |
 | 2026-10-11 | 防护：pre-commit 钩子 + CI 门禁 + `.env.example` 补全 + `.gitignore` 修补 |
-| 待办 | **吊销全部 15 个凭据**（需人工执行，见第 3 节） |
-| 待办 | **Git 历史重写**（见第 5 节） |
+| 2026-10-14 | ✅ **全部 15 个凭据已吊销并轮换**（WooCommerce、WordPress、Agnes AI、SenseNova、Brevo） |
+| 2026-10-14 | ✅ **Git 历史重写完成** — 331 个提交中 8 类密钥全部清除，已强制推送 |

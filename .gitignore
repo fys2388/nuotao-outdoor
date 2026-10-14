@@ -8,6 +8,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.git-rewrite/
 
 # Env & secrets
 .env
@@ -82,6 +83,8 @@ backend/app/data/
 *secret*.txt
 secrets.txt
 bfg-*.jar
+bfg-replace*.txt
+scripts/security/bfg-*.txt
 brevo-smtp-key*.txt
 webhook_secret.txt
 *.pem
