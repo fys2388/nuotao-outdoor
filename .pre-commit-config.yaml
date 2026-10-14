@@ -55,14 +55,14 @@ repos:
         pass_filenames: true
         stages: [commit]
 
-      # ------------------------------------------------------------------
-      # Python hygiene (AGENTS.md §2.1: ruff)
-      # ------------------------------------------------------------------
-      - repo: https://github.com/astral-sh/ruff-pre-commit
-        rev: v0.8.4
-        hooks:
-          - id: ruff
-            args: [--fix]
-          - id: ruff-format
+  # ------------------------------------------------------------------
+  # Python hygiene (AGENTS.md §2.1: ruff)
+  # ------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
 
   # Markdown lint is optional; kept lightweight on purpose.
