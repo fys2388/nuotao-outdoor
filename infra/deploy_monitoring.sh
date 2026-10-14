@@ -106,7 +106,9 @@ domain = nuotaooutdoor.com
 
 [security]
 admin_user = admin
-admin_password = NUOTA0_GRAFANA_ADMIN_PASSWORD
+# 2026-10-11: was hardcoded as NUOTA0_GRAFANA_ADMIN_PASSWORD (note the missing $).
+# Read it from the environment instead - never ship a real password in a script.
+admin_password = ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is not set}
 
 [users]
 default_allow_sign_up = false

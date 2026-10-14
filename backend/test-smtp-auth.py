@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 smtp_host = 'smtp-relay.brevo.com'
 smtp_port = 587
-smtp_key = 'xsmtpsib-37c4ce6ebce648e87df9516995a5738fc96718422fb31d504af5983966eaf115-03TB3w'
+smtp_key = os.getenv("BREVO_SMTP_KEY", "")
+if not smtp_key:
+    raise SystemExit("BREVO_SMTP_KEY 未设置：请写入 backend/.env（参见 .env.example），禁止硬编码 SMTP 密钥")
 from_email = 'noreply@nuotaooutdoor.com'
 to_email = 'fys2388@gmail.com'
 

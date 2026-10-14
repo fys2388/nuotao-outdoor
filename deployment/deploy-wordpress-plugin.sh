@@ -14,8 +14,8 @@ echo "=========================================="
 echo ""
 
 # 配置变量
-WP_USERNAME="fys2388@gmail.com"
-WP_APP_PASSWORD="Nh7c PVfF G029 gORK 39BE ozBr"
+WP_USERNAME="${WP_USERNAME:?缺少 WP_USERNAME（WP Admin → Users → Profile → Application Passwords）}"
+WP_APP_PASSWORD="${WP_APP_PASSWORD:?缺少 WP_APP_PASSWORD}"
 WP_SITE_URL="https://nuotaooutdoor.com"
 PLUGIN_FILE="wp-plugin-register-seo-meta.zip"
 UPLOAD_URL="${WP_SITE_URL}/wp-content/uploads/2026/10/wp-plugin-register-seo-meta.zip"

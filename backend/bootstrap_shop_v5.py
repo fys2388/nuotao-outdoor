@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """第 3 批上架：6 图上传 + 6 商品创建（nuotaooutdoor.com）"""
-import base64, json, os, requests
+import base64, json, os, sys, requests
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from wc_env import wc_base_url, wp_application_password, wp_username
 
-USER = "fys2388@gmail.com"
-APP_PW = "7g7r yV5N GeUs x7Cu EljL NPjf"
-BASE = "https://nuotaooutdoor.com"
+USER = wp_username()
+APP_PW = wp_application_password()
+BASE = wc_base_url()
 AUTH = base64.b64encode(f"{USER}:{APP_PW}".encode()).decode()
 
 # 根目录 .env consumer key（wc/v3 写权限）

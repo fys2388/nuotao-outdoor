@@ -36,7 +36,10 @@ datasources:
     database: nuotao
     user: nuotao
     secureJsonData:
-      password: REDACTED_DB_PASSWORD
+      # 2026-10-11 incident: the DB password was hardcoded here and this file
+      # lives in infra/ which is NOT gitignored. Provide it at deploy time:
+      #   sed "s|__DB_PASSWORD__|<real>|" datasources.yml > /etc/grafana/provisioning/datasources/datasources.yml
+      password: __DB_PASSWORD__
     editable: true
     jsonData:
       sslmode: disable

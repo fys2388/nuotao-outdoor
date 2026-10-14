@@ -82,7 +82,7 @@ import asyncio, os, sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, "/opt/nuotao/backend")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://nuotao:s2o7bdFwAXB2DoaqIhpdakiSJTAj3U09@localhost:5432/nuotao")
+os.environ.setdefault("DATABASE_URL", os.environ.get("DATABASE_URL", "postgresql+asyncpg://nuotao:REDACTED_DEFAULT_DB@localhost:5432/nuotao"))
 
 from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine

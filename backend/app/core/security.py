@@ -11,13 +11,33 @@ from typing import Any
 import jwt
 from passlib.context import CryptContext
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 # 密码哈希上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# JWT 配置（从环境变量读取，有默认值）
-SECRET_KEY = "REDACTED_JWT_SECRET"
+# JWT 配置。
+# 2026-10-11 事故：此处曾硬编码一个开发用密钥并提交到公开仓库，任何人都能用它
+# 伪造管理员 access/refresh token。密钥一律来自 .env 的 JWT_SECRET_KEY，
+# 任何环境未配置都直接报错（fail closed）——不再保留仓库内默认值，
+# 避免同一个字符串继续出现在公开代码里。
+# 生成密钥：python -c "import secrets; print(secrets.token_urlsafe(64))"
+_settings = get_settings()
+
+
+def _resolve_secret_key() -> str:
+    key = (_settings.jwt_secret_key or "").strip()
+    if not key:
+        raise RuntimeError(
+            "JWT_SECRET_KEY 未配置：请在 .env 中设置（参见 .env.example）。\n"
+            "生成方式：python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+        )
+    return key
+
+
+SECRET_KEY = _resolve_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 小时
 REFRESH_TOKEN_EXPIRE_DAYS = 7

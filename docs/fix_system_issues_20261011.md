@@ -143,7 +143,7 @@ async def update_wordpress_seo(request: WordPressSEOUpdateRequest):
 
 **环境变量配置**: ✅ 已配置
 - `WP_USERNAME=fys2388@gmail.com`
-- `WP_APP_PASSWORD=Nh7c PVfF G029 gORK 39BE ozBr`
+- `WP_APP_PASSWORD=<从环境变量读取，禁止写入文档>`
 - `WP_SITE_URL=https://nuotaooutdoor.com`
 
 **部署**: ✅ 代码已部署到生产服务器

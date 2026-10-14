@@ -6,9 +6,12 @@ Agnes AI API 验证测试
 
 import asyncio
 import httpx
+import os
 import sys
 
-API_KEY = "REDACTED_AGNEAI_KEY"
+API_KEY = os.getenv("AGNES_API_KEY", "")
+if not API_KEY:
+    raise SystemExit("AGNES_API_KEY 未设置：请写入 backend/.env（参见 .env.example），禁止硬编码")
 BASE_URL = "https://apihub.agnes-ai.com/v1"
 MODEL = "agnes-2.5-flash"
 

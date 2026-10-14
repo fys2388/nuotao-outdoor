@@ -3,11 +3,14 @@
 import json
 import hmac
 import hashlib
+import os
 import requests
 import time
 
 WEBHOOK_URL = "http://127.0.0.1:8000/api/v1/webhooks/woocommerce"
-WEBHOOK_SECRET = "VSgwAnYjJstBRPiCz67kqcmfu9GrTy84"
+WEBHOOK_SECRET = os.getenv("WOOCOMMERCE_WEBHOOK_SECRET", "")
+if not WEBHOOK_SECRET:
+    raise SystemExit("WOOCOMMERCE_WEBHOOK_SECRET 未设置：请写入 backend/.env（参见 .env.example），禁止硬编码")
 
 # 模拟 WooCommerce 订单数据
 test_order = {

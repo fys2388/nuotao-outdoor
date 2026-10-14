@@ -1,0 +1,68 @@
+# Nuotao AI OS — pre-commit hooks
+#
+# 2026-10-11 incident: 7 classes of credentials (4 WooCommerce API key sets,
+# 2 WordPress application passwords, 1 PostgreSQL password, 1 Brevo SMTP key,
+# 1 Agnes AI image key, and a JWT signing key in the main app code) were found
+# hardcoded across 100+ files. Some of those files were committed to a PUBLIC
+# repository. The secret-scanning hooks below exist so that cannot happen again.
+#
+# Setup (developer machine):
+#   pip install pre-commit
+#   pre-commit install
+#
+# Install gitleaks (GitGuardian's OSS scanner) - https://github.com/gitleaks/gitleaks
+#   Windows:  choco install gitleaks        or  winget install Gitleaks.Gitleaks
+#   macOS:    brew install gitleaks
+#   Linux:    see https://github.com/gitleaks/gitleaks/releases
+#
+# Run manually over the whole repo:
+#   gitleaks detect --source . --verbose
+#
+repos:
+  - repo: local
+    hooks:
+      # ------------------------------------------------------------------
+      # Gitleaks: the same detection engine GitGuardian uses. Blocks any
+      # WooCommerce / Stripe / GitHub / SMTP / private-key material in a commit.
+      # ------------------------------------------------------------------
+      - id: gitleaks
+        name: gitleaks (secret scanning)
+        entry: gitleaks detect --redact --source . --no-git --no-banner --exit-code 1
+        language: system
+        pass_filenames: false
+        stages: [commit]
+
+      # ------------------------------------------------------------------
+      # detect-secrets: second, independent detector. Tolerates a missing
+      # baseline so the hook degrades gracefully on a fresh clone - run
+      # `detect-secrets scan > .secrets.baseline` once after legitimate
+      # key rotation to seed it.
+      # ------------------------------------------------------------------
+      - id: detect-secrets
+        name: detect-secrets (baseline scan)
+        entry: python scripts/security/run_detect_secrets.py
+        language: system
+        pass_filenames: false
+        stages: [commit]
+
+      # ------------------------------------------------------------------
+      # Project-specific: refuse to commit a .env file that is not the template.
+      # ------------------------------------------------------------------
+      - id: no-env-commits
+        name: refuse .env files in commits
+        entry: python scripts/security/check_no_env_in_commit.py
+        language: system
+        pass_filenames: true
+        stages: [commit]
+
+      # ------------------------------------------------------------------
+      # Python hygiene (AGENTS.md §2.1: ruff)
+      # ------------------------------------------------------------------
+      - repo: https://github.com/astral-sh/ruff-pre-commit
+        rev: v0.8.4
+        hooks:
+          - id: ruff
+            args: [--fix]
+          - id: ruff-format
+
+  # Markdown lint is optional; kept lightweight on purpose.

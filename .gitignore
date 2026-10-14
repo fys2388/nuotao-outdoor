@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.venv_nuotao/
 venv/
 .pytest_cache/
 .ruff_cache/
@@ -12,6 +13,10 @@ venv/
 .env
 .env.*
 !.env.example
+# Local E2E env files hold real credentials (2026-10-11 incident) - never commit.
+_*.env
+_local_dev.env
+*.env.local
 
 # Node
 node_modules/
@@ -75,6 +80,8 @@ backend/app/data/
 # 密钥与敏感文件
 *.key
 *secret*.txt
+secrets.txt
+bfg-*.jar
 brevo-smtp-key*.txt
 webhook_secret.txt
 *.pem

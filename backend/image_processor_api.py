@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 1688图片自动处理API服务
 功能：从1688链接提取图片 → 下载 → ImageMagick处理 → 上传WooCommerce
@@ -26,10 +26,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 配置
-WOOCOMMERCE_URL = "https://nuotaooutdoor.com"
-WOOCOMMERCE_CK = "REDACTED_WC_KEY_3"
-WOOCOMMERCE_CS = "REDACTED_WC_SECRET_1"
+# 配置：凭证一律从环境变量 / .env 读取，禁止硬编码（2026-10-11 密钥泄露事故）
+from app.core.config import get_settings as _get_settings
+
+_wc_cfg = _get_settings()
+WOOCOMMERCE_URL = _wc_cfg.woocommerce_base_url.rstrip("/")
+WOOCOMMERCE_CK = _wc_cfg.woocommerce_consumer_key
+WOOCOMMERCE_CS = _wc_cfg.woocommerce_consumer_secret
+if not (WOOCOMMERCE_URL and WOOCOMMERCE_CK and WOOCOMMERCE_CS):
+    raise RuntimeError(
+        "WOOCOMMERCE_BASE_URL / WOOCOMMERCE_CONSUMER_KEY / "
+        "WOOCOMMERCE_CONSUMER_SECRET 未配置：请写入 backend/.env（参见 .env.example）"
+    )
 AUTH = HTTPBasicAuth(WOOCOMMERCE_CK, WOOCOMMERCE_CS)
 
 WORK_DIR = "/tmp/1688-image-processor"

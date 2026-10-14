@@ -64,9 +64,13 @@ ls -la /var/www/html/wp-content/mu-plugins/register-seo-meta.php
 ### 2. 测试 REST API
 
 ```bash
+# 先导出凭证环境变量
+export WP_USERNAME="you@example.com"
+export WP_APP_PASSWORD="xxxx xxxx xxxx xxxx xxxx"   # WP Admin → Users → Profile → Application Passwords
+
 # 获取 SEO 数据
 curl -X GET https://nuotaooutdoor.com/wp-json/nuotao/v1/seo/2372 \
-  -u "fys2388@gmail.com:Nh7c PVfF G029 gORK 39BE ozBr"
+  -u "$WP_USERNAME:$WP_APP_PASSWORD"
 
 # 预期响应:
 # {
@@ -84,7 +88,7 @@ curl -X GET https://nuotaooutdoor.com/wp-json/nuotao/v1/seo/2372 \
 ```bash
 # 更新 SEO 数据
 curl -X POST https://nuotaooutdoor.com/wp-json/nuotao/v1/seo/2372 \
-  -u "fys2388@gmail.com:Nh7c PVfF G029 gORK 39BE ozBr" \
+  -u "$WP_USERNAME:$WP_APP_PASSWORD" \
   -H "Content-Type: application/json" \
   -d '{
     "seo_title": "Portable Folding Moon Chair for Camping & Patio - Nuotao Outdoor",
