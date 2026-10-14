@@ -128,6 +128,9 @@ backend/app/data/
 *.backup
 *.bak
 check_*.py
+# Security hook scripts must be committed (pre-commit depends on them)
+!scripts/security/check_*.py
+!scripts/security/run_*.py
 debug_*.py
 _*.py
 .rivet/
@@ -142,6 +145,9 @@ admin_token*.txt
 /backend/scripts/*.py
 # CI 必需的幂等种子脚本：非临时脚本，必须入库供 deploy.yml §3.6 调用
 !/backend/scripts/seed_agent_config.py
+
+# Graphflow output artifacts
+graphflow-out/
 
 # Sensitive files
 server_credentials.txt

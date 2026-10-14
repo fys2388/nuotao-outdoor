@@ -203,19 +203,21 @@ SenseNova 控制台 → **API Keys** → 撤销以 `sk-Az1wKSUq` 开头的那把
 排查中发现 `backend/.env` 里其实**已经配置了** `JWT_SECRET_KEY`，值是
 `REDACTED_JWT_SECRET`——**和代码里硬编码的
 那一串一模一样**。`backend/.env.development` 和 `backend/.env.staging` 同样是
-这个值；只有 `backend/.env.production` 是一把独立的 61 字符密钥。
+这个值；`backend/.env.production` 里是 `CHANGE_ME_VERY_STRONG_RANDOM_KEY_...`
+**占位符**（61 字符，看起来像真密钥但其实不是）。
 
-**这意味着两件事：**
+**这意味着：所有环境都没有配置过真正的 JWT 密钥。**
 
-1. ✅ **生产环境用的是一把真密钥**（长度 61），它没有出现在公开仓库里，是安全的。
-   但请确认它就是你想用的那把，并确认它没有被写过别的地方。
-2. 🔴 **dev / staging 环境用的是那把公开的可预测密钥**。`"change-in-production"`
-   写在变量名里不是缓解措施。staging 如果对外可访问，就等于又开了一扇门。
-   请为 dev 和 staging 分别生成独立的随机密钥。
+1. 🔴 **生产环境的 `JWT_SECRET_KEY` 是占位符** `CHANGE_ME_...`，不是真密钥。
+   如果生产服务正在运行，它要么在用代码里那个已公开的硬编码值，要么 fail-fast
+   后启动了。请立刻生成真密钥并部署。
+2. 🔴 **dev / staging 用的是那把公开的可预测密钥**。`"change-in-production"`
+   写在变量名里不是缓解措施。
+3. ✅ **本次已为 dev / staging / local 生成了新的随机密钥**
+   （`secrets.token_urlsafe(64)`），写入对应 `.env`。生产环境请同样生成一把。
 
-> 补充：因为 `backend/.env` 里已经有 `JWT_SECRET_KEY`，本次新增的 fail-fast 守卫
-> 在本仓库**不会**触发——脚本会静默读到那把 dev 密钥。这是"开箱即用"的预期行为，
-> 但意味着新脚本依赖的是一把公开可预测的密钥。改完 3.7 就一起解决了。
+> 补充：因为 `.env` 里已经有 `JWT_SECRET_KEY`，本次新增的 fail-fast 守卫
+> 在本仓库**不会**触发——脚本会静默读到 `.env` 里的值。这是"开箱即用"的预期行为。
 
 ---
 
