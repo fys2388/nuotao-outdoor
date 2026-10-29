@@ -1,0 +1,87 @@
+name: Docker Redeploy API
+
+# Rebuild and restart the production `api` Docker container with the latest
+# code from origin/main. The production backend runs in a Docker container
+# (docker-proxy listens on :8000); the old rsync-to-/opt/nuotao/backend flow
+# only updated the host filesystem and never rebuilt the image, so the running
+# container kept serving stale code (e.g. the old scrape_1688.py without the
+# 986492089515 hardcoded fallback).
+#
+# This workflow:
+#   1. SSH into production, clone latest origin/main to a temp dir
+#   2. rsync the repo (backend + frontend + infra + compose files) into
+#      /opt/nuotao (the Docker Compose project root)
+#   3. Rebuild the `api` image and recreate the container
+#   4. Health-check the backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Git SHA to deploy'
+        required: false
+        default: ''
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  REPO_URL: https://github.com/fys2388/nuotao-outdoor.git
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Redeploy api container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -eo pipefail
+            SHA="${{ inputs.sha }}"
+            if [ -z "$SHA" ]; then
+              SHA=$(git ls-remote "$REPO_URL" refs/heads/main | cut -f1)
+            fi
+            SHORT=$(echo "$SHA" | cut -c1-7)
+            PROJ=/opt/nuotao
+            echo "REDEPLOY $SHORT $(date -u)"
+            TMP=$(mktemp -d /tmp/rd-XXXXXX)
+            echo "TMP=$TMP"
+            git clone "$REPO_URL" "$TMP/r" 2>&1
+            cd "$TMP/r"
+            git checkout "$SHA" 2>&1
+            echo "SHA=$(git rev-parse HEAD)"
+            echo "LOG=$(git log -1 --oneline)"
+            echo "--- rsync project (keep .env/.venv/data) ---"
+            rsync -a --delete \
+              --exclude='.git' \
+              --exclude='.env' \
+              --exclude='.venv' \
+              --exclude='backend/.venv' \
+              --exclude='backend/.env' \
+              --exclude='backend/data' \
+              --exclude='backend/logs' \
+              --exclude='data' \
+              --exclude='frontend/node_modules' \
+              "$TMP/r/" "$PROJ/"
+            echo "--- check scrape_1688.py has new fallback ---"
+            grep -c "986492089515" "$PROJ/backend/app/services/scrape_1688.py" || echo "WARN: new fallback NOT found"
+            echo "--- compose files present ---"
+            ls -la "$PROJ/docker-compose.yml" "$PROJ/docker-compose.prod.yml" 2>&1 || echo "compose files missing"
+            echo "--- docker available? ---"
+            docker --version 2>&1 || echo "docker not available"
+            echo "--- rebuild api ---"
+            cd "$PROJ"
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml build api 2>&1
+            echo "--- recreate api ---"
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps api 2>&1
+            echo "--- wait + health ---"
+            sleep 8
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps api 2>&1
+            curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/readyz 2>&1
+            curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/healthz 2>&1
+            rm -rf "$TMP"
+            echo "DONE $SHORT"
