@@ -21,6 +21,19 @@ jobs:
   ci-gate:
     name: Pre-deploy check (syntax + imports + smoke)
     runs-on: ubuntu-latest
+    # CI runner has no .env; security.py fails closed (RuntimeError) when
+    # JWT_SECRET_KEY is unset. Inject a throwaway test key so import-integrity
+    # checks and the app smoke can load modules without a real .env. This key
+    # is NEVER used in production (server .env holds the real value) and only
+    # lives for the duration of this job.
+    env:
+      ENVIRONMENT: test
+      JWT_SECRET_KEY: ci-only-throwaway-test-key-not-for-production
+      WOOCOMMERCE_BASE_URL: https://nuotaooutdoor.com
+      WOOCOMMERCE_CONSUMER_KEY: ci-test
+      WOOCOMMERCE_CONSUMER_SECRET: ci-test
+      WP_USERNAME: ci-test
+      WP_APPLICATION_PASSWORD: ci-test
     defaults:
       run:
         working-directory: backend
