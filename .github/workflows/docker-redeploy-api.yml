@@ -74,14 +74,23 @@ jobs:
             ls -la "$PROJ/docker-compose.yml" "$PROJ/docker-compose.prod.yml" 2>&1 || echo "compose files missing"
             echo "--- docker available? ---"
             docker --version 2>&1 || echo "docker not available"
-            echo "--- rebuild api ---"
+            echo "--- validate single-file compose config ---"
             cd "$PROJ"
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml build api 2>&1
-            echo "--- recreate api ---"
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps api 2>&1
+            # docker-compose.prod.yml references the x-backend-env anchor from
+            # docker-compose.yml, but Docker Compose v2 does not resolve YAML
+            # anchors across separate -f files, so the merged config fails with
+            # "unknown anchor 'backend-env'". The production api container
+            # actually exposes :8000 (docker-proxy listens), which matches the
+            # single-file docker-compose.yml (ports: ["${BACKEND_PORT:-8000}:8000"]),
+            # so we rebuild with the single file that the stack actually uses.
+            docker compose -f docker-compose.yml config --quiet 2>&1 || echo "WARN: single-file config failed"
+            echo "--- rebuild api (single file) ---"
+            docker compose -f docker-compose.yml build api 2>&1
+            echo "--- recreate api (single file) ---"
+            docker compose -f docker-compose.yml up -d --no-deps api 2>&1
             echo "--- wait + health ---"
-            sleep 8
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps api 2>&1
+            sleep 10
+            docker compose -f docker-compose.yml ps api 2>&1
             curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/readyz 2>&1
             curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/healthz 2>&1
             rm -rf "$TMP"
