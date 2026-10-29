@@ -39,6 +39,7 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
+          envs: REPO_URL
           script: |
             set -eo pipefail
             SHA="${{ inputs.sha }}"
