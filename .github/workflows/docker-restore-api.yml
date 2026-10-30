@@ -1,0 +1,58 @@
+name: Docker Restore API
+
+# Emergency recovery: restart the production `api` container with the real
+# DATABASE_URL. After docker-redeploy-api rebuilt the api image, the new
+# container exited with "password authentication failed for user nuotao"
+# because docker-compose.yml's DATABASE_URL template fell back to
+# ${POSTGRES_PASSWORD:-REDACTED_DEFAULT_DB}. The running worker container
+# holds the correct DATABASE_URL / REDIS_URL in its environment; extract
+# them, write them into /opt/nuotao/.env, then bring the api container back
+# up via docker compose (keeping compose-managed config).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore api container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -eo pipefail
+            PROJ=/opt/nuotao
+            cd "$PROJ"
+            echo "=== .env presence ==="
+            ls -la .env 2>&1 || echo ".env MISSING"
+            echo "=== worker env DATABASE_URL (masked) ==="
+            WDB=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^DATABASE_URL=' | head -1)
+            WREDIS=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^REDIS_URL=' | head -1)
+            echo "${WDB:0:30}...(masked)"
+            echo "=== backup + merge worker DB/Redis into .env ==="
+            if [ -f .env ]; then cp .env .env.bak.$(date +%s); fi
+            touch .env
+            for V in "$WDB" "$WREDIS"; do
+              K=${V%%=*}
+              if ! grep -q "^$K=" .env 2>/dev/null; then
+                echo "$V" >> .env
+                echo "appended $K"
+              else
+                echo "kept existing $K"
+              fi
+            done
+            echo "=== .env DATABASE_URL (masked) ==="
+            grep '^DATABASE_URL=' .env | sed 's|:\([^:@]*\)@|:***@|'
+            echo "=== recreate api via compose ==="
+            docker compose -f docker-compose.yml up -d --no-deps api 2>&1 || echo "(compose up failed)"
+            echo "=== wait + status ==="
+            sleep 15
+            docker compose -f docker-compose.yml ps api 2>&1
+            echo "=== api logs tail ==="
+            docker logs --tail 30 nuotao-ai-os-api-1 2>&1 | tail -30
+            echo "=== port 8000 ==="
+            ss -tlnp | grep 8000 || echo "port 8000 not listening"
