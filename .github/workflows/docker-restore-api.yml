@@ -49,9 +49,28 @@ jobs:
             docker rm -f nuotao-ai-os-api-1 2>/dev/null || echo "no api container"
             echo "=== recreate api via compose (uses .env now) ==="
             docker compose -f docker-compose.yml up -d --no-deps api 2>&1 || echo "(compose up failed)"
-            echo "=== wait + status ==="
+            echo "=== wait + check port ==="
             sleep 18
-            docker compose -f docker-compose.yml ps api 2>&1
+            if ss -tln | grep -q ':8000'; then
+              echo "PORT 8000 UP via compose"
+            else
+              echo "PORT 8000 still down; fallback: docker run with worker env"
+              docker rm -f nuotao-ai-os-api-1 2>/dev/null || true
+              WENV=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -vE '^(PATH|HOSTNAME|HOME|PWD|SHLVL|_|TERM|PYTHON_|GIT_|GITHUB_)')
+              ARGS=""
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                ARGS="$ARGS -e $line"
+              done <<< "$WENV"
+              docker run -d --name nuotao-ai-os-api-1 \
+                --network nuotao-network --restart unless-stopped \
+                $ARGS \
+                nuotao-ai-os-api:latest \
+                sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
+              sleep 15
+            fi
+            echo "=== final status ==="
+            docker compose -f docker-compose.yml ps api 2>&1 || true
             echo "=== api logs tail ==="
             docker logs --tail 30 nuotao-ai-os-api-1 2>&1 | tail -30
             echo "=== port 8000 ==="
