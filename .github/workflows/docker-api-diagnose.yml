@@ -1,0 +1,38 @@
+name: Docker API Diagnose
+
+# Read-only diagnostics for the production `api` Docker container after a
+# rebuild. Shows container state, recent logs (startup failure reason), and
+# compose status. Used to recover from a failed docker-redeploy-api run.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose api container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -eo pipefail
+            PROJ=/opt/nuotao
+            echo "=== compose ps ==="
+            cd "$PROJ"
+            docker compose -f docker-compose.yml ps 2>&1 || echo "(compose ps failed)"
+            echo ""
+            echo "=== all containers ==="
+            docker ps -a --format "{{.Names}}  {{.Status}}  {{.Image}}" 2>&1 | head -30
+            echo ""
+            echo "=== api container logs (last 80) ==="
+            docker logs --tail 80 nuotao-ai-os-api-1 2>&1 || echo "(no logs / container name differs)"
+            echo ""
+            echo "=== api inspect exit/health ==="
+            docker inspect nuotao-ai-os-api-1 --format "State={{.State.Status}} Exit={{.State.ExitCode}} Err={{.State.Error}} Restart={{.RestartCount}}" 2>&1 || echo "(inspect failed)"
+            echo ""
+            echo "=== port 8000 ==="
+            ss -tlnp | grep 8000 || echo "port 8000 not listening"
