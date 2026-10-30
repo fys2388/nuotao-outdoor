@@ -74,6 +74,7 @@ jobs:
               done <<< "$WENV"
               docker run -d --name nuotao-ai-os-api-1 \
                 --network "$NET" --restart unless-stopped \
+                -p 8000:8000 \
                 $ARGS \
                 nuotao-ai-os-api:latest \
                 sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
