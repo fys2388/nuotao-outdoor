@@ -2779,9 +2779,9 @@ def convert_1688_to_pipeline_input(
     else:
         sku = ""
 
-    # 如果没有 SKU，生成一个
+    # 如果没有 SKU，生成一个（有 1688 offer id 时用 NT-<offer_id>，红线规则）
     if not sku:
-        sku = _generate_sku(name)
+        sku = _generate_sku(name, offer_id=source_id)
 
     # 提取所有 SKU 变体（用于 WooCommerce 变量产品）
     variations = []
