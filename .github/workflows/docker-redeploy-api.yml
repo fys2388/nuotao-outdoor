@@ -86,6 +86,8 @@ jobs:
             docker compose -f docker-compose.yml config --quiet 2>&1 || echo "WARN: single-file config failed"
             echo "--- rebuild api (single file) ---"
             docker compose -f docker-compose.yml build api 2>&1
+            echo "--- remove existing api container (name conflict) ---"
+            docker rm -f nuotao-ai-os-api-1 2>/dev/null || echo "no existing api container"
             echo "--- recreate api (single file) ---"
             docker compose -f docker-compose.yml up -d --no-deps api 2>&1
             echo "--- wait + health ---"
