@@ -91,7 +91,28 @@ jobs:
             echo "--- recreate api (single file) ---"
             docker compose -f docker-compose.yml up -d --no-deps api 2>&1
             echo "--- wait + health ---"
-            sleep 10
+            sleep 15
+            if curl -s --max-time 8 http://127.0.0.1:8000/api/v1/healthz >/dev/null 2>&1; then
+              echo "HEALTHZ OK via compose"
+            else
+              echo "compose api not healthy; fallback docker run with worker env"
+              docker rm -f nuotao-ai-os-api-1 2>/dev/null || true
+              NET=$(docker network ls --format '{{.Name}}' | grep -i 'nuotao' | head -1)
+              echo "using network: $NET"
+              WENV=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -vE '^(PATH|HOSTNAME|HOME|PWD|SHLVL|_|TERM|PYTHON_|GIT_|GITHUB_)')
+              ARGS=""
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                ARGS="$ARGS -e $line"
+              done <<< "$WENV"
+              docker run -d --name nuotao-ai-os-api-1 \
+                --network "$NET" --restart unless-stopped \
+                -p 8000:8000 \
+                $ARGS \
+                nuotao-ai-os-api:latest \
+                sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
+              sleep 15
+            fi
             docker compose -f docker-compose.yml ps api 2>&1
             curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/readyz 2>&1
             curl -s -w " HTTP=%{http_code}\n" --max-time 10 http://127.0.0.1:8000/api/v1/healthz 2>&1
