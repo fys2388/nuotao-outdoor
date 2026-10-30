@@ -1,14 +1,13 @@
 name: Docker Restore API
 
 # Emergency recovery: restart the production `api` container with the real
-# Postgres credentials from the running worker container. After
-# docker-redeploy-api rebuilt the api image, the new container exited with
-# "password authentication failed for user nuotao". Root cause: rsync
-# --delete removed /opt/nuotao/.env, so docker-compose.yml's DATABASE_URL
-# template interpolated the default password. The worker container holds the
-# real DATABASE_URL / POSTGRES_* in its environment, so launch the api with
-# that env directly (compose env interpolation bypassed for the recovery),
-# then restore .env so docker compose manages the container afterwards.
+# Postgres credentials. rsync --delete removed /opt/nuotao/.env, so
+# docker-compose.yml's DATABASE_URL template interpolated the default
+# password (password authentication failed for user nuotao). The worker
+# container holds the real DATABASE_URL; parse the password out of it,
+# write POSTGRES_* into .env so compose's DATABASE_URL template uses the
+# real credentials, then bring the api back up. Fall back to docker run
+# with the worker env if compose still fails.
 
 on:
   workflow_dispatch:
@@ -28,34 +27,45 @@ jobs:
             set -eo pipefail
             PROJ=/opt/nuotao
             cd "$PROJ"
-            echo "=== .env presence ==="
-            ls -la .env 2>&1 || echo ".env MISSING"
-            echo "=== worker DATABASE_URL (masked) ==="
+            echo "=== worker DATABASE_URL ==="
             WDB=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^DATABASE_URL=' | head -1)
-            echo "${WDB:0:28}...(masked)"
-            echo "=== rebuild .env from worker env (POSTGRES/DATABASE/REDIS) ==="
+            echo "${WDB:0:30}...(masked)"
+            # Parse user:password@host:port/db from DATABASE_URL
+            # format: postgresql+asyncpg://USER:PASS@HOST:PORT/DB
+            DBURL=${WDB#*=}
+            DBHOST=$(echo "$DBURL" | sed -E 's|.*@([^:/]+):.*|\1|')
+            DBPORT=$(echo "$DBURL" | sed -E 's|.*:([0-9]+)/.*|\1|')
+            DBNAME=$(echo "$DBURL" | sed -E 's|.*/([^/?]+).*|\1|')
+            DBPASS=$(echo "$DBURL" | sed -E 's|.*://([^:]+):([^@]+)@.*|\2|')
+            DBUSER=$(echo "$DBURL" | sed -E 's|.*://([^:]+):.*|\1|')
+            echo "parsed: user=$DBUSER host=$DBHOST port=$DBPORT db=$DBNAME passlen=${#DBPASS}"
+            echo "=== rebuild .env with POSTGRES_* ==="
             if [ -f .env ]; then cp .env .env.bak.$(date +%s); fi
-            docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-              | grep -E '^(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|POSTGRES_HOST|DATABASE_URL|REDIS_URL|ENVIRONMENT|DEBUG|LOG_LEVEL|JWT_SECRET_KEY|SECRET_KEY)=' \
-              > .env.tmp
-            # also copy all non-trivial worker env so api has same config as worker
-            docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-              | grep -vE '^(PATH|HOSTNAME|HOME|PWD|SHLVL|_|TERM|PYTHON_|GIT_|GITHUB_)' >> .env.tmp
-            mv .env.tmp .env
+            {
+              echo "POSTGRES_USER=$DBUSER"
+              echo "POSTGRES_PASSWORD=$DBPASS"
+              echo "POSTGRES_DB=$DBNAME"
+              echo "POSTGRES_HOST=$DBHOST"
+              echo "POSTGRES_PORT=$DBPORT"
+              # also copy the rest of worker env (DATABASE_URL, REDIS_URL, JWT, etc.)
+              docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+                | grep -vE '^(PATH|HOSTNAME|HOME|PWD|SHLVL|_|TERM|PYTHON_|GIT_|GITHUB_|POSTGRES_|DATABASE_URL)'
+            } > .env
             echo "new .env lines: $(wc -l < .env)"
             echo "=== .env key vars (masked) ==="
             grep -E '^(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|DATABASE_URL|REDIS_URL)' .env | sed 's|\(:[^:@]*@\)|:***@|;s|\(PASSWORD=.*\)|PASSWORD=***|'
             echo "=== remove failed api container ==="
             docker rm -f nuotao-ai-os-api-1 2>/dev/null || echo "no api container"
-            echo "=== recreate api via compose (uses .env now) ==="
+            echo "=== recreate api via compose ==="
             docker compose -f docker-compose.yml up -d --no-deps api 2>&1 || echo "(compose up failed)"
-            echo "=== wait + check port ==="
             sleep 18
             if ss -tln | grep -q ':8000'; then
               echo "PORT 8000 UP via compose"
             else
               echo "PORT 8000 still down; fallback: docker run with worker env"
               docker rm -f nuotao-ai-os-api-1 2>/dev/null || true
+              NET=$(docker network ls --format '{{.Name}}' | grep -i 'nuotao' | head -1)
+              echo "using network: $NET"
               WENV=$(docker inspect nuotao-ai-os-worker-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -vE '^(PATH|HOSTNAME|HOME|PWD|SHLVL|_|TERM|PYTHON_|GIT_|GITHUB_)')
               ARGS=""
               while IFS= read -r line; do
@@ -63,7 +73,7 @@ jobs:
                 ARGS="$ARGS -e $line"
               done <<< "$WENV"
               docker run -d --name nuotao-ai-os-api-1 \
-                --network nuotao-network --restart unless-stopped \
+                --network "$NET" --restart unless-stopped \
                 $ARGS \
                 nuotao-ai-os-api:latest \
                 sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
