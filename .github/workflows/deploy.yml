@@ -1,4 +1,4 @@
-name: Deploy to Production (staging-gated)
+﻿name: Deploy to Production (staging-gated)
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -79,17 +79,17 @@ jobs:
           port: 22
           script: |
             set -e
-            STAGE=/opt/nuotao/staging
+            STAGE=/opt/nuotao-ai-os/staging
             echo "=== [staging] syncing code to $STAGE ==="
             mkdir -p "$STAGE"
 
             # Pull latest code from GitHub first (staging must validate new code, not old production)
-            cd /opt/nuotao
+            cd /opt/nuotao-ai-os
             git fetch --prune origin ${{ github.ref_name }}
             git reset --hard origin/${{ github.ref_name }}
             echo "[staging] pulled latest code: $(git log -1 --format='%h %s')"
 
-            cd /opt/nuotao
+            cd /opt/nuotao-ai-os
             if command -v rsync >/dev/null 2>&1; then
               rsync -a --delete \
                 --exclude .git --exclude backend/.env --exclude backend/.venv \
@@ -188,12 +188,12 @@ jobs:
           port: 22
           script: |
             set -e
-            cd /opt/nuotao
+            cd /opt/nuotao-ai-os
 
             echo "=== 0. Pre-deploy backup (code + db + frontend) ==="
-            chmod +x /opt/nuotao/infra/deploy-rollback.sh 2>/dev/null || true
-            if [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
-              BACKUP_DIR=$(/opt/nuotao/infra/deploy-rollback.sh backup)
+            chmod +x /opt/nuotao-ai-os/infra/deploy-rollback.sh 2>/dev/null || true
+            if [ -f /opt/nuotao-ai-os/infra/deploy-rollback.sh ]; then
+              BACKUP_DIR=$(/opt/nuotao-ai-os/infra/deploy-rollback.sh backup)
               echo "Backup created: $BACKUP_DIR"
               echo "$BACKUP_DIR" > /tmp/nuotao_last_backup
             else
@@ -207,13 +207,13 @@ jobs:
             echo "[git] cleaned untracked migration files"
 
             echo "=== 2. Installing backend dependencies ==="
-            cd /opt/nuotao/backend
+            cd /opt/nuotao-ai-os/backend
             source .venv/bin/activate
             pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 渚濊禆瀹夎澶辫触锛岃妫€鏌?pip 婧愪笌 requirements.txt"; exit 1; }
 
             echo "=== 2.5 .env variable drift check ==="
-            ENV_FILE=/opt/nuotao/backend/.env
-            TEMPLATE=/opt/nuotao/backend/.env.production.template
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
+            TEMPLATE=/opt/nuotao-ai-os/backend/.env.production.template
             if [ -f "$TEMPLATE" ] && [ -f "$ENV_FILE" ]; then
               MISSING=0
               while IFS='=' read -r key _; do
@@ -227,7 +227,7 @@ jobs:
               done < "$TEMPLATE"
               if [ "$MISSING" -gt 0 ]; then
                 echo "WARNING: $MISSING variable(s) in template missing from server .env"
-                echo "  Fix: ssh to server and add missing vars to /opt/nuotao/backend/.env"
+                echo "  Fix: ssh to server and add missing vars to /opt/nuotao-ai-os/backend/.env"
               else
                 echo "[env] all template variables present in server .env"
               fi
@@ -243,7 +243,7 @@ jobs:
             # this step read $WOOCOMMERCE_CONSUMER_KEY from the workflow env and
             # silently skipped with "WC secrets not configured in this repo" even
             # though the secrets existed. Secret values are masked in run logs.
-            ENV_FILE=/opt/nuotao/backend/.env
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
             WC_KEY='${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}'
             WC_SECRET='${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}'
             WC_BASE='${{ secrets.WOOCOMMERCE_BASE_URL }}'
@@ -294,10 +294,10 @@ jobs:
             fi
 
             echo "=== 3. Running database migrations ==="
-            if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
+            if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
               echo "[db] 杩炴帴閰嶇疆(瀵嗙爜宸查殣钘?: $DBURL"
             else
-              echo "[db] 璀﹀憡: 鏈湪 /opt/nuotao/backend/.env 鎵惧埌 DATABASE_URL"
+              echo "[db] 璀﹀憡: 鏈湪 /opt/nuotao-ai-os/backend/.env 鎵惧埌 DATABASE_URL"
             fi
             echo "[db] 鎵ц鏁版嵁搴撹縼绉?.."
             if ! alembic upgrade head; then
@@ -308,24 +308,24 @@ jobs:
               exit 1
             fi
             echo "[db] ensure all model tables exist (create_all idempotent)..."
-            python3 /opt/nuotao/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
+            python3 /opt/nuotao-ai-os/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
             echo "[db] table check done"
 
             echo "=== 3.6 Seeding agent config (idempotent) ==="
             # 瑙勮寖 ID 娉ㄥ唽 5 涓?Agent + 宸ュ叿鐧藉悕鍗曪紙handler_name 瀵归綈鐪熷疄娉ㄥ唽鍚嶏級
             # + 鎴愭湰鎶ゆ爮 + 瀹℃壒 SLA銆倁psert 璇箟锛屼笉鎵ц DELETE銆?            # 鍙栦唬 scripts/configure_agent_roles.sql锛坔yphen ID 涓?runtime 鍐茬獊锛屽凡鍒犻櫎锛夈€?            # 璇﹁ docs/agent_team_workflow_refactor.md
-            python3 /opt/nuotao/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] agent config seed failed (non-blocking, check logs)"
+            python3 /opt/nuotao-ai-os/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] agent config seed failed (non-blocking, check logs)"
             echo "[seed] agent config seed done"
 
             echo "=== 3.4 Ensure nuotao system user and permissions ==="
             id nuotao >/dev/null 2>&1 || useradd -r -s /bin/false nuotao
-            mkdir -p /opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
-            chown -R nuotao:nuotao /opt/nuotao/backend
+            mkdir -p /opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs /opt/nuotao-ai-os/backend/app/data /opt/nuotao-ai-os/backend/app/logs
+            chown -R nuotao:nuotao /opt/nuotao-ai-os/backend
             echo "[user] nuotao user ready, backend dir owned by nuotao"
 
             echo "=== 3.5 Installing backend systemd from versioned template ==="
             BACKEND_SERVICE=/etc/systemd/system/nuotao-backend.service
-            BACKEND_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-backend.service
+            BACKEND_TEMPLATE=/opt/nuotao-ai-os/infra/systemd/nuotao-backend.service
             if [ -f "$BACKEND_TEMPLATE" ]; then
               cp "$BACKEND_TEMPLATE" "$BACKEND_SERVICE"
               chmod 644 "$BACKEND_SERVICE"
@@ -341,10 +341,10 @@ jobs:
                 echo 'Type=simple'
                 echo 'User=nuotao'
                 echo 'Group=nuotao'
-                echo 'WorkingDirectory=/opt/nuotao/backend'
-                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin"'
-                echo 'EnvironmentFile=/opt/nuotao/.env'
-                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4'
+                echo 'WorkingDirectory=/opt/nuotao-ai-os/backend'
+                echo 'Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin"'
+                echo 'EnvironmentFile=/opt/nuotao-ai-os/.env'
+                echo 'ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4'
                 echo 'Restart=always'
                 echo 'RestartSec=5'
                 echo 'StandardOutput=journal'
@@ -356,7 +356,7 @@ jobs:
               echo "[backend] template missing, generated inline fallback"
             else
               echo "[backend] template missing, keeping existing $BACKEND_SERVICE"
-              sed -i 's|/opt/nuotao-ai-os/|/opt/nuotao/|g' "$BACKEND_SERVICE"
+              sed -i 's|/opt/nuotao-ai-os/|/opt/nuotao-ai-os/|g' "$BACKEND_SERVICE"
             fi
             systemctl daemon-reload
             systemctl enable nuotao-backend 2>/dev/null || true
@@ -385,7 +385,7 @@ jobs:
               fi
             ) || echo "[swap] setup failed (non-fatal)"
             free -m | head -2 || true
-            cd /opt/nuotao/frontend
+            cd /opt/nuotao-ai-os/frontend
             npm install --silent
             # 限制 Node 堆内存，避免 OOM killer 杀构建进程
             export NODE_OPTIONS="--max-old-space-size=2048"
@@ -398,7 +398,7 @@ jobs:
 
             echo "=== 6.5 Installing nginx from versioned template (infra/nginx/console.conf) ==="
             NGINX_CONF=/etc/nginx/sites-available/nuotao-console
-            TEMPLATE=/opt/nuotao/infra/nginx/console.conf
+            TEMPLATE=/opt/nuotao-ai-os/infra/nginx/console.conf
             if [ -f "$TEMPLATE" ]; then
               cp "$TEMPLATE" "$NGINX_CONF"
               echo "[nginx] installed versioned template -> $NGINX_CONF"
@@ -445,10 +445,10 @@ jobs:
               echo "-- postgres:"; systemctl status postgresql --no-pager | head -6 || true
               echo "ERROR: 鍚庣鍋ュ悍妫€鏌ュけ璐?(HTTP $BACKEND_CODE)"
               echo "=== AUTO ROLLBACK ==="
-              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao-ai-os/infra/deploy-rollback.sh ]; then
                 BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
                 echo "Rolling back to: $BACKUP_DIR"
-                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED - manual intervention required"
+                /opt/nuotao-ai-os/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED - manual intervention required"
               else
                 echo "No backup found, cannot auto-rollback"
               fi
@@ -457,38 +457,38 @@ jobs:
             if [ "$FRONTEND_CODE" != "200" ]; then
               echo "ERROR: 鍓嶇鍋ュ悍妫€鏌ュけ璐?(HTTP $FRONTEND_CODE)"
               echo "=== AUTO ROLLBACK ==="
-              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao/infra/deploy-rollback.sh ]; then
+              if [ -f /tmp/nuotao_last_backup ] && [ -f /opt/nuotao-ai-os/infra/deploy-rollback.sh ]; then
                 BACKUP_DIR=$(cat /tmp/nuotao_last_backup)
-                /opt/nuotao/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED"
+                /opt/nuotao-ai-os/infra/deploy-rollback.sh rollback "$BACKUP_DIR" || echo "ROLLBACK FAILED"
               fi
               exit 1
             fi
 
             echo "=== 7.4 Deploy monitoring configs (prometheus/grafana/alertmanager) ==="
             if [ -d /etc/prometheus ]; then
-              cp /opt/nuotao/infra/monitoring/prometheus.yml /etc/prometheus/prometheus.yml 2>/dev/null || true
-              cp /opt/nuotao/infra/monitoring/alerts.yml /etc/prometheus/alerts.yml 2>/dev/null || true
+              cp /opt/nuotao-ai-os/infra/monitoring/prometheus.yml /etc/prometheus/prometheus.yml 2>/dev/null || true
+              cp /opt/nuotao-ai-os/infra/monitoring/alerts.yml /etc/prometheus/alerts.yml 2>/dev/null || true
               systemctl reload prometheus 2>/dev/null || systemctl restart prometheus 2>/dev/null || echo "[monitoring] prometheus reload skipped"
               echo "[monitoring] prometheus config deployed"
             else
               echo "[monitoring] prometheus not installed, skipping"
             fi
             if [ -d /etc/grafana/provisioning ]; then
-              cp -r /opt/nuotao/infra/grafana/provisioning/* /etc/grafana/provisioning/ 2>/dev/null || true
+              cp -r /opt/nuotao-ai-os/infra/grafana/provisioning/* /etc/grafana/provisioning/ 2>/dev/null || true
               systemctl restart grafana-server 2>/dev/null || echo "[monitoring] grafana restart skipped"
               echo "[monitoring] grafana provisioning deployed"
             else
               echo "[monitoring] grafana not installed, skipping"
             fi
-            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao/infra/monitoring/alertmanager.yml ]; then
-              cp /opt/nuotao/infra/monitoring/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
+            if [ -d /etc/alertmanager ] && [ -f /opt/nuotao-ai-os/infra/monitoring/alertmanager.yml ]; then
+              cp /opt/nuotao-ai-os/infra/monitoring/alertmanager.yml /etc/alertmanager/alertmanager.yml 2>/dev/null || true
               systemctl reload alertmanager 2>/dev/null || systemctl restart alertmanager 2>/dev/null || true
               echo "[monitoring] alertmanager config deployed"
             fi
 
             echo "=== 7.5 Configuring AI Agent Scheduler ==="
             SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
-            SCHEDULER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-scheduler.service
+            SCHEDULER_TEMPLATE=/opt/nuotao-ai-os/infra/systemd/nuotao-agent-scheduler.service
             if [ -f "$SCHEDULER_TEMPLATE" ]; then
               # 妯℃澘浼樺厛锛氫互浠撳簱鐗堟湰鍖栨ā鏉夸负鍑嗭紙docs/agent_scheduler_deployment.md锛?              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
               chmod 644 "$SCHEDULER_SERVICE"
@@ -504,9 +504,9 @@ jobs:
                 echo 'Type=simple'
                 echo 'User=nuotao'
                 echo 'Group=nuotao'
-                echo 'WorkingDirectory=/opt/nuotao/backend'
-                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
-                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler'
+                echo 'WorkingDirectory=/opt/nuotao-ai-os/backend'
+                echo 'Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
+                echo 'ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/python -m app.services.agent_scheduler'
                 echo 'Restart=always'
                 echo 'RestartSec=10'
                 echo 'StandardOutput=journal'
@@ -518,7 +518,7 @@ jobs:
               echo "[scheduler] template missing, generated inline fallback"
             else
               echo "[scheduler] template missing, keeping existing $SCHEDULER_SERVICE"
-              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler|' "$SCHEDULER_SERVICE"
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/python -m app.services.agent_scheduler|' "$SCHEDULER_SERVICE"
             fi
             systemctl daemon-reload
             systemctl enable nuotao-agent-scheduler 2>/dev/null || true
@@ -531,7 +531,7 @@ jobs:
             # 姝ゅ墠鏃犱换浣?systemd 鍗曞厓锛歅OST /api/v1/agent-tasks 鍏ラ槦鍚庢棤浜烘秷璐癸紝
             # 浠诲姟姘镐箙 pending銆侀槦鍒楁寔缁爢绉€傝瑙?docs/agent_team_workflow_refactor.md
             WORKER_SERVICE=/etc/systemd/system/nuotao-agent-worker.service
-            WORKER_TEMPLATE=/opt/nuotao/infra/systemd/nuotao-agent-worker.service
+            WORKER_TEMPLATE=/opt/nuotao-ai-os/infra/systemd/nuotao-agent-worker.service
             if [ -f "$WORKER_TEMPLATE" ]; then
               cp "$WORKER_TEMPLATE" "$WORKER_SERVICE"
               chmod 644 "$WORKER_SERVICE"
@@ -547,10 +547,10 @@ jobs:
                 echo 'Type=simple'
                 echo 'User=nuotao'
                 echo 'Group=nuotao'
-                echo 'WorkingDirectory=/opt/nuotao/backend'
-                echo 'Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
-                echo 'EnvironmentFile=/opt/nuotao/backend/.env'
-                echo 'ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker'
+                echo 'WorkingDirectory=/opt/nuotao-ai-os/backend'
+                echo 'Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"'
+                echo 'EnvironmentFile=/opt/nuotao-ai-os/backend/.env'
+                echo 'ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/python -m app.worker'
                 echo 'Restart=always'
                 echo 'RestartSec=10'
                 echo 'StandardOutput=journal'
@@ -562,7 +562,7 @@ jobs:
               echo "[worker] template missing, generated inline fallback"
             else
               echo "[worker] template missing, keeping existing $WORKER_SERVICE"
-              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.worker|' "$WORKER_SERVICE"
+              sed -i 's|^ExecStart=.*|ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/python -m app.worker|' "$WORKER_SERVICE"
             fi
             systemctl daemon-reload
             systemctl enable nuotao-agent-worker 2>/dev/null || true
