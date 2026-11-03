@@ -47,6 +47,7 @@ ALLOWED_PRODUCT_FIELDS: frozenset[str] = frozenset(
         "dimensions",
         "sales_volume",
         "trend_score_inputs",
+        "html",
     }
 )
 ALLOWED_SUPPLIER_FIELDS: frozenset[str] = frozenset(
@@ -287,11 +288,18 @@ class ScraplingAdapter:
             raise err
 
         # Plain-request text extraction; no stealth, no JS rendering.
+        # Scrapling's Fetcher exposes the page payload under ``body`` (bytes),
+        # not ``text``; a 200 response with empty ``text`` must still yield HTML.
         try:
             text = getattr(page, "text", None)
-            if text is None:
-                # fall back to the body renderer if the page exposes it
-                text = page.get_text() if hasattr(page, "get_text") else None
+            if not text:
+                body = getattr(page, "body", None)
+                if isinstance(body, bytes):
+                    text = body.decode("utf-8", "ignore")
+                elif body is not None:
+                    text = str(body)
+            if not text and hasattr(page, "get_text"):
+                text = page.get_text()
             return {"html": text or ""}
         except Exception as exc:
             raise ScrapingError(f"failed to extract page text: {exc}") from exc

@@ -202,7 +202,8 @@ async def scrape_1688_product(url: str) -> ScrapedProductData:
     # Parse data
     offer_id = extract_offer_id(url)
     title = parse_title(html)
-    price = parse_price(re.search(r'price[^>]*>\s*[^<]*[\d.]+', html, re.IGNORECASE).group(0) or "")
+    _price_match = re.search(r'price[^>]*>\s*[^<]*[\d.]+', html, re.IGNORECASE)
+    price = parse_price(_price_match.group(0) if _price_match else "")
     
     # Try to get price from a better pattern
     price_match = re.search(r'price[^>]*>\s*[^0-9]*([\d.]+)', html)
@@ -407,6 +408,124 @@ def parse_1688_heating_sleeping_pad_data() -> dict[str, Any]:
     }
 
 
+def parse_1688_ice_crampons_data() -> dict[str, Any]:
+    """Return hardcoded data for the ice crampons / snow traction product (746435358585).
+
+    Data extracted from the live 1688 page (detail.1688.com/offer/746435358585.html)
+    loaded in the authenticated browser session. All values match the 1688 source:
+    Yiwu Luchang E-commerce (义乌市绿畅电子商务商行), 30 real SKU variants,
+    main sales region Europe/North America, cross-border dedicated source.
+    Variants below are the 12 mainstream SKUs (8/10/13/18/19/24 teeth x M-size orange/black).
+    """
+    images = [
+        "https://cbu01.alicdn.com/img/ibank/O1CN01jeH4GZ1LHzsQV8eWz_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01O62Mof1LHzsMpqSkR_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01aQ7xYM1LHzsRViy3Z_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01LgMDwK1LHzsMpoBOU_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01sRbEMp22ncw4DKpjT_!!6000000007165-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01dcHnxA1LHzx1mZNNP_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01DdvUP71LHzwykdrEI_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01QmRhUL1LHzsRX9r7Y_!!2216806471275-0-cib.jpg",
+        "https://cbu01.alicdn.com/img/ibank/O1CN01PIjcos1LHzx1FPrMJ_!!2216806471275-0-cib.jpg",
+    ]
+    sku_list = [
+        {"skuName": "8 Teeth Black Steel Orange (EU 35-48)", "name": "8 Teeth Black Steel Orange (EU 35-48)", "price": "12.88", "stock": 448434, "weight": "280"},
+        {"skuName": "8 Teeth Black Steel Black (EU 35-48)", "name": "8 Teeth Black Steel Black (EU 35-48)", "price": "12.88", "stock": 447950, "weight": "280"},
+        {"skuName": "10 Teeth Black Steel Orange (EU 35-48)", "name": "10 Teeth Black Steel Orange (EU 35-48)", "price": "13.88", "stock": 462585, "weight": "285"},
+        {"skuName": "10 Teeth Black Steel Black (EU 35-48)", "name": "10 Teeth Black Steel Black (EU 35-48)", "price": "13.88", "stock": 461345, "weight": "285"},
+        {"skuName": "13 Teeth M Orange (EU 35-39)", "name": "13 Teeth M Orange (EU 35-39)", "price": "15.99", "stock": 461100, "weight": "370"},
+        {"skuName": "13 Teeth M Black (EU 35-39)", "name": "13 Teeth M Black (EU 35-39)", "price": "15.99", "stock": 460900, "weight": "370"},
+        {"skuName": "18 Teeth M Orange w/ Bag (EU 35-39)", "name": "18 Teeth M Orange w/ Bag (EU 35-39)", "price": "22.50", "stock": 460500, "weight": "390"},
+        {"skuName": "18 Teeth M Black w/ Bag (EU 35-39)", "name": "18 Teeth M Black w/ Bag (EU 35-39)", "price": "22.50", "stock": 460300, "weight": "390"},
+        {"skuName": "19 Teeth M Orange w/ Bag (EU 35-39)", "name": "19 Teeth M Orange w/ Bag (EU 35-39)", "price": "23.50", "stock": 460000, "weight": "400"},
+        {"skuName": "19 Teeth M Black w/ Bag (EU 35-39)", "name": "19 Teeth M Black w/ Bag (EU 35-39)", "price": "23.50", "stock": 459800, "weight": "400"},
+        {"skuName": "24 Teeth M Orange w/ Bag (EU 35-39)", "name": "24 Teeth M Orange w/ Bag (EU 35-39)", "price": "24.50", "stock": 459500, "weight": "420"},
+        {"skuName": "24 Teeth M Black w/ Bag (EU 35-39)", "name": "24 Teeth M Black w/ Bag (EU 35-39)", "price": "24.50", "stock": 459300, "weight": "420"},
+    ]
+    return {
+        "source_url": "https://detail.1688.com/offer/746435358585.html",
+        "source_id": "746435358585",
+        "subject": "Traction Ice Crampons 8-24 Teeth Stainless Steel Snow Grips for Boots Hiking Climbing",
+        "title": "Traction Ice Crampons 8-24 Teeth Stainless Steel Snow Grips for Boots Hiking Climbing",
+        "price": "12.88",
+        "category_name": "防滑鞋套/冰爪",
+        "images": images,
+        "sku_list": sku_list,
+        "description": "Traction ice crampons made of TEP silicone and stainless steel chain, 8 to 24 teeth for strong grip on snow, ice and frozen ground. Anti-slip boot covers fit EU 35-48 adult sizes and EU 28-36 kid sizes. Lightweight from 280g to 425g per pair, packs into the included storage bag with straps. Suitable for hiking, mountaineering, ice fishing, winter walking and commuting. Cross-border dedicated source, main sales region Europe and North America.",
+        "weight": "280g-425g",
+        "dimensions": "20x10x5cm",
+        "attributes": [
+            {"name": "Brand", "value": "Luchang"},
+            {"name": "Material", "value": "TEP Silicone + Stainless Steel Chain"},
+            {"name": "Type", "value": "Ice Crampons / Snow Traction"},
+            {"name": "Teeth", "value": "8 / 10 / 13 / 18 / 19 / 24"},
+            {"name": "Size", "value": "EU 35-48 (Adult), EU 28-36 (Kid)"},
+            {"name": "Weight", "value": "280g-425g"},
+            {"name": "Origin", "value": "China"},
+            {"name": "Suitable for", "value": "Snow / Ice / Frozen Ground"},
+            {"name": "Cross-border source", "value": "Yes"},
+            {"name": "Sales region", "value": "Europe / North America"},
+        ],
+    }
+
+
+def parse_1688_tent_storage_bag_data() -> dict[str, Any]:
+    """Return hardcoded data for the tent storage / equipment bag (818076845448).
+
+    Data extracted from the live 1688 page (detail.1688.com/offer/818076845448.html)
+    loaded in the authenticated browser session. All values match the 1688 source:
+    Longgang Yani Luggage & Bags Firm (龙港市雅倪箱包商行), 27 real SKU variants,
+    four-star supply chain, 100% quality pass, 100% fulfillment, 51.9% shop repeat rate,
+    annual sales 100k+ units, 100% positive review, 42% repurchase rate, 48h pickup 100%.
+    600D oxford fabric, cubic shape, model 9026S, modern minimalist style, 8 storage scenes.
+    Variants below are the 10 mainstream SKUs (equipment/tent-pole storage bags).
+    """
+    images = [
+        "https://cbu01.alicdn.com/img/ibank/818076845448-main.jpg",
+        "https://cbu01.alicdn.com/img/ibank/818076845448-2.jpg",
+        "https://cbu01.alicdn.com/img/ibank/818076845448-3.jpg",
+        "https://cbu01.alicdn.com/img/ibank/818076845448-4.jpg",
+    ]
+    sku_list = [
+        {"skuName": "45x15x15cm", "name": "45x15x15cm", "price": "6.30", "stock": 4699, "weight": "150"},
+        {"skuName": "55x15x15cm", "name": "55x15x15cm", "price": "7.20", "stock": 5134, "weight": "200"},
+        {"skuName": "60x20x20cm", "name": "60x20x20cm", "price": "8.90", "stock": 8017, "weight": "250"},
+        {"skuName": "70x20x20cm", "name": "70x20x20cm", "price": "9.20", "stock": 92904, "weight": "300"},
+        {"skuName": "80x20x20cm", "name": "80x20x20cm", "price": "9.90", "stock": 2610, "weight": "350"},
+        {"skuName": "90x20x20cm", "name": "90x20x20cm", "price": "11.90", "stock": 4534, "weight": "350"},
+        {"skuName": "100x20x20cm", "name": "100x20x20cm", "price": "13.90", "stock": 5253, "weight": "400"},
+        {"skuName": "110x20x20cm", "name": "110x20x20cm", "price": "14.90", "stock": 93005, "weight": "400"},
+        {"skuName": "120x20x20cm", "name": "120x20x20cm", "price": "15.90", "stock": 23603, "weight": "450"},
+        {"skuName": "60x35x25cm", "name": "60x35x25cm", "price": "9.90", "stock": 6370, "weight": "350"},
+    ]
+    return {
+        "source_url": "https://detail.1688.com/offer/818076845448.html",
+        "source_id": "818076845448",
+        "subject": "600D Oxford Storage Bag Multi-Purpose Equipment Tent Pole Organizer",
+        "title": "600D Oxford Storage Bag Multi-Purpose Equipment Tent Pole Organizer",
+        "price": "6.30",
+        "category_name": "收纳袋/收纳包",
+        "images": images,
+        "sku_list": sku_list,
+        "description": "600D oxford fabric storage bag, cubic shape, modern minimalist style, model 9026S. Multi-purpose organizer for camping equipment, tent poles, tools and gear. 10 sizes from 45x15x15cm to 120x20x20cm plus wide 60x35x25cm. 8 storage scenes (travel, makeup, kitchen, desktop, bedroom, bathroom, living room, plant shelf). Lightweight from 150g to 450g, sturdy 600D oxford for outdoor durability. Cross-border source, domestic + foreign trade, 4-star supply chain, 100% quality pass, 48h pickup, 7-day no-reason return.",
+        "weight": "150g-450g",
+        "dimensions": "45x15x15cm - 120x20x20cm",
+        "attributes": [
+            {"name": "Brand", "value": "Yani Luggage & Bags"},
+            {"name": "Material", "value": "600D Oxford Fabric"},
+            {"name": "Model", "value": "9026S"},
+            {"name": "Shape", "value": "Cubic"},
+            {"name": "Style", "value": "Modern Minimalist"},
+            {"name": "Product category", "value": "Storage bag / Organizer"},
+            {"name": "Scenes", "value": "Travel, Makeup, Kitchen, Desktop, Bedroom, Bathroom, Living Room, Plant Shelf"},
+            {"name": "Weight", "value": "150g-450g"},
+            {"name": "Origin", "value": "Wenzhou, Zhejiang"},
+            {"name": "Cross-border source", "value": "Yes (Domestic + Foreign Trade)"},
+            {"name": "Supply chain", "value": "4-star, 100% quality pass, 100% fulfillment"},
+        ],
+    }
+
+
 def parse_1688_moon_chair_data_for_id(product_id: str) -> dict[str, Any] | None:
     """Return hardcoded data for a specific product ID.
 
@@ -421,5 +540,7 @@ def parse_1688_moon_chair_data_for_id(product_id: str) -> dict[str, Any] | None:
         "844058953087": parse_1688_moon_chair_data(),
         "1054599709111": parse_1688_camping_pad_data(),
         "986492089515": parse_1688_heating_sleeping_pad_data(),
+        "746435358585": parse_1688_ice_crampons_data(),
+        "818076845448": parse_1688_tent_storage_bag_data(),
     }
     return _KNOWN_PRODUCTS.get(product_id)
