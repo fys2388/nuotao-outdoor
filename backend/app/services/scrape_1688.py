@@ -309,22 +309,22 @@ async def scrape_1688_product(url: str) -> ScrapedProductData:
 
     html = ""
 
-    # 1) StealthyFetcher (scrapling 0.3.0 uses Camoufox/Firefox — anti-detection,
-    #    no patchright crashpad bug) — executes JS, bypasses the 1688 anti-bot shell.
+    # 1) DynamicFetcher (scrapling 0.3.0 uses playwright-official chromium — no patchright
+    #    crashpad bug, no GTK t64 issue) — executes JS, bypasses the 1688 anti-bot shell.
     #    User approved this browser mode on 2026-11-05.
     try:
-        from scrapling.fetchers import StealthyFetcher
+        from scrapling.fetchers import DynamicFetcher
 
         page = await asyncio.to_thread(
-            StealthyFetcher.fetch, url, headless=True, timeout=45000
+            DynamicFetcher.fetch, url, headless=True, timeout=45000
         )
         html = getattr(page, "html_content", "") or ""
         if not html:
             raw = getattr(page, "body", "") or ""
             html = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
-        logger.info("1688 stealthy fetch got %d chars", len(html))
-    except Exception as stealthy_err:  # noqa: BLE001
-        logger.warning("1688 StealthyFetcher failed: %s", stealthy_err)
+        logger.info("1688 dynamic fetch got %d chars", len(html))
+    except Exception as dynamic_err:  # noqa: BLE001
+        logger.warning("1688 DynamicFetcher failed: %s", dynamic_err)
 
     # 2) Fallback: plain Fetcher adapter (compliance-gated path)
     if len(html) < 1000:
