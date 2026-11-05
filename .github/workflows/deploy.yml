@@ -419,6 +419,15 @@ jobs:
                 echo "[hotfix] scrapling already installed: $(.venv/bin/pip show scrapling 2>/dev/null | grep -i '^Version:' | head -1)"
               fi
               .venv/bin/python -c "import scrapling; print('[hotfix] scrapling import OK v'+getattr(scrapling,'__version__','?'))" 2>&1 | tail -2
+              # 5.6b) 确保 curl_cffi（scrapling Fetcher.get 底层依赖，缺失导致 ModuleNotFoundError）
+              if ! .venv/bin/pip show curl_cffi >/dev/null 2>&1; then
+                echo "[hotfix] curl_cffi missing, installing..."
+                .venv/bin/pip install curl_cffi --quiet 2>&1 | tail -4
+                echo "[hotfix] curl_cffi install exit=$?"
+              else
+                echo "[hotfix] curl_cffi already installed: $(.venv/bin/pip show curl_cffi 2>/dev/null | grep -i '^Version:' | head -1)"
+              fi
+              .venv/bin/python -c "import curl_cffi; print('[hotfix] curl_cffi import OK v'+getattr(curl_cffi,'__version__','?'))" 2>&1 | tail -2
               # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
               if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
                 sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
