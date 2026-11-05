@@ -446,6 +446,10 @@ jobs:
                 echo "[hotfix] browserforge already installed: $(.venv/bin/pip show browserforge 2>/dev/null | grep -i '^Version:' | head -1)"
               fi
               .venv/bin/python -c "import browserforge; print('[hotfix] browserforge import OK')" 2>&1 | tail -2
+              # 5.6e) 安装 patchright 浏览器（StealthyFetcher 需要，绕过 1688 反爬）
+              echo "[hotfix] installing patchright chromium (browser for StealthyFetcher)..."
+              .venv/bin/python -m patchright install chromium 2>&1 | tail -8
+              echo "[hotfix] patchright browser install exit=$?"
               # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
               if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
                 sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
