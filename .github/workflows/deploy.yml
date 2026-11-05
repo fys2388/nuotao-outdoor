@@ -210,11 +210,22 @@ jobs:
               [ -n "$EF" ] && [ -f "$EF" ] && DB_VAL=$(grep '^DATABASE_URL=' "$EF" | head -1 | cut -d'=' -f2-)
               [ -n "$DB_VAL" ] && echo "[hotfix] DATABASE_URL from EnvironmentFile $EF"
             fi
-            # 3) 从任何备份恢复
+            # 3) 从任何备份恢复：遍历所有备份（旧→新），用 asyncpg 测试其密码，找到污染前的有效配置
             if [ -z "$DB_VAL" ]; then
-              for BAK in $(ls -td /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null); do
+              echo "[hotfix] scanning backups for a working DATABASE_URL (oldest first)..."
+              for BAK in $(ls -tr /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null); do
                 V=$(grep '^DATABASE_URL=' "$BAK" 2>/dev/null | head -1 | cut -d'=' -f2-)
-                if [ -n "$V" ]; then DB_VAL="$V"; echo "[hotfix] DATABASE_URL from backup $BAK"; break; fi
+                [ -z "$V" ] && continue
+                DB_USER=$(echo "$V" | sed -E 's#^[^:]+://([^:]+):.*#\1#')
+                DB_PW=$(echo "$V" | sed -E 's#^[^:]+://[^:]+:([^@]+)@.*#\1#')
+                [ -z "$DB_PW" ] && continue
+                if /opt/nuotao-ai-os/backend/.venv/bin/python -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect(host='localhost',port=5432,user='$DB_USER',password='$DB_PW',database='nuotao',timeout=6)); print('OK')" 2>/dev/null | grep -q OK; then
+                  DB_VAL="$V"
+                  echo "[hotfix] DATABASE_URL verified from backup $BAK (user=$DB_USER)"
+                  break
+                else
+                  echo "[hotfix]   backup $BAK password rejected"
+                fi
               done
             fi
             # 3.5) 用户提供的数据库密码 fallback：用 asyncpg（服务器 .venv 已安装）测试连通性
