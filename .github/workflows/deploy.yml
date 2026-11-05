@@ -186,8 +186,28 @@ jobs:
             [ -z "$BPID" ] && BPID=$(pgrep -f 'uvicorn' | head -1)
             DB_VAL=""
             if [ -n "$BPID" ]; then
-              DB_VAL=$(tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
+              echo "[hotfix] backend pid=$BPID cwd=$(readlink /proc/$BPID/cwd 2>/dev/null || echo '?')"
+              echo "[hotfix] backend cmdline: $(tr '\0' ' ' < /proc/$BPID/cmdline 2>/dev/null | head -c 200)"
+              ENV_SRC=$(sudo cat /proc/$BPID/environ 2>/dev/null || cat /proc/$BPID/environ 2>/dev/null)
+              echo "[hotfix] env keys: $(echo "$ENV_SRC" | tr '\0' '\n' | grep -E '^(DATABASE_URL|POSTGRES|DB_|PG)' | cut -d'=' -f1 | tr '\n' ' ')"
+              DB_VAL=$(echo "$ENV_SRC" | tr '\0' '\n' | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
               echo "[hotfix] backend pid=$BPID DATABASE_URL found: $([ -n "$DB_VAL" ] && echo YES || echo NO)"
+            fi
+            # 1.5) 全盘搜索含 DATABASE_URL 的 .env 文件（脱敏显示，定位真实配置）
+            if [ -z "$DB_VAL" ]; then
+              echo "[hotfix] searching all .env files for DATABASE_URL..."
+              FOUND_DB=""
+              for F in $(find /opt/nuotao-ai-os -maxdepth 4 \( -name '*.env' -o -name '.env*' \) 2>/dev/null | grep -v '/\.venv/' | grep -v node_modules); do
+                V=$(grep '^DATABASE_URL=' "$F" 2>/dev/null | head -1)
+                if [ -n "$V" ]; then
+                  echo "[hotfix]   $F -> $(echo "$V" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')"
+                  [ -z "$FOUND_DB" ] && FOUND_DB="$F"
+                fi
+              done
+              if [ -n "$FOUND_DB" ]; then
+                DB_VAL=$(grep '^DATABASE_URL=' "$FOUND_DB" | head -1 | cut -d'=' -f2-)
+                echo "[hotfix] DATABASE_URL from $FOUND_DB"
+              fi
             fi
             # 2) 若进程读不到，尝试从 systemd 服务文件 EnvironmentFile 指向的文件读取
             if [ -z "$DB_VAL" ]; then
