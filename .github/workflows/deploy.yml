@@ -462,8 +462,9 @@ jobs:
                 echo "[hotfix] PLAYWRIGHT_BROWSERS_PATH already set"
               fi
               echo "[hotfix] nuotao cache: $(ls /home/nuotao/.cache/ms-playwright/ 2>/dev/null | head -3 || echo NONE)"
-              echo "[hotfix] StealthyFetcher test (as nuotao):"
-              su - nuotao -c "cd /opt/nuotao-ai-os/backend && PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright .venv/bin/python -c \"from scrapling.fetchers import StealthyFetcher; p=StealthyFetcher.fetch('https://detail.1688.com/offer/964465929482.html', headless=True, timeout=30000); print('sf_len', len(getattr(p,'html_content','') or ''))\"" 2>&1 | tail -6
+              echo "[hotfix] StealthyFetcher test (as nuotao, full traceback):"
+              cd /opt/nuotao-ai-os/backend && timeout 70 su - nuotao -s /bin/bash -c "cd /opt/nuotao-ai-os/backend && PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright timeout 60 .venv/bin/python -c \"import traceback; from scrapling.fetchers import StealthyFetcher; p=StealthyFetcher.fetch('https://detail.1688.com/offer/964465929482.html', headless=True, timeout=30000); print('sf_len', len(getattr(p,'html_content','') or ''))\"" 2>&1 | tail -20
+              echo "[hotfix] StealthyFetcher test exit=$?"
               # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
               if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
                 sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
