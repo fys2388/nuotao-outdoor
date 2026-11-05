@@ -182,11 +182,13 @@ jobs:
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
             ROOT_ENV=/opt/nuotao-ai-os/.env
             # 1) 从后端运行进程读取真实 DATABASE_URL（进程仍存活，环境有效）
-            # 精确匹配 uvicorn 进程：cmdline 必须含 'uvicorn' 且 'app.main'，排除 bash 脚本自身
+            # 精确匹配 uvicorn 进程：排除 bash 包装（appleboy 用 bash -c "脚本"，bash cmdline 含脚本文本），
+            # 再匹配 cmdline 含 'uvicorn' 且 'app.main' 的真实进程
             BPID=""
             for PID in $(pgrep -f 'uvicorn' 2>/dev/null); do
               CMD=$(tr '\0' ' ' < /proc/$PID/cmdline 2>/dev/null | head -c 250)
               case "$CMD" in
+                bash*|sh*|-bash*) continue;;
                 *uvicorn*app.main*) BPID=$PID; break;;
                 *) continue;;
               esac
