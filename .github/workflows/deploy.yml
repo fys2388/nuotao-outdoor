@@ -182,13 +182,13 @@ jobs:
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
             ROOT_ENV=/opt/nuotao-ai-os/.env
             # 1) 从后端运行进程读取真实 DATABASE_URL（进程仍存活，环境有效）
-            # 精确匹配 uvicorn 进程：排除 bash 脚本自身（cmdline 含 'uvicorn' 文本会误匹配）
+            # 精确匹配 uvicorn 进程：cmdline 必须含 'uvicorn' 且 'app.main'，排除 bash 脚本自身
             BPID=""
             for PID in $(pgrep -f 'uvicorn' 2>/dev/null); do
-              CMD=$(tr '\0' ' ' < /proc/$PID/cmdline 2>/dev/null | head -c 200)
+              CMD=$(tr '\0' ' ' < /proc/$PID/cmdline 2>/dev/null | head -c 250)
               case "$CMD" in
-                bash*|sh*|-bash*) continue;;
-                *) BPID=$PID; break;;
+                *uvicorn*app.main*) BPID=$PID; break;;
+                *) continue;;
               esac
             done
             DB_VAL=""
@@ -200,23 +200,7 @@ jobs:
               DB_VAL=$(echo "$ENV_SRC" | tr '\0' '\n' | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
               echo "[hotfix] backend pid=$BPID DATABASE_URL found: $([ -n "$DB_VAL" ] && echo YES || echo NO)"
             else
-              echo "[hotfix] no uvicorn backend process found"
-            fi
-            # 1.5) 全盘搜索含 DATABASE_URL 的真实 .env 文件（排除 .example/.template 假模板）
-            if [ -z "$DB_VAL" ]; then
-              echo "[hotfix] searching real .env files for DATABASE_URL (excluding .example/.template)..."
-              FOUND_DB=""
-              for F in $(find /opt/nuotao-ai-os -maxdepth 4 \( -name '*.env' -o -name '.env*' \) 2>/dev/null | grep -v '/\.venv/' | grep -v node_modules | grep -vE '\.(example|template)$' | grep -vE '\.(example|template)'); do
-                V=$(grep '^DATABASE_URL=' "$F" 2>/dev/null | head -1)
-                if [ -n "$V" ]; then
-                  echo "[hotfix]   $F -> $(echo "$V" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')"
-                  [ -z "$FOUND_DB" ] && FOUND_DB="$F"
-                fi
-              done
-              if [ -n "$FOUND_DB" ]; then
-                DB_VAL=$(grep '^DATABASE_URL=' "$FOUND_DB" | head -1 | cut -d'=' -f2-)
-                echo "[hotfix] DATABASE_URL from $FOUND_DB"
-              fi
+              echo "[hotfix] no uvicorn app.main process found"
             fi
             # 2) 若进程读不到，尝试从 systemd 服务文件 EnvironmentFile 指向的文件读取
             if [ -z "$DB_VAL" ]; then
@@ -231,13 +215,13 @@ jobs:
                 if [ -n "$V" ]; then DB_VAL="$V"; echo "[hotfix] DATABASE_URL from backup $BAK"; break; fi
               done
             fi
-            # 3.5) 用户提供的数据库密码 fallback：测试连通性后使用
+            # 3.5) 用户提供的数据库密码 fallback：用 asyncpg（服务器 .venv 已安装）测试连通性
             if [ -z "$DB_VAL" ]; then
               DB_PW='UFMmchfTXuRk'
               for DB_USER in nuotao root postgres; do
-                if PGPASSWORD="$DB_PW" psql -h localhost -p 5432 -U "$DB_USER" -d nuotao -c "SELECT 1" >/dev/null 2>&1; then
+                if /opt/nuotao-ai-os/backend/.venv/bin/python -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect(host='localhost',port=5432,user='$DB_USER',password='$DB_PW',database='nuotao',timeout=6)); print('OK')" 2>/dev/null | grep -q OK; then
                   DB_VAL="postgresql+asyncpg://${DB_USER}:${DB_PW}@localhost:5432/nuotao"
-                  echo "[hotfix] DATABASE_URL verified with user $DB_USER"
+                  echo "[hotfix] DATABASE_URL verified with user $DB_USER (asyncpg)"
                   break
                 fi
               done
