@@ -550,16 +550,11 @@ jobs:
                 echo ""
                 # 5.6z) chromium-1234 路径修复（playwright 1.62 用 chrome-linux，scrapling 找 chrome-linux64）
                 echo "[hotfix] chromium dirs: $(ls /home/nuotao/.cache/ms-playwright/ 2>/dev/null | tr '\n' ' ')"
-                # chrome-linux64 可能是悬空 symlink——重建为真实目录
-                if [ ! -f /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome ]; then
-                  echo "[hotfix] rebuilding chrome-linux64 (real dir)..."
+                # 用 /root/.cache 的真实完整 chromium（playwright install 装的）修复 chrome-linux64
+                if [ -d /root/.cache/ms-playwright/chromium-1234 ]; then
+                  echo "[hotfix] copying real chromium-1234 from /root/.cache..."
                   rm -rf /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64 2>/dev/null || true
-                  if [ -d /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux ]; then
-                    cp -r /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64
-                  else
-                    mkdir -p /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64
-                    cp -r /home/nuotao/.cache/ms-playwright/chromium_headless_shell-1234/* /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64/ 2>/dev/null || true
-                  fi
+                  cp -r /root/.cache/ms-playwright/chromium-1234/chrome-linux64 /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64 2>/dev/null || true
                 fi
                 chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
                 echo "[hotfix] chrome-linux64/chrome: $(ls -la /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome 2>/dev/null || echo MISSING)"
