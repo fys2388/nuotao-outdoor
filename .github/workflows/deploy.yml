@@ -318,8 +318,15 @@ jobs:
               # 5) 重启后端
               systemctl daemon-reload
               systemctl restart nuotao-backend
-              sleep 8
-              systemctl is-active nuotao-backend && echo "[hotfix] backend ACTIVE" || echo "[hotfix] backend INACTIVE"
+              sleep 10
+              if systemctl is-active nuotao-backend; then
+                echo "[hotfix] backend ACTIVE"
+              else
+                echo "[hotfix] backend INACTIVE, diagnosing:"
+                systemctl status nuotao-backend --no-pager 2>&1 | head -15
+                echo "[hotfix] --- journal ---"
+                journalctl -u nuotao-backend -n 30 --no-pager 2>&1 | tail -30
+              fi
               curl -s -o /dev/null -w "health=%{http_code}\n" http://localhost:8000/healthz || true
             else
               echo "[hotfix] FATAL: could not recover DATABASE_URL anywhere"
