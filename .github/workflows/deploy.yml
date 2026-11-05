@@ -315,6 +315,13 @@ jobs:
                 echo "DATABASE_URL=$DB_VAL" >> "$F"
                 echo "[hotfix] wrote DATABASE_URL to $F"
               done
+              # 4.2) 权限修复：nuotao 用户需能遍历目录并读取 .env（systemd User=nuotao）
+              chmod 755 /opt/nuotao-ai-os 2>/dev/null || true
+              chmod 755 /opt/nuotao-ai-os/backend 2>/dev/null || true
+              chmod 644 "$ENV_FILE" "$ROOT_ENV" 2>/dev/null || true
+              echo "[hotfix] dir perm: $(ls -ld /opt/nuotao-ai-os 2>&1 | head -1)"
+              echo "[hotfix] root.env: $(ls -la /opt/nuotao-ai-os/.env 2>&1 | head -1)"
+              echo "[hotfix] backend.env: $(ls -la "$ENV_FILE" 2>&1 | head -1)"
               # 5) 确保生产 .venv 的 uvicorn 存在（缺失则重建/回退复制 staging）
               cd /opt/nuotao-ai-os/backend
               echo "[hotfix] uvicorn check: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
