@@ -353,9 +353,19 @@ jobs:
               systemctl cat nuotao-backend 2>&1 | grep -E 'EnvironmentFile|ExecStart' || echo "[hotfix] systemctl cat failed"
               # 4.6) 停掉占 8000 的 staging 后端（生产需绑 8000，Address already in use）
               echo "[hotfix] port 8000 before: $(ss -tlnp 2>/dev/null | grep ':8000' | head -2 || echo none)"
-              for PID in $(pgrep -f 'staging/backend' 2>/dev/null); do
-                echo "[hotfix] killing staging backend pid=$PID"
-                kill -9 "$PID" 2>/dev/null || true
+              # 用 ss 提取占 8000 的 pid（pgrep -f staging 会误匹配 bash wrapper）
+              P8000=$(ss -tlnp 2>/dev/null | grep ':8000' | sed -E 's/.*pid=([0-9]+).*/\1/' | head -1)
+              if [ -n "$P8000" ]; then
+                echo "[hotfix] killing pid $P8000 (port 8000 holder)"
+                kill -9 "$P8000" 2>/dev/null || true
+              fi
+              # 兜底：kill 真实 staging uvicorn（排除 bash wrapper）
+              for PID in $(pgrep -f 'uvicorn' 2>/dev/null); do
+                CMD=$(tr '\0' ' ' < /proc/$PID/cmdline 2>/dev/null | head -c 250)
+                case "$CMD" in
+                  bash*|sh*|-bash*) continue;;
+                  *staging*uvicorn*) echo "[hotfix] killing staging uvicorn pid=$PID"; kill -9 "$PID" 2>/dev/null || true;;
+                esac
               done
               sleep 2
               echo "[hotfix] port 8000 after: $(ss -tlnp 2>/dev/null | grep ':8000' | head -2 || echo none)"
