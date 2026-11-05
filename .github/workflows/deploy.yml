@@ -255,14 +255,21 @@ jobs:
             if [ -z "$DB_VAL" ]; then
               NEWPW="Nuotao_$(openssl rand -hex 12 2>/dev/null || date +%s)"
               echo "[hotfix] attempting to RESET nuotao password..."
-              if sudo -n -u postgres psql -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null \
-                 || su - postgres -c "psql -c \"ALTER USER nuotao WITH PASSWORD '$NEWPW';\"" 2>/dev/null \
-                 || runuser -u postgres -- psql -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null \
-                 || psql -U postgres -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null; then
-                DB_VAL="postgresql+asyncpg://nuotao:$NEWPW@localhost:5432/nuotao"
-                echo "[hotfix] nuotao password RESET ok, DATABASE_URL built"
+              # psql 可能不在 PATH，先 find 完整路径（Debian 通常在 /usr/lib/postgresql/<ver>/bin/psql）
+              PSQL=$(find /usr/lib/postgresql /usr/local/bin /usr/bin /opt -name psql -type f 2>/dev/null | head -1)
+              [ -z "$PSQL" ] && PSQL=$(command -v psql 2>/dev/null)
+              echo "[hotfix] psql=$PSQL"
+              if [ -n "$PSQL" ]; then
+                if su - postgres -c "$PSQL -c \"ALTER USER nuotao WITH PASSWORD '$NEWPW';\"" 2>/dev/null \
+                   || sudo -n -u postgres "$PSQL" -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null \
+                   || runuser -u postgres -- "$PSQL" -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null; then
+                  DB_VAL="postgresql+asyncpg://nuotao:$NEWPW@localhost:5432/nuotao"
+                  echo "[hotfix] nuotao password RESET ok, DATABASE_URL built"
+                else
+                  echo "[hotfix] RESET failed (psql ran but ALTER USER rejected)"
+                fi
               else
-                echo "[hotfix] RESET failed (need postgres superuser access)"
+                echo "[hotfix] RESET failed (psql binary not found)"
               fi
             fi
             # 4) 写入 backend/.env 和根目录 .env（systemd 实际读取的）
