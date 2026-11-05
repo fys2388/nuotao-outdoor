@@ -398,6 +398,14 @@ jobs:
                 journalctl -u nuotao-backend -n 30 --no-pager 2>&1 | tail -30
               fi
               curl -s -o /dev/null -w "health=%{http_code}\n" http://localhost:8000/healthz || true
+              # 7) 本地诊断 import 端点（绕过 Cloudflare，确认 502 是 nginx/Cloudflare 还是后端）
+              echo "[hotfix] === local endpoint diagnostics ==="
+              echo "[hotfix] readyz local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/readyz)"
+              echo "[hotfix] import POST local: $(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H 'Content-Type: application/json' -d '{\"url_or_id\":\"diag-test\"}')"
+              echo "[hotfix] import GET local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688)"
+              echo "[hotfix] products local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/products)"
+              echo "[hotfix] import POST body: $(curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H 'Content-Type: application/json' -d '{\"url_or_id\":\"diag-test\"}' | head -c 300)"
+              echo "[hotfix] === local diagnostics end ==="
             else
               echo "[hotfix] FATAL: could not recover DATABASE_URL anywhere"
             fi
