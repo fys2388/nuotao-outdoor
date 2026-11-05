@@ -1,30 +1,27 @@
 [Unit]
-Description=Nuotao AI Agent Scheduler (选品/营销/供应链/执行/反馈)
+Description=Nuotao AI Agent Scheduler (选品/营销/供应�?执行/反馈)
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 
 [Service]
 Type=simple
-# v1.1: 由 root 改为 nuotao，与 backend/worker 权限模型一致
-# （AGENTS.md §4.3 最小权限；调度器无需写系统区）
-User=nuotao
+# v1.1: �?root 改为 nuotao，与 backend/worker 权限模型一�?# （AGENTS.md §4.3 最小权限；调度器无需写系统区�?User=nuotao
 Group=nuotao
-WorkingDirectory=/opt/nuotao/backend
-Environment="PATH=/opt/nuotao/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/opt/nuotao/backend/.env
-ExecStart=/opt/nuotao/backend/.venv/bin/python -m app.services.agent_scheduler
+WorkingDirectory=/opt/nuotao-ai-os/backend
+Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/nuotao-ai-os/backend/.env
+ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/python -m app.services.agent_scheduler
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nuotao-agent-scheduler
 
-# 安全限制（与 nuotao-backend.service 对齐）
-NoNewPrivileges=true
+# 安全限制（与 nuotao-backend.service 对齐�?NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/nuotao/backend/data /opt/nuotao/backend/logs /opt/nuotao/backend/app/data /opt/nuotao/backend/app/logs
+ReadWritePaths=/opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs /opt/nuotao-ai-os/backend/app/data /opt/nuotao-ai-os/backend/app/logs
 
 [Install]
 WantedBy=multi-user.target

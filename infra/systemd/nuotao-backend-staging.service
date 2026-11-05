@@ -1,4 +1,4 @@
-﻿[Unit]
+[Unit]
 Description=Nuotao AI OS Backend API Server (Staging)
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
@@ -7,10 +7,10 @@ Wants=postgresql.service redis.service
 Type=simple
 User=nuotao
 Group=nuotao
-WorkingDirectory=/opt/nuotao/staging/backend
-Environment="PATH=/opt/nuotao/staging/backend/.venv/bin"
-EnvironmentFile=/opt/nuotao/staging/backend/.env
-ExecStart=/opt/nuotao/staging/backend/.venv/bin/gunicorn app.main:app --bind 127.0.0.1:8001 --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 120
+WorkingDirectory=/opt/nuotao-ai-os/staging/backend
+Environment="PATH=/opt/nuotao-ai-os/staging/backend/.venv/bin"
+EnvironmentFile=/opt/nuotao-ai-os/staging/backend/.env
+ExecStart=/opt/nuotao-ai-os/staging/backend/.venv/bin/gunicorn app.main:app --bind 127.0.0.1:8001 --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 120
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -18,12 +18,12 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nuotao-backend-staging
 
-# 瀹夊叏闄愬埗
+# 安全限制
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/opt/nuotao/staging/backend/data /opt/nuotao/staging/backend/logs /opt/nuotao/staging/backend/app/data /opt/nuotao/staging/backend/app/logs
+ReadWritePaths=/opt/nuotao-ai-os/staging/backend/data /opt/nuotao-ai-os/staging/backend/logs /opt/nuotao-ai-os/staging/backend/app/data /opt/nuotao-ai-os/staging/backend/app/logs
 
 [Install]
 WantedBy=multi-user.target
