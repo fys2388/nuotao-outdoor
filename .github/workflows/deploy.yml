@@ -164,6 +164,63 @@ jobs:
             fi
             echo "=== STAGING VALIDATION PASSED ==="
 
+  # 紧急修复：从后端运行进程读取真实 DATABASE_URL 并写回 .env，修复后端启动失败。
+  # 独立 job（不依赖 CI/staging），立即执行，趁后端进程仍存活时读取其环境。
+  hotfix-env:
+    name: Hotfix DATABASE_URL (read from backend process)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hotfix .env via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -x
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
+            ROOT_ENV=/opt/nuotao-ai-os/.env
+            # 1) 从后端运行进程读取真实 DATABASE_URL（进程仍存活，环境有效）
+            BPID=$(pgrep -f 'uvicorn app.main|app.main:app' | head -1)
+            [ -z "$BPID" ] && BPID=$(pgrep -f 'uvicorn' | head -1)
+            DB_VAL=""
+            if [ -n "$BPID" ]; then
+              DB_VAL=$(tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
+              echo "[hotfix] backend pid=$BPID DATABASE_URL found: $([ -n "$DB_VAL" ] && echo YES || echo NO)"
+            fi
+            # 2) 若进程读不到，尝试从 systemd 服务文件 EnvironmentFile 指向的文件读取
+            if [ -z "$DB_VAL" ]; then
+              EF=$(systemctl cat nuotao-backend 2>/dev/null | grep -oP 'EnvironmentFile=\K.*' | head -1)
+              [ -n "$EF" ] && [ -f "$EF" ] && DB_VAL=$(grep '^DATABASE_URL=' "$EF" | head -1 | cut -d'=' -f2-)
+              [ -n "$DB_VAL" ] && echo "[hotfix] DATABASE_URL from EnvironmentFile $EF"
+            fi
+            # 3) 从任何备份恢复
+            if [ -z "$DB_VAL" ]; then
+              for BAK in $(ls -td /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null); do
+                V=$(grep '^DATABASE_URL=' "$BAK" 2>/dev/null | head -1 | cut -d'=' -f2-)
+                if [ -n "$V" ]; then DB_VAL="$V"; echo "[hotfix] DATABASE_URL from backup $BAK"; break; fi
+              done
+            fi
+            # 4) 写入 backend/.env 和根目录 .env（systemd 实际读取的）
+            if [ -n "$DB_VAL" ]; then
+              for F in "$ENV_FILE" "$ROOT_ENV"; do
+                mkdir -p "$(dirname "$F")"
+                touch "$F"
+                sed -i '/^DATABASE_URL=/d' "$F" 2>/dev/null || true
+                echo "DATABASE_URL=$DB_VAL" >> "$F"
+                echo "[hotfix] wrote DATABASE_URL to $F"
+              done
+              # 5) 重启后端
+              systemctl daemon-reload
+              systemctl restart nuotao-backend
+              sleep 8
+              systemctl is-active nuotao-backend && echo "[hotfix] backend ACTIVE" || echo "[hotfix] backend INACTIVE"
+              curl -s -o /dev/null -w "health=%{http_code}\n" http://localhost:8000/healthz || true
+            else
+              echo "[hotfix] FATAL: could not recover DATABASE_URL anywhere"
+            fi
+
   deploy-production:
     name: Deploy to Production
     needs: [ci-gate, stage-validate]
