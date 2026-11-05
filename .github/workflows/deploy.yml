@@ -500,11 +500,13 @@ jobs:
                 # 5.6p) 降级 scrapling 0.3.0（DynamicFetcher 用 playwright 官方，无 patchright crashpad bug）
                 /opt/nuotao-ai-os/backend/.venv/bin/pip install "scrapling==0.3.0" playwright 2>&1 | tail -3
                 /opt/nuotao-ai-os/backend/.venv/bin/python -m playwright install chromium 2>&1 | tail -3
-                # 5.6s) 磁盘清理（camoufox Firefox 下载需空间；chromium 多版本 + .venv.314 占用）
+                # 5.6s) 深度磁盘清理（4GB 磁盘：docker 旧镜像 + /var 缓存 + 旧 chromium + .venv.314）
                 echo "[hotfix] disk before: $(df -h / | tail -1)"
                 rm -rf /opt/nuotao-ai-os/backend/.venv.314 2>/dev/null || true
                 rm -rf /home/nuotao/.cache/ms-playwright/* /root/.cache/ms-playwright/* 2>/dev/null || true
+                docker system prune -af 2>/dev/null | tail -2 || true
                 apt-get clean 2>/dev/null || true
+                rm -rf /var/cache/apt /var/lib/apt/lists/* /var/log/*.log /tmp/* 2>/dev/null || true
                 echo "[hotfix] disk after: $(df -h / | tail -1)"
                 # 5.6r) camoufox（Firefox，反检测，无 crashpad）需要 ~/.camoufox + ~/.cache/camoufox + Firefox 下载
                 mkdir -p /home/nuotao/.camoufox
