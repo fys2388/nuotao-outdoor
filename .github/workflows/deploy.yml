@@ -481,6 +481,15 @@ jobs:
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
               chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
               chmod -R 755 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+              # 5.6n) 降级 patchright（chromium 138+ 的 crashpad_handler --database required bug；131 无 crashpad）
+              echo "[hotfix] downgrading patchright to 1.49.0 (chromium 131, no crashpad bug)..."
+              .venv/bin/pip install "patchright==1.49.0" 2>&1 | tail -4
+              echo "[hotfix] patchright now: $(.venv/bin/pip show patchright 2>/dev/null | grep -i '^Version' | head -1)"
+              .venv/bin/python -m patchright install chromium 2>&1 | tail -3
+              mkdir -p /home/nuotao/.cache/ms-playwright
+              cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
+              chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+              chmod -R 755 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
               # 5.6f) 浏览器权限：patchright 装到 /root/.cache（root），后端 User=nuotao 读不到 → 复制到 nuotao + 设 env
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
