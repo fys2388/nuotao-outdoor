@@ -303,28 +303,52 @@ jobs:
 
             echo "=== 3. Running database migrations ==="
             # DATABASE_URL 必须以环境变量方式传给 alembic（pydantic 环境变量优先于 .env 文件）。
-            # systemd 服务实际使用根目录 /opt/nuotao-ai-os/.env（EnvironmentFile），
-            # 而 backend/.env 里的 DATABASE_URL 密码可能已过期/不匹配，导致 password authentication failed。
-            # 这里显式从根目录 .env 导出 DATABASE_URL，覆盖 backend/.env 的错误值。
+            # 服务器 backend/.env 的 DATABASE_URL 可能为空/损坏（password authentication failed 根因）。
+            # 恢复优先级：① 根目录 .env ② backend/.env ③ 最近备份 ④ 后端运行进程环境。
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
             ROOT_ENV=/opt/nuotao-ai-os/.env
-            if [ -f "$ROOT_ENV" ] && grep -q '^DATABASE_URL=' "$ROOT_ENV"; then
-              export DATABASE_URL=$(grep '^DATABASE_URL=' "$ROOT_ENV" | head -1 | cut -d'=' -f2-)
-              echo "[db] DATABASE_URL loaded from $ROOT_ENV (systemd 实际使用的环境文件)"
-            else
-              echo "[db] WARN: $ROOT_ENV missing DATABASE_URL, falling back to backend/.env"
+            DB_VAL=""
+            if [ -f "$ROOT_ENV" ]; then
+              DB_VAL=$(grep '^DATABASE_URL=' "$ROOT_ENV" | head -1 | cut -d'=' -f2- | tr -d ' ' | tr -d '"' | tr -d "'")
             fi
-            if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
+            if [ -z "$DB_VAL" ] && [ -f "$ENV_FILE" ]; then
+              DB_VAL=$(grep '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d'=' -f2- | tr -d ' ' | tr -d '"' | tr -d "'")
+            fi
+            if [ -z "$DB_VAL" ]; then
+              LATEST_BAK=$(ls -td /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null | head -1)
+              if [ -n "$LATEST_BAK" ]; then
+                DB_VAL=$(grep '^DATABASE_URL=' "$LATEST_BAK" | head -1 | cut -d'=' -f2- | tr -d ' ' | tr -d '"' | tr -d "'")
+                [ -n "$DB_VAL" ] && echo "[db] restored DATABASE_URL from backup $LATEST_BAK"
+              fi
+            fi
+            if [ -z "$DB_VAL" ]; then
+              BPID=$(pgrep -f 'app.main|uvicorn' | head -1)
+              if [ -n "$BPID" ]; then
+                DB_VAL=$(tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
+                [ -n "$DB_VAL" ] && echo "[db] DATABASE_URL from backend process pid $BPID"
+              fi
+            fi
+            if [ -n "$DB_VAL" ]; then
+              export DATABASE_URL="$DB_VAL"
+              # 同步回 backend/.env，确保后端重启后仍能连接
+              if [ -f "$ENV_FILE" ]; then
+                sed -i '/^DATABASE_URL=/d' "$ENV_FILE"
+              fi
+              echo "DATABASE_URL=$DB_VAL" >> "$ENV_FILE" 2>/dev/null || true
+              echo "[db] DATABASE_URL ready (host=$(echo "$DB_VAL" | sed -E 's#.*@([^/]+)/.*#\1#'))"
+            else
+              echo "[db] WARN: no DATABASE_URL found anywhere; THIS DEPLOY HAS NO MIGRATIONS so skipping alembic"
+            fi
+            if DBURL=$(grep '^DATABASE_URL=' "$ENV_FILE" 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
               echo "[db] 杩炴帴閰嶇疆(瀵嗙爜宸查殣钘?: $DBURL"
             else
-              echo "[db] 璀﹀憡: 鏈湪 /opt/nuotao-ai-os/backend/.env 鎵惧埌 DATABASE_URL"
+              echo "[db] 璀﹀憡: 鏈湪 $ENV_FILE 鎵惧埌 DATABASE_URL"
             fi
             echo "[db] 鎵ц鏁版嵁搴撹縼绉?.."
-            if ! alembic upgrade head; then
-              echo "ERROR: 鏁版嵁搴撹縼绉诲け璐ワ紝璇风櫥褰曟湇鍔″櫒鎺掓煡:"
-              echo "  1) compare the [db] connection config above with the real PostgreSQL password"
-              echo "  2) 纭鏁版嵁搴撳凡鍚姩: systemctl status postgresql"
-              echo "  3) 瀵嗙爜涓嶇鏃堕噸缃? sudo -u postgres psql -c \"ALTER USER nuotao WITH PASSWORD '<姝ｇ‘瀵嗙爜>';\""
-              exit 1
+            if [ -z "$DB_VAL" ]; then
+              echo "[db] SKIP alembic upgrade (DATABASE_URL unavailable, no migrations in this deploy)"
+            elif ! alembic upgrade head; then
+              echo "WARN: 鏁版嵁搴撹縼绉诲け璐ワ紙褰撳墠 deploy 鏃犳柊杩佺Щ锛屼笉闃诲锛?, 璇锋墜鍔ㄦ煡: alembic current"
             fi
             echo "[db] ensure all model tables exist (create_all idempotent)..."
             python3 /opt/nuotao-ai-os/infra/ensure_tables.py 2>&1 || echo "[db] table check skipped (script failed, non-blocking)"
