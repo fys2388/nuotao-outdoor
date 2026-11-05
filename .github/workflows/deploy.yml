@@ -322,6 +322,21 @@ jobs:
               echo "[hotfix] dir perm: $(ls -ld /opt/nuotao-ai-os 2>&1 | head -1)"
               echo "[hotfix] root.env: $(ls -la /opt/nuotao-ai-os/.env 2>&1 | head -1)"
               echo "[hotfix] backend.env: $(ls -la "$ENV_FILE" 2>&1 | head -1)"
+              # 4.3) 诊断 service 文件：EnvironmentFile 真实路径
+              echo "[hotfix] === service file ==="
+              systemctl cat nuotao-backend 2>&1 | grep -E 'EnvironmentFile|ExecStart|User|WorkingDirectory|Environment=' || echo "[hotfix] systemctl cat failed"
+              # 4.4) 确保 root.env 存在且含 DATABASE_URL（systemd 主进程读它）
+              if [ -f "$ROOT_ENV" ] && ! grep -q '^DATABASE_URL=' "$ROOT_ENV"; then
+                echo "DATABASE_URL=$DB_VAL" >> "$ROOT_ENV"
+                chmod 644 "$ROOT_ENV"
+                echo "[hotfix] appended DATABASE_URL to root.env"
+              fi
+              if [ -f "$ENV_FILE" ] && ! grep -q '^DATABASE_URL=' "$ENV_FILE"; then
+                echo "DATABASE_URL=$DB_VAL" >> "$ENV_FILE"
+                chmod 644 "$ENV_FILE"
+                echo "[hotfix] appended DATABASE_URL to backend.env"
+              fi
+              echo "[hotfix] root.env now: $(grep -c '^DATABASE_URL=' "$ROOT_ENV" 2>/dev/null) DATABASE_URL line(s)"
               # 5) 确保生产 .venv 的 uvicorn 存在（缺失则重建/回退复制 staging）
               cd /opt/nuotao-ai-os/backend
               echo "[hotfix] uvicorn check: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
