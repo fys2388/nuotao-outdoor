@@ -500,6 +500,11 @@ jobs:
                 # 5.6p) 降级 scrapling 0.3.0（DynamicFetcher 用 playwright 官方，无 patchright crashpad bug）
                 /opt/nuotao-ai-os/backend/.venv/bin/pip install "scrapling==0.3.0" playwright 2>&1 | tail -3
                 /opt/nuotao-ai-os/backend/.venv/bin/python -m playwright install chromium 2>&1 | tail -3
+                # 5.6r) camoufox（Firefox，反检测，无 crashpad）需要 ~/.camoufox + Firefox 下载
+                mkdir -p /home/nuotao/.camoufox
+                chown -R nuotao:nuotao /home/nuotao/.camoufox
+                echo "[hotfix] camoufox fetch (Firefox)..."
+                su - nuotao -c "cd /opt/nuotao-ai-os/backend && .venv/bin/python -m camoufox fetch" 2>&1 | tail -4 || echo "[hotfix] camoufox fetch failed"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
