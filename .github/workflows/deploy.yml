@@ -483,7 +483,12 @@ jobs:
               chmod -R 755 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
               # 5.6n) 降级 patchright（chromium 138+ 的 crashpad_handler --database required bug；131 无 crashpad）
               echo "[hotfix] python3: $(python3 --version 2>&1)"
-              echo "[hotfix] python3.12: $(command -v python3.12 || echo NONE)"
+              echo "[hotfix] installing python3.12 (deadsnakes; server only has 3.14)..."
+              apt-get install -y -qq software-properties-common 2>&1 | tail -2 || true
+              add-apt-repository -y ppa:deadsnakes/ppa 2>&1 | tail -2 || true
+              apt-get update -qq 2>&1 | tail -1 || true
+              apt-get install -y -qq python3.12 python3.12-venv 2>&1 | tail -3
+              echo "[hotfix] python3.12: $(command -v python3.12 >/dev/null && python3.12 --version || echo NONE)"
               if command -v python3.12 >/dev/null; then
                 echo "[hotfix] rebuilding .venv with python3.12 (patchright 1.49 needs greenlet 3.x w/ 3.12 wheel)..."
                 mv /opt/nuotao-ai-os/backend/.venv /opt/nuotao-ai-os/backend/.venv.314 2>/dev/null || true
