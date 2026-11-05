@@ -109,20 +109,119 @@ def parse_title(html: str) -> str:
     return "1688 Product"
 
 
+def _extract_balanced_json(html: str, key: str) -> str | None:
+    """Extract a balanced-brace JSON object from HTML starting at ``key``.
+
+    1688 detail pages embed SKU data as ``"skuInfoMap":{...}`` with nested
+    braces, so a naive non-greedy regex truncates at the first ``}``. This
+    helper finds the opening ``{`` after ``key`` and scans with a depth
+    counter to return the complete object text.
+    """
+    idx = html.find(key)
+    if idx < 0:
+        return None
+    start = html.find("{", idx)
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(html)):
+        c = html[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:i + 1]
+    return None
+
+
+def _extract_balanced_array(html: str, key: str) -> str | None:
+    """Extract a balanced-bracket JSON array from HTML starting at ``key``."""
+    idx = html.find(key)
+    if idx < 0:
+        return None
+    start = html.find("[", idx)
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(html)):
+        c = html[i]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return html[start:i + 1]
+    return None
+
+
+def _parse_price_from_sku_data(html: str) -> float:
+    """Extract the source price from the 1688 SKU data (skuRangePrices / skuInfoMap).
+
+    Returns the lowest SKU price, or 0.0 if not found. This avoids the legacy
+    bug where ``re.search(r'price[^>]*>\\s*[^0-9]*([\\d.]+)', html)`` matched the
+    first ``price`` occurrence in the page (e.g. a large 成交价) instead of the
+    actual SKU prices (¥55/¥150).
+    """
+    import json
+
+    range_text = _extract_balanced_array(html, '"skuRangePrices"')
+    if range_text:
+        try:
+            data = json.loads(range_text)
+            prices = [
+                float(p.get("price"))
+                for p in data
+                if isinstance(p, dict) and p.get("price")
+            ]
+            if prices:
+                return min(prices)
+        except Exception:
+            pass
+
+    sku_map_text = _extract_balanced_json(html, '"skuInfoMap"')
+    if sku_map_text:
+        try:
+            sku_map = json.loads(sku_map_text)
+            prices = []
+            for info in sku_map.values():
+                if isinstance(info, dict):
+                    p = info.get("discountPrice") or info.get("price")
+                    if p:
+                        try:
+                            prices.append(float(p))
+                        except (TypeError, ValueError):
+                            pass
+            if prices:
+                return min(prices)
+        except Exception:
+            pass
+
+    return 0.0
+
+
 def parse_variations(html: str) -> list[dict[str, Any]]:
     """Extract SKU variations from HTML."""
     variations = []
-    
-    # Pattern 1: JSON data in script tags
-    json_match = re.search(r'productSkuInfos\s*:\s*(\[.*?\])', html)
-    if json_match:
+
+    # Pattern 0 (primary): 1688 detail page uses skuProps + skuInfoMap, where
+    # skuInfoMap maps each SKU name to {discountPrice, canBookCount, price, ...}.
+    # e.g. "skuInfoMap":{"MH1多功能头灯英文版":{"discountPrice":"55.00","canBookCount":720,...}}
+    sku_map_text = _extract_balanced_json(html, '"skuInfoMap"')
+    if sku_map_text:
         try:
             import json
-            sku_data = json.loads(json_match.group(1))
-            for sku in sku_data[:5]:  # Max 5 variations
-                name = sku.get('name', '') or sku.get('skuName', '')
-                price = sku.get('price', 0) or sku.get('displayPrice', 0)
-                stock = sku.get('quantity', 0) or sku.get('stock', 0)
+            sku_map = json.loads(sku_map_text)
+            for name, info in sku_map.items():
+                if not isinstance(info, dict):
+                    continue
+                price = info.get("discountPrice") or info.get("price") or 0
+                stock = (
+                    info.get("canBookCount")
+                    or info.get("stock")
+                    or info.get("quantity")
+                    or 0
+                )
                 if name and price:
                     variations.append({
                         "name": name,
@@ -130,7 +229,27 @@ def parse_variations(html: str) -> list[dict[str, Any]]:
                         "stock_quantity": int(stock) if stock else 100,
                     })
         except Exception as e:
-            logger.warning(f"Failed to parse SKU JSON: {e}")
+            logger.warning(f"Failed to parse skuInfoMap JSON: {e}")
+
+    # Pattern 1: JSON data in script tags
+    if not variations:
+        json_match = re.search(r'productSkuInfos\s*:\s*(\[.*?\])', html)
+        if json_match:
+            try:
+                import json
+                sku_data = json.loads(json_match.group(1))
+                for sku in sku_data[:5]:  # Max 5 variations
+                    name = sku.get('name', '') or sku.get('skuName', '')
+                    price = sku.get('price', 0) or sku.get('displayPrice', 0)
+                    stock = sku.get('quantity', 0) or sku.get('stock', 0)
+                    if name and price:
+                        variations.append({
+                            "name": name,
+                            "price": float(price) if isinstance(price, (int, float, str)) else 0,
+                            "stock_quantity": int(stock) if stock else 100,
+                        })
+            except Exception as e:
+                logger.warning(f"Failed to parse SKU JSON: {e}")
     
     # Pattern 2: Look for variation names in HTML
     if not variations:
@@ -202,14 +321,22 @@ async def scrape_1688_product(url: str) -> ScrapedProductData:
     # Parse data
     offer_id = extract_offer_id(url)
     title = parse_title(html)
-    _price_match = re.search(r'price[^>]*>\s*[^<]*[\d.]+', html, re.IGNORECASE)
-    price = parse_price(_price_match.group(0) if _price_match else "")
-    
+
+    # Price: prefer the actual SKU prices (skuRangePrices / skuInfoMap) so the
+    # import uses ¥55/¥150 instead of the first "price" match in the page (¥1001).
+    price = _parse_price_from_sku_data(html)
+
+    # Legacy fallbacks: first "price" match in HTML (kept for compatibility).
+    if price == 0:
+        _price_match = re.search(r'price[^>]*>\s*[^<]*[\d.]+', html, re.IGNORECASE)
+        price = parse_price(_price_match.group(0) if _price_match else "")
+
     # Try to get price from a better pattern
-    price_match = re.search(r'price[^>]*>\s*[^0-9]*([\d.]+)', html)
-    if price_match:
-        price = float(price_match.group(1))
-    
+    if price == 0:
+        price_match = re.search(r'price[^>]*>\s*[^0-9]*([\d.]+)', html)
+        if price_match:
+            price = float(price_match.group(1))
+
     # If price still 0, use default from known product
     if price == 0:
         price = 35.8  # Default for moon chair
