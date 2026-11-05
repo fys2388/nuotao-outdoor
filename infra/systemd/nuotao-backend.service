@@ -22,8 +22,13 @@ SyslogIdentifier=nuotao-backend
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=/opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs /opt/nuotao-ai-os/backend/app/data /opt/nuotao-ai-os/backend/app/logs
+# uvicorn 需要读 playwright 浏览器缓存（/home/nuotao/.cache/ms-playwright）；
+# ProtectHome=true 会把 /home 整体隔离，导致 DynamicFetcher 报
+# "Executable doesn't exist at /home/nuotao/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"。
+# read-only + 显式 ReadWritePaths 才能既保安全又让浏览器起得来。
+ProtectHome=read-only
+ReadWritePaths=/opt/nuotao-ai-os/backend/data /opt/nuotao-ai-os/backend/logs /opt/nuotao-ai-os/backend/app/data /opt/nuotao-ai-os/backend/app/logs /home/nuotao/.cache
+ReadWritePaths+=/home/nuotao/.camoufox /tmp
 
 [Install]
 WantedBy=multi-user.target
