@@ -458,6 +458,12 @@ jobs:
               apt-get update -qq 2>&1 | tail -1 || true
               apt-get install -y -qq libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 libx11-xcb1 libxcursor1 libxshmfence1 2>&1 | tail -3
               echo "[hotfix] chromium deps install done"
+              # 5.6i) 诊断缺库 + patchright install-deps（官方依赖，比手动 apt 全）
+              CHROME_BIN=$(ls /home/nuotao/.cache/ms-playwright/chromium_headless_shell-1248/chrome-linux/headless_shell 2>/dev/null || ls /home/nuotao/.cache/ms-playwright/chromium-1248/chrome-linux/chrome 2>/dev/null)
+              echo "[hotfix] chromium bin: $CHROME_BIN"
+              if [ -n "$CHROME_BIN" ]; then echo "[hotfix] missing libs:"; ldd "$CHROME_BIN" 2>&1 | grep -i "not found" | head -12 || echo "(all resolved)"; fi
+              echo "[hotfix] patchright install-deps:"
+              .venv/bin/python -m patchright install-deps chromium 2>&1 | tail -8 || echo "[hotfix] install-deps failed (non-fatal)"
               # 5.6f) 浏览器权限：patchright 装到 /root/.cache（root），后端 User=nuotao 读不到 → 复制到 nuotao + 设 env
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
