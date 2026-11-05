@@ -437,6 +437,15 @@ jobs:
                 echo "[hotfix] patchright already installed: $(.venv/bin/pip show patchright 2>/dev/null | grep -i '^Version:' | head -1)"
               fi
               .venv/bin/python -c "import patchright; print('[hotfix] patchright import OK')" 2>&1 | tail -2
+              # 5.6d) 确保 browserforge（curl_cffi 指纹库，scrapling Fetcher 依赖链）
+              if ! .venv/bin/pip show browserforge >/dev/null 2>&1; then
+                echo "[hotfix] browserforge missing, installing..."
+                .venv/bin/pip install browserforge --quiet 2>&1 | tail -4
+                echo "[hotfix] browserforge install exit=$?"
+              else
+                echo "[hotfix] browserforge already installed: $(.venv/bin/pip show browserforge 2>/dev/null | grep -i '^Version:' | head -1)"
+              fi
+              .venv/bin/python -c "import browserforge; print('[hotfix] browserforge import OK')" 2>&1 | tail -2
               # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
               if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
                 sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
