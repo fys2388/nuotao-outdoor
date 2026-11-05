@@ -450,6 +450,20 @@ jobs:
               echo "[hotfix] installing patchright chromium (browser for StealthyFetcher)..."
               .venv/bin/python -m patchright install chromium 2>&1 | tail -8
               echo "[hotfix] patchright browser install exit=$?"
+              # 5.6f) 浏览器权限：patchright 装到 /root/.cache（root），后端 User=nuotao 读不到 → 复制到 nuotao + 设 env
+              mkdir -p /home/nuotao/.cache/ms-playwright
+              cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
+              chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+              chmod -R 755 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+              if ! grep -q '^PLAYWRIGHT_BROWSERS_PATH=' "$ENV_FILE"; then
+                echo 'PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright' >> "$ENV_FILE"
+                echo "[hotfix] PLAYWRIGHT_BROWSERS_PATH set to nuotao cache"
+              else
+                echo "[hotfix] PLAYWRIGHT_BROWSERS_PATH already set"
+              fi
+              echo "[hotfix] nuotao cache: $(ls /home/nuotao/.cache/ms-playwright/ 2>/dev/null | head -3 || echo NONE)"
+              echo "[hotfix] StealthyFetcher test (as nuotao):"
+              su - nuotao -c "cd /opt/nuotao-ai-os/backend && PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright .venv/bin/python -c \"from scrapling.fetchers import StealthyFetcher; p=StealthyFetcher.fetch('https://detail.1688.com/offer/964465929482.html', headless=True, timeout=30000); print('sf_len', len(getattr(p,'html_content','') or ''))\"" 2>&1 | tail -6
               # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
               if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
                 sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
