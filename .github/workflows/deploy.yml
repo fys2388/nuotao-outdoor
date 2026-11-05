@@ -497,6 +497,9 @@ jobs:
                 /opt/nuotao-ai-os/backend/.venv/bin/pip install -e /opt/nuotao-ai-os/backend 2>&1 | tail -3
                 /opt/nuotao-ai-os/backend/.venv/bin/pip install scrapling curl_cffi "patchright==1.49.0" browserforge msgspec 2>&1 | tail -3
                 /opt/nuotao-ai-os/backend/.venv/bin/python -m patchright install chromium 2>&1 | tail -3
+                # 5.6p) 降级 scrapling 0.4.14（playwright 官方，crashpad 正常；0.5.x 用 patchright 有 --database required bug）
+                /opt/nuotao-ai-os/backend/.venv/bin/pip install "scrapling==0.4.14" playwright 2>&1 | tail -3
+                /opt/nuotao-ai-os/backend/.venv/bin/python -m playwright install chromium 2>&1 | tail -3
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
