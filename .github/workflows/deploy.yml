@@ -520,6 +520,11 @@ jobs:
                 chmod -R 777 /home/nuotao 2>/dev/null || true
                 chown -R nuotao:nuotao /home/nuotao 2>/dev/null || true
                 echo "[hotfix] .cache perms: $(stat -c '%A %U' /home/nuotao/.cache 2>/dev/null || echo NONE)"
+                # 5.6u) fpgen 指纹模型（camoufox 反检测）需 nuotao 可读写；重跑 fetch 生成
+                chmod -R 777 /opt/nuotao-ai-os/backend/.venv/lib/python3.12/site-packages/fpgen 2>/dev/null || true
+                su - nuotao -c "cd /opt/nuotao-ai-os/backend && .venv/bin/python -m camoufox fetch" 2>&1 | tail -3 || echo "[hotfix] camoufox fetch(2) failed"
+                chmod -R 777 /opt/nuotao-ai-os/backend/.venv/lib/python3.12/site-packages/fpgen 2>/dev/null || true
+                echo "[hotfix] fpgen data: $(ls -la /opt/nuotao-ai-os/backend/.venv/lib/python3.12/site-packages/fpgen/ 2>/dev/null | grep data | head -2 || echo NONE)"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
