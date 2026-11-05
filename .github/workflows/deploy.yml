@@ -419,6 +419,19 @@ jobs:
                 echo "[hotfix] scrapling already installed: $(.venv/bin/pip show scrapling 2>/dev/null | grep -i '^Version:' | head -1)"
               fi
               .venv/bin/python -c "import scrapling; print('[hotfix] scrapling import OK v'+getattr(scrapling,'__version__','?'))" 2>&1 | tail -2
+              # 5.7) 确保 SCRAPING_ENABLED=true（scrapling is_enabled 开关）+ 诊断 fetch
+              if ! grep -q '^SCRAPING_ENABLED=true' "$ENV_FILE"; then
+                sed -i '/^SCRAPING_ENABLED=/d' "$ENV_FILE"
+                echo "SCRAPING_ENABLED=true" >> "$ENV_FILE"
+                echo "[hotfix] SCRAPING_ENABLED=true added to backend.env"
+              else
+                echo "[hotfix] SCRAPING_ENABLED=true already present"
+              fi
+              echo "[hotfix] === scrapling fetch diagnostic ==="
+              echo "[hotfix] SCRAPING_ENABLED in env: $(grep -c '^SCRAPING_ENABLED=true' "$ENV_FILE")"
+              echo "[hotfix] 1688 http_code: $(curl -s -o /dev/null -w '%{http_code}' -L 'https://detail.1688.com/offer/964465929482.html' -A 'Mozilla/5.0' --max-time 15)"
+              echo "[hotfix] 1688 body_head: $(curl -s -L 'https://detail.1688.com/offer/964465929482.html' -A 'Mozilla/5.0' --max-time 15 | head -c 100 | tr -d '\n')"
+              echo "[hotfix] === scrapling fetch diag end ==="
               # 6) 重启后端
               systemctl daemon-reload
               systemctl restart nuotao-backend
