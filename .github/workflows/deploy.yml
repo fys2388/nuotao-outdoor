@@ -514,6 +514,9 @@ jobs:
                 echo "[hotfix] camoufox fetch (Firefox)..."
                 su - nuotao -c "cd /opt/nuotao-ai-os/backend && .venv/bin/python -m camoufox fetch" 2>&1 | tail -4 || echo "[hotfix] camoufox fetch failed"
                 echo "[hotfix] camoufox installed: $(ls /home/nuotao/.cache/camoufox/ 2>/dev/null | head -3 || echo NONE)"
+                # 5.6t) camoufox 权限（remove_incompatible_data 需写 .cache/camoufox）
+                chmod -R 777 /home/nuotao/.cache/camoufox /home/nuotao/.camoufox 2>/dev/null || true
+                chown -R nuotao:nuotao /home/nuotao/.cache/camoufox /home/nuotao/.camoufox 2>/dev/null || true
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
