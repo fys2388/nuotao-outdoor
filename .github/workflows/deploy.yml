@@ -1,4 +1,4 @@
-﻿name: Deploy to Production (staging-gated)
+name: Deploy to Production (staging-gated)
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -208,6 +208,10 @@ jobs:
 
             echo "=== 2. Installing backend dependencies ==="
             cd /opt/nuotao-ai-os/backend
+            if [ ! -f .venv/bin/activate ]; then
+              echo "[venv] .venv not found, creating..."
+              python3 -m venv .venv
+            fi
             source .venv/bin/activate
             pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet || { echo "ERROR: Python 渚濊禆瀹夎澶辫触锛岃妫€鏌?pip 婧愪笌 requirements.txt"; exit 1; }
 
