@@ -250,6 +250,25 @@ jobs:
                 fi
               done
             fi
+            # 3.6) 从 Docker 容器环境读取 POSTGRES_USER/POSTGRES_PASSWORD（compose 启动时的真实凭据）
+            if [ -z "$DB_VAL" ]; then
+              PGCTX=$(docker inspect nuotao-ai-os-postgres-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)
+              PGUSER=$(echo "$PGCTX" | grep '^POSTGRES_USER=' | head -1 | cut -d'=' -f2-)
+              PGPW=$(echo "$PGCTX" | grep '^POSTGRES_PASSWORD=' | head -1 | cut -d'=' -f2-)
+              PGDBS=$(echo "$PGCTX" | grep '^POSTGRES_DB=' | head -1 | cut -d'=' -f2-)
+              echo "[hotfix] container env: POSTGRES_USER=${PGUSER:-none} POSTGRES_DB=${PGDBS:-none} PASSWORD=$([ -n "$PGPW" ] && echo SET || echo none)"
+              if [ -n "$PGUSER" ] && [ -n "$PGPW" ]; then
+                # 测试 nuotao 库（业务库）连接；若不存在则用 POSTGRES_DB
+                for DBT in nuotao "$PGDBS"; do
+                  [ -z "$DBT" ] && continue
+                  if /opt/nuotao-ai-os/backend/.venv/bin/python -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect(host='localhost',port=5432,user='$PGUSER',password='$PGPW',database='$DBT',timeout=6)); print('OK')" 2>/dev/null | grep -q OK; then
+                    DB_VAL="postgresql+asyncpg://${PGUSER}:${PGPW}@localhost:5432/${DBT}"
+                    echo "[hotfix] DATABASE_URL from container env (user=$PGUSER db=$DBT)"
+                    break
+                  fi
+                done
+              fi
+            fi
             # 3.8) 兜底：重置 nuotao 密码（数据库数据不变，仅改认证密码），写入 .env
             echo "[hotfix] whoami=$(whoami 2>/dev/null) id=$(id -u 2>/dev/null)"
             if [ -z "$DB_VAL" ]; then
