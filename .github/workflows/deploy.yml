@@ -385,6 +385,30 @@ jobs:
                 fi
               fi
               echo "[hotfix] uvicorn final: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
+              # 5.5) 恢复 JWT_SECRET_KEY（缺失导致 security fail closed: JWT_SECRET_KEY 未配置）
+              # 来源：服务器 .env.env.production.bak → staging/.env → 各备份（脱敏检测非占位符）
+              JK=""
+              echo "[hotfix] searching JWT_SECRET_KEY on server..."
+              for SRC in /opt/nuotao-ai-os/backend/.env.env.production.bak /opt/nuotao-ai-os/.env.env.production.bak /opt/nuotao-ai-os/staging/.env /opt/nuotao-ai-os/staging/backend/.env /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env; do
+                [ -f "$SRC" ] || continue
+                V=$(grep '^JWT_SECRET_KEY=' "$SRC" 2>/dev/null | head -1 | cut -d'=' -f2-)
+                [ -z "$V" ] && continue
+                if [ ${#V} -ge 20 ] && ! echo "$V" | grep -qiE 'CHANGE_ME|your_|example|placeholder|changeme|secret'; then
+                  JK="$V"
+                  echo "[hotfix] JWT_SECRET_KEY found in $SRC (len=${#V}, non-placeholder)"
+                  break
+                else
+                  echo "[hotfix]   $SRC JWT_SECRET_KEY len=${#V} (placeholder, skip)"
+                fi
+              done
+              if [ -n "$JK" ]; then
+                sed -i '/^JWT_SECRET_KEY=/d' "$ENV_FILE"
+                echo "JWT_SECRET_KEY=$JK" >> "$ENV_FILE"
+                chmod 644 "$ENV_FILE"
+                echo "[hotfix] JWT_SECRET_KEY restored to backend.env (len=${#JK})"
+              else
+                echo "[hotfix] WARN: no real JWT_SECRET_KEY found on server"
+              fi
               # 6) 重启后端
               systemctl daemon-reload
               systemctl restart nuotao-backend
