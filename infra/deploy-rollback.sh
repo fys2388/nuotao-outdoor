@@ -7,10 +7,10 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/nuotao"
-BACKUP_ROOT="/opt/nuotao/backups"
+APP_DIR="/opt/nuotao-ai-os"
+BACKUP_ROOT="/opt/nuotao-ai-os/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="/opt/nuotao/logs/rollback_${TIMESTAMP}.log"
+LOG_FILE="/opt/nuotao-ai-os/logs/rollback_${TIMESTAMP}.log"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -45,10 +45,15 @@ create_backup() {
 
     # 1.1 代码备份（git stash + 当前 commit）
     cd "$APP_DIR"
-    local current_commit
-    current_commit=$(git rev-parse HEAD)
-    echo "$current_commit" > "$backup_dir/git_commit.txt"
-    log "当前 commit: $current_commit"
+    local current_commit=""
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        current_commit=$(git rev-parse HEAD)
+        echo "$current_commit" > "$backup_dir/git_commit.txt"
+        log "当前 commit: $current_commit"
+    else
+        warn "目录不是 git 仓库，跳过代码版本记录"
+        echo "unknown" > "$backup_dir/git_commit.txt"
+    fi
 
     # 1.2 数据库备份
     log "备份数据库..."
@@ -133,14 +138,18 @@ rollback() {
     if [ -f "$backup_dir/git_commit.txt" ]; then
         local target_commit
         target_commit=$(cat "$backup_dir/git_commit.txt")
-        log "回滚代码到 commit: $target_commit"
-        cd "$APP_DIR"
-        git fetch --all 2>>"$LOG_FILE" || true
-        git reset --hard "$target_commit" 2>>"$LOG_FILE" || {
-            error "代码回滚失败"
-            exit 1
-        }
-        success "代码回滚完成"
+        if [ "$target_commit" != "unknown" ]; then
+            log "回滚代码到 commit: $target_commit"
+            cd "$APP_DIR"
+            git fetch --all 2>>"$LOG_FILE" || true
+            git reset --hard "$target_commit" 2>>"$LOG_FILE" || {
+                error "代码回滚失败"
+                exit 1
+            }
+            success "代码回滚完成"
+        else
+            warn "备份中无有效 git commit 记录，跳过代码回滚"
+        fi
     else
         warn "备份中无 git commit 记录，跳过代码回滚"
     fi
