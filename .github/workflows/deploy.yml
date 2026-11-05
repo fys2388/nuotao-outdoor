@@ -538,6 +538,9 @@ jobs:
                 chmod -R 777 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
                 echo "[hotfix] DynamicFetcher test (playwright chromium):"
                 timeout 80 su - nuotao -s /bin/bash -c 'cd /opt/nuotao-ai-os/backend && PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright timeout 70 .venv/bin/python -c "import traceback; from scrapling.fetchers import DynamicFetcher; p=DynamicFetcher.fetch(\"https://detail.1688.com/offer/964465929482.html\", headless=True, timeout=30000); print(\"df_len\", len(getattr(p,\"html_content\",\"\") or \"\"))"' 2>&1 | tail -12
+                # 5.6y) 触发 import（DynamicFetcher 已绕过反爬，596081 字符）
+                echo "[hotfix] triggering import..."
+                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 120 | head -c 1000 || echo "[hotfix] import curl failed"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
