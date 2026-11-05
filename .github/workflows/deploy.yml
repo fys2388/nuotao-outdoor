@@ -409,6 +409,16 @@ jobs:
               else
                 echo "[hotfix] WARN: no real JWT_SECRET_KEY found on server"
               fi
+              # 5.6) 确保 scrapling 已安装（1688 抓取依赖；deploy 的 pip install -e . 未装 scrape extra）
+              cd /opt/nuotao-ai-os/backend
+              if ! .venv/bin/pip show scrapling >/dev/null 2>&1; then
+                echo "[hotfix] scrapling missing, installing..."
+                .venv/bin/pip install "scrapling>=0.1.0" --quiet 2>&1 | tail -6
+                echo "[hotfix] scrapling install exit=$?"
+              else
+                echo "[hotfix] scrapling already installed: $(.venv/bin/pip show scrapling 2>/dev/null | grep -i '^Version:' | head -1)"
+              fi
+              .venv/bin/python -c "import scrapling; print('[hotfix] scrapling import OK v'+getattr(scrapling,'__version__','?'))" 2>&1 | tail -2
               # 6) 重启后端
               systemctl daemon-reload
               systemctl restart nuotao-backend
