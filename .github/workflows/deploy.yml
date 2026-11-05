@@ -181,6 +181,17 @@ jobs:
             set -x
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
             ROOT_ENV=/opt/nuotao-ai-os/.env
+            echo "[hotfix] === diagnostics: backup dir ==="
+            ls -la /opt/nuotao-ai-os/backups/ 2>/dev/null | head -25
+            echo "[hotfix] === diagnostics: all backend.env ==="
+            ls -la /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null
+            echo "[hotfix] === diagnostics: all uvicorn/app.main procs ==="
+            ps aux 2>/dev/null | grep -E 'uvicorn|app\.main' | grep -v grep | head -12
+            echo "[hotfix] === diagnostics: DATABASE_URL in env files (masked) ==="
+            for F in /opt/nuotao-ai-os/backend/.env /opt/nuotao-ai-os/.env /opt/nuotao-ai-os/staging/.env /opt/nuotao-ai-os/staging/backend/.env; do
+              [ -f "$F" ] && echo "  $F -> $(grep '^DATABASE_URL=' "$F" 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')"
+            done
+            echo "[hotfix] === diagnostics end ==="
             # 1) 从后端运行进程读取真实 DATABASE_URL（进程仍存活，环境有效）
             # 精确匹配 uvicorn 进程：排除 bash 包装（appleboy 用 bash -c "脚本"，bash cmdline 含脚本文本），
             # 再匹配 cmdline 含 'uvicorn' 且 'app.main' 的真实进程
