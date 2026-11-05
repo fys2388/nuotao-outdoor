@@ -351,6 +351,14 @@ jobs:
               systemctl daemon-reload
               echo "[hotfix] === service file after fix ==="
               systemctl cat nuotao-backend 2>&1 | grep -E 'EnvironmentFile|ExecStart' || echo "[hotfix] systemctl cat failed"
+              # 4.6) 停掉占 8000 的 staging 后端（生产需绑 8000，Address already in use）
+              echo "[hotfix] port 8000 before: $(ss -tlnp 2>/dev/null | grep ':8000' | head -2 || echo none)"
+              for PID in $(pgrep -f 'staging/backend' 2>/dev/null); do
+                echo "[hotfix] killing staging backend pid=$PID"
+                kill -9 "$PID" 2>/dev/null || true
+              done
+              sleep 2
+              echo "[hotfix] port 8000 after: $(ss -tlnp 2>/dev/null | grep ':8000' | head -2 || echo none)"
               # 5) 确保生产 .venv 的 uvicorn 存在（缺失则重建/回退复制 staging）
               cd /opt/nuotao-ai-os/backend
               echo "[hotfix] uvicorn check: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
