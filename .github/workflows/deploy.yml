@@ -450,6 +450,9 @@ jobs:
               echo "[hotfix] installing patchright chromium (browser for StealthyFetcher)..."
               .venv/bin/python -m patchright install chromium 2>&1 | tail -8
               echo "[hotfix] patchright browser install exit=$?"
+              # 5.6g) StealthyFetcher 浏览器模式依赖：msgspec（scrapling browser 需要，缺失导致 ModuleNotFoundError）
+              .venv/bin/pip install msgspec 2>&1 | tail -3
+              .venv/bin/python -c "import msgspec; print('[hotfix] msgspec import OK')" 2>&1 | tail -1
               # 5.6f) 浏览器权限：patchright 装到 /root/.cache（root），后端 User=nuotao 读不到 → 复制到 nuotao + 设 env
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
