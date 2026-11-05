@@ -202,6 +202,32 @@ jobs:
                 if [ -n "$V" ]; then DB_VAL="$V"; echo "[hotfix] DATABASE_URL from backup $BAK"; break; fi
               done
             fi
+            # 3.5) 用户提供的数据库密码 fallback：测试连通性后使用
+            if [ -z "$DB_VAL" ]; then
+              DB_PW='UFMmchfTXuRk'
+              for DB_USER in nuotao root postgres; do
+                TEST_URL="postgresql+asyncpg://${DB_USER}:${DB_PW}@localhost:5432/nuotao"
+                if cd /opt/nuotao-ai-os/backend && .venv/bin/python -c "
+import asyncio, sys
+try:
+    import asyncpg
+except ImportError:
+    sys.exit(0)
+async def t():
+    try:
+        c = await asyncpg.connect(host='localhost', port=5432, user='$DB_USER', password='$DB_PW', database='nuotao', timeout=5)
+        await c.close()
+        print('OK')
+    except Exception as e:
+        print('FAIL', str(e)[:60])
+asyncio.run(t())
+" 2>/dev/null | grep -q OK; then
+                  DB_VAL="$TEST_URL"
+                  echo "[hotfix] DATABASE_URL verified with user $DB_USER"
+                  break
+                fi
+              done
+            fi
             # 4) 写入 backend/.env 和根目录 .env（systemd 实际读取的）
             if [ -n "$DB_VAL" ]; then
               for F in "$ENV_FILE" "$ROOT_ENV"; do
