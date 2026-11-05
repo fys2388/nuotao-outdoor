@@ -193,9 +193,13 @@ jobs:
             echo "=== 0. Pre-deploy backup (code + db + frontend) ==="
             chmod +x /opt/nuotao-ai-os/infra/deploy-rollback.sh 2>/dev/null || true
             if [ -f /opt/nuotao-ai-os/infra/deploy-rollback.sh ]; then
-              BACKUP_DIR=$(/opt/nuotao-ai-os/infra/deploy-rollback.sh backup)
-              echo "Backup created: $BACKUP_DIR"
-              echo "$BACKUP_DIR" > /tmp/nuotao_last_backup
+              BACKUP_DIR=$(/opt/nuotao-ai-os/infra/deploy-rollback.sh backup 2>/dev/null || echo "")
+              if [ -n "$BACKUP_DIR" ]; then
+                echo "Backup created: $BACKUP_DIR"
+                echo "$BACKUP_DIR" > /tmp/nuotao_last_backup 2>/dev/null || true
+              else
+                echo "WARN: backup script returned no backup dir, continuing (non-fatal)"
+              fi
             else
               echo "WARN: deploy-rollback.sh not found, skipping backup"
             fi
