@@ -337,6 +337,20 @@ jobs:
                 echo "[hotfix] appended DATABASE_URL to backend.env"
               fi
               echo "[hotfix] root.env now: $(grep -c '^DATABASE_URL=' "$ROOT_ENV" 2>/dev/null) DATABASE_URL line(s)"
+              # 4.5) 修复 systemd service 文件的旧路径 /opt/nuotao/ → /opt/nuotao-ai-os/（根因：ExecStart/EnvironmentFile 指向不存在的旧路径）
+              for SVC in /etc/systemd/system/nuotao-backend.service /etc/systemd/system/nuotao-agent-worker.service /etc/systemd/system/nuotao-agent-scheduler.service; do
+                if [ -f "$SVC" ]; then
+                  if grep -q '/opt/nuotao/' "$SVC"; then
+                    sed -i 's|/opt/nuotao/|/opt/nuotao-ai-os/|g' "$SVC"
+                    echo "[hotfix] FIXED old path /opt/nuotao/ in $SVC"
+                  else
+                    echo "[hotfix] $SVC already uses new path"
+                  fi
+                fi
+              done
+              systemctl daemon-reload
+              echo "[hotfix] === service file after fix ==="
+              systemctl cat nuotao-backend 2>&1 | grep -E 'EnvironmentFile|ExecStart' || echo "[hotfix] systemctl cat failed"
               # 5) 确保生产 .venv 的 uvicorn 存在（缺失则重建/回退复制 staging）
               cd /opt/nuotao-ai-os/backend
               echo "[hotfix] uvicorn check: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
