@@ -259,14 +259,17 @@ jobs:
               echo "[hotfix] diag psql: $(find / -name psql -type f 2>/dev/null | head -3 | tr '\n' ' ')"
               echo "[hotfix] diag docker pg: $(docker ps 2>/dev/null | grep -i postgres | head -2 | tr '\n' ' ')"
               echo "[hotfix] diag socket: $(ls /var/run/postgresql/ 2>/dev/null | tr '\n' ' ')"
-              # 方法1: docker exec（PostgreSQL 可能在容器里）
+              # 方法1: docker exec（数据库在 nuotao-ai-os-postgres-1 容器，需 -u postgres 走 peer 认证）
               PGC=$(docker ps 2>/dev/null | grep -i postgres | awk '{print $1}' | head -1)
               if [ -n "$PGC" ]; then
-                if docker exec "$PGC" psql -U postgres -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null; then
+                if docker exec -u postgres "$PGC" psql -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null; then
+                  DB_VAL="postgresql+asyncpg://nuotao:$NEWPW@localhost:5432/nuotao"
+                  echo "[hotfix] RESET ok via docker container $PGC (-u postgres)"
+                elif docker exec "$PGC" psql -U postgres -c "ALTER USER nuotao WITH PASSWORD '$NEWPW';" 2>/dev/null; then
                   DB_VAL="postgresql+asyncpg://nuotao:$NEWPW@localhost:5432/nuotao"
                   echo "[hotfix] RESET ok via docker container $PGC"
                 else
-                  echo "[hotfix] docker exec psql failed"
+                  echo "[hotfix] docker exec psql failed (tried -u postgres and -U postgres)"
                 fi
               fi
               # 方法2: su - postgres + find psql（Debian 包安装）
