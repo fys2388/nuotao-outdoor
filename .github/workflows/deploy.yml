@@ -406,6 +406,13 @@ jobs:
               echo "[hotfix] products local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/products)"
               echo "[hotfix] import POST body: $(curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H 'Content-Type: application/json' -d '{\"url_or_id\":\"diag-test\"}' | head -c 300)"
               echo "[hotfix] === local diagnostics end ==="
+              echo "[hotfix] === process/port/journal diagnostics ==="
+              echo "[hotfix] ss 8000: $(ss -tlnp 2>/dev/null | grep ':8000' | head -3 || echo NONE)"
+              echo "[hotfix] uvicorn procs:"
+              ps aux 2>/dev/null | grep -E 'uvicorn|app.main' | grep -v grep | head -6 || echo "  none"
+              echo "[hotfix] journal (last 15):"
+              journalctl -u nuotao-backend -n 15 --no-pager 2>&1 | tail -15
+              echo "[hotfix] === proc/port/journal end ==="
             else
               echo "[hotfix] FATAL: could not recover DATABASE_URL anywhere"
             fi
