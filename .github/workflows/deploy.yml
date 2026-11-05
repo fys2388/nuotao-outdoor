@@ -298,6 +298,17 @@ jobs:
             fi
 
             echo "=== 3. Running database migrations ==="
+            # DATABASE_URL 必须以环境变量方式传给 alembic（pydantic 环境变量优先于 .env 文件）。
+            # systemd 服务实际使用根目录 /opt/nuotao-ai-os/.env（EnvironmentFile），
+            # 而 backend/.env 里的 DATABASE_URL 密码可能已过期/不匹配，导致 password authentication failed。
+            # 这里显式从根目录 .env 导出 DATABASE_URL，覆盖 backend/.env 的错误值。
+            ROOT_ENV=/opt/nuotao-ai-os/.env
+            if [ -f "$ROOT_ENV" ] && grep -q '^DATABASE_URL=' "$ROOT_ENV"; then
+              export DATABASE_URL=$(grep '^DATABASE_URL=' "$ROOT_ENV" | head -1 | cut -d'=' -f2-)
+              echo "[db] DATABASE_URL loaded from $ROOT_ENV (systemd 实际使用的环境文件)"
+            else
+              echo "[db] WARN: $ROOT_ENV missing DATABASE_URL, falling back to backend/.env"
+            fi
             if DBURL=$(grep '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env 2>/dev/null | sed -E 's#(://[^:]+:)[^@]+@#\1***@#'); then
               echo "[db] 杩炴帴閰嶇疆(瀵嗙爜宸查殣钘?: $DBURL"
             else
