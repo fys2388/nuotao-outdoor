@@ -567,6 +567,9 @@ jobs:
                 sleep 6
                 echo "[hotfix] retry import after path fix:"
                 curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1000 || echo "[hotfix] import curl failed"
+                echo ""
+                echo "[hotfix] backend log (1688/dynamic):"
+                journalctl -u nuotao-backend -n 40 --no-pager 2>/dev/null | grep -i "1688\|dynamic\|stealth\|scrapling\|Failed to fetch\|error" | tail -14 || echo "[hotfix] (no journal)"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
