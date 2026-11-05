@@ -548,8 +548,15 @@ jobs:
                 echo "[hotfix] scrape_1688 fetch_url: $(grep -c fetch_url /opt/nuotao-ai-os/backend/app/services/scrape_1688.py 2>/dev/null || echo 0)"
                 curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1000 || echo "[hotfix] import curl failed"
                 echo ""
-                echo "[hotfix] backend log (1688/dynamic/error):"
-                journalctl -u nuotao-backend -n 60 --no-pager 2>/dev/null | grep -i "1688\|dynamic\|stealth\|scrapling\|Failed to fetch" | tail -16 || echo "[hotfix] (no journal)"
+                # 5.6z) chromium-1234 路径修复（playwright 1.62 用 chrome-linux，scrapling 找 chrome-linux64）
+                echo "[hotfix] chromium dirs: $(ls /home/nuotao/.cache/ms-playwright/ 2>/dev/null | tr '\n' ' ')"
+                ln -sfn /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux /home/nuotao/.cache/ms-playwright/chromium-1234/chrome-linux64 2>/dev/null || true
+                chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+                echo "[hotfix] chromium-1234 layout: $(ls /home/nuotao/.cache/ms-playwright/chromium-1234/ 2>/dev/null | tr '\n' ' ')"
+                systemctl restart nuotao-backend
+                sleep 6
+                echo "[hotfix] retry import after path fix:"
+                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1000 || echo "[hotfix] import curl failed"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
