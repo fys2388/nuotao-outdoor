@@ -468,6 +468,15 @@ jobs:
               if [ -n "$CHROME_BIN" ]; then echo "[hotfix] ldd missing libs:"; ldd "$CHROME_BIN" 2>&1 | grep -i "not found" | head -15 || echo "(all resolved)"; fi
               echo "[hotfix] patchright install-deps:"
               .venv/bin/python -m patchright install-deps chromium 2>&1 | tail -8 || echo "[hotfix] install-deps failed (non-fatal)"
+              # 5.6j) 升级 scrapling/patchright（chrome_crashpad_handler --database required 兼容 chromium 156）
+              echo "[hotfix] current patchright: $(.venv/bin/pip show patchright 2>/dev/null | grep -i '^Version' | head -1)"
+              .venv/bin/pip install -U scrapling patchright 2>&1 | tail -6
+              echo "[hotfix] patchright upgraded: $(.venv/bin/pip show patchright 2>/dev/null | grep -i '^Version' | head -1)"
+              .venv/bin/python -m patchright install chromium 2>&1 | tail -3
+              mkdir -p /home/nuotao/.cache/ms-playwright
+              cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
+              chown -R nuotao:nuotao /home/nuotao/.cache/ms-playwright 2>/dev/null || true
+              chmod -R 755 /home/nuotao/.cache/ms-playwright 2>/dev/null || true
               # 5.6f) 浏览器权限：patchright 装到 /root/.cache（root），后端 User=nuotao 读不到 → 复制到 nuotao + 设 env
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
