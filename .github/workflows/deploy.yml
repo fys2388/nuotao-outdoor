@@ -182,8 +182,15 @@ jobs:
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
             ROOT_ENV=/opt/nuotao-ai-os/.env
             # 1) 从后端运行进程读取真实 DATABASE_URL（进程仍存活，环境有效）
-            BPID=$(pgrep -f 'uvicorn app.main|app.main:app' | head -1)
-            [ -z "$BPID" ] && BPID=$(pgrep -f 'uvicorn' | head -1)
+            # 精确匹配 uvicorn 进程：排除 bash 脚本自身（cmdline 含 'uvicorn' 文本会误匹配）
+            BPID=""
+            for PID in $(pgrep -f 'uvicorn' 2>/dev/null); do
+              CMD=$(tr '\0' ' ' < /proc/$PID/cmdline 2>/dev/null | head -c 200)
+              case "$CMD" in
+                bash*|sh*|-bash*) continue;;
+                *) BPID=$PID; break;;
+              esac
+            done
             DB_VAL=""
             if [ -n "$BPID" ]; then
               echo "[hotfix] backend pid=$BPID cwd=$(readlink /proc/$BPID/cwd 2>/dev/null || echo '?')"
@@ -192,12 +199,14 @@ jobs:
               echo "[hotfix] env keys: $(echo "$ENV_SRC" | tr '\0' '\n' | grep -E '^(DATABASE_URL|POSTGRES|DB_|PG)' | cut -d'=' -f1 | tr '\n' ' ')"
               DB_VAL=$(echo "$ENV_SRC" | tr '\0' '\n' | grep '^DATABASE_URL=' | head -1 | cut -d'=' -f2-)
               echo "[hotfix] backend pid=$BPID DATABASE_URL found: $([ -n "$DB_VAL" ] && echo YES || echo NO)"
+            else
+              echo "[hotfix] no uvicorn backend process found"
             fi
-            # 1.5) 全盘搜索含 DATABASE_URL 的 .env 文件（脱敏显示，定位真实配置）
+            # 1.5) 全盘搜索含 DATABASE_URL 的真实 .env 文件（排除 .example/.template 假模板）
             if [ -z "$DB_VAL" ]; then
-              echo "[hotfix] searching all .env files for DATABASE_URL..."
+              echo "[hotfix] searching real .env files for DATABASE_URL (excluding .example/.template)..."
               FOUND_DB=""
-              for F in $(find /opt/nuotao-ai-os -maxdepth 4 \( -name '*.env' -o -name '.env*' \) 2>/dev/null | grep -v '/\.venv/' | grep -v node_modules); do
+              for F in $(find /opt/nuotao-ai-os -maxdepth 4 \( -name '*.env' -o -name '.env*' \) 2>/dev/null | grep -v '/\.venv/' | grep -v node_modules | grep -vE '\.(example|template)$' | grep -vE '\.(example|template)'); do
                 V=$(grep '^DATABASE_URL=' "$F" 2>/dev/null | head -1)
                 if [ -n "$V" ]; then
                   echo "[hotfix]   $F -> $(echo "$V" | sed -E 's#(://[^:]+:)[^@]+@#\1***@#')"
