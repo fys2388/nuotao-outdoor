@@ -315,7 +315,23 @@ jobs:
                 echo "DATABASE_URL=$DB_VAL" >> "$F"
                 echo "[hotfix] wrote DATABASE_URL to $F"
               done
-              # 5) 重启后端
+              # 5) 确保生产 .venv 的 uvicorn 存在（缺失则重建/回退复制 staging）
+              cd /opt/nuotao-ai-os/backend
+              echo "[hotfix] uvicorn check: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
+              if [ ! -x .venv/bin/uvicorn ]; then
+                echo "[hotfix] .venv/bin/uvicorn MISSING, attempting rebuild..."
+                rm -rf .venv
+                python3 -m venv .venv 2>&1 | tail -3
+                .venv/bin/pip install -r requirements.txt --quiet 2>&1 | tail -12
+                echo "[hotfix] pip install exit=$?"
+                if [ ! -x .venv/bin/uvicorn ]; then
+                  echo "[hotfix] rebuild failed, fallback: copy staging .venv"
+                  rm -rf .venv
+                  cp -r /opt/nuotao-ai-os/staging/backend/.venv .venv 2>&1 | tail -3
+                fi
+              fi
+              echo "[hotfix] uvicorn final: $(ls -la .venv/bin/uvicorn 2>&1 | head -1)"
+              # 6) 重启后端
               systemctl daemon-reload
               systemctl restart nuotao-backend
               sleep 10
