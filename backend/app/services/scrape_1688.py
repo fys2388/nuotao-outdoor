@@ -315,8 +315,10 @@ async def scrape_1688_product(url: str) -> ScrapedProductData:
     try:
         from scrapling.fetchers import DynamicFetcher
 
+        # url 可能是纯商品 id（如 "964465929482"）——拼成完整 URL 再抓取
+        fetch_url = url if url.startswith("http") else f"https://detail.1688.com/offer/{url}.html"
         page = await asyncio.to_thread(
-            DynamicFetcher.fetch, url, headless=True, timeout=45000
+            DynamicFetcher.fetch, fetch_url, headless=True, timeout=45000
         )
         html = getattr(page, "html_content", "") or ""
         if not html:
