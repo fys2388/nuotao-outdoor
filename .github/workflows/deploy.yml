@@ -550,22 +550,24 @@ jobs:
                 echo ""
                 # 5.6z) chromium-1234 路径修复（playwright 1.62 用 chrome-linux，scrapling 找 chrome-linux64）
                 # 5.6z) 根因修复：ProtectHome=true 隔离了 /home，uvicorn 看不到 ms-playwright 缓存。
-                # 应用仓库里的新单元（ProtectHome=read-only + ReadWritePaths /home/nuotao/.cache）
+                # 应用仓库里的新单元（ProtectHome=read-only + 单元级 PLAYWRIGHT_BROWSERS_PATH）
+                cd /opt/nuotao-ai-os && git pull origin main 2>&1 | tail -3
                 cp /opt/nuotao-ai-os/infra/systemd/nuotao-backend.service /etc/systemd/system/nuotao-backend.service 2>/dev/null || echo "[hotfix] unit cp failed"
                 echo "[hotfix] ProtectHome: $(grep -E '^ProtectHome=' /etc/systemd/system/nuotao-backend.service || echo NONE)"
-                echo "[hotfix] ReadWritePaths: $(grep -E '^ReadWritePaths' /etc/systemd/system/nuotao-backend.service || echo NONE)"
-                # PLAYWRIGHT_BROWSERS_PATH 写进 .env（EnvironmentFile 加载）
-                if ! grep -q '^PLAYWRIGHT_BROWSERS_PATH=' "$ENV_FILE"; then
-                  echo 'PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright' >> "$ENV_FILE"
-                fi
-                echo "[hotfix] .env PLAYWRIGHT_BROWSERS_PATH: $(grep '^PLAYWRIGHT_BROWSERS_PATH=' "$ENV_FILE" || echo MISSING)"
+                echo "[hotfix] unit PLAYWRIGHT env: $(grep -E '^Environment=.PLAYWRIGHT' /etc/systemd/system/nuotao-backend.service || echo NONE)"
+                echo "[hotfix] None.get 防御 in place: $(grep -c 'if product is None' /opt/nuotao-ai-os/backend/app/services/product_pipeline_service.py || echo 0)"
                 systemctl daemon-reload
                 systemctl restart nuotao-backend
-                sleep 8
+                sleep 10
                 echo "[hotfix] backend state: $(systemctl is-active nuotao-backend)"
                 echo "[hotfix] uvicorn env PLAYWRIGHT_BROWSERS_PATH: $(tr '\0' '\n' < /proc/$(pgrep -f 'uvicorn app.main' | head -1)/environ 2>/dev/null | grep '^PLAYWRIGHT_BROWSERS_PATH=' || echo NONE)"
+                echo "[hotfix] backend journal 1688/dynamic:"
+                journalctl -u nuotao-backend -n 200 --no-pager 2>/dev/null | grep -iE '1688|dynamic|scrapling|Traceback|unexpected error' | tail -10 || echo "(no journal lines)"
                 echo "[hotfix] trigger import:"
-                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1000 || echo "[hotfix] import curl failed"
+                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1500 || echo "[hotfix] import curl failed"
+                echo ""
+                echo "[hotfix] post-import journal (traceback if any):"
+                journalctl -u nuotao-backend -n 60 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|dynamic fetch got|Scrapling' | tail -16 || echo "(no journal lines)"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
