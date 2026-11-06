@@ -770,7 +770,6 @@ jobs:
             ALI_SECRET='${{ secrets.ALI1688_APP_SECRET }}'
             ALI_TOKEN='${{ secrets.ALI1688_ACCESS_TOKEN }}'
             if [ -n "$ALI_KEY" ] && [ -n "$ALI_SECRET" ]; then
-              sed -i '/^ALI1688_APP_KEY=/d;/^ALI1688_APP_SECRET=/d;/^ALI1688_ACCESS_TOKEN=/d' "$ENV_FILE"
               {
                 echo "ALI1688_APP_KEY=${ALI_KEY}"
                 echo "ALI1688_APP_SECRET=${ALI_SECRET}"
