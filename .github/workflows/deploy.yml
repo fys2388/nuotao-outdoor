@@ -566,9 +566,41 @@ jobs:
                 echo "[hotfix] backend state: $(systemctl is-active nuotao-backend)"
                 echo "[hotfix] uvicorn env PLAYWRIGHT_BROWSERS_PATH: $(tr '\0' '\n' < /proc/$(pgrep -f 'uvicorn app.main' | head -1)/environ 2>/dev/null | grep '^PLAYWRIGHT_BROWSERS_PATH=' || echo NONE)"
                 echo "[hotfix] uvicorn env LOGIN_COOKIE: $(tr '\0' '\n' < /proc/$(pgrep -f 'uvicorn app.main' | head -1)/environ 2>/dev/null | grep '^LOGIN_COOKIE=' | head -c 80 || echo NONE)..."
-                echo "[hotfix] trigger import:"
-                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1500 || echo "[hotfix] import curl failed"
-                echo ""
+                echo "[hotfix] trigger import (full JSON):"
+                curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 > /tmp/import_964465929482.json 2>/dev/null || echo "[hotfix] import curl failed"
+                echo "[hotfix] import size: $(wc -c < /tmp/import_964465929482.json 2>/dev/null || echo 0) bytes"
+                # 打印关键字段（标题/价格/SKU/图片/属性），JSON 完整存盘
+                /opt/nuotao-ai-os/backend/.venv/bin/python -c "
+import json,sys
+try:
+    d=json.load(open('/tmp/import_964465929482.json'))
+except Exception as e:
+    print('[hotfix] import JSON parse failed:', e); sys.exit(0)
+print('[hotfix] success:', d.get('success'), 'error:', d.get('error'))
+p=(d.get('data') or {}).get('product_info') or {}
+print('[hotfix] name:', p.get('name'))
+print('[hotfix] price:', p.get('price'))
+print('[hotfix] category:', p.get('category'))
+print('[hotfix] dimensions:', p.get('dimensions'))
+print('[hotfix] weight:', p.get('weight'))
+print('[hotfix] materials:', p.get('materials'))
+print('[hotfix] sku:', p.get('sku'))
+print('[hotfix] images:', len(p.get('images') or []))
+for i,u in enumerate((p.get('images') or [])[:10]):
+    print('  img%d:'%(i+1), u[:120])
+v=p.get('variations') or []
+print('[hotfix] variations:', len(v))
+for x in v:
+    print('  sku:', x.get('sku'), '| name:', x.get('name'), '| price:', x.get('price'), '| stock:', x.get('stock_quantity'))
+attrs=p.get('attributes') or []
+print('[hotfix] attributes:', len(attrs))
+for a in attrs[:20]:
+    if isinstance(a,dict):
+        print('  ', a.get('name') or a.get('attributeName'), '=', a.get('value'))
+sup=p.get('supplier') or {}
+print('[hotfix] supplier:', sup.get('company_name'))
+print('[hotfix] selling_points:', p.get('core_selling_points'))
+"
                 echo "[hotfix] post-import journal (traceback if any):"
                 journalctl -u nuotao-backend -n 80 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|playwright fetch got|dynamic fetch got|Scrapling|generic data|no hardcoded' | tail -16 || echo "(no journal lines)"
               fi
