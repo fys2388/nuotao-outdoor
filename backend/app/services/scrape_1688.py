@@ -302,31 +302,70 @@ def parse_description(html: str) -> str:
 async def scrape_1688_product(url: str) -> ScrapedProductData:
     """Scrape a 1688 product page and return structured data.
 
-    Uses Scrapling's StealthyFetcher (browser, executes JS) first to bypass
-    1688's anti-bot shell; falls back to the plain Fetcher adapter.
+    1688 detail pages are gated by an anti-bot login wall (____tmd_____ login
+    jump) for unauthenticated server IPs. The browser path therefore injects
+    a saved 1688 login cookie before visiting the offer page, so the page
+    renders real SKU data instead of the login shell.
+    Falls back to the plain Fetcher adapter when the browser path is unavailable.
     """
     import asyncio
+    import os
 
     html = ""
 
-    # 1) DynamicFetcher (scrapling 0.3.0 uses playwright-official chromium — no patchright
-    #    crashpad bug, no GTK t64 issue) — executes JS, bypasses the 1688 anti-bot shell.
-    #    User approved this browser mode on 2026-11-05.
+    # 1) Playwright chromium with saved 1688 login cookies (bypasses the tmd login wall)
     try:
-        from scrapling.fetchers import DynamicFetcher
+        from playwright.async_api import async_playwright
 
-        # url 可能是纯商品 id（如 "964465929482"）——拼成完整 URL 再抓取
         fetch_url = url if url.startswith("http") else f"https://detail.1688.com/offer/{url}.html"
-        page = await asyncio.to_thread(
-            DynamicFetcher.fetch, fetch_url, headless=True, timeout=45000
-        )
-        html = getattr(page, "html_content", "") or ""
-        if not html:
-            raw = getattr(page, "body", "") or ""
-            html = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
-        logger.info("1688 dynamic fetch got %d chars", len(html))
+
+        # Build a cookies list from the env-provided login cookie string (1688 LOGIN_COOKIE)
+        cookies_env = os.environ.get("LOGIN_COOKIE", "").strip()
+        cookies = []
+        for part in cookies_env.split(";"):
+            part = part.strip()
+            if "=" in part:
+                name, _, value = part.partition("=")
+                cookies.append({
+                    "name": name.strip(),
+                    "value": value.strip(),
+                    "domain": ".1688.com",
+                    "path": "/",
+                })
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            if cookies:
+                await context.add_cookies(cookies)
+            page = await context.new_page()
+            try:
+                await page.goto(fetch_url, timeout=45000, wait_until="domcontentloaded")
+                # give client-rendered JS a moment to embed sku data
+                await page.wait_for_timeout(3000)
+                html = await page.content()
+            finally:
+                await context.close()
+                await browser.close()
+        logger.info("1688 playwright fetch got %d chars (cookies=%d)", len(html), len(cookies))
     except Exception as dynamic_err:  # noqa: BLE001
-        logger.warning("1688 DynamicFetcher failed: %s", dynamic_err)
+        logger.warning("1688 playwright fetch failed: %s", dynamic_err)
+
+    # 1b) Fallback: scrapling DynamicFetcher (no cookies)
+    if len(html) < 1000:
+        try:
+            from scrapling.fetchers import DynamicFetcher
+
+            page = await asyncio.to_thread(
+                DynamicFetcher.fetch, fetch_url, headless=True, timeout=45000
+            )
+            html = getattr(page, "html_content", "") or ""
+            if not html:
+                raw = getattr(page, "body", "") or ""
+                html = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
+            logger.info("1688 dynamic fetch got %d chars", len(html))
+        except Exception as dynamic_err:  # noqa: BLE001
+            logger.warning("1688 DynamicFetcher failed: %s", dynamic_err)
 
     # 2) Fallback: plain Fetcher adapter (compliance-gated path)
     if len(html) < 1000:

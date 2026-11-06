@@ -556,18 +556,21 @@ jobs:
                 echo "[hotfix] ProtectHome: $(grep -E '^ProtectHome=' /etc/systemd/system/nuotao-backend.service || echo NONE)"
                 echo "[hotfix] unit PLAYWRIGHT env: $(grep -E '^Environment=.PLAYWRIGHT' /etc/systemd/system/nuotao-backend.service || echo NONE)"
                 echo "[hotfix] None.get 防御 in place: $(grep -c 'if product is None' /opt/nuotao-ai-os/backend/app/services/product_pipeline_service.py || echo 0)"
+                # 1688 登录 Cookie（绕过 tmd 登录墙）——注入 LOGIN_COOKIE 到 backend/.env
+                sed -i '/^LOGIN_COOKIE=/d' "$ENV_FILE"
+                printf 'LOGIN_COOKIE=lid=tb638676; cna=Y6otIx2+7ncCARsmor681Jo0; t=2c37fe3eb51bf21f6fb0c2cf9e96ca17; unb=492426082; __last_loginid__=b2b-492426082; __cn_logon__=true; __cn_logon_id__=tb638676; _tb_token_=38f67b3338913\n' >> "$ENV_FILE"
+                echo "[hotfix] LOGIN_COOKIE written (len=$(grep '^LOGIN_COOKIE=' "$ENV_FILE" | wc -c))"
                 systemctl daemon-reload
                 systemctl restart nuotao-backend
                 sleep 10
                 echo "[hotfix] backend state: $(systemctl is-active nuotao-backend)"
                 echo "[hotfix] uvicorn env PLAYWRIGHT_BROWSERS_PATH: $(tr '\0' '\n' < /proc/$(pgrep -f 'uvicorn app.main' | head -1)/environ 2>/dev/null | grep '^PLAYWRIGHT_BROWSERS_PATH=' || echo NONE)"
-                echo "[hotfix] backend journal 1688/dynamic:"
-                journalctl -u nuotao-backend -n 200 --no-pager 2>/dev/null | grep -iE '1688|dynamic|scrapling|Traceback|unexpected error' | tail -10 || echo "(no journal lines)"
+                echo "[hotfix] uvicorn env LOGIN_COOKIE: $(tr '\0' '\n' < /proc/$(pgrep -f 'uvicorn app.main' | head -1)/environ 2>/dev/null | grep '^LOGIN_COOKIE=' | head -c 80 || echo NONE)..."
                 echo "[hotfix] trigger import:"
                 curl -s -X POST http://127.0.0.1:8000/api/v1/product-pipeline/import-from-1688 -H "Content-Type: application/json" -d '{"url_or_id":"964465929482","auto_run_pipeline":false,"auto_list":false}' --max-time 150 | head -c 1500 || echo "[hotfix] import curl failed"
                 echo ""
                 echo "[hotfix] post-import journal (traceback if any):"
-                journalctl -u nuotao-backend -n 60 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|dynamic fetch got|Scrapling' | tail -16 || echo "(no journal lines)"
+                journalctl -u nuotao-backend -n 80 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|playwright fetch got|dynamic fetch got|Scrapling|generic data|no hardcoded' | tail -16 || echo "(no journal lines)"
               fi
               mkdir -p /home/nuotao/.cache/ms-playwright
               cp -r /root/.cache/ms-playwright/* /home/nuotao/.cache/ms-playwright/ 2>/dev/null || echo "[hotfix] (no root cache to copy)"
