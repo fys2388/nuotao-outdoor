@@ -571,6 +571,9 @@ jobs:
                 echo "[hotfix] import size: $(wc -c < /tmp/import_964465929482.json 2>/dev/null || echo 0) bytes"
                 # 打印关键字段（标题/价格/SKU/图片/属性），JSON 完整存盘
                 /opt/nuotao-ai-os/backend/.venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_import_extract.py /tmp/import_964465929482.json
+                echo "[hotfix] === decisive _fetch_1688_product diagnostic ==="
+                cd /opt/nuotao-ai-os/backend && timeout 120 su - nuotao -s /bin/bash -c "cd /opt/nuotao-ai-os/backend && export LOGIN_COOKIE=\"\$(grep '^LOGIN_COOKIE=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)\" && export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && timeout 110 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_decisive_diag.py" 2>&1 | tail -30
+                echo "[hotfix] === decisive diag end ==="
                 echo "[hotfix] post-import journal (traceback if any):"
                 journalctl -u nuotao-backend -n 80 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|playwright fetch got|dynamic fetch got|Scrapling|generic data|no hardcoded' | tail -16 || echo "(no journal lines)"
               fi
