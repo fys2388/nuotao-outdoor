@@ -770,6 +770,7 @@ jobs:
             ALI_SECRET='${{ secrets.ALI1688_APP_SECRET }}'
             ALI_TOKEN='${{ secrets.ALI1688_ACCESS_TOKEN }}'
             if [ -n "$ALI_KEY" ] && [ -n "$ALI_SECRET" ]; then
+              echo "ALI1688_APP_KEY=${ALI_KEY}" >> "$ENV_FILE"
               echo "[1688] key+secret present"
             else
               echo "[1688] ALI1688 secrets not configured, skipping injection"
