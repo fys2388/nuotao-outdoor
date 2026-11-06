@@ -773,7 +773,6 @@ jobs:
               {
                 echo "ALI1688_APP_KEY=${ALI_KEY}"
                 echo "ALI1688_APP_SECRET=${ALI_SECRET}"
-                echo "ALI1688_ACCESS_TOKEN=${ALI_TOKEN}"
               } >> "$ENV_FILE"
               echo "[1688] Open API credentials injected into $ENV_FILE (key=$ALI_KEY)"
             else
