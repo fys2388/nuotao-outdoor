@@ -2445,9 +2445,13 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
     # ROUND-4G: 若首次稀疏结果已含核心字段（名称+价格+图片），跳过重试——
     # 实测重试 KILL 率 > 50%，平均浪费 ~297s 但无数据收益。
     result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+    if result is None:
+        result = {"success": False, "error": "Fetch returned None", "data": None}
     if _is_sparse_fetch(result) and not _has_minimal_data(result):
         logger.info("1688 fetch sparse (no attributes/weight/dims), no minimal data, retrying once")
         retry = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+        if retry is None:
+            retry = {"success": False, "error": "Retry returned None", "data": None}
         first_info = ((result.get("data") or {}).get("product_info") or {})
         retry_info = ((retry.get("data") or {}).get("product_info") or {})
         # 如果首次失败但重试成功，无论丰富度如何都保留重试结果
@@ -2527,6 +2531,11 @@ def convert_1688_to_pipeline_input(
         产品工作流输入格式的商品信息
     """
     product = product_detail.get("product", {}) if product_detail.get("success") else {}
+    # 防御：product_detail 本身或其 product 子项为 None 时 .get 会炸
+    if product is None:
+        product = {}
+    if not isinstance(product, dict):
+        product = {"raw": product}
 
     # 提取商品名称
     name = product.get("subject", product.get("title", "未命名商品"))
@@ -2727,10 +2736,12 @@ def convert_1688_to_pipeline_input(
         raw = s.get("price")
         if raw in (None, ""):
             raw = s.get("skuPrice")
-        if raw in (None, "") and isinstance(s.get("priceRange"), list) and s["priceRange"]:
-            first = s["priceRange"][0]
-            if isinstance(first, dict):
-                raw = first.get("price")
+        if raw in (None, ""):
+            price_range = s.get("priceRange")
+            if isinstance(price_range, list) and price_range:
+                first = price_range[0]
+                if isinstance(first, dict):
+                    raw = first.get("price")
         if raw in (None, ""):
             return 0.0
         try:
@@ -3022,7 +3033,8 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
             "data": {"import_id": import_id, "source_url": url_or_id},
         }
     except Exception as e:
-        logger.error("1688 import %s: unexpected error: %s", import_id, str(e))
+        import traceback as _tb
+        logger.error("1688 import %s: unexpected error: %s\n%s", import_id, str(e), _tb.format_exc())
         return {
             "success": False,
             "error": str(e),
@@ -3157,3 +3169,4 @@ async def import_and_analyze_from_1688(
         },
         "error": None,
     }
+

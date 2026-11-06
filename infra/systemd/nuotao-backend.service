@@ -9,6 +9,8 @@ User=nuotao
 Group=nuotao
 WorkingDirectory=/opt/nuotao-ai-os/backend
 Environment="PATH=/opt/nuotao-ai-os/backend/.venv/bin"
+# playwright 浏览器目录必须在 uvicorn 进程环境里可见（单元级，不依赖 .env）
+Environment="PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright"
 EnvironmentFile=/opt/nuotao-ai-os/backend/.env
 ExecStart=/opt/nuotao-ai-os/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
 ExecReload=/bin/kill -s HUP $MAINPID
