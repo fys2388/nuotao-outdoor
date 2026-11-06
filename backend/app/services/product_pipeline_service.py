@@ -2444,7 +2444,16 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
     # 稀疏结果重试一次并保留较丰富者；稀疏结果用短 TTL，避免把单薄数据缓存一小时。
     # ROUND-4G: 若首次稀疏结果已含核心字段（名称+价格+图片），跳过重试——
     # 实测重试 KILL 率 > 50%，平均浪费 ~297s 但无数据收益。
-    result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+    try:
+        result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+        logger.info("1688 _cached_fetch: to_thread returned type=%s", type(result).__name__)
+        if result is None:
+            logger.warning("1688 _cached_fetch: to_thread returned None -> Fetch returned None")
+    except Exception as _thread_err:
+        import traceback as _tb2
+        logger.error("1688 _cached_fetch: to_thread RAISED %s: %s\n%s",
+                     type(_thread_err).__name__, str(_thread_err), _tb2.format_exc())
+        result = None
     if result is None:
         result = {"success": False, "error": "Fetch returned None", "data": None}
     if _is_sparse_fetch(result) and not _has_minimal_data(result):
