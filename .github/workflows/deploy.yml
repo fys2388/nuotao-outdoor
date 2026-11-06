@@ -574,6 +574,9 @@ jobs:
                 echo "[hotfix] === decisive _fetch_1688_product diagnostic ==="
                 cd /opt/nuotao-ai-os/backend && timeout 120 su - nuotao -s /bin/bash -c "cd /opt/nuotao-ai-os/backend && export LOGIN_COOKIE=\"\$(grep '^LOGIN_COOKIE=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)\" && export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && timeout 110 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_decisive_diag.py" 2>&1 | tail -30
                 echo "[hotfix] === decisive diag end ==="
+                echo "[hotfix] === 1688 Open API diagnostic ==="
+                cd /opt/nuotao-ai-os/backend && timeout 90 su - nuotao -s /bin/bash -c "cd /opt/nuotao-ai-os/backend && export ALI1688_APP_KEY=\"\$(grep '^ALI1688_APP_KEY=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)\" && export ALI1688_APP_SECRET=\"\$(grep '^ALI1688_APP_SECRET=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)\" && export ALI1688_ACCESS_TOKEN=\"\$(grep '^ALI1688_ACCESS_TOKEN=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)\" && timeout 80 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_oapi_diag.py" 2>&1 | tail -40
+                echo "[hotfix] === OAPI diag end ==="
                 echo "[hotfix] post-import journal (traceback if any):"
                 journalctl -u nuotao-backend -n 80 --no-pager 2>/dev/null | grep -iE 'Traceback|File "|unexpected error|playwright fetch got|dynamic fetch got|Scrapling|generic data|no hardcoded' | tail -16 || echo "(no journal lines)"
               fi
