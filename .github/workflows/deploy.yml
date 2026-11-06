@@ -778,7 +778,7 @@ jobs:
                   echo "ALI1688_ACCESS_TOKEN=${ALI_TOKEN}"
                 fi
               } >> "$ENV_FILE"
-              echo "[1688] Open API credentials injected into $ENV_FILE (key=${ALI_KEY:0:6}...)"
+              echo "[1688] Open API credentials injected into $ENV_FILE (key=$ALI_KEY)"
             else
               echo "[1688] ALI1688 secrets not configured in this repo, skipping injection"
             fi
