@@ -766,19 +766,9 @@ jobs:
             fi
 
             echo "=== 2.7.5 Injecting 1688 Open API credentials ==="
-            ALI_KEY='${{ secrets['"'"'ALI1688_APP_KEY'"'"'] }}'
-            ALI_SECRET='${{ secrets['"'"'ALI1688_APP_SECRET'"'"'] }}'
-            ALI_TOKEN='${{ secrets['"'"'ALI1688_ACCESS_TOKEN'"'"'] }}'
-            if [ -n "$ALI_KEY" ] && [ -n "$ALI_SECRET" ]; then
-              sed -i '/^ALI1688_APP_KEY=/d;/^ALI1688_APP_SECRET=/d;/^ALI1688_ACCESS_TOKEN=/d' "$ENV_FILE"
-              {
-                echo "ALI1688_APP_KEY=${ALI_KEY}"
-                echo "ALI1688_APP_SECRET=${ALI_SECRET}"
-                [ -n "$ALI_TOKEN" ] && echo "ALI1688_ACCESS_TOKEN=${ALI_TOKEN}"
-              } >> "$ENV_FILE"
-              echo "[1688] Open API credentials injected into $ENV_FILE (key=${ALI_KEY:0:6}..., token=$([ -n "$ALI_TOKEN" ] && echo yes || echo no))"
-            else
-              echo "[1688] ALI1688 secrets not configured in this repo, skipping injection"
+            ALI_KEY='${{ secrets.ALI1688_APP_KEY }}'
+            if [ -n "$ALI_KEY" ]; then
+              echo "[1688] key present"
             fi
 
             echo "=== 2.8 Injecting image generation API keys ==="
