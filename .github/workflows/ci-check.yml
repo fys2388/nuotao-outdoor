@@ -13,6 +13,11 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # CI runner 无 .env；app.core.security 在 import 时即读取 JWT_SECRET_KEY，
+    # 缺它会抛 RuntimeError 导致 check_app_imports 全模块失败。
+    # 这里提供 CI 专用测试值（不连真实生产，仅让导入完整性检查可运行）。
+    env:
+      JWT_SECRET_KEY: ci-test-only-not-for-production
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
