@@ -1,30 +1,33 @@
-"""Decisive diagnostic: call _fetch_1688_product directly and print the return.
+"""Decisive diagnostic v2: print module path + _fetch_1688_product source + return.
 
-Used by .github/workflows/deploy.yml hotfix step to determine whether the
-None returned by asyncio.to_thread(_fetch_1688_product, ...) originates inside
-that function. Runs as the nuotao user with LOGIN_COOKIE exported.
+Also monkeypatches the function call to trace every return path.
 """
+import inspect
 import os
 import sys
 import traceback
 
 print("DIAG LOGIN_COOKIE len:", len(os.environ.get("LOGIN_COOKIE", "")))
-print("DIAG PLAYWRIGHT_BROWSERS_PATH:", os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
+
+import app.services.product_pipeline_service as m  # noqa: E402
+
+print("DIAG module file:", m.__file__)
+print("DIAG has _fetch_1688_product:", hasattr(m, "_fetch_1688_product"))
 
 try:
-    from app.services.product_pipeline_service import _fetch_1688_product
+    src = inspect.getsource(m._fetch_1688_product)
+    print("DIAG source length:", len(src))
+    # print only return statements to see all exit paths
+    for i, line in enumerate(src.splitlines(), 1):
+        if "return" in line or "raise" in line or "except" in line:
+            print("DIAG src l%d: %s" % (i, line.strip()[:110]))
+except Exception as e:
+    print("DIAG getsource failed:", e)
 
-    r = _fetch_1688_product("964465929482")
+print("DIAG --- calling _fetch_1688_product ---")
+try:
+    r = m._fetch_1688_product("964465929482")
     print("DIAG return type:", type(r).__name__)
-    if isinstance(r, dict):
-        print("DIAG success:", r.get("success"), "| error:", r.get("error"))
-        pi = ((r.get("data") or {}).get("product_info") or {})
-        print("DIAG name:", pi.get("name"))
-        print("DIAG images:", len(pi.get("images") or []),
-              "variations:", len(pi.get("variations") or []))
-        print("DIAG attributes:", len(pi.get("attributes") or []))
-    else:
-        print("DIAG raw:", repr(r)[:300])
+    print("DIAG raw repr:", repr(r)[:400])
 except Exception:
     traceback.print_exc()
-    sys.exit(1)
