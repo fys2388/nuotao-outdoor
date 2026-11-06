@@ -1,33 +1,37 @@
-"""Decisive diagnostic v2: print module path + _fetch_1688_product source + return.
+"""Decisive diagnostic v3: reproduce the API channel exactly.
 
-Also monkeypatches the function call to trace every return path.
+The API path is: import_from_1688 -> _cached_fetch_1688_product (async)
+  -> asyncio.to_thread(_fetch_1688_product, url)   # worker thread
+  -> _fetch_1688_product internally calls _asyncio.run(scrape_1688_product(...))
+
+diag v1/v2 called _fetch_1688_product SYNCHRONOUSLY (main thread) and got a
+dict. The API channel calls it via asyncio.to_thread (worker thread) and got
+None. This script reproduces the worker-thread call and prints what comes back,
+plus catches the actual exception if the Future carries one.
 """
-import inspect
+import asyncio
 import os
-import sys
 import traceback
 
 print("DIAG LOGIN_COOKIE len:", len(os.environ.get("LOGIN_COOKIE", "")))
 
 import app.services.product_pipeline_service as m  # noqa: E402
 
-print("DIAG module file:", m.__file__)
-print("DIAG has _fetch_1688_product:", hasattr(m, "_fetch_1688_product"))
 
-try:
-    src = inspect.getsource(m._fetch_1688_product)
-    print("DIAG source length:", len(src))
-    # print only return statements to see all exit paths
-    for i, line in enumerate(src.splitlines(), 1):
-        if "return" in line or "raise" in line or "except" in line:
-            print("DIAG src l%d: %s" % (i, line.strip()[:110]))
-except Exception as e:
-    print("DIAG getsource failed:", e)
+async def main():
+    # Reproduce exactly what _cached_fetch_1688_product does at line ~2447
+    try:
+        result = await asyncio.to_thread(m._fetch_1688_product, "964465929482")
+        print("DIAG to_thread result type:", type(result).__name__)
+        print("DIAG to_thread raw:", repr(result)[:300])
+    except Exception as e:
+        print("DIAG to_thread RAISED:", type(e).__name__, ":", str(e)[:300])
+        traceback.print_exc()
+        return
 
-print("DIAG --- calling _fetch_1688_product ---")
-try:
-    r = m._fetch_1688_product("964465929482")
-    print("DIAG return type:", type(r).__name__)
-    print("DIAG raw repr:", repr(r)[:400])
-except Exception:
-    traceback.print_exc()
+    # Also reproduce the None-guard branch
+    if result is None:
+        print("DIAG >>> _cached_fetch would set: Fetch returned None <<<")
+
+
+asyncio.run(main())
