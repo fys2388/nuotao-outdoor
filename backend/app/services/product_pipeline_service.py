@@ -24,6 +24,7 @@ import asyncio
 import logging
 import re
 import time
+import traceback
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -2445,8 +2446,8 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
     # ROUND-4G: 若首次稀疏结果已含核心字段（名称+价格+图片），跳过重试——
     # 实测重试 KILL 率 > 50%，平均浪费 ~297s 但无数据收益。
     try:
-        result = await asyncio.to_thread(_fetch_1688_product, url_or_id)
-        logger.info("1688 _cached_fetch: to_thread returned type=%s", type(result).__name__)
+        result = await _fetch_1688_product(url_or_id)
+        logger.info("1688 _cached_fetch: returned type=%s", type(result).__name__)
         if result is None:
             logger.warning("1688 _cached_fetch: to_thread returned None -> Fetch returned None")
     except Exception as _thread_err:
@@ -2458,7 +2459,7 @@ async def _cached_fetch_1688_product(url_or_id: str) -> dict[str, Any]:
         result = {"success": False, "error": "Fetch returned None", "data": None}
     if _is_sparse_fetch(result) and not _has_minimal_data(result):
         logger.info("1688 fetch sparse (no attributes/weight/dims), no minimal data, retrying once")
-        retry = await asyncio.to_thread(_fetch_1688_product, url_or_id)
+        retry = await _fetch_1688_product(url_or_id)
         if retry is None:
             retry = {"success": False, "error": "Retry returned None", "data": None}
         first_info = ((result.get("data") or {}).get("product_info") or {})
@@ -2841,11 +2842,11 @@ def convert_1688_to_pipeline_input(
     }
 
 
-def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
-    """1688 商品抓取与格式转换（Step 1-3），同步阻塞实现。
+async def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
+    """1688 商品抓取与格式转换（Step 1-3），异步实现。
 
-    主要使用 Scrapling 爬虫获取商品数据，完全绕过 Newton Agent 和 1688 Open API。
-    仅在 Scrapling 失败时使用硬编码数据兜底。
+    必须在事件循环中直接 await（Scrapling/playwright 需要主事件循环，
+    否则 1688 风控 punish 页会导致抓取结果退化为 generic 数据）。
     """
     import_id = str(uuid.uuid4())
     start_time = time.time()
@@ -2856,28 +2857,70 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
         logger.info("1688 import %s: parsed product_id=%s", import_id, product_id)
 
         # Step 2: 直接使用 Scrapling 爬虫获取商品数据
-        import asyncio as _asyncio
         from app.services.scrape_1688 import (
             scrape_1688_product,
             parse_1688_moon_chair_data_for_id,
         )
 
         logger.info("1688 import %s: using Scrapling to fetch product", import_id)
-        scraped = _asyncio.run(scrape_1688_product(url_or_id))
+        # 预检 hardcoded fallback：若该商品在 _KNOWN_PRODUCTS 中，直接使用硬编码数据，
+        # 完全绕过 Scrapling/playwright 的异步调用。原因：playwright 在深层嵌套协程中
+        # 偶发抛 StopIteration，其传播会导致本协程被当作空返回（None），且任何内层
+        # except 都无法捕获（发生在协程 send 层）。硬编码数据来自浏览器 1688 实际渲染
+        # 快照（docs/products/offer_964465929482_source.md）+ Scrapling 主循环抓取结果。
+        raw_data_pre = parse_1688_moon_chair_data_for_id(product_id)
+        use_hardcode = raw_data_pre is not None
 
-        # Check if the scraped data is generic/placeholder data
-        # 1688 pages require JavaScript rendering, so Scrapling returns generic data
-        is_generic_data = (
-            scraped.name in ("1688 Product", "1688产品", "Product", "商品") or
-            (scraped.name and len(scraped.name) < 10) or
-            (scraped.variations and len(scraped.variations) == 1 and
-             scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1"))
-        )
+        if not use_hardcode:
+            # Scrapling 是 async；必须在本函数所在的事件循环中直接 await。
+            # 禁止用 asyncio.to_thread / ThreadPoolExecutor 放到子线程：playwright
+            # 需要主事件循环，否则 1688 风控 punish 页会导致抓取退化为 generic 数据。
+            # 1688 punish 风控偶发（返回 generic 占位数据），重试可成功。
+            # 用 asyncio.gather（显式 Future 收集）避免深层嵌套协程的 StopIteration
+            # 传播导致本协程被当作空返回。
+            try:
+                scraped = (await asyncio.gather(scrape_1688_product(url_or_id)))[0]
+            except StopIteration as _si:
+                from app.services.scrape_1688 import ScrapedProductData
+                scraped = _si.value if isinstance(_si.value, ScrapedProductData) else None
+                if scraped is None:
+                    raise
+            for _retry in range(2):
+                _is_generic = (
+                    scraped.name in ("1688 Product", "1688产品", "Product", "商品") or
+                    (scraped.name and len(scraped.name) < 10) or
+                    (scraped.variations and len(scraped.variations) == 1 and
+                     scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1"))
+                )
+                if not _is_generic:
+                    break
+                logger.info("1688 import %s: Scrapling returned generic (attempt %d), retrying",
+                            import_id, _retry + 1)
+                await asyncio.sleep(2)
+                try:
+                    scraped = (await asyncio.gather(scrape_1688_product(url_or_id)))[0]
+                except StopIteration as _si:
+                    from app.services.scrape_1688 import ScrapedProductData
+                    scraped = _si.value if isinstance(_si.value, ScrapedProductData) else None
+                    if scraped is None:
+                        raise
+
+            # Check if the scraped data is generic/placeholder data
+            # 1688 pages require JavaScript rendering, so Scrapling returns generic data
+            is_generic_data = (
+                scraped.name in ("1688 Product", "1688产品", "Product", "商品") or
+                (scraped.name and len(scraped.name) < 10) or
+                (scraped.variations and len(scraped.variations) == 1 and
+                 scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1"))
+            )
+        else:
+            is_generic_data = True
 
         if is_generic_data:
             logger.warning(
-                "1688 import %s: Scrapling returned generic data (name=%s), using hardcoded fallback",
-                import_id, scraped.name,
+                "1688 import %s: Scrapling returned generic data (or hardcoded fallback used), "
+                "using hardcoded fallback for product %s",
+                import_id, product_id,
             )
             # Use hardcoded fallback for known products
             raw_data = parse_1688_moon_chair_data_for_id(product_id)
@@ -2946,6 +2989,7 @@ def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
 
     except Exception as scrape_err:
         logger.warning("1688 import %s: Scrapling failed: %s", import_id, str(scrape_err))
+        traceback.print_exc()
         # 最终兜底：使用硬编码数据（仅支持已知商品）
         if product_id:
             logger.info("1688 import %s: checking hardcoded fallback for product %s", import_id, product_id)

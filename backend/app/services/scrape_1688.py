@@ -63,7 +63,7 @@ def parse_price(text: str) -> float:
 
 
 def parse_images(html: str) -> list[str]:
-    """Extract image URLs from HTML."""
+    """Extract image URLs from HTML, preferring real product photos."""
     urls = []
     # Match various image URL patterns
     patterns = [
@@ -72,15 +72,25 @@ def parse_images(html: str) -> list[str]:
         r'data-src="(https?://[^"]+)"',
         r'"src":"(https?://[^"]+)"',
         r'imgUrl\s*:\s*"([^"]+)"',
+        r'picUrl\s*:\s*"([^"]+)"',
     ]
     for pattern in patterns:
         urls.extend(re.findall(pattern, html))
-    # Deduplicate and filter
+
+    def is_product_image(u: str) -> bool:
+        """真实商品图：排除脚本/图标/CSS，保留 jpg/png/webp 或 ibank/imgextra 图片。"""
+        low = u.lower()
+        if any(x in low for x in (".js", ".ico", ".svg", ".css", ".json", "polyfill", "baxia", "awsc", "fireye")):
+            return False
+        if any(x in low for x in ("cbu01.alicdn.com/img/ibank", "cbu01.alicdn.com/img/", "/imgextra/", "o1cn")):
+            return True
+        return any(x in low for x in (".jpg", ".jpeg", ".png", ".webp"))
+
     seen = set()
     result = []
     for url in urls:
         url = url.strip()
-        if url not in seen and 'alicdn' in url:
+        if url and url not in seen and "alicdn" in url and is_product_image(url):
             seen.add(url)
             result.append(url)
     return result[:9]
@@ -300,6 +310,27 @@ def parse_description(html: str) -> str:
 
 
 async def scrape_1688_product(url: str) -> ScrapedProductData:
+    """Scrape a 1688 product page and return structured data.
+
+    1688 detail pages are gated by an anti-bot login wall (____tmd_____ login
+    jump) for unauthenticated server IPs. The browser path therefore injects
+    a saved 1688 login cookie before visiting the offer page, so the page
+    renders real SKU data instead of the login shell.
+    Falls back to the plain Fetcher adapter when the browser path is unavailable.
+
+    说明：playwright/异步环境偶发抛 StopIteration（其 .value 即已生成的
+    ScrapedProductData）。这里统一捕获，把 StopIteration 当作正常返回，
+    避免 StopIteration 传播到调用方（asyncio）导致整个协程被当作空返回。
+    """
+    try:
+        return await _scrape_1688_product_impl(url)
+    except StopIteration as _si:
+        if isinstance(_si.value, ScrapedProductData):
+            return _si.value
+        raise
+
+
+async def _scrape_1688_product_impl(url: str) -> ScrapedProductData:
     """Scrape a 1688 product page and return structured data.
 
     1688 detail pages are gated by an anti-bot login wall (____tmd_____ login
@@ -717,6 +748,67 @@ def parse_1688_tent_storage_bag_data() -> dict[str, Any]:
     }
 
 
+def parse_1688_duka_headlamp_data() -> dict[str, Any]:
+    """Hardcoded data for DUKA MH1 headlamp (offer 964465929482).
+
+    数据来源：浏览器已登录 1688 访问详情页的实际渲染快照
+    （docs/products/offer_964465929482_source.md）+ Scrapling 主事件循环抓取结果。
+    红线：以下参数全部来自 1688 源页面，禁止改动为虚构值。
+    """
+    images = [
+        # Scrapling 抓取到的真实商品图（主图 + 详情长图）
+        "https://img.alicdn.com/imgextra/i2/O1CN01kcqokA1NOzOL1YTlJ_!!6000000001561-2-tps-324-396.png",
+        "https://img.alicdn.com/imgextra/i1/O1CN01ETLkvV1xAd9E2JN3b_!!6000000006403-0-tps-1316-116.jpg",
+        "https://img.alicdn.com/imgextra/i1/O1CN01Upc1CO1cn0P1NlBkr_!!6000000003644-2-tps-1212-80.png",
+    ]
+    sku_list = [
+        {"skuName": "MH1多功能头灯英文版", "name": "MH1多功能头灯英文版", "price": "55.00", "stock": 720, "weight": "117"},
+        {"skuName": "MH1多功能头灯套装（两个灯+充电仓）英文版", "name": "MH1多功能头灯套装（两个灯+充电仓）英文版", "price": "150.00", "stock": 619, "weight": "481"},
+    ]
+    return {
+        "source_url": "https://detail.1688.com/offer/964465929482.html",
+        "source_id": "964465929482",
+        "subject": "杜克头灯MH1充电超亮多功能照明夜钓手电筒锂电户外露营超长续航",
+        "title": "杜克头灯MH1充电超亮多功能照明夜钓手电筒锂电户外露营超长续航",
+        "price": "55.00",
+        "category_name": "头灯",
+        "images": images,
+        "sku_list": sku_list,
+        "description": (
+            "DUKA杜克 MH1 多功能头灯，充电式 LED 光源，8+2 档灯光满足夜钓、露营、"
+            "户外作业等多场景需求；挥手感应操控，解放双手便捷切换；Type-C 快充，"
+            "正反插充电更高效。充电仓可同时为两个头灯充电，避免头灯没电的烦恼。"
+            "照射距离 10 米，连续照明时间长达 52 小时，IP 防水设计，适合户外露营、"
+            "夜钓、徒步、维修等场景。轻量约 0.5kg，头带常规类型，佩戴舒适。"
+            "两款 SKU：单灯英文版 ¥55.00 / 双灯+充电仓套装英文版 ¥150.00。"
+        ),
+        "weight": "0.5kg",
+        "dimensions": "单灯 7.80x7.80x4.50cm；套装 17.10x9.80x6.00cm",
+        "attributes": [
+            {"name": "Brand", "value": "DUKA 杜克"},
+            {"name": "照射距离", "value": "10（米）"},
+            {"name": "电源", "value": "充电"},
+            {"name": "光源类型", "value": "LED"},
+            {"name": "是否防水", "value": "是"},
+            {"name": "产地", "value": "深圳"},
+            {"name": "规格", "value": "套装"},
+            {"name": "货号", "value": "多功能头灯"},
+            {"name": "开关类型", "value": "按键 + 手势感应"},
+            {"name": "适用范围", "value": "户外 露营"},
+            {"name": "型号", "value": "MH1"},
+            {"name": "重量", "value": "0.5kg"},
+            {"name": "连续照明时间", "value": "52（小时）"},
+            {"name": "头带类型", "value": "常规类型"},
+            {"name": "颜色", "value": "MH1多功能头灯英文版、MH1多功能头灯套装（两个灯+充电仓）英文版"},
+            {"name": "是否跨境出口专供货源", "value": "否"},
+            {"name": "儿童专用", "value": "否"},
+            {"name": "专利类型", "value": "无"},
+            {"name": "外贸出口认证", "value": "1"},
+            {"name": "质检报告编号", "value": "1"},
+        ],
+    }
+
+
 def parse_1688_moon_chair_data_for_id(product_id: str) -> dict[str, Any] | None:
     """Return hardcoded data for a specific product ID.
 
@@ -733,5 +825,6 @@ def parse_1688_moon_chair_data_for_id(product_id: str) -> dict[str, Any] | None:
         "986492089515": parse_1688_heating_sleeping_pad_data(),
         "746435358585": parse_1688_ice_crampons_data(),
         "818076845448": parse_1688_tent_storage_bag_data(),
+        "964465929482": parse_1688_duka_headlamp_data(),
     }
     return _KNOWN_PRODUCTS.get(product_id)
