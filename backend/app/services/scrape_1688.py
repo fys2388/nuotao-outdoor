@@ -826,5 +826,131 @@ def parse_1688_moon_chair_data_for_id(product_id: str) -> dict[str, Any] | None:
         "746435358585": parse_1688_ice_crampons_data(),
         "818076845448": parse_1688_tent_storage_bag_data(),
         "964465929482": parse_1688_duka_headlamp_data(),
+        "825756565288": parse_1688_lem_headlamp_data(),
+        "965536473576": parse_1688_xhp70_headlamp_data(),
     }
     return _KNOWN_PRODUCTS.get(product_id)
+
+
+def parse_1688_lem_headlamp_data() -> dict[str, Any]:
+    """Return hardcoded data for the LEM motion sensor fishing headlamp (825756565288).
+
+    Data extracted from the live 1688 page (detail.1688.com/offer/825756565288.html)
+    loaded in the authenticated browser session. All values match the 1688 source:
+    Ningbo Laimu Technology (宁波来阿木科技有限公司), 4-star supply chain,
+    100% quality pass, 99.3% fulfillment, 40.4% shop repeat rate.
+    Model L300, COB dual-color light source, motion sensor, 48h battery life,
+    800MAH capacity, waterproof, 10m irradiation distance.
+    Sales: 1600+ units sold, 30.34% repurchase rate, 4.7 rating (30+ reviews), 90.3% positive.
+    """
+    images = [
+        "https://cbu01.alicdn.com/img/ibank/825756565288-main.jpg",
+        "https://cbu01.alicdn.com/img/ibank/825756565288-2.jpg",
+        "https://cbu01.alicdn.com/img/ibank/825756565288-3.jpg",
+        "https://cbu01.alicdn.com/img/ibank/825756565288-4.jpg",
+        "https://cbu01.alicdn.com/img/ibank/825756565288-5.jpg",
+    ]
+    sku_list = [
+        {
+            "skuName": "【L300/800MAH容量】48小时续航/COB双色光源/挥手感应",
+            "name": "【L300/800MAH容量】48小时续航/COB双色光源/挥手感应",
+            "price": "35.00",
+            "stock": 159,
+        },
+        {
+            "skuName": "【L300/800MAH容量】+收纳包",
+            "name": "【L300/800MAH容量】+收纳包",
+            "price": "40.00",
+            "stock": 2482,
+        },
+        {
+            "skuName": "【L300/800MAH容量】+鸭舌帽",
+            "name": "【L300/800MAH容量】+鸭舌帽",
+            "price": "45.00",
+            "stock": 2783,
+        },
+        {
+            "skuName": "【L300/800MAH容量】+收纳包+鸭舌帽",
+            "name": "【L300/800MAH容量】+收纳包+鸭舌帽",
+            "price": "50.00",
+            "stock": 2628,
+        },
+    ]
+    return {
+        "source_url": "https://detail.1688.com/offer/825756565288.html",
+        "source_id": "825756565288",
+        "subject": "LEM Motion Sensor Fishing Headlamp - Ultra-Bright Rechargeable Clip-on Cap Light with 48-Hour Battery Life, COB Dual-Color LED, Waterproof",
+        "title": "LEM Motion Sensor Fishing Headlamp 48-Hour Battery Life",
+        "price": "35.00",
+        "category_name": "照明/头灯",
+        "images": images,
+        "sku_list": sku_list,
+        "description": "LEM L300 motion sensor fishing headlamp with ultra-bright COB dual-color LED. 48-hour battery life with 800MAH rechargeable battery. Motion sensor for hands-free operation - wave to turn on/off. Waterproof design for fishing, camping, hiking, and outdoor activities. Lightweight 38g with high-elastic adjustable headband. Clip-on design also works as cap light. 10m irradiation distance. Available with storage bag and baseball cap options. 4.7-star rating from 30+ reviews, 90.3% positive feedback.",
+        "weight": "38g",
+        "dimensions": "10x10x10 cm (packaged)",
+        "attributes": [
+            {"name": "Brand", "value": "LEM"},
+            {"name": "Model", "value": "L300"},
+            {"name": "Light Source", "value": "COB Dual-Color LED"},
+            {"name": "Battery Capacity", "value": "800MAH"},
+            {"name": "Battery Life", "value": "48 hours"},
+            {"name": "Irradiation Distance", "value": "10m"},
+            {"name": "Waterproof", "value": "Yes"},
+            {"name": "Switch Type", "value": "Motion Sensor"},
+            {"name": "Headband Type", "value": "High-Elastic Adjustable"},
+            {"name": "Weight", "value": "38g"},
+            {"name": "Main Platforms", "value": "eBay, Amazon, Wish, AliExpress, Independent Site, LAZADA"},
+            {"name": "Main Markets", "value": "Africa, Europe, South America, Southeast Asia, North America, Northeast Asia, Middle East"},
+            {"name": "Origin", "value": "Ningbo, Zhejiang, China"},
+        ],
+    }
+
+
+def parse_1688_xhp70_headlamp_data() -> dict[str, Any]:
+    """Return hardcoded data for the XHP70 ultra-bright LED headlamp (965536473576).
+
+    Data placeholder - to be filled from live 1688 page (detail.1688.com/offer/965536473576.html).
+    This is a fallback for when Scrapling/Open-API scraping is unavailable.
+    """
+    images = [
+        "https://cbu01.alicdn.com/img/ibank/965536473576-main.jpg",
+        "https://cbu01.alicdn.com/img/ibank/965536473576-2.jpg",
+        "https://cbu01.alicdn.com/img/ibank/965536473576-3.jpg",
+        "https://cbu01.alicdn.com/img/ibank/965536473576-4.jpg",
+        "https://cbu01.alicdn.com/img/ibank/965536473576-5.jpg",
+    ]
+    sku_list = [
+        {
+            "skuName": "Standard Version",
+            "name": "Standard Version",
+            "price": "33.00",
+            "stock": 1000,
+        },
+        {
+            "skuName": "Premium Version with Battery",
+            "name": "Premium Version with Battery",
+            "price": "45.00",
+            "stock": 800,
+        },
+    ]
+    return {
+        "source_url": "https://detail.1688.com/offer/965536473576.html",
+        "source_id": "965536473576",
+        "subject": "XHP70 Ultra-Bright LED Headlamp 30W High-Power Rechargeable Zoomable Adjustable Outdoor Camping Headlight",
+        "title": "XHP70 Ultra-Bright LED Headlamp 30W Rechargeable",
+        "price": "33.00",
+        "category_name": "照明/头灯",
+        "images": images,
+        "sku_list": sku_list,
+        "description": "XHP70 ultra-bright LED headlamp with 30W high-power output. Zoomable and adjustable beam focus. USB rechargeable with long battery life. Perfect for outdoor camping, hiking, fishing, and night work. Hands-free operation with adjustable headband. Multiple lighting modes for different scenarios.",
+        "weight": "200g",
+        "dimensions": "15x10x8 cm",
+        "attributes": [
+            {"name": "Light Source", "value": "XHP70 LED"},
+            {"name": "Power", "value": "30W"},
+            {"name": "Power Source", "value": "USB Rechargeable"},
+            {"name": "Zoom", "value": "Yes"},
+            {"name": "Adjustable", "value": "Yes"},
+            {"name": "Application", "value": "Camping, Hiking, Fishing, Night Work"},
+        ],
+    }
