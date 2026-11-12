@@ -357,7 +357,8 @@ echo "=== 7.5 Configuring AI Agent Scheduler ==="
 SCHEDULER_SERVICE=/etc/systemd/system/nuotao-agent-scheduler.service
 SCHEDULER_TEMPLATE=/opt/nuotao-ai-os/infra/systemd/nuotao-agent-scheduler.service
 if [ -f "$SCHEDULER_TEMPLATE" ]; then
-  # 妯℃澘浼樺厛锛氫互浠撳簱鐗堟湰鍖栨ā鏉夸负鍑嗭紙docs/agent_scheduler_deployment.md锛?              cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
+  # Use versioned template from repo (docs/agent_scheduler_deployment.md)
+  cp "$SCHEDULER_TEMPLATE" "$SCHEDULER_SERVICE"
   chmod 644 "$SCHEDULER_SERVICE"
   echo "[scheduler] installed versioned template -> $SCHEDULER_SERVICE"
 elif [ ! -f "$SCHEDULER_SERVICE" ]; then
