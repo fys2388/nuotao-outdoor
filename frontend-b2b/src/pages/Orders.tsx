@@ -53,7 +53,7 @@ export default function OrdersPage() {
       dataIndex: 'order_number',
       key: 'order_number',
       render: (v: string, record: Order) => (
-        <a onClick={() => { navigateTo(`/orders/${record.id}`) }}>
+        <a onClick={() => { navigateTo(`/portal/orders/${record.id}`) }}>
           <Text strong>{v}</Text>
         </a>
       ),
@@ -99,7 +99,7 @@ export default function OrdersPage() {
       title: 'Action',
       key: 'action',
       render: (_: any, record: Order) => (
-        <Button type="link" icon={<EyeOutlined />} onClick={() => { navigateTo(`/orders/${record.id}`) }}>
+        <Button type="link" icon={<EyeOutlined />} onClick={() => { navigateTo(`/portal/orders/${record.id}`) }}>
           View
         </Button>
       ),

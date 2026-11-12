@@ -49,12 +49,12 @@ export default function OrderDetailPage({ orderId }: { orderId: string }) {
   return (
     <div>
       <Breadcrumb style={{ marginBottom: 16 }}>
-        <Breadcrumb.Item><a href="/orders" onClick={(e) => { e.preventDefault(); navigateTo('/orders') }}>My Orders</a></Breadcrumb.Item>
+        <Breadcrumb.Item><a href="/portal/orders" onClick={(e) => { e.preventDefault(); navigateTo('/portal/orders') }}>My Orders</a></Breadcrumb.Item>
         <Breadcrumb.Item>{order.order_number}</Breadcrumb.Item>
       </Breadcrumb>
 
       <div style={{ marginBottom: 16 }}>
-        <Button type="link" icon={<LeftOutlined />} onClick={() => { navigateTo('/orders') }}>
+        <Button type="link" icon={<LeftOutlined />} onClick={() => { navigateTo('/portal/orders') }}>
           Back to Orders
         </Button>
       </div>

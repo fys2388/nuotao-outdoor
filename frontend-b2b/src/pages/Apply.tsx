@@ -139,7 +139,7 @@ export default function ApplyPage() {
           requiredMark="optional"
           initialValues={{ country: '', business_type: '' }}
         >
-          <Divider orientation="left" orientationMargin={0}>Company Information</Divider>
+          <Divider titlePlacement="left" orientationMargin={0}>Company Information</Divider>
 
           <Row gutter={16}>
             <Col span={12}>
@@ -203,7 +203,7 @@ export default function ApplyPage() {
             </Col>
           </Row>
 
-          <Divider orientation="left" orientationMargin={0}>Contact Person</Divider>
+          <Divider titlePlacement="left" orientationMargin={0}>Contact Person</Divider>
 
           <Row gutter={16}>
             <Col span={12}>
@@ -264,7 +264,7 @@ export default function ApplyPage() {
             <Input placeholder="Street address, postal code" size="large" />
           </Form.Item>
 
-          <Divider orientation="left" orientationMargin={0}>Account Setup</Divider>
+          <Divider titlePlacement="left" orientationMargin={0}>Account Setup</Divider>
 
           <Form.Item
             name="password"
@@ -306,7 +306,7 @@ export default function ApplyPage() {
               <Button
                 type="link"
                 icon={<ArrowLeftOutlined />}
-                onClick={() => (window.location.hash = '/login')}
+                onClick={() => navigateTo('/login')}
                 style={{ padding: 0 }}
               >
                 Already have an account? Sign in

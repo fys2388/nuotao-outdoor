@@ -38,7 +38,7 @@ export default function CartPage() {
       message.success(`Order ${order.order_number} placed successfully!`)
       clearCart()
       setCheckoutModal(false)
-      navigateTo(`/orders/${order.id}`)
+      navigateTo(`/portal/orders/${order.id}`)
     } catch (e: any) {
       message.error(e.message || 'Failed to place order')
     } finally {
@@ -115,7 +115,7 @@ export default function CartPage() {
         <Title level={4}>Your cart is empty</Title>
         <Text type="secondary">Browse our wholesale catalog and add products to your cart</Text>
         <div style={{ marginTop: 24 }}>
-          <Button type="primary" size="large" onClick={() => { navigateTo('/products') }}>
+          <Button type="primary" size="large" onClick={() => { navigateTo('/portal/products') }}>
             Browse Products
           </Button>
         </div>
@@ -156,7 +156,7 @@ export default function CartPage() {
 
       <div style={{ marginTop: 24, textAlign: 'right' }}>
         <Space>
-          <Button size="large" onClick={() => { navigateTo('/products') }}>
+          <Button size="large" onClick={() => { navigateTo('/portal/products') }}>
             Continue Shopping
           </Button>
           <Button

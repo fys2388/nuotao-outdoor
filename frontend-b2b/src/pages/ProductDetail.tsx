@@ -45,7 +45,7 @@ export default function ProductDetailPage({ productId }: { productId: string }) 
   return (
     <div>
       <Breadcrumb style={{ marginBottom: 16 }}>
-        <Breadcrumb.Item><a href="/products" onClick={(e) => { e.preventDefault(); navigateTo('/products') }}>Products</a></Breadcrumb.Item>
+        <Breadcrumb.Item><a href="/portal/products" onClick={(e) => { e.preventDefault(); navigateTo('/portal/products') }}>Products</a></Breadcrumb.Item>
         <Breadcrumb.Item>{product.name}</Breadcrumb.Item>
       </Breadcrumb>
 

@@ -15,7 +15,7 @@ export default function LoginPage() {
     try {
       await login(values.email, values.password)
       message.success('Login successful')
-      navigateTo('/products')
+      navigateTo('/portal/products')
     } catch (e: any) {
       message.error(e.message || 'Login failed. Please check your credentials.')
     } finally {
