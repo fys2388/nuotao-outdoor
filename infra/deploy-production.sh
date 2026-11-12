@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -e
 cd /opt/nuotao-ai-os
 
@@ -17,8 +17,8 @@ else
 fi
 
 echo "=== 1. Pulling latest code ==="
-git fetch --prune origin ${{ github.ref_name }}
-git reset --hard origin/${{ github.ref_name }}
+git fetch --prune origin $(git rev-parse --abbrev-ref HEAD)
+git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
 git clean -fd backend/alembic/versions/ 2>/dev/null || true
 echo "[git] cleaned untracked migration files"
 
@@ -64,9 +64,9 @@ echo "=== 2.6 Injecting WooCommerce REST credentials into server .env ==="
 # silently skipped with "WC secrets not configured in this repo" even
 # though the secrets existed. Secret values are masked in run logs.
 ENV_FILE=/opt/nuotao-ai-os/backend/.env
-WC_KEY='${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}'
-WC_SECRET='${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}'
-WC_BASE='${{ secrets.WOOCOMMERCE_BASE_URL }}'
+WC_KEY='\$WOOCOMMERCE_CONSUMER_KEY'
+WC_SECRET='\$WOOCOMMERCE_CONSUMER_SECRET'
+WC_BASE='\$WOOCOMMERCE_BASE_URL'
 if [ -n "$WC_KEY" ] && [ -n "$WC_SECRET" ]; then
   mkdir -p "$(dirname "$ENV_FILE")"
   touch "$ENV_FILE"
@@ -82,8 +82,8 @@ else
 fi
 
 echo "=== 2.7 Injecting WordPress application password (media upload) ==="
-WP_USER='${{ secrets.WP_USERNAME }}'
-WP_PASS='${{ secrets.WP_APPLICATION_PASSWORD }}'
+WP_USER='\$WP_USERNAME'
+WP_PASS='\$WP_APPLICATION_PASSWORD'
 if [ -n "$WP_USER" ] && [ -n "$WP_PASS" ]; then
   sed -i '/^WP_USERNAME=/d;/^WP_APPLICATION_PASSWORD=/d' "$ENV_FILE"
   {
@@ -96,9 +96,9 @@ else
 fi
 
 echo "=== 2.7.5 Injecting 1688 Open API credentials ==="
-ALI_KEY='${{ secrets.ALI1688_APP_KEY }}'
-ALI_SECRET='${{ secrets.ALI1688_APP_SECRET }}'
-ALI_TOKEN='${{ secrets.ALI1688_ACCESS_TOKEN }}'
+ALI_KEY='\$ALI1688_APP_KEY'
+ALI_SECRET='\$ALI1688_APP_SECRET'
+ALI_TOKEN='\$ALI1688_ACCESS_TOKEN'
 if [ -n "$ALI_KEY" ] && [ -n "$ALIKEY" ]; then
   echo "ALI1688_APP_KEY=${ALI_KEY}" >> "$ENV_FILE"
   echo "ALI1688_APP_KEY=${ALIKEY}" >> "$ENV_FILE"
@@ -108,11 +108,11 @@ else
 fi
 
 echo "=== 2.8 Injecting image generation API keys ==="
-OPENAI_KEY='${{ secrets.OPENAI_API_KEY }}'
-OPENAI_URL='${{ secrets.OPENAI_BASE_URL }}'
-VOLC_KEY='${{ secrets.VOLCENGINE_API_KEY }}'
-DASHSCOPE_KEY='${{ secrets.DASHSCOPE_API_KEY }}'
-DASHSCOPE_WS='${{ secrets.DASHSCOPE_WORKSPACE_ID }}'
+OPENAI_KEY='\$OPENAI_API_KEY'
+OPENAI_URL='\$OPENAI_BASE_URL'
+VOLC_KEY='\$VOLCENGINE_API_KEY'
+DASHSCOPE_KEY='\$DASHSCOPE_API_KEY'
+DASHSCOPE_WS='\$DASHSCOPE_WORKSPACE_ID'
 if [ -n "$OPENAI_KEY" ] || [ -n "$VOLC_KEY" ] || [ -n "$DASHSCOPE_KEY" ]; then
   sed -i '/^OPENAI_API_KEY=/d;/^OPENAI_BASE_URL=/d;/^VOLCENGINE_API_KEY=/d;/^DASHSCOPE_API_KEY=/d;/^DASHSCOPE_WORKSPACE_ID=/d' "$ENV_FILE"
   [ -n "$OPENAI_KEY" ] && echo "OPENAI_API_KEY=${OPENAI_KEY}" >> "$ENV_FILE"
