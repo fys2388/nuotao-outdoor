@@ -1,0 +1,77 @@
+name: Set B2B Showcase Product Images (temporary)
+
+# One-off: for each enabled B2B showcase product, prefer a real generated
+# image from image_generation_tasks (main_image / lifestyle_image); otherwise
+# use a stable Picsum placeholder seeded by the product slug. Writes the
+# chosen URL(s) into products.meta -> images so the public portal card shows
+# an image instead of "No Image".
+
+on:
+  workflow_dispatch:
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set B2B showcase product images
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/set_images.py << 'PYEOF'
+            import asyncio, json
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            async def main():
+                url = get_settings().database_url
+                engine = create_async_engine(url)
+                try:
+                    async with engine.connect() as conn:
+                        cols = [c["name"] for c in (await conn.run_sync(lambda sync: __import__("sqlalchemy").inspect(sync).get_columns("products")))]
+                        print("products has meta:", "meta" in cols, "| attributes:", "attributes" in cols)
+                        # Enabled showcase products.
+                        prods = (await conn.execute(
+                            text("SELECT id, name, b2b_public_slug FROM products WHERE b2b_showcase_enabled = true AND deleted_at IS NULL")
+                        )).fetchall()
+                        print("showcase products:", len(prods))
+                        used_generated = used_placeholder = 0
+                        for p in prods:
+                            pid, name, slug = p[0], p[1], (p[2] or ("prod-" + str(p[0])[:8]))
+                            # Prefer a real generated image (main_image / lifestyle_image).
+                            gen = (await conn.execute(
+                                text(
+                                    "SELECT image_url FROM image_generation_tasks "
+                                    "WHERE product_id = :pid AND image_url IS NOT NULL "
+                                    "AND use_case IN ('main_image','lifestyle_image') "
+                                    "ORDER BY created_at DESC LIMIT 1"
+                                ),
+                                {"pid": pid},
+                            )).fetchone()
+                            if gen and gen[0]:
+                                images = [gen[0]]
+                                used_generated += 1
+                            else:
+                                images = [f"https://picsum.photos/seed/{slug}/800/600"]
+                                used_placeholder += 1
+                            imgs_json = json.dumps(images)
+                            await conn.execute(
+                                text("UPDATE products SET meta = jsonb_set(meta, '{images}', :imgs::jsonb) WHERE id = :id"),
+                                {"imgs": imgs_json, "id": pid},
+                            )
+                            print(f"  - {name[:30]:30s} images={images[0][:60]}")
+                        await conn.commit()
+                        print("generated:", used_generated, "placeholder:", used_placeholder)
+                finally:
+                    await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/set_images.py 2>&1 | tail -25
+            rm -f /tmp/set_images.py
