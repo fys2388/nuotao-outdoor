@@ -1,0 +1,64 @@
+name: Enable B2B Showcase Products (temporary)
+
+# One-off: mark up to 12 non-enabled products as B2B showcase products
+# (b2b_showcase_enabled=true + a unique b2b_public_slug) so the public
+# b2b.nuotaooutdoor.com product catalogue shows real products.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable B2B showcase products
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/enable_b2b.py << 'PYEOF'
+            import asyncio, uuid
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            async def main():
+                url = get_settings().database_url
+                engine = create_async_engine(url)
+                try:
+                    async with engine.connect() as conn:
+                        # Inspect columns to stay safe across schema variants.
+                        cols = [c["name"] for c in (await conn.run_sync(lambda sync: __import__("sqlalchemy").inspect(sync).get_columns("products")))]
+                        print("products columns:", [c for c in cols if c in ("id","name","b2b_showcase_enabled","b2b_public_slug","created_at")])
+                        where = "b2b_showcase_enabled = false"
+                        if "deleted_at" in cols:
+                            where += " AND deleted_at IS NULL"
+                        order = "created_at" if "created_at" in cols else "id"
+                        sql = text(f"SELECT id, name FROM products WHERE {where} ORDER BY {order} LIMIT 12")
+                        rows = (await conn.execute(sql)).fetchall()
+                        print("candidates:", len(rows))
+                        n = 0
+                        for r in rows:
+                            slug = f"b2b-{str(r.id)[:8]}"
+                            await conn.execute(
+                                text("UPDATE products SET b2b_showcase_enabled = true, b2b_public_slug = :slug WHERE id = :id"),
+                                {"slug": slug, "id": r.id},
+                            )
+                            n += 1
+                        await conn.commit()
+                        print("enabled:", n)
+                        # Re-check enabled count.
+                        total = (await conn.execute(text("SELECT COUNT(*) FROM products WHERE b2b_showcase_enabled = true"))).scalar()
+                        print("total enabled now:", total)
+                finally:
+                    await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/enable_b2b.py 2>&1 | tail -20
+            rm -f /tmp/enable_b2b.py
