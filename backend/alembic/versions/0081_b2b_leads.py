@@ -25,7 +25,6 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "b2b_leads",
-        if_not_exists=True,
         sa.Column("id", sa.Uuid(), primary_key=True),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column("reference_number", sa.String(32), nullable=False),
@@ -76,6 +75,7 @@ def upgrade() -> None:
         sa.Index("ix_b2b_leads_email", "email"),
         sa.Index("ix_b2b_leads_country", "country"),
         sa.Index("ix_b2b_leads_converted_application_id", "converted_application_id"),
+        if_not_exists=True,
     )
 
 
