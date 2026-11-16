@@ -4,6 +4,9 @@ name: M420 B2B Audit (read-only)
 # 只输出：服务名、EnvironmentFile 路径、变量名、长度/是否占位符；数据库结构；映射现状。
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/audit-m420.yml"
 
 jobs:
   audit:
