@@ -119,6 +119,11 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "https://nuotaooutdoor.com",
         "https://www.nuotaooutdoor.com",
+        # B2B portal is a static SPA on Cloudflare Pages; it calls the backend
+        # cross-origin on the console origin.
+        "https://b2b.nuotaooutdoor.com",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
     ],
     allow_credentials=True,
     allow_methods=["*"],

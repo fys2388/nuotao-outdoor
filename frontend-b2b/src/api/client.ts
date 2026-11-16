@@ -1,4 +1,7 @@
-const API_BASE = '/api/v1/b2b-portal'
+// On the static Cloudflare Pages host there is no /api backend, so the
+// production build points this at the backend on the console origin
+// (admin.nuotaooutdoor.com), which nginx proxies to FastAPI.
+const API_BASE = import.meta.env.VITE_B2B_PORTAL_API || '/api/v1/b2b-portal'
 
 function getToken(): string | null {
   return localStorage.getItem('b2b_token')

@@ -1,6 +1,10 @@
 // Public B2B showcase API (no auth, never sends token, never redirects on 401).
 // Talks to the public, price-redacted catalogue + public lead submission.
-const PUBLIC_API_BASE = '/api/v1/b2b-showcase'
+// On the static Cloudflare Pages host there is no /api backend, so the
+// production build points this at the public backend API on the console
+// origin (admin.nuotaooutdoor.com), which nginx proxies to FastAPI.
+const PUBLIC_API_BASE =
+  import.meta.env.VITE_B2B_SHOWCASE_API || '/api/v1/b2b-showcase'
 
 // SPA navigation for the public showcase (same history-routing approach as the portal).
 export function navigate(path: string) {
