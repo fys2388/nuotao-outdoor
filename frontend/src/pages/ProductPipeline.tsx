@@ -328,7 +328,7 @@ export default function ProductPipeline() {
       const submitted = await api.createImportFrom1688Job({
         url_or_id: importUrl.trim(),
         auto_run_pipeline: autoRunPipeline,
-        auto_list: false,
+        auto_list: true,
       })
       if (!submitted.success || !submitted.data) {
         message.error(`提交导入任务失败：${submitted.error || '未知错误'}`)
@@ -525,7 +525,7 @@ export default function ProductPipeline() {
         headers: runHeaders,
         body: JSON.stringify({
           product_info: productInfo,
-          auto_list: false,
+          auto_list: true,
           include_images: false,
         }),
       })

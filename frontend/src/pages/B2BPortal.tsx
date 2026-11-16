@@ -171,6 +171,7 @@ function PortalLoading() {
 function PortalLogin({ onAuthenticated }: { onAuthenticated: (agent: PortalAgent) => void }) {
   const [submitting, setSubmitting] = useState(false)
   const [form] = Form.useForm<LoginFormValues>()
+  const navigate = useNavigate()
 
   const submit = async () => {
     const values = await form.validateFields()
@@ -224,6 +225,15 @@ function PortalLogin({ onAuthenticated }: { onAuthenticated: (agent: PortalAgent
           >
             登录
           </Button>
+          <Divider />
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Text type="secondary" style={{ textAlign: 'center', display: 'block' }}>
+              还没有合作伙伴账号？
+            </Text>
+            <Button block onClick={() => navigate('/portal/register')}>
+              立即申请合作
+            </Button>
+          </Space>
         </Form>
       </section>
     </div>
@@ -873,7 +883,7 @@ export default function B2BPortal() {
   return (
     <div className="portal-shell">
       <header className="portal-topbar">
-        <button type="button" className="portal-brand" onClick={() => navigate('/portal')}>
+        <button type="button" className="portal-brand" onClick={() => navigate('/auth')}>
           <span className="portal-mark">N</span>
           <span>
             <strong>Nuotao B2B</strong>

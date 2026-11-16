@@ -425,7 +425,8 @@ async def admin_b2b_update_agent_status(
             "email": agent.email,
             "tier": agent.tier,
         }
-        if old_status == "pending" and req.status == "active":
+        # M3.37: 支持从 pending_verification 直接激活（跳过人工审核）
+        if old_status in ("pending", "pending_verification") and req.status == "active":
             subject, html, text = render_b2b_approval_email(agent_dict)
             await email_service.send_email(
                 to_email=agent.email,

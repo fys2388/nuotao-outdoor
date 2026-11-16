@@ -75,7 +75,7 @@ export default function ListingJobs() {
   const [activeStatus, setActiveStatus] = useState<string>('all')
   const [detailJob, setDetailJob] = useState<ListingJob | null>(null)
   const [reviewTarget, setReviewTarget] = useState<ListingJob | null>(null)
-  const [reviewForm] = Form.useForm<{ note: string; reasons: string }>()
+  const [reviewForm] = Form.useForm<{ note: string; reasons: string; decision: string }>()
   const [pushingId, setPushingId] = useState<string | null>(null)
 
   const loadJobs = useCallback(async (status?: string) => {

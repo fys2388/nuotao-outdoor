@@ -1,0 +1,38 @@
+{
+  "version": "production-lock-20260927",
+  "locked_at": "2026-09-27T01:47:35Z",
+  "branch": "main",
+  "commit": "8903f9fe7db8ddd5baccff703601546a4574031e",
+  "commit_short": "8903f9fe",
+  "description": "Base production version locked for future development",
+  "services": {
+    "backend": {
+      "service": "nuotao-backend",
+      "port": 8000,
+      "status": "active",
+      "workers": 2
+    },
+    "frontend": {
+      "path": "/opt/nuotao/frontend/dist",
+      "build_time": "2026-09-27T01:44:00Z",
+      "nginx": "/etc/nginx/sites-enabled/nuotao"
+    }
+  },
+  "features": [
+    "BUG #12: stats use meta.woocommerce_id fallback",
+    "BUG #10: guard scan 1s interval",
+    "WC sync stats show push/pull breakdown",
+    "WC sync retry alert + OSS upload",
+    "WC clickback events (impression/click/view/cart/purchase)"
+  ],
+  "deployment": {
+    "server": "95.217.218.178",
+    "ssh_key": "~/.ssh/id_ed25519_nuotao",
+    "git_repo": "/opt/nuotao",
+    "backup_branch": "backup/production-20260911"
+  },
+  "rollback": {
+    "command": "git checkout main && git pull origin main && cd frontend && npm run build && systemctl restart nuotao-backend",
+    "backup_tag": "production-lock-20260927"
+  }
+}

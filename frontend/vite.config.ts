@@ -5,7 +5,7 @@ import { visualizer } from 'rollup-plugin-visualizer'
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // Hardcoded for local development - backend runs on port 8012
-  const apiProxyTarget = 'http://127.0.0.1:8012'
+  const apiProxyTarget = 'http://127.0.0.1:8000'
   console.log('[Vite] API Proxy Target:', apiProxyTarget)
   const buildId = (
     process.env.VITE_BUILD_ID ||

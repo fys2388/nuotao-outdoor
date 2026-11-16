@@ -24,6 +24,7 @@ from sqlalchemy import (
     Uuid,
     func,
     Index,
+    text as sa_text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -202,7 +203,13 @@ class B2BPriceTier(Base, TimestampMixin, WorkspaceMixin):
 
 
 class B2BAgent(Base, TimestampMixin, WorkspaceMixin):
-    """B2B 代理商账号（外部实体，独立于内部 users 表）。"""
+    """B2B 代理商账号（外部实体，独立于内部 users 表）。
+
+    M3.37: 新增 email_verification 字段支持自助注册流程。
+    - pending_verification: 等待邮箱验证
+    - pending: 等待人工审核（旧状态兼容）
+    - active: 已激活可登录
+    """
 
     __tablename__ = "b2b_agents"
 
@@ -217,7 +224,7 @@ class B2BAgent(Base, TimestampMixin, WorkspaceMixin):
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     tier: Mapped[str] = mapped_column(String(16), nullable=False, default="bronze")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending_verification", index=True)
     commission_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
     discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
     credit_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
@@ -249,6 +256,10 @@ class B2BAgent(Base, TimestampMixin, WorkspaceMixin):
         nullable=True,
         index=True,
     )
+    # M3.37: Email verification fields
+    verification_token: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="Email verification token (hashed)")
+    verification_token_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="Token expiry timestamp")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="Timestamp when email was verified")
 
     orders: Mapped[list["B2BOrder"]] = relationship(back_populates="agent", lazy="selectin")
 
@@ -259,11 +270,21 @@ class B2BAgent(Base, TimestampMixin, WorkspaceMixin):
             "credit_status IN ('normal', 'watch', 'hold', 'frozen')",
             name="ck_b2b_agents_credit_status",
         ),
+        CheckConstraint(
+            "status IN ('pending','pending_verification','active','suspended','rejected')",
+            name="ck_b2b_agents_status",
+        ),
         Index("ix_b2b_agents_workspace_status", "workspace_id", "status"),
         Index(
             "ix_b2b_agents_workspace_credit_status",
             "workspace_id",
             "credit_status",
+        ),
+        Index(
+            "ix_b2b_agents_verification_token",
+            "verification_token",
+            postgresql_where=sa_text("verification_token IS NOT NULL"),
+            unique=True,
         ),
     )
 

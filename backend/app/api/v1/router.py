@@ -18,11 +18,14 @@ from app.api.v1.endpoints import (
     analytics,
     auth,
     b2b_admin,
+    b2b_agreements,
     b2b_credit,
     b2b_finance,
     b2b_fulfillment,
     b2b_portal,
     b2b_pricing,
+    b2b_sales,
+    b2b_showcase,
     cache,
     calibration,
     consolidation,
@@ -190,10 +193,15 @@ api_router.include_router(feishu.router)
 api_router.include_router(ai_capability.router)
 api_router.include_router(b2b_portal.router)
 api_router.include_router(b2b_admin.router)
+api_router.include_router(b2b_agreements.router)
 api_router.include_router(b2b_credit.router)
 api_router.include_router(b2b_finance.router)
 api_router.include_router(b2b_fulfillment.router)
 api_router.include_router(b2b_pricing.router)
+api_router.include_router(b2b_sales.router)
+api_router.include_router(b2b_showcase.public_router)
+api_router.include_router(b2b_showcase.admin_router)
+api_router.include_router(b2b_showcase.showcase_admin_router)
 api_router.include_router(consolidation.router)
 api_router.include_router(currency.router)
 api_router.include_router(customer_data.router)

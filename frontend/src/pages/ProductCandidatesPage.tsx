@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Alert,
   Button,
@@ -816,7 +816,7 @@ export default function ProductCandidatesPage() {
     // 前端软拦截给出友好提示，后端 update_candidate_status 也会硬性 400 拦截。
     const needsPricingGate =
       status === 'approved' && candidate.candidate_status === 'candidate'
-    let content = '该动作会写入候选状态机审计记录，且必须由人工操作。'
+    let content: ReactNode = '该动作会写入候选状态机审计记录，且必须由人工操作。'
     if (needsPricingGate) {
       const meta = (candidate as any).meta || {}
       const hasPrice =

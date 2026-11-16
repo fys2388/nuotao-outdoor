@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Map 4 · Nuotao Fit × 1688 Supply Chain Maturity</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+  body { margin:0; padding:24px; background:#fff; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#222; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px 0; }
+  .sub { font-size:12px; color:#666; margin-bottom:16px; }
+  #chart { width:100%; height:720px; }
+</style>
+</head>
+<body>
+<h1>Map 4 · Nuotao 适配度 × 1688 供应链成熟度</h1>
+<div class="sub">X = Nuotao Fit（轻小/低退货/低法规/直发友好）｜Y = 1688 Supply Maturity（产业带成熟度，证据 04）｜右上 = 立即可以下单的品类。</div>
+<div id="chart"></div>
+<div style="margin-top:16px;font-size:12px;color:#555;line-height:1.7;">
+<b>读图说明</b>：本图 26 个微品类。蓝色阴影区（右上）= 1688 已验证供应链 + Nuotao 高适配：Repair Tape/Patch（义乌/惠州）、Shock Cord/Paracord（泰州）、Buckles（义乌/温州）、Zipper Pull（温州/义乌）、Trunk Organizer（上海臻充琦，明确 DTC 下游）、Guyline（金华）、Bino Strap（深圳宝安）。灰色点（Unknown Supply）= 1688 证据未覆盖，需二轮询盘。
+<br><b>核心结论</b>：上海臻充琦（offer 944138010136）明确做独立站下游，是 Trunk Organizer Hero 的首选询盘对象；中科皮具（offer 937013461917）有可授权自有品牌，是压缩袋潜在 OEM。
+<br><b>使用建议</b>：蓝色阴影区（Verified Supply）可立即启动询盘；Partial Supply 需补 1688 详情页；Unknown Supply（Dry Bag Valve / Dog Paw Washer / Birding Journal）暂不立项，等二轮 1688 寻源后再评。优先询盘上海臻充琦、中科皮具、深圳永智创。
+<br><span style="color:#999;">数据来源：evidence_04 1688 快照 · 2026-10-08 · offer_id 以 URL 为准</span></div>
+<script>
+const categories = {
+  "Verified Supply": "#2563eb",
+  "Partial Supply": "#d97706",
+  "Unknown Supply": "#9ca3af"
+};
+// [name, nuotaoFitX, supplyY, size, cat]
+const data = [
+  ["Repair Tape / Patch", 9, 9.5, 90, "Verified Supply"],
+  ["Shock Cord / Paracord", 9, 9.5, 80, "Verified Supply"],
+  ["Straps & Buckles", 9, 9.5, 85, "Verified Supply"],
+  ["Zipper Pull / Lubricant", 8.5, 9, 50, "Verified Supply"],
+  ["Trunk Organizer", 7, 9, 70, "Verified Supply"],
+  ["Compression Sack", 8.5, 8, 65, "Verified Supply"],
+  ["Pet Buckle / D-Ring", 7.5, 9, 30, "Verified Supply"],
+  ["Bino/Camera Strap", 7, 8.5, 25, "Verified Supply"],
+  ["Wagon Pull Rod", 5, 6, 20, "Partial Supply"],
+  ["Camp Chair Feet / Cord", 7, 6.5, 45, "Partial Supply"],
+  ["Hydration Bite Valve", 8.5, 7, 90, "Partial Supply"],
+  ["Hydration Cleaning Tablets", 7.5, 5, 60, "Partial Supply"],
+  ["Rain Cover", 8, 7, 50, "Partial Supply"],
+  ["Dry Bag (Earth Pak class)", 7.5, 6.5, 55, "Partial Supply"],
+  ["Wet/Dry Bag", 7.5, 7, 45, "Partial Supply"],
+  ["Guyline + Tensioner", 8.5, 8, 55, "Verified Supply"],
+  ["Tent Pole Splint", 7, 6, 35, "Partial Supply"],
+  ["Sternum Strap", 8, 9, 40, "Verified Supply"],
+  ["Dog Paw Washer", 6, 5, 35, "Unknown Supply"],
+  ["Dog Seatbelt Tether", 6, 6, 20, "Unknown Supply"],
+  ["Bino Harness / Strap", 7, 8.5, 25, "Verified Supply"],
+  ["Birding Notebook", 6, 3, 20, "Unknown Supply"],
+  ["Tackle Box Divider", 6.5, 7, 30, "Partial Supply"],
+  ["Fishing Plier Sheath", 7, 7, 25, "Partial Supply"],
+  ["Dry Bag Valve", 5, 3, 25, "Unknown Supply"],
+  ["Carabiner / Gear Tie", 8.5, 8, 50, "Verified Supply"]
+];
+const series = {};
+Object.keys(categories).forEach(k => series[k] = []);
+data.forEach(d => series[d[4]].push({ name: d[0], value: [d[1], d[2], d[3]], symbolSize: d[3] }));
+const option = {
+  backgroundColor: "#fff",
+  grid: { left: 70, right: 40, top: 50, bottom: 70 },
+  tooltip: { trigger: "item", formatter: p => `${p.data.name}<br/>Nuotao Fit: ${p.data.value[0]}/10<br/>1688 Supply: ${p.data.value[1]}/10` },
+  legend: { top: 8, textStyle: { fontSize: 11 } },
+  xAxis: { name: "Nuotao Fit →", nameLocation: "middle", nameGap: 32, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  yAxis: { name: "1688 Supply Chain Maturity →", nameLocation: "middle", nameGap: 55, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  series: Object.keys(series).map(k => ({
+    name: k, type: "scatter", data: series[k],
+    itemStyle: { color: categories[k], opacity: 0.78, borderColor: "#fff", borderWidth: 1 },
+    label: { show: true, position: "right", fontSize: 10, formatter: p => p.data.name, color: "#333" },
+    markArea: k === "Verified Supply" ? {
+      itemStyle: { color: "rgba(37,99,235,0.06)" },
+      data: [[{ xAxis: 7.5, yAxis: 7.5 }, { xAxis: 10, yAxis: 10 }]]
+    } : undefined
+  }))
+};
+echarts.init(document.getElementById("chart")).setOption(option);
+</script>
+</body>
+</html>

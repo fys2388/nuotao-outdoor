@@ -1,0 +1,50 @@
+{
+  "prompt_id": "yoga-mat-hero-v3",
+  "created_at": "2026-09-27T14:30:00Z",
+  "created_by": "op-team-01",
+  "product_sku": "NT-YS-6MM-PUR-6824",
+  "product_id": "uuid-local-db-example-001",
+  "tool": "seedream-5.0-pro",
+  "image_type": "hero-main-01",
+  "image_index": 1,
+  "aspect_ratio": "1:1",
+  "resolution": "2048x2048",
+  "i2i_reference_url": "https://detail.1688.com/img/NWxxxxxxxx.jpg",
+  "prompt": "参考[img0]作为产品外观参考，保持产品的形状、颜色、材质、结构100%不变。将背景替换为纯白色背景，产品位于画面中央，采用45度俯视角展示，产品占画面约65%，下方有柔和的接触阴影。整体采用专业电商产品摄影风格，柔和均匀的顶光照明，无任何文字、水印或其他装饰元素，画面干净清爽。关键主体完整置于安全边界内，四周边距均衡，背景自然铺满画布。",
+  "negative_prompt": "no text, no watermark, no chinese characters, no other brand logo, no extra elements, no blur, no distortion, no color shift, keep product shape identical, keep product color identical",
+  "parameters": {
+    "creative_degree": "low",
+    "detail_level": "high",
+    "quality": "commercial"
+  },
+  "seed": 123456789,
+  "output_url": "https://cdn.nuotao.com/products/hero-yoga-purple-v3.jpg",
+  "output_size_kb": 387,
+  "final_version": true,
+  "iterations": [
+    {"v": 1, "issue": "product color shifted to blue", "fix": "emphasized 'keep product color identical' in negative prompt"},
+    {"v": 2, "issue": "background not pure white", "fix": "added 'pure white background' emphasis"},
+    {"v": 3, "issue": "approved - final version"}
+  ],
+  "review": {
+    "l1_verdict": "PASS",
+    "l1_score": 95,
+    "l1_issues": [],
+    "l2_reviewer": "op-lead-01",
+    "l2_verified_at": "2026-09-27T15:00:00Z",
+    "l2_approved": true,
+    "l2_notes": "Image approved for production"
+  },
+  "compliance": {
+    "ftc_check": "passed",
+    "no_chinese": true,
+    "no_watermark": true,
+    "no_third_party_logo": true,
+    "product_accuracy": "100% match with 1688 original"
+  },
+  "cost": {
+    "api_cost_usd": 0.05,
+    "total_cost_usd": 0.05
+  },
+  "notes": "First hero image for yoga mat SKU. Used for WC product page main image slot 01."
+}

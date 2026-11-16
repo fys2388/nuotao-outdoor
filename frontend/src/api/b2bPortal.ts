@@ -103,6 +103,17 @@ export const portalApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  // M3.37: Email verification endpoints
+  verifyEmail: (token: string) =>
+    portalRequest<PortalAgent>('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  resendVerification: (email: string) =>
+    portalRequest<{ message: string }>('/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
   me: () => portalRequest<PortalAgent>('/auth/me'),
   summary: () => portalRequest<PortalAccountSummary>('/account/summary'),
   products: (search?: string) => {

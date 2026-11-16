@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     # are allowlisted. A domain whitelist with a single proxy-less plain
     # request is used - no stealth / Cloudflare bypass / login-wall scraping.
     scraping_enabled: bool = False
-    scraping_allowed_domains: list[str] = []  # e.g. ["detail.1688.com"]
+    scraping_allowed_domains: list[str] = ["1688.com", "detail.1688.com"]  # Default allowlist for 1688 sourcing
     scraping_qps_per_domain: float = 0.5  # min 2s between requests per domain
     scraping_max_urls_per_job: int = 50
     scraping_global_concurrency: int = 2
@@ -160,6 +160,11 @@ class Settings(BaseSettings):
     sensenova_default_model: str = "sensenova-6.8-flash-lite"
     llm_timeout_seconds: float = 60.0
     llm_max_tokens: int = 4000
+    # Client-side concurrency cap for LLM calls. Without it, many agents
+    # calling the gateway at once exceed the provider's per-minute rate
+    # quota (Agnes returns 429 "inference exceeds tpm/rpm limit"). A low cap
+    # throttles concurrency at the source so retries are less likely. (2026-11-16)
+    llm_max_concurrent: int = 2
 
     # --- Vision (multimodal) routing ----------------------------------------
     # P0-5: vision must route to a model that genuinely reads images. The
@@ -180,6 +185,15 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     from_email: str = "noreply@nuotaooutdoor.com"
     from_name: str = "Nuotao Outdoor"
+    # M2.5.5: internal recipient(s) notified of new B2B public enquiries.
+    # Comma-separated list. Empty => notification is skipped gracefully (the
+    # lead is still persisted; a notification_failed event is NOT raised just
+    # for "no recipient configured" - that is an explicit configuration gap).
+    b2b_lead_notify_emails: str | None = None
+    # Public base URL for the internal AI OS console (for authenticated lead
+    # detail links in notification emails). Never expose private leads via
+    # unauthenticated URLs.
+    console_base_url: str = "https://admin.nuotaooutdoor.com"
 
     # --- M5.1 Agent Runtime production hardening ------------------------------
     # Task queue: Redis Streams for Phase 1 (modular monolith; no Celery/Kafka).

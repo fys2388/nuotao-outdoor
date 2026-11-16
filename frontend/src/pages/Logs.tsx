@@ -3,7 +3,7 @@ import {
   Card, Table, Button, Space, Typography, Tag, Input, Select,
   Statistic, Row, Col, Spin, message, Modal, Descriptions, List,
   Badge, Tooltip, Empty, Tabs, Timeline, Divider, Alert,
-  DatePicker, Radio
+  DatePicker, Radio, Avatar
 } from 'antd'
 import {
   FileTextOutlined, ReloadOutlined, SearchOutlined,

@@ -102,16 +102,25 @@ def _sign_aop(url_path: str, params: dict[str, Any], secret: str) -> str:
 
 
 def _call_open_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
-    """调用一个 1688 开放平台接口并统一检查网关业务错误。"""
+    """调用一个 1688 开放平台接口并统一检查网关业务错误。
+
+    1688商品公共接口（如alibaba.product.get）只需要签名，不需要access_token。
+    需要授权的接口（如alibaba.product.simple.get）才需要access_token。
+    """
     if not is_configured():
         raise OpenAPIError("1688 open API credentials are not configured")
 
     url_path = _build_aop_url_path(method)
     params: dict[str, Any] = {
         **biz_params,
-        "access_token": ALI1688_ACCESS_TOKEN,
         "_aop_timestamp": str(int(time.time() * 1000)),
     }
+
+    # 如果配置了access_token，才传入（用于需要授权的接口）
+    # 公共接口不需要token，只需要签名
+    if ALI1688_ACCESS_TOKEN:
+        params["access_token"] = ALI1688_ACCESS_TOKEN
+
     params["_aop_signature"] = _sign_aop(url_path, params, ALI1688_APP_SECRET)
 
     response = requests.get(
@@ -144,7 +153,7 @@ def _call_open_api(method: str, biz_params: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_configured() -> bool:
-    """检查 1688 API 是否已配置"""
+    """检查 1688 API 是否已配置（只需AppKey和AppSecret）"""
     return bool(ALI1688_APP_KEY and ALI1688_APP_SECRET)
 
 
@@ -203,6 +212,9 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
     """
     获取 1688 产品详情
 
+    优先调用公共接口 alibaba.product.get（不需要token），
+    如果失败，降级到需要授权的 alibaba.product.simple.get（需要token）。
+
     Args:
         product_id: 1688 商品 ID
 
@@ -213,50 +225,65 @@ def get_product_detail(product_id: str) -> dict[str, Any]:
         return _mock_product_detail(product_id)
 
     try:
-        # 优先调用账号已订购的 simple.get（能力名「获取已购买商家商品信息」，
-        # 需 webSite 参数）；未订购时网关报 gw.APIACLDecline，再降级尝试完整版
-        # alibaba.product.get（当前账号未开通，为将来预留）。
-        try:
-            method = "alibaba.product.simple.get"
-            data = _call_open_api(method, {
-                "productID": product_id,
-                "webSite": "1688",
-            })
-        except OpenAPIError as exc:
-            if "APIACLDecline" not in str(exc) and "APIUnsupported" not in str(exc):
-                raise
-            logger.warning(
-                "1688 simple.get unavailable (%s), falling back to alibaba.product.get",
-                exc,
-            )
-            method = "alibaba.product.get"
-            data = _call_open_api(method, {"productID": product_id})
-        # simple.get 的业务错误放在顶层 errMsg（而非 error_code/result.success），
-        # 网关层检查不到，必须在此拦截，否则会被当成「空成功」静默返回全空字段。
-        # 典型场景：该能力仅可查「已购买商家」的商品，查未采购过的商家会返回
-        # 「由于权限受限，你不能获取该商品的信息。」
+        # 优先调用公共接口（不需要token，只需要签名）
+        method = "alibaba.product.get"
+        data = _call_open_api(method, {"productID": product_id})
+
+        # 检查业务错误
         biz_err = data.get("errMsg") or data.get("errorMessage")
         result = data.get("result") or {}
         product = result.get("productInfo") or result.get("product") or result
+
         if biz_err or not product:
             message = str(biz_err) if biz_err else "empty product payload"
-            restricted = "权限受限" in message or "permission" in message.lower()
             logger.warning(
-                "1688 product detail business-level rejection (product_id=%s, "
-                "method=%s): %s",
-                product_id,
+                "1688 product detail failed with %s (product_id=%s): %s",
                 method,
+                product_id,
                 message,
             )
+
+            # 如果公共接口失败，尝试需要授权的接口（如果有token）
+            if ALI1688_ACCESS_TOKEN:
+                logger.info("Trying alibaba.product.simple.get as fallback...")
+                method = "alibaba.product.simple.get"
+                try:
+                    data = _call_open_api(method, {
+                        "productID": product_id,
+                        "webSite": "1688",
+                    })
+                    result = data.get("result") or {}
+                    product = result.get("productInfo") or result.get("product") or result
+                    biz_err = data.get("errMsg") or data.get("errorMessage")
+
+                    if product and not biz_err:
+                        return {
+                            "success": True,
+                            "source": "1688_open_api",
+                            "api_method": method,
+                            "product": _normalize_product_detail(product),
+                        }
+                except OpenAPIError as fallback_exc:
+                    logger.warning("Fallback also failed: %s", fallback_exc)
+                    return {
+                        "success": False,
+                        "source": "1688_open_api",
+                        "api_method": method,
+                        "error": str(fallback_exc),
+                        "product": None,
+                    }
+
+            # 两个接口都失败
+            restricted = "权限受限" in message or "permission" in message.lower()
             return {
                 "success": False,
                 "source": "1688_open_api",
                 "api_method": method,
                 "error": message,
-                # 供调用方区分「账号无权调用该接口」与「该接口不覆盖此商品」
                 "error_kind": "business_restricted" if restricted else "empty_result",
                 "product": None,
             }
+
         return {
             "success": True,
             "source": "1688_open_api",

@@ -518,22 +518,36 @@ def list_to_woocommerce(
                         "options": opts,
                     }
                 ]
-            # 变量产品
+            # 变量产品。父产品同样必须带价格与库存（P0 字段，见 wc-product-upload
+            # skill）：父产品的 regular_price 是前台价格区间的下界展示值，WC 对
+            # variable 产品要求至少一个变体有价才能正常售卖；库存与重量决定运费
+            # 计算。此前只推 attributes + 文案，导致多规格商品落到 WC 后价格/库存
+            # 全空、前台不可购买。
             data = {
                 "name": product["name"],
                 "type": "variable",
+                "regular_price": str(product.get("regular_price", "")),
                 "description": product.get("description", ""),
                 "short_description": product.get("short_description", ""),
                 # 父商品也带 SKU：_find_existing_wc_id 靠它做幂等反查，
                 # 缺了它重推时会再建一个重复的父商品。
                 "sku": product.get("sku", ""),
+                "manage_stock": True,
+                "stock_quantity": int(product.get("stock_quantity") or 0),
+                "stock_status": "instock" if int(product.get("stock_quantity") or 0) > 0 else "outofstock",
+                "weight": str(product.get("weight", "")),
                 "status": status,
                 "categories": product.get("categories", [{"id": 15}]),
                 "tags": product.get("tags", []),
                 "attributes": product_attributes,
             }
-            if product.get("images"):
-                data["images"] = _normalize_wc_images(product["images"])
+            if product.get("sale_price"):
+                data["sale_price"] = str(product["sale_price"])
+            # WC REST API 不允许直接通过外部 URL 上传图片（WordPress 安全限制）。
+            # 图片通过 image_wc_pipeline.upload_images_to_wc 单独上传到媒体库，
+            # 然后用 media_id 更新产品。初始创建时不传 images，避免 400 错误。
+            # if product.get("images"):
+            #     data["images"] = _normalize_wc_images(product["images"])
         else:
             # 简单产品
             data = {
@@ -551,8 +565,9 @@ def list_to_woocommerce(
             }
             if product.get("sale_price"):
                 data["sale_price"] = str(product["sale_price"])
-            if product.get("images"):
-                data["images"] = _normalize_wc_images(product["images"])
+            # 同上：图片通过媒体库单独上传，不在此处传递
+            # if product.get("images"):
+            #     data["images"] = _normalize_wc_images(product["images"])
 
         # 自有品牌（product_brand 分类法）。WC 9.4+ 的 products 端点接受 brands 为
         # 整数 ID 数组，不支持 [{name:...}]。此处不随父商品一起推送 brands，避免
@@ -629,12 +644,30 @@ def list_to_woocommerce(
                     )
                     _time.sleep(delay)
             except requests.exceptions.RequestException as e:
-                # ConnectionError / Timeout / TooManyRedirects 等 — 均可重试
+                # ConnectionError / Timeout / TooManyRedirects 等 — 均可重试。
+                # 超时/断连时服务端可能已经创建成功（响应丢失），先按 SKU 回查一次：
+                # 命中则视为成功进入变体创建，避免重试 POST 撞上 WC 的
+                # product_invalid_sku 400 而整单失败。
                 last_error = str(e)
-                logger.warning(
-                    "WooCommerce listing network error attempt %d/%d for sku=%s: %s",
-                    attempt, max_attempts, product.get("sku"), last_error,
-                )
+                if http_method == "POST" and not _find_existing_wc_id(product.get("sku")):
+                    logger.warning(
+                        "WooCommerce listing network error attempt %d/%d for sku=%s: %s",
+                        attempt, max_attempts, product.get("sku"), last_error,
+                    )
+                else:
+                    found = _find_existing_wc_id(product.get("sku"))
+                    if found:
+                        logger.warning(
+                            "WooCommerce listing request timed out but SKU %s already "
+                            "exists in WC (id=%s); treating as success",
+                            product.get("sku"), found,
+                        )
+                        result = {"id": found, "name": product.get("name", "")}
+                        break
+                    logger.warning(
+                        "WooCommerce listing network error attempt %d/%d for sku=%s: %s",
+                        attempt, max_attempts, product.get("sku"), last_error,
+                    )
                 if attempt < max_attempts:
                     delay = retry_delays[attempt - 1]
                     _time.sleep(delay)

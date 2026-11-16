@@ -1,0 +1,331 @@
+{
+  "meta": {
+    "report_id": "BA-WINTER-CN-DIRECT-2026-11",
+    "title": "冬季户外产品中国直发经济性研究（US/UK/CA/AU/DE/FR）",
+    "role": "Nuotao Outdoor 商业分析研究员",
+    "research_date": "2026-11",
+    "methodology": "web_search 不可用（DeepSeek 402 余额不足），改用 web_fetch 直连政府/权威源 + 项目既有研究交叉验证。已验证：Federal Register API（de minimis 时间线、Section 301 强制劳动、IEEPA）、项目 us-outdoor-market-research-2026.md（真实 DDP 报价、关税表）、钛炊具多国到岸成本模型（EU DG Trade €3 固定关税）。",
+    "data_confidence": {
+      "us_tariff_policy": "HIGH — Federal Register 官方文件逐条验证（de minimis 无限期暂停、Sec301 +12.5%、IEEPA 2026-02 法院推翻）",
+      "us_shipping_quote": "HIGH — 项目 2026-10 实查真实 DDP 报价（云途/燕文/4PX），非估算",
+      "eu_tariff": "MEDIUM-HIGH — 项目 DG Trade 引用（≤€150 €3 固定关税 + IOSS）；与知识库「2028 取消豁免」存在口径差异，已标注",
+      "uk_ca_au_shipping_quote": "LOW — 无真实报价，仅知识库行业基准（$7-18/kg）→ 标 SHIPPING_COST_UNKNOWN",
+      "winter_peak_delay": "MEDIUM — 行业经验值（Q4 量增 + 天气 + CNY），非官方实测",
+      "ieepa_status": "MEDIUM — 项目称 2026-02-20 被法院推翻；Federal Register 2026 无 IEEPA 修改通知（支持），但后续诉讼/行政变化未完全排除 → 列入 Conservative 敏感性"
+    },
+    "critical_findings": [
+      "美国 de minimis 已无限期暂停（2025-05-02 中国取消 → 2025-08-29 全球暂停 → 2026-06-24 CBP 最终规则：邮政/非邮政均须正式或非正式申报并缴税），中国直发小包不再免税，单票均需缴税。",
+      "美国对中国服装类叠加关税 = MFN(7.5-32%) + 原始 Section 301(7.5-25%) + 强制劳动 12.5% ≈ 20-56%；IEEPA(20%+10%) 若恢复将再 +30%。冬季服装（6201/6202/6110）综合 31-52%，冬季保暖小件（6307.90/9404.90）综合 20-28%。",
+      "体积重是冬季隔热品的最大成本杀手：0.35kg 实重的压缩羽绒营地靴，装箱 20×15×12cm → 体积重 0.72kg(÷5000)/0.60kg(÷6000)，计费重约为实重 1.7-2 倍；加厚营毯（30×22×15cm）计费重可达 1.65-2.0kg（实重的 3-4 倍）。计费重=max(实重,体积重)，÷5000 快递/÷6000 专线，最低按首重 0.5-1kg 计。",
+      "中国直发美国：冬季保暖小件（体积重 ≤1kg 档）走云途/燕文 DDP（已含 10% 邮政渠道关税预缴）Base 可做到 30%+ 贡献毛利率；但若走正式报关（20-28% 关税）或 IEEPA 恢复，贡献毛利转负。→ 仅紧凑保暖小件可行，加厚营毯/服装类需海外仓或放弃。",
+      "欧盟/英国关税友好（≤€150 每件 €3 固定关税 + IOSS VAT；英国 ≤£135 卖家代收 VAT 无关税），但物流费（$8-18/kg）高于美国，且欧盟需注册 IOSS、英国需注册 UK VAT。",
+      "加拿大免税阈值极低（≤CAD20 免税），冬季产品通常超阈值需缴 MFN 关税（纺织品 ~10-17.5%）+ GST 5%，叠加高物流费 → 贡献毛利被压缩至 ~15%，接近不可行。",
+      "澳大利亚 ≤AUD1,000 关税 0% + GST 10%（卖家代收），但物流最贵（$9-18/kg）+ 南半球季节错位（澳冬 6-8 月，北半球冬季售卖为淡季）→ 中国直发澳冬产品经济性差。",
+      "冬季高峰（Q4 11-12 月）：中国直发时效 +3-7 天（量增 3-5x + 天气 + 清关积压），部分货代加收 10-30% 旺季附加费；1-2 月春节工厂停产 + 空运舱位紧张，补货断档。Q4 备货应在 9-10 月锁定舱位。"
+    ]
+  },
+
+  "product_scenarios": {
+    "base": {
+      "name": "冬季保暖小件（羽绒营地靴/压缩保暖配件，代表性）",
+      "description": "符合项目 export_trade_category_research 冬季窗口策略（毛利 55-70%、蓝海、小件）；避开高关税服装（项目明确不做 TNF 冲锋衣/Patagonia 抓绒）。",
+      "unit": "冬季保暖小件",
+      "weight_kg_actual": 0.35,
+      "package_cm": [20, 15, 12],
+      "volumetric_kg": {"divisor_5000_express": 0.72, "divisor_6000_line": 0.60},
+      "chargeable_kg": "0.60-0.72（按实重与体积重取大；最低按 0.5kg/1kg 档计）",
+      "fob_1688_cny": {"low": 50, "high": 70, "base": 58},
+      "retail_usd_base": 29.99
+    },
+    "risk_scenario_bulky": {
+      "name": "加厚保暖营毯/羽绒被（体积重风险）",
+      "description": "体积重远大于实重，中国直发运费失控。",
+      "weight_kg_actual": 0.6,
+      "package_cm": [30, 22, 15],
+      "volumetric_kg": {"divisor_5000_express": 1.98, "divisor_6000_line": 1.65},
+      "chargeable_kg": "1.65-2.0",
+      "verdict": "中国直发经济性差，建议 Phase 2 海外仓或放弃",
+      "shipping_impact": "0.6kg 实重按 1.65-2.0kg 计费，运费为同重普通品的 2.8-3.3 倍"
+    },
+    "risk_scenario_apparel": {
+      "name": "冬季服装（冲锋衣/抓绒/打底，6201/6202/6110/6109）",
+      "description": "项目已明确避开（关税 31-52%、品牌壁垒、PFAS 合规）。",
+      "tariff_us": "31-52%（MFN 11-16% + 原始301 7.5-25% + 强制劳动12.5%；棉T恤可达 54-70%）",
+      "verdict": "中国直发不可行，项目 DEC 已避开"
+    }
+  },
+
+  "countries": {
+    "US": {
+      "market": "United States",
+      "currency": "USD",
+      "fx_cny": 7.2,
+      "logistics": {
+        "real_quote_status": "REAL_QUOTE_AVAILABLE",
+        "carrier_quotes_ddp_2026_10": {
+          "yunexpress_us_express": {"0.5kg_cny": "48-55", "1kg_cny": "66-77", "2kg_cny": "102-121", "transit": "6-10 工作日", "note": "DDP 完税到门，已含美国 10% 邮政渠道关税预缴"},
+          "yanwen_us_registered": {"0.5kg_cny": "42-50", "1kg_cny": "58-70", "2kg_cny": "90-110", "transit": "8-14 天", "note": "DDP"},
+          "4px_union_pack": {"per_kg_cny": 132, "transit": "5-8 天", "note": "深圳，优先挂号"},
+          "source": "项目 us-outdoor-market-research-2026.md §5.1（amz012/yunexpress.cn/b.4px.com，2026-09/10 实查）"
+        },
+        "benchmark_air_per_kg_usd": "4.50-8.20 + 燃油 18-24%（King-Hor Supply Chain，项目钛炊具研究）",
+        "volumetric_rule": "计费重 = max(实重, 体积重)；体积重 = 长×宽×高cm ÷ 5000(快递)/÷6000(专线)；最低按首重 0.5-1kg 档",
+        "min_charge": "首重 0.5kg（¥42-55）；1kg 档 ¥58-77；2kg 档 ¥90-121",
+        "tracking": "云途/燕文/4PX 全程可追踪 + 17TRACK 聚合",
+        "dap_vs_ddp": "主流报价为 DDP（完税到门）。DAP/非正式报关需另行询价。DDP 已含关税预缴，勿重复交税",
+        "last_mile_usps_ground_advantage": {"1lb": "$7.61", "2lb": "$7.99", "5lb": "$9.70", "note": "海外仓阶段尾程参考"}
+      },
+      "tariff": {
+        "de_minimis": {
+          "status": "SUSPENDED_INDEFINITELY",
+          "timeline": [
+            "2025-05-02 中国/香港 de minimis 取消（EO 14256/14259/14266）",
+            "2025-08-29 全球暂停（EO 14324，Federal Register 2025-09-02 notice）",
+            "2026-02-25 & 2026-04-09 继续暂停（Presidential Documents）",
+            "2026-06-24 CBP 最终规则：邮政/非邮政均无限期暂停，需正式/非正式申报并缴税（FR 2026-12669/2026-12670）"
+          ],
+          "verified_via": "Federal Register API（2026-06-24 final rules + EO 14324 + 延续暂停文档）",
+          "impact": "所有 ≤$800 中国直发包裹均需缴税，不再免税"
+        },
+        "duty_layers": [
+          {"layer": "基础 MFN", "rates": "冬季服装 6201/6202: 11-16%；抓绒 6110: 14-32%；棉T恤 6109: 16.5-32%；保暖小件 6307.90: 7-8%；睡袋毯 9404.90: 0%（Free）；登山包 4202.92: ~17.6%", "source": "项目 us-outdoor-market-research-2026.md §4.2"},
+          {"layer": "原始 Section 301（2018-2019，List 1-4）", "rates": "多数 7.5%（List 4A）；棉针织/背包 25%（List 3）", "status": "仍有效"},
+          {"layer": "Section 301 强制劳动（2026-07-24 生效）", "rate": "+12.5%（对中国所有产品，除 Annex I/II 豁免；服装/纺织品未获豁免）", "verified_via": "Federal Register 2026-15181（2026-07-28）— 明确 '12. China: 12.5 percent tariffs on products of China'", "status": "有效"}
+        ],
+        "ieepa": {
+          "status": "OVERTURNED_BY_COURT_2026_02_20（Learning Resources v. Trump，项目引用）",
+          "prior_rates": "芬太尼 9903.01.20 20% + 互惠 9903.01.25 10%（EO 14298 Geneva，2025-05-14 生效）",
+          "risk": "若恢复，中国商品再 +30%（20% 芬太尼 + 10% 互惠）→ 列入 Conservative 敏感性",
+          "federal_register_2026_check": "2026-01-01 起无 9903.01.20/9903.01.25 修改通知（count=0），支持已失效"
+        },
+        "combined_rate": {
+          "winter_thermal_accessory_6307_9404": "20-28%（MFN 0-8% + 301 7.5% + 强制劳动 12.5%）",
+          "winter_apparel_6201_6202": "31-36%（MFN 11-16% + 301 7.5% + 12.5%）",
+          "base_layer_6110_6109": "34-52%（最高 70% 棉T恤）"
+        },
+        "sales_tax": "无联邦销售税；各州 0-10%，达到经济关联阈值（$100k 或 200 单/州）后需代收",
+        "duty_on_ddp": "DDP 报价已含 10% 邮政渠道关税预缴；正式报关按实际综合税率（20-28% 小件）"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价 − 1688成本 − DDP物流(含关税) − 支付手续费(2.9%+$0.30) − 退货准备金(3%)；不含营销费",
+        "base_case_retail": 29.99,
+        "base_case_1688_usd": 8.06,
+        "base_case_ddp_1kg_usd": 10.0,
+        "sensitivity": {
+          "Conservative": {"scenario": "正式报关（综合关税 20-28%）+ 若 IEEPA 恢复 +30%", "margin_usd": -2.04, "margin_pct": -6.8, "note": "关税叠加后贡献毛利转负 → 中国直发美国服装/加厚品不可行"},
+          "Base": {"scenario": "云途/燕文 DDP 1kg 档（含 10% 邮政渠道关税预缴）", "margin_usd": 9.86, "margin_pct": 32.9, "note": "仅紧凑保暖小件（≤1kg 计费重）可行"},
+          "Optimistic": {"scenario": "DDP 邮政渠道 + 301 降至 7.5%（无 12.5% 强制劳动）", "margin_usd": 11.4, "margin_pct": 38.0}
+        },
+        "bulky_blanket": {"chargeable_kg": "1.65-2.0", "ddp_2kg_usd": 15.28, "margin_pct": 12.0, "note": "加厚营毯中国直发贡献毛利被压缩至 ~12%，建议海外仓"},
+        "apparel": {"margin_pct": "NEGATIVE", "note": "31-52% 关税下不可行，项目已避开"}
+      },
+      "winter_peak": {
+        "q4_delay": "+3-7 天（11-12 月量增 3-5x + 天气 + 清关积压）",
+        "peak_surcharge": "部分货代 Q4 加收 10-30%",
+        "cn_new_year": "1-2 月春节工厂停产 + 空运舱位紧张 → 补货断档 2-4 周",
+        "mitigation": "Q4 备货 9-10 月锁舱位；主力货代 + 备胎（顺友/SFC）双通道；慢件兜底 EUB"
+      },
+      "unknown_fields": ["美国 8 位 HTS 精确归类（需报关行确认，项目 P0 行动项）", "IEEPA 是否恢复（法院判决后行政/诉讼变化未排除）", "非邮政渠道正式报关的实际税率（DDP 仅含 10% 邮政预缴）", "实际到岸重量/尺寸（打样实测）"]
+    },
+
+    "DE": {
+      "market": "Germany（欧盟次市场）",
+      "currency": "EUR",
+      "fx_cny": 7.92,
+      "logistics": {
+        "real_quote_status": "SHIPPING_COST_UNKNOWN",
+        "benchmark": "中欧专线 $8-12/kg，10-15 天（知识库 §3.2）；计费重同规则（÷5000/6000）",
+        "quote_needed": "需向云途/燕文/4PX 询欧洲专线 DDP 报价（P0-1 询价单已含欧盟）",
+        "tracking": "专线可追踪；需 IOSS 报关以快速清关",
+        "dap_vs_ddp": "欧盟直发须走 IOSS 通道（≤€150）避免海关扣件",
+        "min_charge": "首重 0.5-1kg 档"
+      },
+      "tariff": {
+        "de_minimis": "≤€150：每件 €3 固定关税（欧盟 DG Trade，项目钛炊具研究 2026-10）；无百分比关税",
+        "duty_over_150": "标准 MFN 约 12%（服装/纺织品）",
+        "vat": "19%（DE 标准）",
+        "ioss": "必须注册 IOSS（一次覆盖 27 国）；结账时代收 VAT，清关不再向买家收税",
+        "future_change": "知识库：欧盟 €150 关税豁免 2028 取消 → 届时低值也需缴关税 + VAT（提前建 IOSS 流程）",
+        "certifications": "CE（电子）、REACH（涂层/纺织）、GPSR/PPWR-PFAS（2026.08）、德国 LUCID 包装法 / WEEE（电子）"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价/1.19(ex-VAT) − 1688成本 − 物流 − €3固定关税 − 支付手续费 − 退货准备金(3%)",
+        "base_case_retail_eur": 34.99,
+        "base_case_ex_vat_eur": 29.4,
+        "base_case_1688_eur": 7.33,
+        "base_case_shipping_eur": 9.1,
+        "sensitivity": {
+          "Conservative": {"scenario": "物流 $12/kg + 关税上调 + 2028 新政", "margin_pct": 15.0, "note": "物流与关税上行侵蚀"},
+          "Base": {"scenario": "中欧专线 $10/kg + €3 固定关税 + IOSS 19%", "margin_usd_equiv": "€7.6", "margin_pct": 25.9, "note": "欧盟/英国相对关税友好，优先于美国"},
+          "Optimistic": {"scenario": "物流 $8/kg + 关税友好", "margin_pct": 31.0}
+        }
+      },
+      "winter_peak": {
+        "q4_delay": "+3-7 天（Q4 量增 + 冬季天气 + 清关）",
+        "cn_new_year": "春节断档 2-4 周",
+        "mitigation": "IOSS 报关前置 + Q4 前锁舱"
+      },
+      "unknown_fields": ["欧洲专线真实报价（无项目数据 → SHIPPING_COST_UNKNOWN）", "实际计费重（打样实测）", "IOSS 注册号（当前为示例号 IM1234567890，需真实注册）", "德国 LUCID/WEEE 登记状态"]
+    },
+
+    "FR": {
+      "market": "France（欧盟次市场）",
+      "currency": "EUR",
+      "fx_cny": 7.92,
+      "logistics": {"same_as_EU": "同 DE：SHIPPING_COST_UNKNOWN，中欧专线 $8-12/kg，10-15 天"},
+      "tariff": {
+        "de_minimis": "≤€150：每件 €3 固定关税 + IOSS（欧盟统一规则）",
+        "duty_over_150": "~12% MFN",
+        "vat": "20%（FR 标准）",
+        "ioss": "必须注册 IOSS（与 DE 同一注册覆盖全欧）"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价/1.20(ex-VAT) − 1688 − 物流 − €3 − 支付 − 退货(3%)",
+        "base_case_retail_eur": 34.99,
+        "base_case_ex_vat_eur": 29.16,
+        "base_case_1688_eur": 7.33,
+        "base_case_shipping_eur": 9.1,
+        "sensitivity": {
+          "Conservative": {"margin_pct": 14.5, "scenario": "物流上行"},
+          "Base": {"margin_pct": 25.2, "note": "VAT 20% 略高于 DE 19%，贡献毛利略低"},
+          "Optimistic": {"margin_pct": 30.0}
+        }
+      },
+      "winter_peak": {"same_as_EU": "同 DE：Q4 +3-7 天，春节断档"},
+      "unknown_fields": ["真实报价", "计费重", "IOSS 注册", "法国包装/回收合规（Triman 标签）"]
+    },
+
+    "UK": {
+      "market": "United Kingdom",
+      "currency": "GBP",
+      "fx_cny": 9.14,
+      "logistics": {
+        "real_quote_status": "SHIPPING_COST_UNKNOWN",
+        "benchmark": "中英专线 $7-15/kg，8-12 天（知识库 §3.2）",
+        "quote_needed": "需询价；UK 需注册 UK VAT（≤£135 结账代收）",
+        "tracking": "专线可追踪",
+        "dap_vs_ddp": "≤£135 走 VAT 代收通道；>£135 买家清关缴关税+VAT",
+        "min_charge": "首重 0.5-1kg 档"
+      },
+      "tariff": {
+        "de_minimis": "≤£135：无关税，VAT 20% 由卖家结账代收（需注册 UK VAT，2-4 周）",
+        "duty_over_135": "~12% MFN + VAT（买家清关时缴纳）",
+        "vat": "20%",
+        "ukca": "电子/PPE 需 UKCA（CE 脱欧后独立标志）"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价/1.20(ex-VAT) − 1688 − 物流 − 0(≤£135无关税) − 支付 − 退货(3%)",
+        "base_case_retail_gbp": 29.99,
+        "base_case_ex_vat_gbp": 24.99,
+        "base_case_1688_gbp": 6.34,
+        "base_case_shipping_gbp": 7.9,
+        "sensitivity": {
+          "Conservative": {"scenario": "物流 $15/kg", "margin_pct": 25.0},
+          "Base": {"scenario": "中英专线 $10/kg + 0% 关税（≤£135）+ UK VAT 代收", "margin_gbp": 8.68, "margin_pct": 34.7, "note": "英国关税友好，仅次于欧盟，适合第二优先市场"},
+          "Optimistic": {"scenario": "物流 $8/kg", "margin_pct": 40.0}
+        }
+      },
+      "winter_peak": {
+        "q4_delay": "+3-6 天（黑五/圣诞）",
+        "cn_new_year": "春节断档",
+        "mitigation": "UK VAT 注册前置；Q4 锁舱"
+      },
+      "unknown_fields": ["中英专线真实报价 → SHIPPING_COST_UNKNOWN", "UK VAT 注册号（未注册）", "计费重实测"]
+    },
+
+    "CA": {
+      "market": "Canada",
+      "currency": "CAD",
+      "fx_cny": 5.26,
+      "logistics": {
+        "real_quote_status": "SHIPPING_COST_UNKNOWN",
+        "benchmark": "中加专线约 $8-14/kg，10-16 天（估算，知识库无 CA 专线行）",
+        "quote_needed": "需询价；加拿大低免税阈值 + 高物流成本",
+        "tracking": "专线可追踪",
+        "min_charge": "首重 0.5-1kg 档"
+      },
+      "tariff": {
+        "de_minimis": "≤CAD20 免税（极低！）；CAD20-40 仅关税；>CAD40 关税+GST/HST",
+        "duty_mfn": "纺织品/服装 ~10-17.5%（加拿大保护性关税）；保暖小件 6307/9404 ~7-10%",
+        "gst": "5% 联邦 GST；HST 部分省 13-15%",
+        "registration": "非居民年收入 >CAD30,000 需注册 GST/HST"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价/1.05(ex-GST) − 1688 − 物流 − MFN关税(≥CAD20) − 支付 − 退货(3%)",
+        "base_case_retail_cad": 39.99,
+        "base_case_ex_gst_cad": 38.09,
+        "base_case_1688_cad": 10.9,
+        "base_case_shipping_cad": 15.0,
+        "base_case_duty_cad": 3.5,
+        "sensitivity": {
+          "Conservative": {"scenario": "关税 17.5% + 物流 CAD18", "margin_pct": 5.0, "note": "接近不可行"},
+          "Base": {"scenario": "MFN ~10% + GST 5% + 物流 CAD15", "margin_cad": 6.03, "margin_pct": 15.8, "note": "低免税阈值 + 高物流 → 贡献毛利被压缩"},
+          "Optimistic": {"scenario": "低值豁免 + 物流 CAD12", "margin_pct": 25.0}
+        }
+      },
+      "winter_peak": {"q4_delay": "+3-6 天", "cn_new_year": "春节断档", "mitigation": "限制 CA 配送或结账预估税费"},
+      "unknown_fields": ["中加专线真实报价 → SHIPPING_COST_UNKNOWN", "HST 适用省（安大略/BC 等）", "计费重实测"]
+    },
+
+    "AU": {
+      "market": "Australia",
+      "currency": "AUD",
+      "fx_cny": 4.75,
+      "logistics": {
+        "real_quote_status": "SHIPPING_COST_UNKNOWN",
+        "benchmark": "中澳专线 $9-18/kg，8-14 天（知识库 §3.2）",
+        "quote_needed": "需询价；澳洲最贵，消费者对运输时间敏感（7-15 天）",
+        "tracking": "专线可追踪",
+        "biosecurity": "户外品类需注意澳洲生物安全检疫",
+        "min_charge": "首重 0.5-1kg 档"
+      },
+      "tariff": {
+        "de_minimis": "≤AUD1,000：0% 关税，GST 10% 由卖家代收（年收入 >AUD75,000 需注册）",
+        "duty_mfn": "服装 ~5%",
+        "gst": "10%",
+        "registration": "需 ABN；B2C 年收入 >AUD75,000 注册 GST"
+      },
+      "contribution_margin": {
+        "formula": "贡献毛利 = 零售价/1.10(ex-GST) − 1688 − 物流 − 0(≤AUD1000无关税) − 支付 − 退货(3%)",
+        "base_case_retail_aud": 44.99,
+        "base_case_ex_gst_aud": 40.9,
+        "base_case_1688_aud": 12.2,
+        "base_case_shipping_aud": 18.0,
+        "sensitivity": {
+          "Conservative": {"scenario": "物流 $18/kg + 长时效退货", "margin_pct": 8.0, "note": "接近不可行"},
+          "Base": {"scenario": "中澳专线 $12/kg + 0% 关税（≤AUD1000）+ GST 10% 代收", "margin_aud": 7.75, "margin_pct": 18.9, "note": "物流最贵 + 南半球季节错位（澳冬 6-8 月）→ 北半球冬季售卖为淡季"},
+          "Optimistic": {"scenario": "物流 $10/kg", "margin_pct": 26.0}
+        }
+      },
+      "winter_peak": {
+        "q4_delay": "+3-6 天",
+        "seasonality": "澳大利亚冬季为 6-8 月；12 月（北半球冬季）为澳夏季 → 冬季产品在 AU 为淡季，需求错位",
+        "mitigation": "AU 市场推迟到 Phase 2（海外仓/本地 3PL）；初期不主动推广"
+      },
+      "unknown_fields": ["中澳专线真实报价 → SHIPPING_COST_UNKNOWN", "ABN/GST 注册状态", "计费重实测", "生物安全检疫要求"]
+    }
+  },
+
+  "strategic_recommendation": {
+    "priority_order": ["DE/FR（欧盟，IOSS 关税友好）", "UK（≤£135 无关税 + VAT 代收）", "US（仅紧凑保暖小件 DDP 可行；服装/加厚品需海外仓）", "CA（接近不可行，限制配送）", "AU（季节错位，推迟）"],
+    "us_rule": "冬季保暖小件（≤1kg 计费重）可云途/燕文 DDP 直发（Base ~33% 贡献毛利）；加厚营毯（1.65-2.0kg）与服装（31-52% 关税）中国直发不可行，转海外仓或放弃",
+    "critical_action": "① 注册欧盟 IOSS + UK VAT；② 向云途/燕文/4PX 询欧洲/英国/加拿大/澳洲 DDP 专线真实报价（当前仅美国有真实报价）；③ 打样实测包装尺寸（体积重是冬季品最大成本杀手）；④ 确认 8 位 HTS 归类（报关行）；⑤ Q4 备货 9-10 月锁舱"
+  },
+
+  "sources": [
+    {"id": "FR-2026-12669", "title": "Indefinite Suspension of De Minimis (Mail)", "url": "https://www.federalregister.gov/documents/2026/06/24/2026-12669/", "verified": true},
+    {"id": "FR-2026-12670", "title": "Indefinite Suspension of De Minimis (Non-Postal)", "url": "https://www.federalregister.gov/documents/2026/06/24/2026-12670/", "verified": true},
+    {"id": "FR-2026-15181", "title": "Section 301 Forced Labor: China +12.5%", "url": "https://www.federalregister.gov/documents/2026/07/28/2026-15181/", "verified": true, "detail": "12. China: 12.5 percent tariffs on products of China"},
+    {"id": "FR-2025-09297", "title": "EO 14298 Geneva: reciprocal 10%, fentanyl 20%", "url": "https://www.federalregister.gov/documents/2025/05/21/2025-09297/", "verified": true},
+    {"id": "FR-2025-16802", "title": "EO 14324 implementation (global de minimis)", "url": "https://www.federalregister.gov/documents/2025/09/02/2025-16802/", "verified": true},
+    {"id": "project-us-research", "title": "Nuotao US Outdoor Market Research 2026 (§4 关税时间线, §4.2 综合税率, §5.1 真实DDP报价)", "path": "docs/us-outdoor-market-research-2026.md", "verified": true},
+    {"id": "project-titanium", "title": "钛炊具多国到岸成本模型（US 30.5%, EU €3+IOSS, DG Trade）", "path": "docs/market_research/titanium_cookware_2026/MARKET_RESEARCH.md", "verified": true},
+    {"id": "project-compliance-kb", "title": "跨境合规知识库（VAT/GST/IOSS/各市场免税阈值）", "path": "docs/cross_border_compliance_knowledge_base.md", "verified": true},
+    {"id": "project-export-category", "title": "出口品类研究（冬季露营保暖配件，毛利55-70%，RDS）", "path": "docs/export_trade_category_research.md", "verified": true},
+    {"id": "project-high-value-niche", "title": "US/EU High Value Niche 执行决策（美国关税30-70%+，优先EU/UK或US DDP）", "path": "docs/market_research/US_EU_OUTDOOR_HIGH_VALUE_NICHE_2026/EXECUTIVE_DECISION.md", "verified": true},
+    {"id": "project-volumetric", "title": "体积重/计费重口径（÷5000快递/÷6000专线，max(实重,体积重)）", "path": "docs/phase1a-1688-bug-log.md / docs/products/yd2324_camping_lantern_image_plan.md §K.3", "verified": true},
+    {"id": "project-p0-1", "title": "中国直发货代询价指南（云途/燕文/4PX/顺友，登录墙化 → 人工询价）", "path": "docs/P0-1-cn-direct-shipping-freight-quote-guide.md", "verified": true}
+  ],
+
+  "disclaimer": "本报告为商业分析参考，不构成法律/税务/物流建议。关税与政策频繁变化（美国 IEEPA 诉讼、欧盟 2028 低值新政、旺季附加费），正式发货前须以报关行/货代实时报价与当地税务专业意见为准。所有「未知字段」不得据此宣称已具备盈利模型。UK/CA/AU 无真实物流报价，其贡献毛利为基于行业基准的估算，非承诺。"
+}

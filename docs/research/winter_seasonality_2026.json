@@ -1,0 +1,169 @@
+{
+  "meta": {
+    "project": "Nuotao Outdoor",
+    "role": "seasonal-researcher",
+    "generated": "2026-10-31",
+    "hemisphere_cutoff": "north: US/UK/CA/DE/FR/NL ; south: AU/NZ",
+    "shipping_mode": "china_direct_2_3_weeks",
+    "data_sources": {
+      "meteorological_winter": [
+        "NOAA/NCEI Meteorological Versus Astronomical Seasons (DJF = coldest 3 months NH)",
+        "Wikipedia Winter / Meteorological reckoning (cites NOAA, Met Office, BOM)",
+        "Australian BOM + NZ official winter: 1 June - 31 August",
+        "NOAA CPC Seasonal Outlook: NDJ 2026-27 (lead 1) and DJF 2026-27 (lead 2) are the live issuance windows as of 2026-10-31"
+      ],
+      "retail_seasonality": [
+        "OIA (Outdoor Industry Association) ConsumerVue + Reports Library (accessed via live site + Wayback snapshot)",
+        "Retail Dive Holiday Shopping / Consumer Trends (Oct 2026 coverage)",
+        "Google Trends unavailable (HTTP 429 rate limit) - retail timing triangulated from OIA + industry pattern"
+      ],
+      "unavailable": [
+        "web_search (DeepSeek API insufficient balance)",
+        "snowsports.org / SIA (bot verification blocked)",
+        "Google Trends API (429 rate-limited)"
+      ]
+    }
+  },
+  "northern_hemisphere": {
+    "hemisphere_label": "Northern Hemisphere (US/UK/CA/DE/FR/NL)",
+    "meteorological_winter_months": ["Dec", "Jan", "Feb"],
+    "coldest_months": ["Jan", "Feb"],
+    "astronomical_winter": "~21 Dec - ~20 Mar",
+    "consumer_buy_start": {
+      "US": "September (early-bird/pre-season; peaks ramp Sep-Oct)",
+      "CA": "August-September (earliest, coldest climate; pre-season Aug)",
+      "UK": "October (mild maritime; later than continental)",
+      "DE": "September-October",
+      "FR": "October",
+      "NL": "October"
+    },
+    "demand_peak": {
+      "months": ["Nov", "Dec"],
+      "detail": "Black Friday (late Nov) through Christmas (Dec) is the absolute peak for winter gear. A secondary spike occurs during cold snaps in Jan-Feb. Gift-giving drives Dec; self-use drives Nov."
+    },
+    "clearance": {
+      "months": ["Jan", "Feb", "Mar"],
+      "detail": "Post-holiday markdowns begin late Dec/early Jan; deep clearance runs Jan-Feb; final sell-through / end-of-season by March. Retailers reset floor to spring by Feb-Mar."
+    },
+    "country_detail": {
+      "US": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "September",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Black Friday/Cyber Monday (late Nov) is the single largest event. Cold-snap re-buys in Jan. Largest absolute winter market."
+      },
+      "UK": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "October",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Milder maritime winter; demand is late-shifted vs US/CA. Boxing Day (26 Dec) is a major clearance trigger."
+      },
+      "CA": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "August",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Coldest/longest winter of the group; pre-season buying is earliest. Strong Jan-Feb cold-snap re-buys."
+      },
+      "DE": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "September",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Largest EU winter market. Advent/St. Nicholas (early Dec) and Christmas drive gift demand. Ski season demand peaks Dec-Mar."
+      },
+      "FR": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "October",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Ski/alpine demand (Alps) is significant; winter-sport buying peaks Nov-Jan."
+      },
+      "NL": {
+        "winter_months": ["Dec", "Jan", "Feb"],
+        "consumer_buy_start": "October",
+        "demand_peak": ["Nov", "Dec"],
+        "clearance": ["Jan", "Feb", "Mar"],
+        "notes": "Mild maritime climate; winter gear demand driven by commuting/cycling cold protection + ski holidays. Sinterklaas (5 Dec) adds a gift peak."
+      }
+    }
+  },
+  "southern_hemisphere": {
+    "hemisphere_label": "Southern Hemisphere (AU/NZ)",
+    "meteorological_winter_months": ["Jun", "Jul", "Aug"],
+    "coldest_months": ["Jun", "Jul", "Aug"],
+    "official_winter": "1 June - 31 August (BOM + NZ official definition)",
+    "consumer_buy_start": {
+      "AU": "March-April (pre-season; early buyers start late March)",
+      "NZ": "March-April"
+    },
+    "demand_peak": {
+      "months": ["May", "Jun", "Jul"],
+      "detail": "Pre-winter + start-of-winter purchasing peaks May-Jun; deep-winter (Jul) sustained demand; Aug is the tail."
+    },
+    "clearance": {
+      "months": ["Aug", "Sep"],
+      "detail": "End-of-winter clearance runs Aug-Sep; retailers reset to spring by September-October."
+    },
+    "country_detail": {
+      "AU": {
+        "winter_months": ["Jun", "Jul", "Aug"],
+        "consumer_buy_start": "March",
+        "demand_peak": ["May", "Jun", "Jul"],
+        "clearance": ["Aug", "Sep"],
+        "notes": "Snow season (ski fields) runs roughly June-September in alpine regions. Winter demand is milder and shorter than NH."
+      },
+      "NZ": {
+        "winter_months": ["Jun", "Jul", "Aug"],
+        "consumer_buy_start": "March",
+        "demand_peak": ["May", "Jun", "Jul"],
+        "clearance": ["Aug", "Sep"],
+        "notes": "Ski season June-October (some fields). South Island alpine drives winter-sport demand."
+      }
+    }
+  },
+  "shipping_decision_2026_27": {
+    "today": "2026-10-31",
+    "china_direct_lead_time": "2-3 weeks",
+    "earliest_arrival": "2026-11-14 to 2026-11-21 (order today)",
+    "northern_hemisphere": {
+      "can_still_catch_dec_feb_window": "MARGINAL - YES, with high risk",
+      "assessment": "Ordering 2026-10-31 with 2-3wk shipping lands inventory ~mid-Nov 2026. That is just before the Nov-Dec peak (Black Friday 27 Nov, Christmas), so it can capture the second half of the buying window (late Nov - Dec) and the Jan-Feb cold-snap tail. HOWEVER it misses the Sep-Oct early-bird/pre-season demand and risks selling into a compressed window with less margin for error.",
+      "recommendation": "If ordering today, ship a small, fast-turning core (insulated mid-layer, base layers, gloves/beanie, waterproof shells) as an immediate fill-in; do NOT treat this as the main 2026/27 winter allocation. Plan the bulk 2026/27 inventory as a 2027/28 pre-season order to be placed Jan-Apr 2027 for arrival Aug-Sep 2027 (NH) - i.e. shift planning to 2027/28.",
+      "verdict": "catch_2026_27_marginal"
+    },
+    "southern_hemisphere": {
+      "can_still_catch_dec_feb_window": "NO",
+      "assessment": "AU/NZ winter is June-Aug. Ordering 2026-10-31 with 2-3wk shipping arrives mid-Nov 2026, which is AU/NZ summer - completely outside the SH winter season. The 2026 SH winter (Jun-Aug 2026) has already passed.",
+      "recommendation": "Do not ship 2026/27 winter stock to AU/NZ now. Target the 2027 SH winter: place order for arrival Apr-May 2027 (before the May-Jun peak). This is the 2027/28 planning cycle from the NH calendar perspective.",
+      "verdict": "skip_2026_27_shift_to_2027"
+    },
+    "cross_season_year_round_products": [
+      "Base layers / thermal underwear (used year-round; winter peak)",
+      "Waterproof hard shells / rain jackets (year-round wet-weather)",
+      "Mid-layer fleece / softshell (3-season; winter in SH is mild enough for year-round use)",
+      "Insulated water bottles / small accessories (year-round)",
+      "Camping/tent & shelter basics (spring-autumn peak, still sellable winter)",
+      "Technical socks, gloves-lite, neck gaiters (year-round basics)",
+      "Hiking/summit packs (year-round; winter only adds a snow-specific top line)"
+    ],
+    "strictly_winter_products": [
+      "Down jackets / parkas",
+      "Insulated ski/snow pants & bibs",
+      "Snow boots / insulated footwear",
+      "Ski goggles, helmets, snow gloves",
+      "Ice axes, crampons, snowshoes",
+      "Ski touring / alpine skins",
+      "Heavy down sleeping bags (winter camping)"
+    ]
+  },
+  "summary": {
+    "north_winter_peak": "Nov-Dec (Black Friday through Christmas); secondary Jan-Feb cold-snap",
+    "south_winter_peak": "May-Jul (pre-winter + deep winter)",
+    "north_clearance": "Jan-Mar",
+    "south_clearance": "Aug-Sep",
+    "key_recommendation": "For 2026/27, treat northern-hemisphere winter as a MARGINAL late fill-in only (small, fast-turning core shipped immediately). Do not make 2026/27 the primary allocation. Replan the full winter program for 2027/28 with pre-season orders placed 2027 Jan-Apr for arrival by Aug 2027 (NH) / Apr-May 2027 (SH). AU/NZ: skip 2026/27 entirely, shift to 2027 SH winter."
+  }
+}

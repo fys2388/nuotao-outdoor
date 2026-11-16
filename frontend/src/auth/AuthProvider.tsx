@@ -26,6 +26,34 @@ interface LoginResponse {
   user: AdminUser
 }
 
+// Standalone admin login (no AuthProvider state). Used by the unified login
+// page so it can authenticate without being mounted inside AuthProvider.
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const form = new URLSearchParams()
+  form.set('username', username)
+  form.set('password', password)
+
+  const response = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form,
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === 'object' && 'detail' in payload
+        ? String((payload as { detail: unknown }).detail)
+        : '登录失败'
+    throw new ApiError(detail, response.status, payload)
+  }
+
+  const result = payload as LoginResponse
+  setAuthTokens(result.access_token, result.refresh_token)
+  localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, result.refresh_token)
+  return result
+}
+
 interface AuthContextValue {
   user: AdminUser | null
   loading: boolean
@@ -65,29 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refreshUser()
   }, [])
 
-  const login = async (username: string, password: string) => {
-    const form = new URLSearchParams()
-    form.set('username', username)
-    form.set('password', password)
-
-    const response = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form,
-    })
-    const payload = await response.json().catch(() => null)
-
-    if (!response.ok) {
-      const detail =
-        payload && typeof payload === 'object' && 'detail' in payload
-          ? String((payload as { detail: unknown }).detail)
-          : '登录失败'
-      throw new ApiError(detail, response.status, payload)
-    }
-
-    const result = payload as LoginResponse
-    setAuthTokens(result.access_token, result.refresh_token)
-    localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, result.refresh_token)
+  const handleLogin = async (username: string, password: string) => {
+    const result = await login(username, password)
     setUser(result.user)
   }
 
@@ -101,7 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       authenticated: Boolean(user && getAccessToken()),
-      login,
+      login: handleLogin,
       logout,
       refreshUser,
     }),

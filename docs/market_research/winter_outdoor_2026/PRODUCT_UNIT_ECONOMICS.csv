@@ -1,0 +1,12 @@
+Category,Selling Price,Market,Product Cost,Shipping+Duty,Payment Fee,Return Allowance,Contribution Before CAC,Contribution Margin,Scenario,Data Status
+Winter Gear Storage System (Hero),29.99,US,4.50,8.50,1.17,0.90,14.92,49.8%,Optimistic (DDP 小件),ASSUMPTION cost + REAL DDP
+Winter Gear Storage System (Hero),29.99,US,5.00,10.00,1.17,0.90,12.92,43.1%,Base (云途DDP 1kg),ASSUMPTION cost + REAL DDP
+Winter Gear Storage System (Hero),29.99,US,5.00,13.50,1.17,0.90,9.42,31.4%,Conservative (正式报关),ASSUMPTION cost + REAL duty
+Winter Gear Storage System (Hero),29.99,UK,5.00,7.50,1.17,0.90,15.42,51.4%,Base (≤£135 无关税),ASSUMPTION cost + SHIPPING_COST_UNKNOWN
+Winter Gear Storage System (Hero),29.99,EU,5.00,8.00,1.17,0.90,14.92,49.8%,Base (€3固定关税+IOSS),ASSUMPTION cost + SHIPPING_COST_UNKNOWN
+Winter Gear Storage System (Hero),29.99,CA,5.00,12.00,1.17,0.90,10.92,36.4%,Base (MFN 10%),ASSUMPTION cost + SHIPPING_COST_UNKNOWN
+Hand Warmers (non-battery, 6pk),14.99,US,2.00,8.00,0.73,0.45,3.81,25.4%,Base (DDP 0.5kg),ASSUMPTION cost + REAL DDP
+Utility Straps/Paracord Set,19.99,US,3.00,9.00,0.88,0.60,6.51,32.6%,Base (DDP),ASSUMPTION cost + REAL DDP
+Trekking Pole Winter Baskets,14.99,US,2.50,8.00,0.73,0.45,3.31,22.1%,Base (DDP),ASSUMPTION cost + REAL DDP
+Microspikes/Traction,49.99,US,12.00,12.00,1.75,1.50,22.74,45.5%,Base (DDP),ASSUMPTION cost + REAL DDP
+Gear Repair Kit (tape+zipper),24.99,US,4.00,9.50,1.02,0.75,9.72,38.9%,Base (DDP),ASSUMPTION cost + REAL DDP

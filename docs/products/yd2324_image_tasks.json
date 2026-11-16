@@ -1,0 +1,238 @@
+{
+  "_meta": {
+    "version": "1.5",
+    "updated": "2026-10-06",
+    "market": "US/EU outdoor DTC (English-language storefront, imperial-first units)",
+    "plan_doc": "docs/products/yd2324_camping_lantern_image_plan.md",
+    "sop": "docs/ai_image_generation_sop_wc.md V3.2",
+    "product_source": "https://detail.1688.com/offer/966534719581.html",
+    "brand": "NUOTAO OUTDOOR (white-label; source: YIZHE YD2324)",
+    "model": "YD2324",
+    "ref_dir": "woo_images/yd2324_refs",
+    "out_dir": "woo_images/yd2324_out",
+    "parts_dir": "woo_images/yd2324_out/_parts",
+    "execution_channel": {
+      "model": "agnes-image-2.5-flash",
+      "cost_cny_per_image": 0.08,
+      "verified_capability_matrix_2026_10_06": {
+        "1:1": "2048x2048 OK", "3:4": "2048x2731 OK", "3:2": "1536x1024 OK", "16:9": "2048x1152 OK",
+        "negative_prompt": "被适配器丢弃，禁令内嵌正向 prompt",
+        "reference_image": "只收 URL/data URI；本地路径运行时转 base64；null = T2I"
+      },
+      "reliability_rules_V1.5": [
+        "AI 只生成单主体图；组合一律 Pillow 程序化（backend/scripts/compose_yd2324.py）",
+        "AI 图内零文字；文字一律 Pillow 后处理（backend/scripts/make_d3_d6.py）",
+        "【V1.5 新增】参考图必须是【已验收的无文字单主体裁切图】：原始 1688 图全是营销图（含中文大字/表格/尺寸线），I2I 会把参考图里的文字与多余部件一起复制（实测 D6 复制了整张中文规格表）。裁切坐标经逐张看图验收，残留用背景色抹除",
+        "【V1.5 新增】部件图提示词用【局部锁定句】：只描述该部件，显式声明 NO pole / NO base / NO shade / NO second product；整产品身份锁只用于整产品图",
+        "【V1.5 新增】含文字的参考图禁止用于 I2I；需要无参考的整产品图时用 T2I（D6 底图）"
+      ]
+    },
+    "partial_locks": {
+      "TORCH": "Product part lock: ONLY the detached flashlight head of the NUOTAO telescoping camping lantern — a black cylinder with a frosted white panel strip on its side and a silver bezel ring around a flat round lens at the working end. Replicate the reference exactly. NO telescoping pole, NO trumpet base, NO conical shade, NO second product copy anywhere in frame. Photorealistic commercial photography. No text, no watermark, no logo.",
+      "ENDCAP": "Product part lock: ONLY the round matte black end face of the NUOTAO lantern seen at three-quarter angle — circular face with a recessed oval USB-C slot, silver rim ring, two small screws, and the black pole entering at the center, exactly as in the reference. No printed characters anywhere. Photorealistic macro. No text, no watermark, no logo.",
+      "BODY": "Product part lock: ONLY the gunmetal-silver cylindrical body section of the NUOTAO lantern with exactly TWO round black buttons stacked vertically and a shallow oval recess below them, exactly as in the reference. NO pole, NO light panels, NO trumpet base, NO shade in frame. Photorealistic macro. No text, no watermark, no logo.",
+      "SHADE": "Product part lock: ONLY the NUOTAO lantern with the black conical lamp shade fitted over its top — shade cone on top, thin metal hanging loop above it, gunmetal body with two round black buttons below, frosted white panel column at the bottom, exactly as in the reference. NO trumpet base, NO telescoping pole, NO open panels in frame. Photorealistic. No text, no watermark, no logo."
+    },
+    "identity_lock": "Product identity lock: NUOTAO OUTDOOR telescoping camping lantern, exact replica of the reference image. Extended top-to-bottom: (1) head with exactly THREE rectangular light panels (black frames, frosted white diffusers) hinged on a central matte black hub — the hub is a plain blank disc with NO dial, NO clock face, NO numbers; (2) slim black four-section telescoping pole; (3) gunmetal-silver cylindrical body with exactly TWO round black buttons on its side; (4) wide black conical trumpet base it stands on. Detached flashlight head: black cylinder with a white-laser LED lens and silver bezel ring. Accessories: detachable black conical lamp shade that fits over the HEAD unit only, thin metal hanging loop. USB-C port: plain recessed oval slot in the round end face, completely blank. Colors limited to black, gunmetal silver, frosted white. All product surfaces completely blank: no printed characters, no icons, no labels. Never change panel count, button count, base shape, colors or proportions. Ignore any text, watermark or logo present in the reference image. Photorealistic commercial product photography for a premium US/European outdoor DTC brand. Absolutely no text, no watermark, no logo anywhere in the image.",
+    "negative_prompt": "(agens 丢弃本字段；禁令已内嵌各 prompt)",
+    "acceptance": {
+      "FINAL_ACCEPTED_2026_10_06": {
+        "M1": "AI I2I（V1.2 首轮过审）",
+        "M2": "AI I2I 局部锁（V1.5）",
+        "M3": "AI I2I（V1.3 过审）",
+        "M4": "AI 单主体×4 + Pillow grid2x2",
+        "D1": "1688 原图白底裁切×3 + Pillow row3（零 AI 漂移）",
+        "D2": "AI I2I（V1.2 首轮过审）",
+        "D3": "Pillow 全程序工程示意图",
+        "D4": "AI 单主体×3 + m4_loop + Pillow grid2x2",
+        "D5": "AI 场景×3 + Pillow vstack3",
+        "D6": "AI I2I 无字底图 + Pillow 叠字"
+      },
+      "total_cost_cny": 4.88,
+      "total_generated": 61
+    }
+  },
+  "tasks": [
+    {
+      "id": "M2",
+      "use_case": "main_image",
+      "width": 2048,
+      "height": 2048,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_hand_torch.png",
+      "filename": "nuotao-camping-lantern-flashlight-mode.png",
+      "alt": "Detached flashlight head of the NUOTAO telescopic camping lantern casting a cool white beam on a night trail",
+      "prompt": "{{LOCK_TORCH}} Scene: night hiking trail in a conifer forest. A hand (only hand and forearm from the top edge, no face, no torso) holds the flashlight head tilted toward lower-left; its cool white zoom beam fires from the flat round lens through light fog onto the dark path, bright core with soft halo, dark green foliage bokeh. Keep the hand pose and product angle close to the reference. No text, no watermark, no logo."
+    },
+    {
+      "id": "M4a",
+      "group": "M4",
+      "use_case": "main_image",
+      "width": 2048,
+      "height": 2048,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_endcap.png",
+      "filename": "_parts/m4_endcap.png",
+      "alt": "Round end face of the NUOTAO lantern with blank recessed USB-C slot",
+      "prompt": "{{LOCK_ENDCAP}} Clean light gray studio background, soft even light, the end face fills 75% of frame at the same three-quarter angle as the reference, crisp edges, premium catalog macro. No text, no watermark."
+    },
+    {
+      "id": "M4b",
+      "group": "M4",
+      "use_case": "main_image",
+      "width": 2048,
+      "height": 2048,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_body_btn.png",
+      "filename": "_parts/m4_buttons.png",
+      "alt": "Gunmetal body side of the NUOTAO lantern with two round black buttons",
+      "prompt": "{{LOCK_BODY}} Clean light gray studio background, soft even light, the body section vertical in frame filling 80% of height, brushed metal texture visible, crisp edges, premium catalog macro. No text, no watermark, no logo."
+    },
+    {
+      "id": "M4c",
+      "group": "M4",
+      "use_case": "main_image",
+      "width": 2048,
+      "height": 2048,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_shade_form.png",
+      "filename": "_parts/m4_loop.png",
+      "alt": "Top cap of the NUOTAO lantern with thin metal hanging loop standing upright",
+      "prompt": "Product part lock: ONLY the top of the NUOTAO lantern with the lamp shade fitted — focus on the silver top cap and the thin polished metal hanging loop standing upright above it, shade cone edge below, exactly as in the reference top area. Macro, shallow depth of field, light gray studio background. NO pole, NO base, NO face. No text, no watermark, no logo."
+    },
+    {
+      "id": "M4d",
+      "group": "M4",
+      "use_case": "main_image",
+      "width": 2048,
+      "height": 2048,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_shade_form.png",
+      "filename": "_parts/m4_shade.png",
+      "alt": "NUOTAO lantern with black conical lamp shade fitted over the head",
+      "prompt": "{{LOCK_SHADE}} Clean light gray studio background, soft even light, the shade-fitted lantern vertical in frame filling 85% of height, exactly the reference configuration, crisp edges, premium catalog look. No text, no watermark, no logo."
+    },
+    {
+      "id": "D1a",
+      "group": "D1",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_col.png",
+      "filename": "_parts/d1_collapsed.png",
+      "alt": "NUOTAO lantern collapsed form standing on its trumpet base",
+      "prompt": "{{IDENTITY_LOCK}} Catalog cutout on pure white background: EXACTLY the collapsed configuration shown in the reference — panels folded closed as one column on top, gunmetal body with two buttons, black conical trumpet base below. One product only, centered, filling 85% of frame height, soft contact shadow. No text, no watermark, no logo, no dimension lines."
+    },
+    {
+      "id": "D1b",
+      "group": "D1",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_mid.png",
+      "filename": "_parts/d1_mid.png",
+      "alt": "NUOTAO lantern mid-extended form, panels still closed, on its trumpet base",
+      "prompt": "{{IDENTITY_LOCK}} Catalog cutout on pure white background: EXACTLY the mid-extended configuration shown in the reference — telescoping pole pulled out one stage, head on top with three panels STILL folded closed as one column (NOT open), gunmetal body, black conical trumpet base. One product only, centered, filling 85% of frame height, soft contact shadow. No text, no watermark, no logo."
+    },
+    {
+      "id": "D1c",
+      "group": "D1",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_ext.png",
+      "filename": "_parts/d1_extended.png",
+      "alt": "NUOTAO lantern fully extended form with three panels open, on its trumpet base",
+      "prompt": "{{IDENTITY_LOCK}} Catalog cutout on pure white background: EXACTLY the fully extended configuration shown in the reference — four-section pole at full length, head on top with three panels open in a wide downward fan, gunmetal body, black conical trumpet base. One product only, centered, filling 90% of frame height, soft contact shadow. No text, no watermark, no logo."
+    },
+    {
+      "id": "D4a",
+      "group": "D4",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_endcap.png",
+      "filename": "_parts/d4_usbc_flap.png",
+      "alt": "Recessed USB-C port with rubber flap hint on the lantern end face",
+      "prompt": "{{LOCK_ENDCAP}} Light gray studio background, shallow depth of field, same three-quarter angle as reference, extreme close-up on the recessed oval USB-C slot and its rubber flap edge, brushed silver rim crisp. No text, no watermark, no logo."
+    },
+    {
+      "id": "D4b",
+      "group": "D4",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_loop_top.png",
+      "filename": "_parts/d4_loop_cap.png",
+      "alt": "Metal hanging loop on the lantern top cap, macro",
+      "prompt": "Product part lock: ONLY the black top cap of the NUOTAO lantern head with the thin metal hanging loop half-folded in its recess, hinge detail visible, exactly the part shown in the reference. Macro, shallow depth of field, light gray studio background. NO shade, NO pole, NO base, NO face. No text, no watermark, no logo."
+    },
+    {
+      "id": "D4c",
+      "group": "D4",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_shade_form.png",
+      "filename": "_parts/d4_shade_fit.png",
+      "alt": "Black conical lamp shade lifted just above the lantern head unit",
+      "prompt": "{{LOCK_SHADE}} Light gray studio background: the same shade-fitted configuration as the reference but with the black conical shade lifted 5 cm above the head, a clear vertical gap showing it is detachable, both parts on the same axis. NO trumpet base, NO pole. Shallow depth of field. No text, no watermark, no logo."
+    },
+    {
+      "id": "D4d",
+      "group": "D4",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_body_btn.png",
+      "filename": "_parts/d4_buttons_macro.png",
+      "alt": "Twin plain round buttons on the gunmetal lantern body, macro",
+      "prompt": "{{LOCK_BODY}} Light gray studio background, extreme close-up on the two round black buttons and the brushed metal grain around them, shallow depth of field, premium build-quality feel. No text, no watermark, no logo."
+    },
+    {
+      "id": "D5b",
+      "group": "D5",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 1152,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_ext.png",
+      "filename": "_parts/d5_workbench.png",
+      "alt": "NUOTAO lantern fully extended on a garage workbench at dusk",
+      "prompt": "{{IDENTITY_LOCK}} Single cinematic wide scene: a home garage workbench at dusk, the fully extended lantern standing on its trumpet base at the right third, three panels open in a downward fan casting warm light over hand tools, a wooden project and a steel cup on the bench, pegboard and window light behind. ABSOLUTELY NO person, NO face, NO body part anywhere in frame. Warm-cool palette. No text, no watermark, no logo."
+    },
+    {
+      "id": "D5a",
+      "group": "D5",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 1152,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_ext.png",
+      "filename": "_parts/d5_tent.png",
+      "alt": "NUOTAO lantern in a bell tent at night, person seen from directly behind",
+      "prompt": "{{IDENTITY_LOCK}} Single cinematic wide scene: inside a canvas bell tent at night, the FULLY EXTENDED lantern (three panels clearly open in a downward fan, standing on its trumpet base) sits on a low wooden crate at the left third, warm glow filling the tent. A person sits at the right seen STRICTLY FROM DIRECTLY BEHIND: camera behind them, only the back of the head with a hair bun and both shoulders in a flannel shirt visible, head NOT turned to profile, face impossible to see. Wool blanket and enamel mug in foreground. Exactly ONE product in frame, no second lantern, no cylindrical lantern. No text, no watermark, no logo."
+    },
+    {
+      "id": "D5c",
+      "group": "D5",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 1152,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_hand_torch.png",
+      "filename": "_parts/d5_trail.png",
+      "alt": "Gloved hand holding the detached flashlight head on a night trail",
+      "prompt": "{{LOCK_TORCH}} Single cinematic wide scene: night conifer forest trail, a black-gloved hand and forearm enter from the right edge holding the flashlight head, cool white beam cutting through light fog onto the path ahead, dark foliage bokeh. NO face, NO torso, NO full body, NO shade, NO base, NO second product. No text, no watermark, no logo."
+    },
+    {
+      "id": "D6",
+      "mode": "ai_base_plus_overlay",
+      "use_case": "detail_image",
+      "width": 2048,
+      "height": 2731,
+      "reference_image": "woo_images/yd2324_out/_parts/ref_form_ext.png",
+      "filename": "_d6_base.png",
+      "alt": "Spec summary of the NUOTAO telescopic camping lantern: light source, modes, charging, materials, weight, size",
+      "prompt": "{{IDENTITY_LOCK}} Single assembled product only, on flat off-white background in the LEFT THIRD of the frame: exactly the fully extended lantern from the reference (three panels open in a downward fan, four-section pole, gunmetal body, black conical trumpet base), every part ATTACHED in its normal position. NO detached parts, NO floating accessories, NO separate shade, NO separate loop, NO separate head anywhere. The RIGHT TWO-THIRDS of the frame is completely empty flat off-white: no objects, no shadows there. Exactly one product, fully assembled. No text, no watermark, no logo. (规格表文字由 Pillow 后处理叠加)"
+    }
+  ],
+  "compose_specs": {
+    "M4": {"type": "grid2x2", "canvas": [2048, 2048], "gutter": 16, "bg": [255, 255, 255], "cells": ["_parts/m4_endcap.png", "_parts/m4_buttons.png", "_parts/m4_loop.png", "_parts/m4_shade.png"], "out": "nuotao-camping-lantern-details-usbc-buttons.png"},
+    "D1": {"type": "row3_white", "canvas": [2048, 2731], "bg": [255, 255, 255], "cells": ["_parts/ref_form_col.png", "_parts/ref_form_mid.png", "_parts/ref_form_ext.png"], "align": "bottom", "note": "V1.5 修正：三态直接用 1688 原图白底裁切（零 AI 漂移），背景归一化+裁边后程序合成", "out": "nuotao-camping-lantern-three-forms.png"},
+    "D4": {"type": "grid2x2", "canvas": [2048, 2728], "gutter": 16, "bg": [255, 255, 255], "cells": ["_parts/d4_usbc_flap.png", "_parts/d4_buttons_macro.png", "_parts/m4_loop.png", "_parts/d4_shade_fit.png"], "note": "V1.5 修正：第三格用 m4_loop（d4_loop_cap 的顶盖被 AI 加了不存在的黑色卡扣）", "out": "nuotao-camping-lantern-build-charging.png"},
+    "D5": {"type": "vstack3_crop", "canvas": [2048, 2731], "band_h": 910, "cells": ["_parts/d5_tent.png", "_parts/d5_workbench.png", "_parts/d5_trail.png"], "out": "nuotao-camping-lantern-scene-triptich.png"}
+  }
+}

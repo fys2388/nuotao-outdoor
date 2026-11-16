@@ -12,6 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -67,8 +68,10 @@ from app.services.b2b_portal_service import (
     list_agent_rfqs,
     list_products_for_agent,
     reject_agent_quote,
+    resend_verification_email,
     sign_agent_contract,
     submit_application,
+    verify_agent_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -226,6 +229,12 @@ async def b2b_login(
             detail="Invalid email or password",
         )
 
+    # M3.37: 检查邮箱验证状态
+    if agent.status == "pending_verification":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address first. Check your inbox for the verification link.",
+        )
     if agent.status == "pending":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -255,7 +264,70 @@ async def b2b_login(
     )
 
 
-@router.get("/auth/me", response_model=B2BAgentProfile)
+# ============================================
+# M3.37: 邮箱验证
+# ============================================
+
+class B2BVerifyEmailRequest(BaseModel):
+    """邮箱验证请求。"""
+    token: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/auth/verify-email", response_model=B2BAgentProfile)
+async def b2b_verify_email(
+    req: B2BVerifyEmailRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """验证代理商邮箱。
+
+    从邮件链接中提取 token，验证成功后将状态从 pending_verification 改为 pending（人工审核）。
+    """
+    agent = await verify_agent_email(db, req.token)
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token.",
+        )
+    return _agent_to_profile(agent)
+
+
+@router.post("/auth/resend-verification")
+async def b2b_resend_verification(
+    req: B2BLoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """重新发送邮箱验证邮件。"""
+    from sqlalchemy import select as _select
+
+    result = await db.execute(
+        _select(B2BAgent).where(
+            B2BAgent.workspace_id == DEFAULT_WORKSPACE_ID,
+            B2BAgent.email == req.email.lower().strip(),
+        )
+    )
+    agent = result.scalar_one_or_none()
+
+    if not agent or agent.status != "pending_verification":
+        # 静默成功，防止枚举攻击
+        return {"message": "If the email exists and requires verification, a new link has been sent."}
+
+    new_agent, raw_token = await resend_verification_email(db, str(agent.id))
+    if not new_agent:
+        raise HTTPException(status_code=500, detail="Failed to resend verification email.")
+
+    # TODO: 集成邮件服务发送验证链接
+    logger.info("Verification link would be sent to: %s (token: %s...)", agent.email, raw_token[:8])
+
+    return {
+        "message": "A new verification link has been sent to your email address.",
+        "email": agent.email,
+        "token_preview": raw_token[:8] + "...",  # 仅用于调试，生产环境删除
+    }
+
+
+# ============================================
+# 代理商资料
+# ============================================
 async def b2b_me(
     current_agent: B2BAgent = Depends(get_current_b2b_agent),
 ) -> Any:

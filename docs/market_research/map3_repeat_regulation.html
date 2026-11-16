@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Map 3 · Repeat Rate × Regulation Risk</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+  body { margin:0; padding:24px; background:#fff; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#222; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px 0; }
+  .sub { font-size:12px; color:#666; margin-bottom:16px; }
+  #chart { width:100%; height:720px; }
+</style>
+</head>
+<body>
+<h1>Map 3 · 复购率 × 法规风险矩阵</h1>
+<div class="sub">X = Repeat Rate（高复购在右）｜Y = Regulation Risk（高法规风险在上）｜右上红区 = 高复购但法规阻断，应 EXCLUDE。</div>
+<div id="chart"></div>
+<div style="margin-top:16px;font-size:12px;color:#555;line-height:1.7;">
+<b>读图说明</b>：本图 33 个微品类。红色阴影区（右上）= 高复购但法规阻断：Seam Grip（UN1133 Class 3）、DWR Aerosol（DOT Div 2.2 + EPA）、Lithium Battery（49 CFR 173.185）、Butane Fuel（DOT Div 2.1）、Water Purification Tablets（EPA FIFRA）、Triple-Antibiotic First Aid（21 CFR 333）、Lighter（UN1057）、Dog Car Harness（FMVSS 213）。绿色点（右下/左下）= 普货，中国直发友好。
+<br><b>核心结论</b>：Nuotao 第一批全部落在绿色区（Repair Tape / Shock Cord / Buckles / Zipper Pull / Guyline / Chair Feet），法规风险 ≤3/10；液体胶与气雾剂即便复购再高也 EXCLUDE，走海外仓或不做。
+<br><b>使用建议</b>：法规风险 ≤3 的品类可中国直发；4–6 分（食品接触/宠物扣/tackle）需测试报告；≥7 分一律走海外仓或 EXCLUDE。Seam Grip 虽复购强，但 UN1133 Class 3 液体不直发。
+<br><span style="color:#999;">数据来源：evidence_04 法规矩阵（eCFR/CPSC/EPA/USPS Pub 52）· 2026-10-08</span></div>
+<script>
+const categories = {
+  "OK Low-Reg": "#059669",
+  "Caution": "#d97706",
+  "Exclude": "#dc2626"
+};
+// [name, repeatX, regY, size, cat]
+const data = [
+  ["Repair Tape (Tenacious)", 9, 1, 90, "OK Low-Reg"],
+  ["Patches / Gear Patches", 8, 1, 55, "OK Low-Reg"],
+  ["Shock Cord / Paracord", 9, 1, 80, "OK Low-Reg"],
+  ["Straps & Buckles", 9, 2, 85, "OK Low-Reg"],
+  ["Zipper Pull / Lubricant", 7, 1.5, 50, "OK Low-Reg"],
+  ["Tent Pole Splint", 6, 1, 35, "OK Low-Reg"],
+  ["Guyline + Tensioner", 7, 1, 55, "OK Low-Reg"],
+  ["Camp Chair Feet", 7, 1, 45, "OK Low-Reg"],
+  ["Sternum Strap", 6, 1.5, 40, "OK Low-Reg"],
+  ["Dry Bag Valve", 5, 1, 25, "OK Low-Reg"],
+  ["Hydration Bite Valve", 9, 3, 90, "Caution"],
+  ["Hydration Cleaning Tablets", 9, 3.5, 60, "Caution"],
+  ["Compression Sack", 7, 1, 65, "OK Low-Reg"],
+  ["Rain Cover", 6, 1.5, 50, "OK Low-Reg"],
+  ["Trunk Organizer", 5, 1, 70, "OK Low-Reg"],
+  ["Wet/Dry Bag", 6, 2, 45, "OK Low-Reg"],
+  ["Dry Bag (Earth Pak)", 6, 2.5, 55, "OK Low-Reg"],
+  ["Carabiner / Gear Tie", 7, 1.5, 50, "OK Low-Reg"],
+  ["Dog Paw Washer", 5, 1.5, 35, "OK Low-Reg"],
+  ["Pet Lead Clip / D-Ring", 6, 2, 30, "OK Low-Reg"],
+  ["Dog Seatbelt Tether", 4, 4, 20, "Caution"],
+  ["Dog Car Harness", 3, 9.5, 30, "Exclude"],
+  ["Bino Harness / Strap", 4, 1, 25, "OK Low-Reg"],
+  ["Birding Notebook", 6, 1, 20, "OK Low-Reg"],
+  ["Tackle Box Divider", 7, 3, 30, "Caution"],
+  ["Seam Grip (solvent)", 8, 8.5, 55, "Exclude"],
+  ["DWR Aerosol Spray", 7, 9.5, 40, "Exclude"],
+  ["Nikwax Wash (liquid)", 8, 6, 50, "Caution"],
+  ["Lithium Battery", 8, 9.8, 60, "Exclude"],
+  ["Butane/White Gas Fuel", 8, 9.9, 50, "Exclude"],
+  ["Water Purification Tablets", 7, 9, 30, "Exclude"],
+  ["Triple-Antibiotic First Aid", 6, 9, 25, "Exclude"],
+  ["Lighter", 5, 9.5, 20, "Exclude"]
+];
+const series = {};
+Object.keys(categories).forEach(k => series[k] = []);
+data.forEach(d => series[d[4]].push({ name: d[0], value: [d[1], d[2], d[3]], symbolSize: d[3] }));
+const option = {
+  backgroundColor: "#fff",
+  grid: { left: 70, right: 40, top: 50, bottom: 70 },
+  tooltip: { trigger: "item", formatter: p => `${p.data.name}<br/>Repeat: ${p.data.value[0]}/10<br/>Reg Risk: ${p.data.value[1]}/10` },
+  legend: { top: 8, textStyle: { fontSize: 11 } },
+  xAxis: { name: "Repeat Rate →", nameLocation: "middle", nameGap: 32, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  yAxis: { name: "Regulation Risk →", nameLocation: "middle", nameGap: 45, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  series: Object.keys(series).map(k => ({
+    name: k, type: "scatter", data: series[k],
+    itemStyle: { color: categories[k], opacity: 0.78, borderColor: "#fff", borderWidth: 1 },
+    label: { show: true, position: "right", fontSize: 10, formatter: p => p.data.name, color: "#333" },
+    markArea: k === "Exclude" ? {
+      itemStyle: { color: "rgba(220,38,38,0.08)" },
+      data: [[{ xAxis: 6, yAxis: 7 }, { xAxis: 10, yAxis: 10 }]]
+    } : undefined
+  }))
+};
+echarts.init(document.getElementById("chart")).setOption(option);
+</script>
+</body>
+</html>

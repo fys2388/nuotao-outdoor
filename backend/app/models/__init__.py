@@ -44,6 +44,7 @@ from app.models.b2b_credit import (
     B2BCreditStatusEvent,
 )
 from app.models.b2b_sales import B2BRFQ, B2BContract, B2BQuote, B2BQuoteItem, B2BRFQItem
+from app.models.b2b_leads import B2BLead
 from app.models.business_alert import BusinessAlert
 from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.consolidation import Brand, CommerceAttribution, LegalEntity
@@ -174,6 +175,7 @@ __all__ = [
     "B2BFulfillment",
     "B2BFulfillmentItem",
     "B2BInvoice",
+    "B2BLead",
     "B2BPriceBook",
     "B2BPriceTier",
     "B2BPriceVersion",

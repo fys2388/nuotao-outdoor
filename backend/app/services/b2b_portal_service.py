@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -148,11 +149,13 @@ async def submit_application(
     message: str | None = None,
     workspace_id: UUID = DEFAULT_WORKSPACE_ID,
 ) -> B2BAgent:
-    """提交代理商申请。
+    """提交代理商申请（M3.37 自助注册流程）。
 
-    创建 status="pending" 的代理商账号，等待管理端审核。
-    审核通过后 status 变为 active，即可登录。
+    创建 status="pending_verification" 的代理商账号，等待邮箱验证。
+    验证通过后进入人工审核阶段，审核通过后可登录。
     """
+    import hashlib
+    
     email_lower = email.lower().strip()
 
     # 检查邮箱是否已存在
@@ -168,6 +171,11 @@ async def submit_application(
     # 生成代理商编号
     now = datetime.now(timezone.utc)
     agent_number = f"AG-{now.strftime('%Y%m%d')}-{uuid4().hex[:8].upper()}"
+
+    # M3.37: 生成邮箱验证 token
+    raw_token = secrets.token_urlsafe(32)
+    verification_token = hashlib.sha256(raw_token.encode()).hexdigest()
+    verification_token_expiry = now + timedelta(hours=24)
 
     # 申请备注（合并业务信息）
     notes_parts = []
@@ -210,19 +218,23 @@ async def submit_application(
         address=address,
         hashed_password=get_password_hash(password),
         tier="bronze",
-        status="pending",
+        status="pending_verification",
         commission_rate=Decimal("0"),
         discount_percent=Decimal("0"),
         credit_limit=Decimal("0"),
         payment_terms_days=30,
         currency="USD",
         notes=notes,
+        verification_token=verification_token,
+        verification_token_expiry=verification_token_expiry,
     )
     db.add(agent)
     await db.commit()
     await db.refresh(agent)
-    logger.info("B2B application submitted: %s (%s)", agent_number, email_lower)
-    return agent
+    logger.info("B2B application submitted (M3.37 self-registration): %s (%s)", agent_number, email_lower)
+    
+    # 返回用于发送验证邮件的数据
+    return agent, raw_token
 
 
 async def get_agent_by_id(
@@ -256,6 +268,88 @@ async def change_agent_password(
     agent.hashed_password = get_password_hash(new_password)
     await db.commit()
     return True
+
+
+# ============================================
+# M3.37: 邮箱验证
+# ============================================
+
+import hashlib as _hashlib
+
+
+async def verify_agent_email(
+    db: AsyncSession,
+    token: str,
+    *,
+    workspace_id: UUID = DEFAULT_WORKSPACE_ID,
+) -> B2BAgent | None:
+    """验证代理商邮箱。
+
+    Args:
+        token: 原始未哈希的验证 token（客户端收到的链接参数）
+        workspace_id: 工作区 ID
+
+    Returns:
+        验证成功的代理商对象，或 None（token 无效/过期）
+    """
+    import hashlib
+    from datetime import datetime, timezone as _tz
+
+    # 计算 token 哈希用于数据库比对
+    token_hash = _hashlib.sha256(token.encode()).hexdigest()
+
+    result = await db.execute(
+        select(B2BAgent).where(
+            B2BAgent.workspace_id == workspace_id,
+            B2BAgent.verification_token == token_hash,
+            B2BAgent.status == "pending_verification",
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if not agent:
+        return None
+
+    # 检查是否过期
+    if agent.verification_token_expiry and agent.verification_token_expiry < datetime.now(_tz.utc):
+        logger.warning("Email verification token expired for agent %s", agent.email)
+        return None
+
+    # 标记为已验证
+    agent.verification_token = None
+    agent.verification_token_expiry = None
+    agent.email_verified_at = datetime.now(_tz.utc)
+    agent.status = "pending"  # 进入人工审核阶段
+    await db.commit()
+    logger.info("Email verified for agent: %s (%s)", agent.agent_number, agent.email)
+    return agent
+
+
+async def resend_verification_email(
+    db: AsyncSession,
+    agent_id: str,
+    *,
+    workspace_id: UUID = DEFAULT_WORKSPACE_ID,
+) -> tuple[B2BAgent, str] | None:
+    """重新发送邮箱验证邮件。
+
+    生成新的验证 token 并更新到期时间。
+    """
+    import hashlib
+
+    agent = await get_agent_by_id(db, agent_id, workspace_id=workspace_id)
+    if not agent or agent.status != "pending_verification":
+        return None
+
+    now = datetime.now(timezone.utc)
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expiry = now + timedelta(hours=24)
+
+    agent.verification_token = token_hash
+    agent.verification_token_expiry = expiry
+    await db.commit()
+    logger.info("Verification token resent for agent: %s", agent.email)
+    return agent, raw_token
 
 
 # ============================================

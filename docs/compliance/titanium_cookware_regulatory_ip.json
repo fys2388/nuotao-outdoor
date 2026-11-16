@@ -1,0 +1,197 @@
+{
+  "report_id": "nuotao-ti-cookware-regulatory-ip",
+  "title": "Titanium Cookware Regulatory + IP Research (Nuotao Outdoor)",
+  "product": "Titanium outdoor cookware (pot/pan/lid, handle, folding, nesting)",
+  "research_date": "2026-10-30",
+  "method": {
+    "search_tool": "web_fetch only (web_search unavailable in session)",
+    "policy": "Official-source-first. All conclusions cite direct official fetches where possible. Dynamic/JS sites (FDA.gov, USITC HTS UI, EUR-Lex async, ECHA WAF, OEHHA list, ACCC/ProductSafety Akamai, USPTO/EUIPO trademark search) could NOT be reliably retrieved; those items are flagged evidence C and must be verified before use.",
+    "evidence_scale": {
+      "A": "Primary legal text retrieved directly from official source",
+      "B": "Official regulator page / database retrieved (guidance, searchable database output)",
+      "C": "Known regulatory fact, NOT directly retrieved this session (blocked/JS/queue) - verify before relying"
+    }
+  },
+  "key_warnings": {
+    "no_fda_approved": "FDA does NOT 'approve' cookware. 'FDA Approved' / 'FDA approved food grade' are unsupported, misleading marketing claims (FTC Act s.5 deception risk). Titanium metal is a food-contact substance (FCS); it is cleared via FCN/GRAS/prior-sanction channels, not a blanket approval label. Use 'meets FDA food-contact requirements' at most, with evidence.",
+    "no_ce_for_fcm": "EU Food Contact Materials do NOT carry CE marking. CE is only for regulated product categories (toys, machinery, PPE...). Placing CE on cookware/FCM is misleading (1935/2004 Art.3(2) prohibits misleading labelling/presentation).",
+    "no_food_grade_cert": "'Food Grade' is not an official regulated certification for cookware in US/EU/CA/AU; it is a marketing descriptor. Compliance is via migration/constituent limits, not a certification stamp.",
+    "regulatory_not_legal_advice": "This is regulatory research, NOT legal advice. Engage counsel before placing product or making claims.",
+    "fto_incomplete": "Preliminary public patent search ≠ full Freedom-to-Operate opinion. Family status of specific CN patents shows some NOT_ACTIVE; no design/utility claim analysis done. Commission a licensed patent agent for FTO."
+  },
+  "jurisdictions": {
+    "US": {
+      "food_contact": {
+        "regime": "Federal Food, Drug, and Cosmetic Act (FFDCA) food-additive framework; food-contact substances regulated under 21 CFR 174-178; Food Contact Notification (FCN) program for new FCS.",
+        "key_regulation": "21 CFR Part 177 'Indirect Food Additives: Polymers' (retrieved via eCFR). Note: titanium is a METAL, NOT a polymer - titanium is NOT listed in 21 CFR 177. Coatings on metal: 21 CFR 175.300.",
+        "titanium_status": "Titanium metal / CP-Ti / Ti-6Al-4V: cleared for food contact through FDA food-contact channels (FCN/GRAS/prior sanction), historically via FCNs. No blanket 'FDA approved' cookware status. FDA.gov FCN database could NOT be fetched (HTTP 401 automated-request block); confirm the specific FCN/clearance basis for your exact alloy/coating.",
+        "evidence": "A (21 CFR 177 text via eCFR); C (FCN database / alloy-specific clearance - unverified)"
+      },
+      "cpsc": {
+        "note": "CPSC (Consumer Product Safety Act) governs general consumer-product hazards; cookware food-contact safety sits with FDA, not CPSC. CPSC cookware guide page returned 404. Lead-in-paint (16 CFR 1303) and lead limits apply if painted/coated (relevant to non-stick/colored coatings).",
+        "evidence": "C"
+      },
+      "ftc": {
+        "note": "FTC Act s.5: deceptive/unfair marketing - 'FDA Approved', 'CE', 'Food Grade' claims must be substantiated and accurate.",
+        "evidence": "C"
+      },
+      "california_prop65": {
+        "note": "Proposition 65 (OEHHA): titanium metal and titanium dioxide are NOT Prop 65 listed chemicals. Relevant listed chemicals for cookware = lead/cadmium (and other heavy metals) if present in coatings/materials, which would trigger clear-and-reasonable warning. OEHHA list page is JS-rendered (could NOT extract directly); verify chemical list and safe-harbor levels before labeling.",
+        "evidence": "C"
+      },
+      "import_tariff": {
+        "hts": "HTS Chapter 81, heading 8108 'Titanium and articles thereof' (e.g., 8108.90.xx 'other articles'). Exact 8-digit MFN rate + Section 301 (China origin) + country-of-origin marking (19 CFR 134) require a binding ruling / customs-broker confirmation.",
+        "evidence": "C (USITC HTS API/UI could not be retrieved; reststop returned 503/400, view page JS)"
+      },
+      "import_labeling": {
+        "note": "Country-of-origin marking required on imported articles (19 CFR 134). No FDA pre-market approval for cookware. If any FDA-regulated claim (e.g., 'food grade', antimicrobial) is made, it must be truthful.",
+        "evidence": "C"
+      }
+    },
+    "EU": {
+      "food_contact": {
+        "framework": "Regulation (EC) No 1935/2004 - framework for materials/articles intended to come into contact with food. Text retrieved (Art.1 scope; Art.3 general requirement: no transfer endangering health / unacceptable composition change / organoleptic deterioration; Art.3(2) no misleading labelling/advertising; Art.5 specific measures).",
+        "specific_measure_for_metal": "No EU-wide specific measure for metals (only plastic EU 10/2011, ceramics EU 84/500, etc.). Metals like titanium are regulated by national provisions (e.g., Italian/French/German national FCM rules) pending an EU metal measure.",
+        "gmp": "Commission Regulation (EC) No 2023/2006 - Good Manufacturing Practice for FCM. Full text retrieved: quality assurance system (Art.5), quality control (Art.6), documentation (Art.7), printing-ink rules (Annex A).",
+        "evidence": "A (1935/2004 and 2023/2006 via legislation.gov.uk /eur/ mirrors of EU text)"
+      },
+      "gpsr": {
+        "regulation": "General Product Safety Regulation (EU) 2023/988 - replaces GPSD 2001/95; applies from 13 Dec 2024. Requires safe products, EU 'responsible economic operator', traceability, safety assessment, risk-based labelling/warnings.",
+        "evidence": "C (EUR-Lex returned HTTP 202 async queue; text NOT retrieved this session - verify)"
+      },
+      "reach_tio2": {
+        "note": "REACH Annex XVII (entry added by Commission Regulation (EU) 2023/727): restriction on titanium dioxide classified as carcinogen cat. 2 in mixtures supplied to general public (certain powder/coating forms), effective 1 Aug 2024. For SOLID titanium metal cookware body this restriction does NOT apply; it only matters if a TiO2-containing coating is supplied in restricted mixture/powder form. ECHA page blocked (403 WAF).",
+        "evidence": "C"
+      },
+      "ce_marking": {
+        "note": "CE marking does NOT apply to food-contact materials/cookware. Using CE here is misleading (1935/2004 Art.3(2)).",
+        "evidence": "C (regulatory knowledge; consistent with retrieved Art.3(2) text)"
+      },
+      "import_tariff": {
+        "taric": "EU Common Customs Tariff (TARIC), Chapter 81 (8108 titanium articles). Confirm exact CN code + MFN duty via TARIC.",
+        "evidence": "C"
+      },
+      "declaration_of_compliance": {
+        "note": "For FCM, a 'Declaration of Compliance' (DoC) and supporting documentation (per 1935/2004 Art.15 + 2023/2006 Art.7) are expected for regulated materials; for metals, national rules apply. Keep GMP records, traceability (Art.17), and food-safety documentation.",
+        "evidence": "A/B (framework retrieved; DoC requirement is Art.15-17, partially confirmed)"
+      }
+    },
+    "UK": {
+      "food_contact": {
+        "framework": "Retained (assimilated) Regulation (EC) 1935/2004 as it applies in GB (amended by The Materials and Articles in Contact with Food (Amendment) (EU Exit) Regulations 2019, SI 2019/704, and later). Text retrieved via legislation.gov.uk. Northern Ireland: EU rules continue under the Windsor Framework (SI 2023/959).",
+        "gmp": "Retained Commission Regulation (EC) No 2023/2006 (GMP) - text retrieved via legislation.gov.uk.",
+        "national_rules": "GB also has national food-contact rules (e.g., Materials and Articles in Contact with Food (England) Regulations 2012, SI 2012/2619) - NOT retrieved this session.",
+        "evidence": "A (1935/2004 + 2023/2006 UK versions)"
+      },
+      "product_safety": {
+        "regime": "General Product Safety Regulations 2005 (SI 2005/1803) apply to Great Britain (general safety requirement, producer/distributor duties, recall). GPSR (EU) 2023/988 does NOT apply to GB (it is EU/NI law). Text retrieved: reg.5 general safety requirement, reg.6 presumption of conformity, reg.7-9 duties, Part 3 enforcement/notices.",
+        "evidence": "A"
+      },
+      "import_tariff": {
+        "uk_global_tariff": "UK Global Tariff, Chapter 81 (8108 titanium articles). Confirm MFN duty + origin.",
+        "evidence": "C"
+      },
+      "labelling": {
+        "note": "UKCA/CE: cookware/FCM are NOT CE-marked products; no UKCA required for FCM. Product-safety information and UK responsible person obligations apply.",
+        "evidence": "C"
+      }
+    },
+    "CA": {
+      "food_contact": {
+        "framework": "Food and Drugs Act (R.S.C., 1985, c. F-27) - text retrieved. Food contact materials/packaging fall under the Act + Food and Drug Regulations.",
+        "key_regulation": "Food and Drug Regulations (C.R.C., c. 870), Division 23 'Food Packaging Materials' - retrieved: B.23.001 'No person shall sell any food in a package that may yield to its contents any substance that may be injurious to the health of a consumer of the food.' This is the general prohibition governing food-contact materials (incl. cookware contact surfaces).",
+        "health_canada": "Health Canada publishes food-contact material guidance/clearances; Health Canada FCM page returned 404 this session - verify the specific Health Canada guidance/listing for your material.",
+        "evidence": "A (FDA F-27 + FDR B.23.001); C (Health Canada guidance - unverified)"
+      },
+      "consumer_product_safety": {
+        "note": "Canada Consumer Product Safety Act (CCPSA, S.C. 2010, c.1) governs general consumer product hazards; cookware safety/hazards fall under CCPSA + FDR Division 23 for food contact. CCPSA page not retrieved (network error) - verify.",
+        "evidence": "C"
+      },
+      "import_tariff": {
+        "cbsa": "CBSA tariff, Chapter 81 (8108 titanium articles). MFN rate + origin; confirm via CBSA.",
+        "evidence": "C"
+      },
+      "labelling": {
+        "note": "Consumer Packaging and Labelling Act + Food and Drugs Act labelling apply to prepackaged food; cookware itself is subject to general consumer-product labelling/origin rules.",
+        "evidence": "C"
+      }
+    },
+    "AU": {
+      "food_contact": {
+        "regime": "Australia New Zealand Food Standards Code (FSANZ) + State/Territory Food Acts. No EU-style positive list for food-contact materials; materials must not transfer harmful substances. FSANZ 'Chemicals in food packaging' and 'Food packaging' pages confirmed to exist (nav retrieved; body JS/truncated).",
+        "titanium_dioxide": "FSANZ has a dedicated 'Review of titanium dioxide as a food additive' page (retrieved nav confirms) - relevant to TiO2 as a food additive, NOT to titanium metal cookware; note for coatings.",
+        "evidence": "B (FSANZ pages reachable/confirmed); C (specific food-contact obligations - verify)"
+      },
+      "consumer_safety": {
+        "note": "ACCC product safety: cookware is NOT subject to a specific mandatory safety standard; general Australian Consumer Law (ACL) safety/consumer guarantees apply. ACCC/ProductSafety.gov.au returned 403 (Akamai) - verify mandatory-standard list.",
+        "evidence": "C"
+      },
+      "import_tariff": {
+        "abf": "Australian Border Force tariff, Chapter 81 (8108 titanium articles). MFN duty + origin; confirm via ABF.",
+        "evidence": "C"
+      },
+      "labelling": {
+        "note": "Country-of-origin labelling (under ACL / Commerce (Trade Descriptions) Act for goods) - confirm applicability to cookware. No mandatory 'food grade' certification.",
+        "evidence": "C"
+      }
+    }
+  },
+  "ip": {
+    "patents": {
+      "method": "Google Patents XHR search endpoint (retrieved). Query 'titanium + cookware' broad: 144,944 hits (noisy, includes coatings/chemistry). Refined CPC A47J (kitchen/cookware) + titanium + cookware: 4,756 hits.",
+      "landscape_top_assignees": [
+        {"name": "武汉苏泊尔炊具有限公司 (Supor Wuhan)", "count": 132},
+        {"name": "佛山市顺德区美的电热电器制造有限公司 (Midea)", "count": 87},
+        {"name": "Seb S.A. (Tefal)", "count": 36},
+        {"name": "浙江福腾宝家居用品有限公司", "count": 13},
+        {"name": "All-Clad Metalcrafters LLC", "count": 10},
+        {"name": "苏州鑫精艺钛制品有限公司 (Suzhou Xinjingyi Titanium Products)", "count": 8},
+        {"name": "浙江康巴赫科技股份有限公司", "count": 8},
+        {"name": "武汉安在厨具有限公司", "count": 7},
+        {"name": "浙江三禾厨具有限公司", "count": 7},
+        {"name": "Costa Handles S.R.L. (designs, EU)", "count": 15}
+      ],
+      "feature_relevant_examples": [
+        {"pub": "KR20120031863A", "feature": "bi-functional cookware lid", "status": "CN ACTIVE / US-KR NOT_ACTIVE"},
+        {"pub": "US20180020870A1", "feature": "cookware with hinged lid (lid stays attached)", "status": "US ACTIVE"},
+        {"pub": "CN108464730A", "feature": "frying pan with pot-edge sealing structure", "assignee": "苏州鑫精艺钛制品有限公司", "status": "CN NOT_ACTIVE"},
+        {"pub": "CN108420302A", "feature": "uncoated physical anti-stick multi-purpose pot", "assignee": "苏州鑫精艺钛制品有限公司", "status": "CN NOT_ACTIVE"},
+        {"pub": "CN108771469A", "feature": "combined cooking utensils (pot + lid + steamer, nesting)", "status": "CN ACTIVE"},
+        {"pub": "KR20110138400A", "feature": "multilayer ceramic-coated cookware", "status": "EP/US/CN/JP/KR ACTIVE"},
+        {"pub": "US11974697B2 / US12490862B2", "feature": "spill-prevention vessel aid", "status": "US ACTIVE"},
+        {"pub": "US20020182449A1", "feature": "coating for cooking utensils", "status": "US NOT_ACTIVE"}
+      ],
+      "risk_summary": "High filing density in CPC A47J cookware + coatings (C23C/C09D) among Chinese cookware majors and Seb/All-Clad. Folding/nesting/handle/combination and coating patents are actively claimed. Feature-level claim mapping + design patent (incl. EU Community design) screening is REQUIRED before launch. Some CN utility/design patents by titanium-specific players (苏州鑫精艺) show NOT_ACTIVE status (favorable signal) but this is preliminary.",
+      "evidence": "B (Google Patents searchable database output)"
+    },
+    "trademarks": {
+      "status": "NOT COMPLETED - USPTO trademark search and EUIPO are JS/dynamic and were NOT retrieved this session.",
+      "competitor_brands_to_check": ["Supor/苏泊尔", "Midea/美的", "Tefal/Seb", "All-Clad", "Snow Peak", "Toaks", "Vargo", "Titanium Goat", "MSR", "GSI Outdoors", "Sea to Summit", "Stanley", "Primus", "Kovea", "Brs", "Soto"],
+      "classes_of_interest": ["Class 21 (cookware/kitchenware)", "Class 8 (utensils)", "Class 11 (heating/cooking apparatus)"],
+      "evidence": "C"
+    },
+    "design_patents": {
+      "note": "Design patents/registered designs are a major cookware risk area (e.g., EU Community designs for handles - Costa Handles EM150622220001S..009S retrieved). Full design-screen required. Evidence B (for the EU handle designs)/C (for other jurisdictions)."
+    }
+  },
+  "evidence_level_summary": {
+    "A_retrieved": ["US 21 CFR 177", "EU 1935/2004", "EU 2023/2006 GMP", "UK SI 2005/1803", "UK retained 1935/2004", "UK retained 2023/2006", "CA Food and Drugs Act F-27", "CA FDR B.23.001"],
+    "B_retrieved": ["Google Patents XHR landscape (titanium+cookware; CPC A47J)", "EU Commission FCM framework page", "FSANZ food-packaging / TiO2 pages (nav confirmed)"],
+    "C_unverified": ["FDA FCN database", "EUR-Lex GPSR 2023/988 text", "ECHA REACH TiO2", "USITC HTS rates", "OEHHA Prop 65 list", "ACCC/ProductSafety AU mandatory standards", "CCPSA text", "Health Canada FCM guidance", "USPTO/EUIPO trademark search", "UK SI 2012/2619", "TARIC / UKGT / CBSA / ABF duty rates"]
+  },
+  "recommended_next_steps": [
+    "Commission a licensed customs broker / tariff ruling for HTS 8108 (US/EU/UK/CA/AU) + Section 301 (China) exposure.",
+    "Obtain a Food Contact Declaration of Compliance + migration/constituent test report (e.g., per 1935/2004 + national metal rules, or FDA FCN basis) for the exact alloy, surface treatment, and any coating.",
+    "Confirm EU GPSR 2023/988 text + GB GPSR 2005 applicability, and assign EU/GB responsible persons.",
+    "Run a full FTO + design-screen (US/EU/CN/JP/KR) on handle/folding/lid/nesting/coating features via a patent attorney.",
+    "Run trademark clearance (Class 8/21/11) for the proposed brand name in target markets.",
+    "Prohibit 'FDA Approved'/'CE'/'Food Grade' claims unless legally supported; use 'meets applicable food-contact requirements' + evidence.",
+    "Check California Prop 65 for lead/cadmium in any coating and OEHHA safe-harbor limits; apply clear-and-reasonable warnings if triggered."
+  ],
+  "limitations": [
+    "FDA.gov, ECHA, ACCC/ProductSafety.gov.au, EUR-Lex (async), USITC HTS, OEHHA, USPTO/EUIPO were not fully retrievable this session; corresponding items are evidence C and MUST be verified before use.",
+    "Patent search is public-database only and preliminary; no claim charts, no family expiry analysis, no design-claim mapping.",
+    "Regulatory conclusions are general and do not account for your specific alloy, finish, coating, or intended markets.",
+    "This is research, not legal advice. Confirm with qualified counsel."
+  ]
+}

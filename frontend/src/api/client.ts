@@ -898,6 +898,34 @@ export const api = {
   getB2BStats: () => request('/admin/b2b/stats'),
   getB2BAgents: () => request('/admin/b2b/agents'),
   getB2BOrders: () => request('/admin/b2b/orders'),
+  // M2.5.2: B2B public-enquiry lead management (internal, authenticated).
+  getB2BLeads: (params?: { status?: string; assigned_to?: string; page?: number; page_size?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.assigned_to) qs.set('assigned_to', params.assigned_to)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.page_size) qs.set('page_size', String(params.page_size))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request(`/admin/b2b/leads${suffix}`)
+  },
+  getB2BLead: (leadId: string) => request(`/admin/b2b/leads/${leadId}`),
+  updateB2BLead: (leadId: string, data: Record<string, unknown>) =>
+    request(`/admin/b2b/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  convertB2BLead: (leadId: string, agentId: string) =>
+    request(`/admin/b2b/leads/${leadId}/convert`, {
+      method: 'POST',
+      body: JSON.stringify({ agent_id: agentId }),
+    }),
+  // M2.5.3: B2B product showcase curation (internal, authenticated).
+  getShowcaseProducts: (params?: { search?: string }) => {
+    const qs = params?.search ? `?search=${encodeURIComponent(params.search)}` : ''
+    return request(`/admin/b2b/showcase/products${qs}`)
+  },
+  updateShowcaseProduct: (productId: string, data: Record<string, unknown>) =>
+    request(`/admin/b2b/showcase/products/${productId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
   getB2BPrices: () => request('/admin/b2b/prices'),
   getB2BPriceBooks: () => request('/admin/b2b/price-books'),
   createB2BPriceBook: (data: Record<string, unknown>) =>

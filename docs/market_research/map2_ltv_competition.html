@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Map 2 · LTV Potential × Competition Intensity</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+  body { margin:0; padding:24px; background:#fff; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#222; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px 0; }
+  .sub { font-size:12px; color:#666; margin-bottom:16px; }
+  #chart { width:100%; height:720px; }
+</style>
+</head>
+<body>
+<h1>Map 2 · LTV 潜力 × 竞争强度矩阵</h1>
+<div class="sub">X = LTV Potential（复购次数 × 客单，低→高）｜Y = Competition Intensity（越低越好，竞争弱在下方）｜气泡 = 微品类。左下 = 高 LTV 低竞争 = Nuotao 甜蜜点。</div>
+<div id="chart"></div>
+<div style="margin-top:16px;font-size:12px;color:#555;line-height:1.7;">
+<b>读图说明</b>：本图 25 个微品类来自 evidence_01–04。绿色阴影区（Replacement Parts 高 LTV、竞争弱）是 Nuotao 替换件战略的甜蜜点——Osprey AMG 6–8 周 turn-around 给了 3PL 替换件"24h 现货"的时间差机会。右上方 Dry Bag / Compression Sack / Trunk Organizer 竞争已红海，需差异化。
+<br><b>核心结论</b>：#1 Hydration Bite Valve（LTV 9 / Comp 7）通用兼容空位；#2 No-Liquid Repair Kit（LTV 8.5 / Comp 5）白牌替代 Gear Aid；#3 Buckle Field Repair（LTV 8.5 / Comp 5.5）打 Osprey 时间差。
+<br><b>使用建议</b>：优先在绿色阴影区（Replacement Parts 高 LTV 低竞争）选品；对 Dry Bag / Trunk Organizer 这类高 LTV 高竞争品类，必须靠"金属扣替代塑料扣"等具体痛点差异化，而非泛泛"高品质"。LTV:CAC 目标 ≥ 3:1。
+<br><span style="color:#999;">数据来源：evidence_01–04 · 2026-10-08 · Nuotao Outdoor Market Research</span></div>
+<script>
+const categories = {
+  "Repair/Maintenance": "#2563eb",
+  "Replacement Parts": "#059669",
+  "Hydration": "#d97706",
+  "Storage/Organization": "#7c3aed",
+  "Pet Outdoor": "#db2777",
+  "Birding/Field": "#0891b2"
+};
+// [name, LTVx, competitionY (low=good bottom), size, cat]
+const data = [
+  ["Repair Tape (Tenacious)", 8.5, 8.5, 90, "Repair/Maintenance"],
+  ["Patches / Gear Patches", 7.5, 7, 55, "Repair/Maintenance"],
+  ["Shock Cord / Paracord", 8, 6, 80, "Repair/Maintenance"],
+  ["Straps & Buckles", 8.5, 5.5, 85, "Replacement Parts"],
+  ["Zipper Pull / Lubricant", 7, 5, 50, "Replacement Parts"],
+  ["Tent Pole Splint", 6, 4, 35, "Replacement Parts"],
+  ["Guyline + Tensioner", 6.5, 4.5, 55, "Replacement Parts"],
+  ["Camp Chair Feet", 6, 3.5, 45, "Replacement Parts"],
+  ["Sternum Strap", 6, 4, 40, "Replacement Parts"],
+  ["Dry Bag Valve", 4.5, 3, 25, "Replacement Parts"],
+  ["Hydration Bite Valve", 9, 7, 90, "Hydration"],
+  ["Hydration Cleaning Tablets", 8, 6, 60, "Hydration"],
+  ["Compression Sack", 7, 7.5, 65, "Storage/Organization"],
+  ["Rain Cover", 6, 7, 50, "Storage/Organization"],
+  ["Trunk Organizer", 7, 8, 70, "Storage/Organization"],
+  ["Wet/Dry Bag", 6, 7.5, 45, "Storage/Organization"],
+  ["Dry Bag (Earth Pak)", 6.5, 8.5, 55, "Storage/Organization"],
+  ["Carabiner / Gear Tie", 6, 8, 50, "Storage/Organization"],
+  ["Dog Paw Washer", 5, 6, 35, "Pet Outdoor"],
+  ["Pet Lead Clip / D-Ring", 5.5, 5, 30, "Pet Outdoor"],
+  ["Dog Seatbelt Tether", 4, 5.5, 20, "Pet Outdoor"],
+  ["Bino Harness / Strap", 4.5, 4, 25, "Birding/Field"],
+  ["Birding Notebook", 4, 3, 20, "Birding/Field"],
+  ["Tackle Box Divider", 6, 6.5, 30, "Replacement Parts"],
+  ["Fishing Plier Sheath", 5, 4.5, 25, "Replacement Parts"]
+];
+const series = {};
+Object.keys(categories).forEach(k => series[k] = []);
+data.forEach(d => series[d[4]].push({ name: d[0], value: [d[1], d[2], d[3]], symbolSize: d[3] }));
+const option = {
+  backgroundColor: "#fff",
+  grid: { left: 70, right: 40, top: 50, bottom: 70 },
+  tooltip: { trigger: "item", formatter: p => `${p.data.name}<br/>LTV: ${p.data.value[0]}/10<br/>Competition: ${p.data.value[1]}/10 (lower=better)` },
+  legend: { top: 8, textStyle: { fontSize: 11 } },
+  xAxis: { name: "LTV Potential →", nameLocation: "middle", nameGap: 32, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  yAxis: { name: "Competition Intensity → (低=机会)", nameLocation: "middle", nameGap: 55, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  series: Object.keys(series).map(k => ({
+    name: k, type: "scatter", data: series[k],
+    itemStyle: { color: categories[k], opacity: 0.75, borderColor: "#fff", borderWidth: 1 },
+    label: { show: true, position: "right", fontSize: 10, formatter: p => p.data.name, color: "#333" },
+    markArea: k === "Replacement Parts" ? {
+      itemStyle: { color: "rgba(5,150,105,0.06)" },
+      data: [[{ xAxis: 6, yAxis: 0 }, { xAxis: 10, yAxis: 5.5 }]]
+    } : undefined
+  }))
+};
+echarts.init(document.getElementById("chart")).setOption(option);
+</script>
+</body>
+</html>

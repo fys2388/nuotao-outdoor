@@ -2987,6 +2987,50 @@ async def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
                 len(scraped.variations),
             )
 
+        # 检查是否成功获取数据
+        if not product_detail.get("success"):
+            error_msg = product_detail.get("error") or "未获得真实 1688 商品数据"
+            logger.error(
+                "1688 import %s: get product detail failed: %s",
+                import_id,
+                error_msg,
+            )
+            return {
+                "success": False,
+                "error": error_msg,
+                "error_code": product_detail.get("error_code", "unknown"),
+                "data": {
+                    "import_id": import_id,
+                    "product_id": product_id,
+                    "source_url": url_or_id,
+                    "data_source": data_source,
+                },
+            }
+
+        # Step 3: 转换为产品工作流输入格式
+        product_info = convert_1688_to_pipeline_input(
+            product_detail,
+            source_url=url_or_id,
+            source_id=product_id,
+        )
+
+        logger.info("1688 import %s: converted product info: name=%s, sku=%s, images=%d",
+                    import_id, product_info.get("name"), product_info.get("sku"),
+                    len(product_info.get("images", [])))
+
+        return {
+            "success": True,
+            "data": {
+                "import_id": import_id,
+                "product_id": product_id,
+                "source_url": url_or_id,
+                "data_source": data_source or "unknown",
+                "product_info": product_info,
+                "elapsed_time_seconds": round(time.time() - start_time, 2),
+            },
+            "error": None,
+        }
+
     except Exception as scrape_err:
         logger.warning("1688 import %s: Scrapling failed: %s", import_id, str(scrape_err))
         traceback.print_exc()

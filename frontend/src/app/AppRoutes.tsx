@@ -48,8 +48,12 @@ const B2BSalesPage = lazy(() => import('../pages/B2BSalesPage'))
 const B2BReceivablesPage = lazy(() => import('../pages/B2BReceivablesPage'))
 const B2BAgreementsPage = lazy(() => import('../pages/B2BAgreementsPage'))
 const B2BCreditRiskPage = lazy(() => import('../pages/B2BCreditRiskPage'))
+const B2BLeadsPage = lazy(() => import('../pages/B2BLeadsPage'))
+const B2BShowcaseCurationPage = lazy(() => import('../pages/B2BShowcaseCurationPage'))
 const B2BAiOperationsPage = lazy(() => import('../pages/B2BAiOperationsPage'))
 const B2BPortalPage = lazy(() => import('../pages/B2BPortal'))
+const B2BRegisterPage = lazy(() => import('../pages/B2BRegister'))
+const UnifiedAuthPage = lazy(() => import('../pages/UnifiedLoginPage'))
 const ChannelAnalyticsPage = lazy(() => import('../pages/ChannelAnalytics'))
 const ConsolidationPage = lazy(() => import('../pages/ConsolidationPage'))
 const ExchangeRatesPage = lazy(() => import('../pages/ExchangeRates'))
@@ -87,7 +91,14 @@ function Protected({ children }: { children: ReactNode }) {
 export default function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={page(<LoginPage />)} />
+      {/* 统一认证入口 - 一套系统，不同权限 */}
+      <Route path="/auth" element={page(<UnifiedAuthPage />)} />
+      <Route path="/" element={page(<UnifiedAuthPage />)} />
+      <Route path="/login" element={page(<UnifiedAuthPage />)} />
+      
+      {/* B2B合作伙伴门户 */}
+      <Route path="/portal/login" element={page(<B2BPortalPage />)} />
+      <Route path="/portal/register" element={page(<B2BRegisterPage />)} />
       <Route path="/portal/*" element={page(<B2BPortalPage />)} />
 
       <Route element={<AppShell />}>
@@ -159,6 +170,14 @@ export default function AppRoutes() {
         <Route
           path="b2b/ai"
           element={<Protected><B2BAiOperationsPage /></Protected>}
+        />
+        <Route
+          path="b2b/leads"
+          element={<Protected><B2BLeadsPage /></Protected>}
+        />
+        <Route
+          path="b2b/showcase"
+          element={<Protected><B2BShowcaseCurationPage /></Protected>}
         />
 
         <Route path="supply/suppliers" element={page(<SuppliersPage />)} />

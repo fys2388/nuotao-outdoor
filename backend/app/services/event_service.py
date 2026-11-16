@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.tracing import get_trace_id
 from app.models.event import EventLog
 
 
@@ -27,14 +28,22 @@ async def create_event(
 
     ``commit=False`` keeps the event in the caller's transaction. Use it when
     the event must be atomic with the business fact that produced it.
+
+    ``trace_id``: when omitted, the current request's trace id is used (via the
+    tracing contextvar set by the trace middleware) so HTTP-driven events are
+    always correlatable with their originating request. Explicit callers (e.g.
+    background workers that pass their own trace id) take precedence. Outside
+    any request context this resolves to ``None`` and the event is stored with
+    a null trace id, which is expected for non-HTTP-triggered facts.
     """
+    resolved_trace_id = trace_id or get_trace_id()
     event = EventLog(
         workspace_id=workspace_id,
         event_type=event_type,
         entity_type=entity_type,
         entity_id=entity_id,
         payload=payload or {},
-        trace_id=trace_id,
+        trace_id=resolved_trace_id,
     )
     session.add(event)
     if commit:

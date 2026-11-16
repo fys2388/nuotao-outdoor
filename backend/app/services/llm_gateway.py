@@ -18,6 +18,7 @@ The transport is OpenAI-compatible ``/chat/completions`` for both providers;
 ``httpx`` is used directly so the gateway stays SDK-independent.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -274,6 +275,37 @@ _CIRCUIT_FAILURE_THRESHOLD = 3
 _CIRCUIT_COOLDOWN_SECONDS = 60
 _circuit_state: dict[str, dict[str, float | int]] = {}
 
+# --------------------------------------------------------------------------- #
+# Client-side concurrency cap（客户端并发限流）
+# --------------------------------------------------------------------------- #
+# The gateway is the single LLM entry point, so a global semaphore here
+# throttles every model call in-process. Many agents calling the provider at
+# once exceed its per-minute tpm/rpm quota (Agnes returns HTTP 429
+# "inference exceeds tpm/rpm limit"); capping concurrency at the source makes
+# retries far less likely. Recreated on reload; sized from settings. (2026-11-16)
+_llm_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Return the process-wide LLM concurrency semaphore (lazy, settings-sized)."""
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        from app.core.config import get_settings
+
+        limit = get_settings().llm_max_concurrent
+        _llm_semaphore = asyncio.Semaphore(max(1, int(limit)))
+    return _llm_semaphore
+
+
+def reset_llm_semaphore() -> None:
+    """Drop the semaphore so the next call re-reads settings (tests / reload)."""
+    global _llm_semaphore
+    _llm_semaphore = None
+
+
+# Backoff for provider rate limits (429) before retrying, in seconds.
+_LLM_429_BACKOFF = (1.0, 2.0, 4.0, 8.0)
+
 
 def _circuit_is_open(provider: str) -> bool:
     state = _circuit_state.get(provider)
@@ -400,14 +432,18 @@ async def complete(
         api_key = overrides["api_key"]
         base_url = overrides["base_url"]
         try:
-            response = await _post(
-                request,
-                provider=provider,
-                api_key=api_key,
-                base_url=base_url,
-                trace_id=trace_id,
-                client=client,
-            )
+            # Client-side concurrency cap: wait for a slot before hitting the
+            # provider, so burst concurrency cannot blow the per-minute quota
+            # and turn into 429s. (2026-11-16)
+            async with _get_llm_semaphore():
+                response = await _post(
+                    request,
+                    provider=provider,
+                    api_key=api_key,
+                    base_url=base_url,
+                    trace_id=trace_id,
+                    client=client,
+                )
             _circuit_record_success(provider)
             return response
         except LLMError as exc:
@@ -423,7 +459,7 @@ async def complete(
     )
 
 
-async def _post(
+async def _post_once(
     request: LLMRequest,
     *,
     provider: str,
@@ -571,6 +607,52 @@ async def _post(
         latency_ms=latency_ms,
         trace_id=trace_id,
         raw=raw,
+    )
+
+
+async def _post(
+    request: LLMRequest,
+    *,
+    provider: str,
+    api_key: str | None,
+    base_url: str | None,
+    trace_id: str,
+    client: httpx.AsyncClient | None,
+) -> LLMResponse:
+    """POST one chat completion with 429 rate-limit backoff.
+
+    A 429 from the provider means the per-minute tpm/rpm quota is momentarily
+    exhausted. Retrying immediately makes it worse, so back off exponentially
+    (``_LLM_429_BACKOFF``) before re-sending, up to a few attempts, then give up
+    so the caller can fail over to the fallback provider. (2026-11-16)
+    """
+    last_error: LLMError | None = None
+    for attempt, delay in enumerate((0.0, *_LLM_429_BACKOFF)):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            return await _post_once(
+                request,
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+                trace_id=trace_id,
+                client=client,
+            )
+        except LLMError as exc:
+            # Only a rate limit is worth retrying on the same provider.
+            if exc.kind != "provider" or "429" not in str(exc):
+                raise
+            last_error = exc
+            logger.warning(
+                "llm provider %s returned 429 (attempt %d/%d); backing off %.1fs",
+                provider,
+                attempt + 1,
+                len(_LLM_429_BACKOFF) + 1,
+                delay,
+            )
+    raise last_error if last_error else LLMError(
+        f"provider '{provider}' rate limited", kind="provider",
     )
 
 

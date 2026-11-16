@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -94,6 +95,13 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # Public B2B showcase (no-price) controls. Only explicitly approved products
+    # appear in the public catalogue; slug is the stable public URL handle and is
+    # deliberately separate from the internal SKU.
+    b2b_showcase_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    b2b_public_slug: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
     __table_args__ = (
         # SKU is unique only among live rows within a workspace, so a soft-deleted

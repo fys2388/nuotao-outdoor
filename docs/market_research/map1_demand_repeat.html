@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Map 1 · Demand × Repeat Frequency 机会矩阵</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+  body { margin:0; padding:24px; background:#ffffff; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#222; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px 0; }
+  .sub { font-size:12px; color:#666; margin-bottom:16px; }
+  #chart { width:100%; height:720px; }
+</style>
+</head>
+<body>
+<h1>Map 1 · 需求强度 × 复购频率 机会矩阵（美国户外 DTC · 2026）</h1>
+<div class="sub">X = Demand 需求强度（低→高）｜Y = Repeat Frequency 复购频率（低→高）｜气泡大小 = Market Opportunity 综合机会｜颜色 = 品类分组。右上象限 = Nuotao 首选。红标品类 = 法规阻断，应 EXCLUDE。</div>
+<div id="chart"></div>
+<div style="margin-top:16px;font-size:12px;color:#555;line-height:1.7;">
+<b>读图说明</b>：本图 28 个微品类均来自证据文件 evidence_01–04，分数为研究团队基于证据强度的 0–10 评分（Nuotao Strategic Inference）。右上蓝区（Repair/Maintenance 高需求高复购）是 Nuotao 第一梯队。红色点（Seam Grip liquid / DWR aerosol / Lithium / Fuel / Water Tablets / Antibiotic First Aid / Lighter / Dog Car Harness）虽复购高，但因 DOT/EPA/FDA/CPS 法规阻断，不进入 Nuotao SKU 池。
+<br><b>核心结论</b>：① Hydration Bite Valve（9,9）复购最硬；② Trail Repair Tape（9,9）消耗品；③ Shock Cord/Paracord（9,9）UV 老化替换；④ Straps & Buckles（9,9）Osprey 保修 6–8 周痛点。
+<br><span style="color:#999;">数据来源：evidence_01–04 · 2026-10-08 · Nuotao Outdoor Market Research</span></div>
+<script>
+const categories = {
+  "Repair/Maintenance": "#2563eb",
+  "Replacement Parts": "#059669",
+  "Hydration": "#d97706",
+  "Storage/Organization": "#7c3aed",
+  "Pet Outdoor": "#db2777",
+  "Birding/Field": "#0891b2",
+  "Reg-Blocked": "#dc2626"
+};
+// [name, demandX(1-10), repeatY(1-10), size, category]
+const data = [
+  ["Repair Tape (Tenacious)", 9, 9, 90, "Repair/Maintenance"],
+  ["Patches / Gear Patches", 8, 8, 60, "Repair/Maintenance"],
+  ["Seam Grip (liquid glue)", 7, 8, 55, "Reg-Blocked"],
+  ["Nikwax Wash/Cleaner", 7, 8, 50, "Reg-Blocked"],
+  ["DWR Aerosol Spray", 6, 7, 30, "Reg-Blocked"],
+  ["Shock Cord / Paracord", 9, 9, 95, "Repair/Maintenance"],
+  ["Straps & Buckles", 9, 9, 85, "Replacement Parts"],
+  ["Zipper Pull / Lubricant", 7, 7, 50, "Replacement Parts"],
+  ["Tent Pole Splint", 6, 6, 35, "Replacement Parts"],
+  ["Guyline + Tensioner", 7, 7, 55, "Replacement Parts"],
+  ["Camp Chair Feet", 6, 7, 45, "Replacement Parts"],
+  ["Sternum Strap", 6, 6, 40, "Replacement Parts"],
+  ["Dry Bag Valve", 5, 5, 25, "Replacement Parts"],
+  ["Hydration Bite Valve", 9, 9, 90, "Hydration"],
+  ["Hydration Cleaning Tablets", 8, 9, 60, "Hydration"],
+  ["Compression Sack", 8, 7, 65, "Storage/Organization"],
+  ["Rain Cover", 7, 6, 50, "Storage/Organization"],
+  ["Trunk Organizer", 9, 5, 70, "Storage/Organization"],
+  ["Wet/Dry Bag", 7, 6, 45, "Storage/Organization"],
+  ["Dry Bag (Earth Pak)", 8, 6, 55, "Storage/Organization"],
+  ["Carabiner / Gear Tie", 7, 7, 50, "Storage/Organization"],
+  ["Dog Paw Washer", 6, 5, 35, "Pet Outdoor"],
+  ["Pet Lead Clip / D-Ring", 5, 6, 30, "Pet Outdoor"],
+  ["Dog Seatbelt Tether", 4, 4, 20, "Pet Outdoor"],
+  ["Bino Harness / Strap", 5, 4, 25, "Birding/Field"],
+  ["Birding Notebook", 4, 6, 20, "Birding/Field"],
+  ["Tackle Box Divider", 5, 7, 30, "Replacement Parts"],
+  ["Fishing Plier Sheath", 4, 6, 25, "Replacement Parts"]
+];
+const series = {};
+Object.keys(categories).forEach(k => series[k] = []);
+data.forEach(d => series[d[4]].push({ name: d[0], value: [d[1], d[2], d[3]], symbolSize: d[3] }));
+
+const option = {
+  backgroundColor: "#fff",
+  grid: { left: 70, right: 40, top: 50, bottom: 70 },
+  tooltip: { trigger: "item", formatter: p => `${p.data.name}<br/>Demand: ${p.data.value[0]}/10<br/>Repeat: ${p.data.value[1]}/10<br/>Opp: ${p.data.value[2]}` },
+  legend: { top: 8, textStyle: { fontSize: 11 } },
+  xAxis: { name: "Demand 需求强度 →", nameLocation: "middle", nameGap: 32, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  yAxis: { name: "Repeat Frequency →", nameLocation: "middle", nameGap: 45, min: 0, max: 10, splitLine: { lineStyle: { type: "dashed", color: "#eee" } } },
+  series: Object.keys(series).map(k => ({
+    name: k, type: "scatter", data: series[k],
+    itemStyle: { color: categories[k], opacity: 0.75, borderColor: "#fff", borderWidth: 1 },
+    label: { show: true, position: "right", fontSize: 10, formatter: p => p.data.name, color: "#333" },
+    markArea: k === "Repair/Maintenance" ? {
+      itemStyle: { color: "rgba(37,99,235,0.05)" },
+      data: [[{ xAxis: 7, yAxis: 7 }, { xAxis: 10, yAxis: 10 }]]
+    } : undefined
+  }))
+};
+echarts.init(document.getElementById("chart")).setOption(option);
+</script>
+</body>
+</html>
