@@ -19,7 +19,10 @@ the application layer treats legacy ``closed`` as closed_lost for reporting.
 Idempotent (inspector-guarded): on a database where the b2b_leads table already
 exists with these columns/constraint (e.g. a previously hand-built schema), the
 migration skips the already-applied pieces instead of failing with a duplicate
-column / duplicate constraint error.
+column / duplicate constraint error. In offline (dry-run) mode Alembic has no
+live schema to inspect, so we emit the plain SQL statements directly - offline
+generation only compiles SQL and never executes it, so the idempotency guard
+is unnecessary there.
 
 Spec: reports/b2b/CHATGPT_M25_SPEC.md (M2.5.1)
 
@@ -28,6 +31,7 @@ Revises: 0082
 Create Date: 2026-11-12
 
 """
+from alembic import context
 from alembic import op
 import sqlalchemy as sa
 
@@ -44,7 +48,39 @@ _WIDE_STATUS = (
 )
 
 
+def _emit(offline: bool) -> None:
+    """Emit the migration regardless of offline/online mode.
+
+    In offline mode Alembic only compiles SQL (never executes), so emitting
+    the plain statements is safe even when the objects already exist.
+    """
+    op.drop_constraint(_OLD_STATUS_CHECK, "b2b_leads", type_="check")
+    op.create_check_constraint(_OLD_STATUS_CHECK, "b2b_leads", sa.text(_WIDE_STATUS))
+    op.add_column(
+        "b2b_leads",
+        sa.Column(
+            "closed_lost_reason",
+            sa.Text(),
+            nullable=True,
+            comment="Why the lead was lost (required when status=closed_lost)",
+        ),
+    )
+    op.add_column(
+        "b2b_leads",
+        sa.Column(
+            "spam_reason",
+            sa.Text(),
+            nullable=True,
+            comment="Why the lead was classified as spam (required when status=spam)",
+        ),
+    )
+
+
 def upgrade() -> None:
+    if context.is_offline_mode():
+        _emit(offline=True)
+        return
+
     bind = op.get_bind()
     insp = sa.inspect(bind)
     table_cols = [c["name"] for c in insp.get_columns("b2b_leads")]
@@ -79,6 +115,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if context.is_offline_mode():
+        op.drop_column("b2b_leads", "spam_reason")
+        op.drop_column("b2b_leads", "closed_lost_reason")
+        op.drop_constraint(_OLD_STATUS_CHECK, "b2b_leads", type_="check")
+        op.create_check_constraint(
+            _OLD_STATUS_CHECK,
+            "b2b_leads",
+            sa.text("status IN ('new','reviewing','qualified','contacted','closed')"),
+        )
+        return
+
     bind = op.get_bind()
     insp = sa.inspect(bind)
     table_cols = [c["name"] for c in insp.get_columns("b2b_leads")]
