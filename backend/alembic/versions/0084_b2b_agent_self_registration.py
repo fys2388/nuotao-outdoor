@@ -67,6 +67,8 @@ def _emit_offline() -> None:
             "status IN ('pending','pending_verification','active','suspended','rejected')"
         ),
     )
+    # 'pending_verification' (19 chars) does not fit the legacy varchar(16).
+    op.alter_column("b2b_agents", "status", type_=sa.String(32), existing_type=sa.String(16))
     op.execute(
         "UPDATE b2b_agents SET status = 'pending_verification' WHERE status = 'pending'"
     )
@@ -132,6 +134,9 @@ def upgrade() -> None:
             "status IN ('pending','pending_verification','active','suspended','rejected')"
         ),
     )
+
+    # 'pending_verification' (19 chars) does not fit the legacy varchar(16).
+    op.alter_column("b2b_agents", "status", type_=sa.String(32), existing_type=sa.String(16))
 
     # 3. Update existing pending agents to pending_verification.
     op.execute(
