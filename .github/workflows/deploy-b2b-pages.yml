@@ -1,0 +1,43 @@
+name: Deploy B2B Portal to Cloudflare Pages
+
+# The B2B portal is hosted as a static SPA on Cloudflare Pages, which has no
+# /api backend. This builds frontend-b2b with the production API base
+# (VITE_B2B_SHOWCASE_API / VITE_B2B_PORTAL_API from .env.production, pointing
+# at https://admin.nuotaooutdoor.com/api/v1/... which nginx proxies to
+# FastAPI) and uploads dist to the Cloudflare Pages project.
+#
+# Secrets required:
+#   CLOUDFLARE_API_TOKEN     Cloudflare API token with Pages:Edit
+#   CLOUDFLARE_ACCOUNT_ID    Cloudflare account id
+#   CLOUDFLARE_PAGES_PROJECT Cloudflare Pages project name (e.g. nuotao-b2b)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'frontend-b2b/**'
+      - '.github/workflows/deploy-b2b-pages.yml'
+    branches: [main]
+
+jobs:
+  deploy-pages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install + build (production API base)
+        working-directory: frontend-b2b
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
+          workingDirectory: frontend-b2b
