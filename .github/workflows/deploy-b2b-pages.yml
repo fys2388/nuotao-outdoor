@@ -31,7 +31,7 @@ jobs:
       - name: Install + build (production API base)
         working-directory: frontend-b2b
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
 
       - name: Deploy to Cloudflare Pages
