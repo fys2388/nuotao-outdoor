@@ -1,0 +1,53 @@
+name: Debug B2B Schema (temporary)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose B2B schema + backend logs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "=== [1] alembic current (prod DB revision) ==="
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            alembic current 2>&1 | tail -6 || echo "alembic current failed"
+
+            echo ""
+            echo "=== [2] b2b_agents / products columns ==="
+            cat > /tmp/b2b_diag.py << 'PYEOF'
+            import sys, os
+            sys.path.insert(0, '/opt/nuotao-ai-os/backend')
+            os.chdir('/opt/nuotao-ai-os/backend')
+            from sqlalchemy import create_engine, inspect
+            from app.core.config import get_settings
+            settings = get_settings()
+            url = settings.database_url
+            print("DATABASE_URL scheme:", url.split("://")[0])
+            sync_url = url.replace("+asyncpg", "").replace("+aiosqlite", "")
+            engine = create_engine(sync_url)
+            insp = inspect(engine)
+            for table in ("b2b_agents", "products", "b2b_leads"):
+                try:
+                    cols = [c["name"] for c in insp.get_columns(table)]
+                    print(f"{table}: {len(cols)} cols")
+                    print("   has verification_token:", "verification_token" in cols)
+                    print("   has email_verified_at:", "email_verified_at" in cols)
+                    print("   has b2b_showcase_enabled:", "b2b_showcase_enabled" in cols)
+                    print("   has b2b_public_slug:", "b2b_public_slug" in cols)
+                except Exception as e:
+                    print(f"{table}: ERROR {e}")
+            PYEOF
+            python3 /tmp/b2b_diag.py 2>&1 | tail -25
+            rm -f /tmp/b2b_diag.py
+
+            echo ""
+            echo "=== [3] backend journal b2b-showcase errors ==="
+            journalctl -u nuotao-backend -n 300 --no-pager 2>/dev/null | grep -iE "b2b|showcase|500 internal|error|traceback|exception" | tail -30 || echo "no journal match"
