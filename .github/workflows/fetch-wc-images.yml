@@ -1,0 +1,83 @@
+name: Fetch WooCommerce Images for B2B Showcase (temporary)
+
+# One-off: the enabled B2B showcase products are WooCommerce-synced listings
+# that already carry real product imagery on the WC side, but products.meta
+# has no images key. Pull each product's WC images (via product_mappings ->
+# woocommerce_id, WC REST) and write them into products.meta -> images so the
+# public portal shows real photos instead of placeholders / "No Image".
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch WC images and write to products.meta
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/fetch_wc_images.py << 'PYEOF'
+            import asyncio, json
+            import requests
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            async def main():
+                s = get_settings()
+                wc_base = (s.woocommerce_base_url or "").rstrip("/")
+                key, secret = s.woocommerce_consumer_key, s.woocommerce_consumer_secret
+                print("wc base:", wc_base, "| key set:", bool(key), "| secret set:", bool(secret))
+                engine = create_async_engine(s.database_url)
+                try:
+                    async with engine.connect() as conn:
+                        rows = (await conn.execute(text(
+                            "SELECT p.id, p.name, m.woocommerce_id FROM products p "
+                            "JOIN product_mappings m ON m.nuotao_product_id = p.id "
+                            "WHERE p.b2b_showcase_enabled = true AND p.deleted_at IS NULL "
+                            "ORDER BY p.created_at"
+                        ))).fetchall()
+                        print("mapped showcase products:", len(rows))
+                        ok = noimg = http_err = 0
+                        for pid, name, wc_id in rows:
+                            try:
+                                r = requests.get(
+                                    f"{wc_base}/products/{wc_id}",
+                                    auth=(key, secret),
+                                    timeout=25,
+                                )
+                                if r.status_code == 200:
+                                    data = r.json()
+                                    imgs = [im.get("src") for im in data.get("images", []) if im.get("src")]
+                                    if imgs:
+                                        await conn.execute(
+                                            text("UPDATE products SET meta = jsonb_set(meta, '{images}', :imgs::jsonb) WHERE id = :id"),
+                                            {"imgs": json.dumps(imgs[:5]), "id": pid},
+                                        )
+                                        print(f"  OK   {name[:26]:26s} wc={wc_id} imgs={len(imgs)} {imgs[0][:60]}")
+                                        ok += 1
+                                    else:
+                                        print(f"  NIMG {name[:26]:26s} wc={wc_id} (no images on WC)")
+                                        noimg += 1
+                                else:
+                                    print(f"  HTTP {r.status_code}  {name[:26]:26s} wc={wc_id}")
+                                    http_err += 1
+                            except Exception as e:
+                                print(f"  ERR  {name[:26]:26s} wc={wc_id}: {e}")
+                                http_err += 1
+                        await conn.commit()
+                        print("summary: ok =", ok, "noimg =", noimg, "errors =", http_err)
+                finally:
+                    await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/fetch_wc_images.py 2>&1 | tail -30
+            rm -f /tmp/fetch_wc_images.py
