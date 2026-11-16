@@ -1,0 +1,49 @@
+name: M420 Probe systemd env (read-only)
+
+# 只读探测：nuotao-backend.service 的环境注入来源 + 进程环境占位符判定。
+# 绝不打印凭证值，仅输出：EnvironmentFile 路径、进程 env 中变量名/长度/是否占位符。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/probe-m420.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe systemd env injection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "===== PROBE BEGIN ====="
+            echo "[A] nuotao-backend.service 定义中 Environment/EnvironmentFile 相关行（含路径，不读值）"
+            grep -nE "EnvironmentFile|Environment=" /etc/systemd/system/nuotao-backend.service 2>/dev/null || echo "  (无 EnvironmentFile/Environment 行)"
+            echo ""
+            echo "[B] systemctl show EnvironmentFiles（仅路径）"
+            systemctl show nuotao-backend.service -p EnvironmentFiles --value 2>/dev/null || echo "  (读取失败)"
+            echo ""
+            echo "[C] 服务进程 PID 与主进程环境（仅变量名/长度/占位符判定）"
+            PID=$(systemctl show nuotao-backend.service -p MainPID --value 2>/dev/null)
+            echo "  MainPID=${PID:-未知}"
+            if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+              echo "  以下为进程 /proc/$PID/environ 中 WOOCOMMERCE_ 变量（不打印值）："
+              tr '\0' '\n' < /proc/$PID/environ 2>/dev/null | grep -E "^WOOCOMMERCE_" | while IFS= read -r line; do
+                name="${line%%=*}"; val="${line#*=}"
+                len=${#val}
+                if echo "$val" | grep -qE '[\${]'; then ph="True"; else ph="False"; fi
+                echo "  ${name} len=${len} placeholder=${ph}"
+              done || echo "  (无法读取 /proc/$PID/environ)"
+            fi
+            echo ""
+            echo "[D] 最近一次备份含真实凭证的文件（仅路径 + 各变量占位符判定）"
+            ls -1dt /opt/nuotao-ai-os/backups/pre_deploy_*/backend.env 2>/dev/null | head -5 | while IFS= read -r f; do
+              ph_base="?"
+              if grep -qE 'WOOCOMMERCE_BASE_URL=.*[\\${]' "$f" 2>/dev/null; then ph_base="True"; else ph_base="False"; fi
+              echo "  $f base_placeholder=${ph_base}"
+            done
+            echo "===== PROBE END ====="
