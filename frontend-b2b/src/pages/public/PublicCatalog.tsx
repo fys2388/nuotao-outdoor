@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Row, Col, Card, Select, Pagination, Spin, Empty, Typography, Alert } from 'antd'
 import { publicApi, navigate, PublicCategory, PublicProduct } from '../../api/publicApi'
 import PublicLayout, { COLORS } from './PublicLayout'
+import { useSeo } from '../../hooks/useSeo'
 
 const { Title, Text } = Typography
 
@@ -21,6 +22,11 @@ export default function PublicCatalog() {
   const [categories, setCategories] = useState<PublicCategory[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  useSeo(
+    'Products — Nuotao Outdoor B2B',
+    'Browse the Nuotao Outdoor wholesale catalogue. Request pricing and bulk order availability for retail and wholesale buyers.',
+  )
 
   useEffect(() => {
     let cancelled = false

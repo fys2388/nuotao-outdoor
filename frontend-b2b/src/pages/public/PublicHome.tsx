@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Row, Col, Card, Button, Typography, Spin, Alert } from 'antd'
 import { publicApi, navigate, PublicCategory, PublicProduct } from '../../api/publicApi'
 import PublicLayout, { COLORS } from './PublicLayout'
+import { useSeo } from '../../hooks/useSeo'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -33,6 +34,11 @@ export default function PublicHome() {
   const [featured, setFeatured] = useState<PublicProduct[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  useSeo(
+    'Nuotao Outdoor — B2B Wholesale Portal',
+    'Practical camping and hiking products for retail and wholesale buyers. Browse the catalogue and request wholesale pricing.',
+  )
 
   useEffect(() => {
     let cancelled = false

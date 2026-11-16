@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Row, Col, Card, Button, Typography, Spin, Alert, Descriptions, Space } from 'antd'
 import { publicApi, navigate, PublicProduct } from '../../api/publicApi'
 import PublicLayout, { COLORS } from './PublicLayout'
+import { useSeo } from '../../hooks/useSeo'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -10,6 +11,14 @@ export default function PublicProductDetail({ slug }: { slug: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeImage, setActiveImage] = useState(0)
+
+  useSeo(
+    product
+      ? `${product.title} — Nuotao Outdoor B2B`
+      : 'Products — Nuotao Outdoor B2B',
+    product?.description ?? 'Request wholesale pricing for this Nuotao Outdoor product. Bulk orders for retail and wholesale buyers.',
+    product?.images?.[0],
+  )
 
   useEffect(() => {
     let cancelled = false

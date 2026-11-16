@@ -1,10 +1,10 @@
 name: Fetch WooCommerce Images for B2B Showcase (temporary)
 
 # One-off: the enabled B2B showcase products are WooCommerce-synced listings
-# that already carry real product imagery on the WC side, but products.meta
-# has no images key. Pull each product's WC images (via product_mappings ->
-# woocommerce_id, WC REST) and write them into products.meta -> images so the
-# public portal shows real photos instead of placeholders / "No Image".
+# that already carry real imagery on the WC side, but products.meta has no
+# images key (and product_mappings is empty for them). Match each product by
+# source_offer_id -> WC SKU (NT-<offer_id>) and pull the WC product's images,
+# writing them into products.meta -> images. Falls back to the internal SKU.
 
 on:
   workflow_dispatch:
@@ -32,45 +32,51 @@ jobs:
 
             async def main():
                 s = get_settings()
-                wc_base = (s.woocommerce_base_url or "").rstrip("/")
+                wc_base = (s.woocommerce_base_url or "https://nuotaooutdoor.com").rstrip("/")
                 key, secret = s.woocommerce_consumer_key, s.woocommerce_consumer_secret
                 print("wc base:", wc_base, "| key set:", bool(key), "| secret set:", bool(secret))
                 engine = create_async_engine(s.database_url)
                 try:
                     async with engine.connect() as conn:
                         rows = (await conn.execute(text(
-                            "SELECT p.id, p.name, m.woocommerce_id FROM products p "
-                            "JOIN product_mappings m ON m.nuotao_product_id = p.id "
-                            "WHERE p.b2b_showcase_enabled = true AND p.deleted_at IS NULL "
-                            "ORDER BY p.created_at"
+                            "SELECT id, name, sku, source_offer_id FROM products "
+                            "WHERE b2b_showcase_enabled = true AND deleted_at IS NULL "
+                            "ORDER BY created_at"
                         ))).fetchall()
-                        print("mapped showcase products:", len(rows))
+                        print("showcase products:", len(rows))
                         ok = noimg = http_err = 0
-                        for pid, name, wc_id in rows:
+                        for pid, name, sku, offer_id in rows:
+                            # WC SKU convention: NT-<1688 offer id>; fall back to internal SKU.
+                            wc_sku = f"NT-{offer_id}" if offer_id else sku
                             try:
                                 r = requests.get(
-                                    f"{wc_base}/wp-json/wc/v3/products/{wc_id}",
+                                    f"{wc_base}/wp-json/wc/v3/products",
+                                    params={"sku": wc_sku, "per_page": 1},
                                     auth=(key, secret),
                                     timeout=25,
                                 )
                                 if r.status_code == 200:
                                     data = r.json()
-                                    imgs = [im.get("src") for im in data.get("images", []) if im.get("src")]
-                                    if imgs:
-                                        await conn.execute(
-                                            text("UPDATE products SET meta = jsonb_set(meta, '{images}', :imgs::jsonb) WHERE id = :id"),
-                                            {"imgs": json.dumps(imgs[:5]), "id": pid},
-                                        )
-                                        print(f"  OK   {name[:26]:26s} wc={wc_id} imgs={len(imgs)} {imgs[0][:60]}")
-                                        ok += 1
+                                    if data:
+                                        imgs = [im.get("src") for im in data[0].get("images", []) if im.get("src")]
+                                        if imgs:
+                                            await conn.execute(
+                                                text("UPDATE products SET meta = jsonb_set(meta, '{images}', :imgs::jsonb) WHERE id = :id"),
+                                                {"imgs": json.dumps(imgs[:5]), "id": pid},
+                                            )
+                                            print(f"  OK   {name[:24]:24s} sku={wc_sku[:24]} imgs={len(imgs)} {imgs[0][:55]}")
+                                            ok += 1
+                                        else:
+                                            print(f"  NIMG {name[:24]:24s} sku={wc_sku[:24]} (no images)")
+                                            noimg += 1
                                     else:
-                                        print(f"  NIMG {name[:26]:26s} wc={wc_id} (no images on WC)")
-                                        noimg += 1
+                                        print(f"  NFND {name[:24]:24s} sku={wc_sku[:24]} (no WC product)")
+                                        http_err += 1
                                 else:
-                                    print(f"  HTTP {r.status_code}  {name[:26]:26s} wc={wc_id}")
+                                    print(f"  HTTP {r.status_code}  {name[:24]:24s} sku={wc_sku[:24]}")
                                     http_err += 1
                             except Exception as e:
-                                print(f"  ERR  {name[:26]:26s} wc={wc_id}: {e}")
+                                print(f"  ERR  {name[:24]:24s} sku={wc_sku[:24]}: {e}")
                                 http_err += 1
                         await conn.commit()
                         print("summary: ok =", ok, "noimg =", noimg, "errors =", http_err)
