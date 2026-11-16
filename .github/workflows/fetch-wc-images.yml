@@ -32,7 +32,12 @@ jobs:
 
             async def main():
                 s = get_settings()
-                wc_base = (s.woocommerce_base_url or "https://nuotaooutdoor.com").rstrip("/")
+                wc_base = (s.woocommerce_base_url or "").rstrip("/")
+                # Server .env stores a literal '\$WOOCOMMERCE_BASE_URL' placeholder
+                # (real value is injected by the service manager); the placeholder is
+                # not a valid URL, so fall back to the known WC host.
+                if not wc_base or "\$" in wc_base or wc_base.startswith("\\"):
+                    wc_base = "https://nuotaooutdoor.com"
                 key, secret = s.woocommerce_consumer_key, s.woocommerce_consumer_secret
                 print("wc base:", wc_base, "| key set:", bool(key), "| secret set:", bool(secret))
                 engine = create_async_engine(s.database_url)
