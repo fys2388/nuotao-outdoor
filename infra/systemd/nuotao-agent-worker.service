@@ -20,7 +20,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nuotao-agent-worker
 
-# 安全限制（与 nuotao-backend.service 对齐�?NoNewPrivileges=true
+# 安全限制（与 nuotao-backend.service 对齐）
+NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
