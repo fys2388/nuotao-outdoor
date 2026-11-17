@@ -61,53 +61,57 @@ def _slugify(value: str) -> str:
 
 
 # ============================================
-# B2B 展示类别中英映射（M420-04）
+# B2B 展示类别映射（M420-04）
 # ============================================
 # 数据库里 category 字段历史上有三种形态：早期手工启用的内部英文 key
 # （hiking_accessories 等）、早期写入的 WooCommerce 类别 ID（"58"/"120"）、
-# 以及 WooCommerce 英文类别名（含 HTML 实体 &amp;）。统一映射为中文显示名 + 英文 slug。
-_CATEGORY_CN: dict[str, tuple[str, str]] = {
+# 以及 WooCommerce 类别名（英文含 HTML 实体 &amp;，或中文历史值）。
+# 统一映射为英文显示名 + 英文 slug（与英文标题/描述一致，面向海外 B2B 买家）。
+_CATEGORY_EN: dict[str, tuple[str, str]] = {
     # 内部英文 key（早期手工启用产品）
-    "hiking_accessories": ("徒步配件", "hiking-accessories"),
-    "outdoor_storage": ("户外收纳", "outdoor-storage"),
-    "hydration": ("补水装备", "hydration"),
-    "camping_lighting": ("露营照明", "camping-lighting"),
-    "camping_cooking": ("露营炊具", "camping-cooking"),
-    "camping_furniture": ("露营家具", "camping-furniture"),
+    "hiking_accessories": ("Hiking Accessories", "hiking-accessories"),
+    "outdoor_storage": ("Outdoor Storage", "outdoor-storage"),
+    "hydration": ("Hydration", "hydration"),
+    "camping_lighting": ("Camping Lighting", "camping-lighting"),
+    "camping_cooking": ("Camping Cooking", "camping-cooking"),
+    "camping_furniture": ("Camping Furniture", "camping-furniture"),
     # 数字：早期写入的 WooCommerce 类别 ID
-    "58": ("户外配件", "outdoor-accessories"),
-    "120": ("露营桌", "camping-tables"),
+    "58": ("Outdoor Accessories", "outdoor-accessories"),
+    "120": ("Camping Tables", "camping-tables"),
     # WooCommerce 英文类别名（含 HTML 实体 &amp;）
-    "Sleeping Gear &amp; Mattress": ("睡眠装备", "sleeping-gear-mattress"),
-    "Backpacks &amp; Hiking Gear": ("背包与徒步装备", "backpacks-hiking-gear"),
-    "Lighting &amp; Power": ("照明与电源", "lighting-power"),
-    "Camping": ("露营", "camping"),
-    "Sports Bottles": ("运动水瓶", "sports-bottles"),
-    "Ice Crampons": ("冰爪", "ice-crampons"),
-    "Camping Chairs": ("露营椅", "camping-chairs"),
-    "Storage &amp; Organizers": ("收纳与整理", "storage-organizers"),
-    "Winter Gear &amp; Snow Traction": ("冬季装备", "winter-gear-snow-traction"),
-    "Outdoor Accessories": ("户外配件", "outdoor-accessories"),
-    "Camping Tables": ("露营桌", "camping-tables"),
+    "Sleeping Gear &amp; Mattress": ("Sleeping Gear & Mattress", "sleeping-gear-mattress"),
+    "Backpacks &amp; Hiking Gear": ("Backpacks & Hiking Gear", "backpacks-hiking-gear"),
+    "Lighting &amp; Power": ("Lighting & Power", "lighting-power"),
+    "Camping": ("Camping", "camping"),
+    "Sports Bottles": ("Sports Bottles", "sports-bottles"),
+    "Ice Crampons": ("Ice Crampons", "ice-crampons"),
+    "Camping Chairs": ("Camping Chairs", "camping-chairs"),
+    "Storage &amp; Organizers": ("Storage & Organizers", "storage-organizers"),
+    "Winter Gear &amp; Snow Traction": ("Winter Gear & Snow Traction", "winter-gear-snow-traction"),
+    "Outdoor Accessories": ("Outdoor Accessories", "outdoor-accessories"),
+    "Camping Tables": ("Camping Tables", "camping-tables"),
+    # WooCommerce 中文历史类别
+    "户外照明/头灯": ("Lighting & Power", "lighting-power"),
 }
 
 # slug -> 可能的数据库原始值集合（用于按 slug 筛选时匹配多种形态）
 _CATEGORY_SLUG_TO_DB: dict[str, list[str]] = {}
-for _db_val, (_cn, _slug) in _CATEGORY_CN.items():
+for _db_val, (_cn, _slug) in _CATEGORY_EN.items():
     _CATEGORY_SLUG_TO_DB.setdefault(_slug, []).append(_db_val)
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _category_display(category: str | None) -> tuple[str, str]:
-    """返回 (中文显示名, 英文 slug)。未命中映射时兜底：中文保留原文，其他原值 slugify。"""
+    """返回 (英文显示名, 英文 slug)。未命中映射时兜底英文，绝不显示中文/数字/内部 key。"""
     if not category:
-        return ("未分类", "uncategorized")
+        return ("Outdoor Gear", "outdoor-gear")
     raw = str(category).strip()
-    if raw in _CATEGORY_CN:
-        return _CATEGORY_CN[raw]
+    if raw in _CATEGORY_EN:
+        return _CATEGORY_EN[raw]
     if _CJK.search(raw):
-        return (raw, _slugify(raw) or "category")
+        # 未映射的中文历史类别：统一英文兜底，避免中英混排
+        return ("Outdoor Gear", "outdoor-gear")
     return (raw, _slugify(raw) or "category")
 
 
@@ -117,7 +121,7 @@ def _category_db_values(slug_or_raw: str) -> list[str]:
     if slug in _CATEGORY_SLUG_TO_DB:
         return _CATEGORY_SLUG_TO_DB[slug]
     # 直接是某个原始值
-    if slug in _CATEGORY_CN:
+    if slug in _CATEGORY_EN:
         return [slug]
     # 兜底：按原值
     return [slug]
