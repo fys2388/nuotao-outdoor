@@ -23,3 +23,5 @@ backend/
 ## 本地开发
 
 见 `docs/development.md`。
+
+<!-- M420-06 audit run: workflow trigger probe -->
