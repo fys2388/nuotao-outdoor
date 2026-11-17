@@ -5,9 +5,8 @@ name: Fix headlamp English copy
 # B2B display layer only - the WooCommerce source listing is NOT touched.
 # Deleted after verification (M420-06 cleanup policy).
 #
-# Structure mirrors deploy.yml / staging-acceptance-v016.yml (top-level env block
-# carrying the SSH secrets + job-level step name + explicit port), because
-# workflows without that shape currently fail to create any job.
+# The Python script is inlined as base64: YAML block scalars require every line inside
+# "script: |" to be indented, and top-level Python lines there break parsing.
 on:
   workflow_dispatch:
   push:
@@ -34,55 +33,6 @@ jobs:
             set -e
             cd /opt/nuotao-ai-os/backend
             source .venv/bin/activate
-            cat > /tmp/fix_hl.py << 'PYEOF'
-import asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
-from app.core.config import get_settings
-
-NEW_NAME = (
-    "nuotao Duke MH1 Rechargeable Headlamp - Ultra-Bright Multifunction "
-    "Night Fishing & Camping Headlight with Lithium Battery, Extra-Long Runtime"
-)
-NEW_DESC = (
-    "<p>The nuotao Duke MH1 headlamp is built for outdoor night fishing, camping, "
-    "and nighttime work. Its ultra-bright LED light source with a high-transparency "
-    "lamp shade delivers a clear, long-throw beam. The built-in lithium battery "
-    "supports USB charging for long, durable runtime without frequent battery "
-    "changes. The lightweight head-mounted structure pairs with an elastic, "
-    "breathable headband that holds its shape without sagging and stays firm.</p>"
-    "<p>It offers dual side-light assist, IPX4 water resistance, stepless focusing, "
-    "and an adjustable headlamp angle to aim at every detail. Three lighting modes "
-    "switch with one tap - a reliable companion for outdoor enthusiasts and night "
-    "workers.</p>"
-)
-
-async def main():
-    s = get_settings()
-    engine = create_async_engine(s.database_url)
-    async with engine.begin() as conn:
-        row = (await conn.execute(text(
-            "SELECT id, name FROM products "
-            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL LIMIT 1"
-        ))).first()
-        if not row:
-            print("out: headlamp row not found")
-            return
-        print("out: found id=" + str(row[0])[:8] + " old=" + str(row[1])[:40])
-        await conn.execute(text(
-            "UPDATE products SET name = :n, description = :d "
-            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
-        ), {"n": NEW_NAME, "d": NEW_DESC})
-        chk = (await conn.execute(text(
-            "SELECT name, length(description) FROM products "
-            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
-        ))).first()
-        print("out: new=" + str(chk[0])[:70])
-        print("out: desc_len=" + str(chk[1]))
-        print("out: cjk=" + str(sum(1 for c in str(chk[0]) if '\u4e00' <= c <= '\u9fff')))
-    await engine.dispose()
-
-asyncio.run(main())
-PYEOF
+            echo 'aW1wb3J0IGFzeW5jaW8KZnJvbSBzcWxhbGNoZW15IGltcG9ydCB0ZXh0CmZyb20gc3FsYWxjaGVteS5leHQuYXN5bmNpbyBpbXBvcnQgY3JlYXRlX2FzeW5jX2VuZ2luZQpmcm9tIGFwcC5jb3JlLmNvbmZpZyBpbXBvcnQgZ2V0X3NldHRpbmdzCgpORVdfTkFNRSA9ICgKICAgICJudW90YW8gRHVrZSBNSDEgUmVjaGFyZ2VhYmxlIEhlYWRsYW1wIC0gVWx0cmEtQnJpZ2h0IE11bHRpZnVuY3Rpb24gIgogICAgIk5pZ2h0IEZpc2hpbmcgJiBDYW1waW5nIEhlYWRsaWdodCB3aXRoIExpdGhpdW0gQmF0dGVyeSwgRXh0cmEtTG9uZyBSdW50aW1lIgopCk5FV19ERVNDID0gKAogICAgIjxwPlRoZSBudW90YW8gRHVrZSBNSDEgaGVhZGxhbXAgaXMgYnVpbHQgZm9yIG91dGRvb3IgbmlnaHQgZmlzaGluZywgY2FtcGluZywgIgogICAgImFuZCBuaWdodHRpbWUgd29yay4gSXRzIHVsdHJhLWJyaWdodCBMRUQgbGlnaHQgc291cmNlIHdpdGggYSBoaWdoLXRyYW5zcGFyZW5jeSAiCiAgICAibGFtcCBzaGFkZSBkZWxpdmVycyBhIGNsZWFyLCBsb25nLXRocm93IGJlYW0uIFRoZSBidWlsdC1pbiBsaXRoaXVtIGJhdHRlcnkgIgogICAgInN1cHBvcnRzIFVTQiBjaGFyZ2luZyBmb3IgbG9uZywgZHVyYWJsZSBydW50aW1lIHdpdGhvdXQgZnJlcXVlbnQgYmF0dGVyeSAiCiAgICAiY2hhbmdlcy4gVGhlIGxpZ2h0d2VpZ2h0IGhlYWQtbW91bnRlZCBzdHJ1Y3R1cmUgcGFpcnMgd2l0aCBhbiBlbGFzdGljLCAiCiAgICAiYnJlYXRoYWJsZSBoZWFkYmFuZCB0aGF0IGhvbGRzIGl0cyBzaGFwZSB3aXRob3V0IHNhZ2dpbmcgYW5kIHN0YXlzIGZpcm0uPC9wPiIKICAgICI8cD5JdCBvZmZlcnMgZHVhbCBzaWRlLWxpZ2h0IGFzc2lzdCwgSVBYNCB3YXRlciByZXNpc3RhbmNlLCBzdGVwbGVzcyBmb2N1c2luZywgIgogICAgImFuZCBhbiBhZGp1c3RhYmxlIGhlYWRsYW1wIGFuZ2xlIHRvIGFpbSBhdCBldmVyeSBkZXRhaWwuIFRocmVlIGxpZ2h0aW5nIG1vZGVzICIKICAgICJzd2l0Y2ggd2l0aCBvbmUgdGFwIC0gYSByZWxpYWJsZSBjb21wYW5pb24gZm9yIG91dGRvb3IgZW50aHVzaWFzdHMgYW5kIG5pZ2h0ICIKICAgICJ3b3JrZXJzLjwvcD4iCikKCmFzeW5jIGRlZiBtYWluKCk6CiAgICBzID0gZ2V0X3NldHRpbmdzKCkKICAgIGVuZ2luZSA9IGNyZWF0ZV9hc3luY19lbmdpbmUocy5kYXRhYmFzZV91cmwpCiAgICBhc3luYyB3aXRoIGVuZ2luZS5iZWdpbigpIGFzIGNvbm46CiAgICAgICAgcm93ID0gKGF3YWl0IGNvbm4uZXhlY3V0ZSh0ZXh0KAogICAgICAgICAgICAiU0VMRUNUIGlkLCBuYW1lIEZST00gcHJvZHVjdHMgIgogICAgICAgICAgICAiV0hFUkUgc2x1ZyA9ICdudW90YW8tbWgxJyBBTkQgZGVsZXRlZF9hdCBJUyBOVUxMIExJTUlUIDEiCiAgICAgICAgKSkpLmZpcnN0KCkKICAgICAgICBpZiBub3Qgcm93OgogICAgICAgICAgICBwcmludCgib3V0OiBoZWFkbGFtcCByb3cgbm90IGZvdW5kIikKICAgICAgICAgICAgcmV0dXJuCiAgICAgICAgcHJpbnQoIm91dDogZm91bmQgaWQ9IiArIHN0cihyb3dbMF0pWzo4XSArICIgb2xkPSIgKyBzdHIocm93WzFdKVs6NDBdKQogICAgICAgIGF3YWl0IGNvbm4uZXhlY3V0ZSh0ZXh0KAogICAgICAgICAgICAiVVBEQVRFIHByb2R1Y3RzIFNFVCBuYW1lID0gOm4sIGRlc2NyaXB0aW9uID0gOmQgIgogICAgICAgICAgICAiV0hFUkUgc2x1ZyA9ICdudW90YW8tbWgxJyBBTkQgZGVsZXRlZF9hdCBJUyBOVUxMIgogICAgICAgICksIHsibiI6IE5FV19OQU1FLCAiZCI6IE5FV19ERVNDfSkKICAgICAgICBjaGsgPSAoYXdhaXQgY29ubi5leGVjdXRlKHRleHQoCiAgICAgICAgICAgICJTRUxFQ1QgbmFtZSwgbGVuZ3RoKGRlc2NyaXB0aW9uKSBGUk9NIHByb2R1Y3RzICIKICAgICAgICAgICAgIldIRVJFIHNsdWcgPSAnbnVvdGFvLW1oMScgQU5EIGRlbGV0ZWRfYXQgSVMgTlVMTCIKICAgICAgICApKSkuZmlyc3QoKQogICAgICAgIHByaW50KCJvdXQ6IG5ldz0iICsgc3RyKGNoa1swXSlbOjcwXSkKICAgICAgICBwcmludCgib3V0OiBkZXNjX2xlbj0iICsgc3RyKGNoa1sxXSkpCiAgICAgICAgcHJpbnQoIm91dDogY2prPSIgKyBzdHIoc3VtKDEgZm9yIGMgaW4gc3RyKGNoa1swXSkgaWYgJ1x1NGUwMCcgPD0gYyA8PSAnXHU5ZmZmJykpKQogICAgYXdhaXQgZW5naW5lLmRpc3Bvc2UoKQoKYXN5bmNpby5ydW4obWFpbigpKQ==' | base64 -d > /tmp/fix_hl.py
             python /tmp/fix_hl.py 2>&1 | grep -a '^out:'
             rm -f /tmp/fix_hl.py

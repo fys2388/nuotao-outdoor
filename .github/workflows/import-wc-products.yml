@@ -1,7 +1,9 @@
 name: M420 Import 8 WC products (user-approved)
 
-# M420-02 扩展（用户批准）：把 8 �?WC publish 产品（无 nuotao 记录）导�?products 表，
-# 同步真实图并启用 B2B 展示。幂等：�?sku 查重，存在则 UPDATE，不存在�?INSERT�?# 安全：凭证经 envs（mask），仅可信图域，uuid/slug 唯一，不输出凭证�?on:
+# M420-02 扩展（用户批准）：把 8 款 WC publish 产品（无 nuotao 记录）导入 products 表，
+# 同步真实图并启用 B2B 展示。幂等：按 sku 查重，存在则 UPDATE，不存在则 INSERT。
+# 安全：凭证经 envs（mask），仅可信图域，uuid/slug 唯一，不输出凭证。
+on:
   workflow_dispatch:
   push:
     paths:
@@ -77,7 +79,8 @@ jobs:
                                         "__prev_images": [], "keywords_1688": []}
                                 attrs = {"specifications": {}}
                                 slug = slugify(name)
-                                # 查重（按 sku�?                                row = (await conn.execute(text(
+                                # 查重（按 sku）
+                                row = (await conn.execute(text(
                                     "SELECT id, meta::text FROM products WHERE "
                                     "workspace_id = :ws AND sku = :sku AND deleted_at IS NULL LIMIT 1"
                                 ), {"ws": WS, "sku": sku})).fetchone()
