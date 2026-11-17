@@ -1,0 +1,84 @@
+name: M420 Products schema probe (read-only)
+
+# 只读：查 products 表列定义（NOT NULL/默认/唯一约束）+ 现有 WC 产品(2687)行的
+# 关键列（workspace_id/sku/name/category/source/status），供导入脚本参考。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/probe-schema.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe products schema
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/probe_schema.py << 'PYEOF'
+            import asyncio
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            s = get_settings()
+
+            async def main():
+                engine = create_async_engine(s.database_url)
+                async with engine.connect() as conn:
+                    print("===== SCHEMA BEGIN =====")
+                    # 1) 列定义
+                    cols = (await conn.execute(text(
+                        "SELECT column_name, data_type, is_nullable, column_default "
+                        "FROM information_schema.columns WHERE table_name='products' "
+                        "ORDER BY ordinal_position"
+                    ))).fetchall()
+                    print("[columns]")
+                    for c in cols:
+                        nn = "NULL" if c[2] == "YES" else "NOT NULL"
+                        dflt = (c[3] or "")[:50]
+                        print(f"  {c[0]} {c[1]} {nn} default={dflt}")
+                    # 2) 唯一约束/索引
+                    idx = (await conn.execute(text(
+                        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename='products' "
+                        "AND indexdef ILIKE '%unique%'"
+                    ))).fetchall()
+                    print("[unique_indexes]")
+                    for i in idx:
+                        print(f"  {i[0]}: {i[1][:90]}")
+                    # 3) 现有 WC 产品(2687) 模板行：非敏感列
+                    row = (await conn.execute(text(
+                        "SELECT id, workspace_id, sku, name, category, status, source, "
+                        "b2b_showcase_enabled, b2b_public_slug, created_at "
+                        "FROM products WHERE COALESCE(meta->>'woocommerce_id','')='2687' LIMIT 1"
+                    ))).fetchall()
+                    print("[template_2687]")
+                    for r in row:
+                        print(f"  id={r[0]} ws={r[1]} sku={r[2]} cat={r[4]} status={r[5]} source={r[6]} "
+                              f"enabled={r[7]} slug={r[8]}")
+                    # 4) 启用产品数量
+                    cnt = (await conn.execute(text(
+                        "SELECT count(*) FROM products WHERE b2b_showcase_enabled=true AND deleted_at IS NULL"
+                    ))).scalar()
+                    print(f"[enabled_count] {cnt}")
+                    # 5) workspace_id 分布（启用产品）
+                    ws = (await conn.execute(text(
+                        "SELECT workspace_id, count(*) FROM products WHERE b2b_showcase_enabled=true "
+                        "AND deleted_at IS NULL GROUP BY workspace_id"
+                    ))).fetchall()
+                    print("[workspaces]")
+                    for r in ws:
+                        print(f"  {r[0]} -> {r[1]}")
+                await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/probe_schema.py 2>&1 | grep -E "SCHEMA BEGIN|\[columns\]|\[unique_indexes\]|\[template_2687\]|\[enabled_count\]|\[workspaces\]|^out:   [a-z_]+ |^out:   [0-9a-f]|^out:   [0-9]+ ->"
+            rm -f /tmp/probe_schema.py
