@@ -80,5 +80,5 @@ jobs:
 
             asyncio.run(main())
             PYEOF
-            python3 /tmp/probe_schema.py 2>&1 | grep -E "SCHEMA BEGIN|\[columns\]|\[unique_indexes\]|\[template_2687\]|\[enabled_count\]|\[workspaces\]|^out:   [a-z_]+ |^out:   [0-9a-f]|^out:   [0-9]+ ->"
+            python3 /tmp/probe_schema.py 2>&1
             rm -f /tmp/probe_schema.py
