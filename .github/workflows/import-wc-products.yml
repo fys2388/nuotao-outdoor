@@ -1,0 +1,130 @@
+name: M420 Import 8 WC products (user-approved)
+
+# M420-02 扩展（用户批准）：把 8 款 WC publish 产品（无 nuotao 记录）导入 products 表，
+# 同步真实图并启用 B2B 展示。幂等：按 sku 查重，存在则 UPDATE，不存在则 INSERT。
+# 安全：凭证经 envs（mask），仅可信图域，uuid/slug 唯一，不输出凭证。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/import-wc-products.yml"
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Import 8 WC products
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          WC_BASE: ${{ secrets.WOOCOMMERCE_BASE_URL }}
+          WC_KEY: ${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}
+          WC_SEC: ${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: WC_BASE,WC_KEY,WC_SEC
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/import_wc.py << 'PYEOF'
+            import asyncio, json, os, re, uuid
+            import requests
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            WC_IDS = [2838, 2785, 2763, 2743, 2669, 2593, 2565, 2549]
+            WS = "00000000-0000-0000-0000-000000000001"
+            TRUSTED = re.compile(r"^https://nuotaooutdoor\.com/wp-content/uploads/")
+
+            def slugify(name):
+                s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+                return (s[:150] or "product")
+
+            async def main():
+                s = get_settings()
+                key = os.environ.get("WC_KEY") or s.woocommerce_consumer_key
+                sec = os.environ.get("WC_SEC") or s.woocommerce_consumer_secret
+                wc_base = (os.environ.get("WC_BASE") or s.woocommerce_base_url or "https://nuotaooutdoor.com").rstrip("/")
+                if re.search(r"[\${]", key) or re.search(r"[\${]", sec):
+                    print("ABORT: creds are placeholders; no request made")
+                    return
+                print("IMPORT BEGIN: key_len=", len(key))
+                engine = create_async_engine(s.database_url)
+                ins = upd = err = 0
+                try:
+                    async with engine.connect() as conn:
+                        for wid in WC_IDS:
+                            try:
+                                r = requests.get(f"{wc_base}/wp-json/wc/v3/products/{wid}",
+                                                 auth=(key, sec), timeout=25)
+                                if r.status_code != 200:
+                                    print(f"  HTTP {r.status_code} wc={wid}")
+                                    err += 1
+                                    continue
+                                p = r.json()
+                                name = (p.get("name") or "").strip()[:250]
+                                sku = (p.get("sku") or "").strip()[:250]
+                                cat = (p.get("categories") or [{}])[0].get("name") or "Uncategorized"
+                                desc = (p.get("description") or "")[:2000]
+                                imgs = [im.get("src") for im in p.get("images", []) if im.get("src")]
+                                imgs = [u for u in imgs if TRUSTED.match(u)][:5]
+                                if not sku or not name or not imgs:
+                                    print(f"  SKIP wc={wid} (missing sku/name/img)")
+                                    err += 1
+                                    continue
+                                meta = {"woocommerce_id": str(wid), "images": imgs,
+                                        "__prev_images": [], "keywords_1688": []}
+                                attrs = {"specifications": {}}
+                                slug = slugify(name)
+                                # 查重（按 sku）
+                                row = (await conn.execute(text(
+                                    "SELECT id, meta::text FROM products WHERE "
+                                    "workspace_id = :ws AND sku = :sku AND deleted_at IS NULL LIMIT 1"
+                                ), {"ws": WS, "sku": sku})).fetchone()
+                                if row:
+                                    pid = row[0]
+                                    meta_json = json.loads(row[1]) if row[1] else {}
+                                    meta_json.setdefault("__prev_images", meta_json.get("images", []))
+                                    meta_json["images"] = imgs
+                                    meta_json["woocommerce_id"] = str(wid)
+                                    await conn.execute(text(
+                                        "UPDATE products SET meta = CAST(:m AS jsonb), category = :cat, "
+                                        "b2b_showcase_enabled = true WHERE id = :pid"
+                                    ), {"m": json.dumps(meta_json), "cat": cat, "pid": pid})
+                                    print(f"  UPD wc={wid} pid={pid[:8]} imgs={len(imgs)}")
+                                    upd += 1
+                                else:
+                                    pid = str(uuid.uuid4())
+                                    # slug 唯一
+                                    ex = (await conn.execute(text(
+                                        "SELECT 1 FROM products WHERE b2b_public_slug = :sl LIMIT 1"
+                                    ), {"sl": slug})).fetchone()
+                                    if ex:
+                                        slug = f"{slug}-{wid}"
+                                    await conn.execute(text(
+                                        "INSERT INTO products (id, workspace_id, sku, name, description, "
+                                        "category, status, source, tags, attributes, meta, target_market, "
+                                        "data_integrity_missing, data_integrity_version, b2b_showcase_enabled, "
+                                        "b2b_public_slug) VALUES (:id, :ws, :sku, :name, :desc, :cat, "
+                                        "'draft', 'pipeline', '[]'::jsonb, CAST(:attrs AS jsonb), CAST(:meta AS jsonb), "
+                                        "'US', '[]'::jsonb, 'v1', true, :slug)"
+                                    ), {"id": pid, "ws": WS, "sku": sku, "name": name, "desc": desc,
+                                        "cat": cat, "attrs": json.dumps(attrs), "meta": json.dumps(meta),
+                                        "slug": slug})
+                                    print(f"  INS wc={wid} pid={pid[:8]} imgs={len(imgs)}")
+                                    ins += 1
+                            except Exception as e:
+                                print(f"  ERR wc={wid}: {str(e)[:70]}")
+                                err += 1
+                        await conn.commit()
+                        print(f"summary: ins={ins} upd={upd} err={err}")
+                finally:
+                    await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/import_wc.py 2>&1
+            rm -f /tmp/import_wc.py
