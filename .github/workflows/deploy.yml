@@ -18,6 +18,77 @@ env:
   WOOCOMMERCE_CONSUMER_SECRET: ${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}
 
 jobs:
+  fix_headlamp_copy:
+    # TEMPORARY one-off (M420-05, user-approved): translate the MH1 headlamp
+    # (WC 2565) showcase title/description to English in the nuotao products
+    # table. B2B display layer only. Removed after verification.
+    name: Fix headlamp copy (one-off M420-05)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix headlamp copy (SSH)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/fix_hl.py << 'PYEOF'
+import asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from app.core.config import get_settings
+
+NEW_NAME = (
+    "nuotao Duke MH1 Rechargeable Headlamp - Ultra-Bright Multifunction "
+    "Night Fishing & Camping Headlight with Lithium Battery, Extra-Long Runtime"
+)
+NEW_DESC = (
+    "<p>The nuotao Duke MH1 headlamp is built for outdoor night fishing, camping, "
+    "and nighttime work. Its ultra-bright LED light source with a high-transparency "
+    "lamp shade delivers a clear, long-throw beam. The built-in lithium battery "
+    "supports USB charging for long, durable runtime without frequent battery "
+    "changes. The lightweight head-mounted structure pairs with an elastic, "
+    "breathable headband that holds its shape without sagging and stays firm.</p>"
+    "<p>It offers dual side-light assist, IPX4 water resistance, stepless focusing, "
+    "and an adjustable headlamp angle to aim at every detail. Three lighting modes "
+    "switch with one tap - a reliable companion for outdoor enthusiasts and night "
+    "workers.</p>"
+)
+
+async def main():
+    s = get_settings()
+    engine = create_async_engine(s.database_url)
+    async with engine.begin() as conn:
+        row = (await conn.execute(text(
+            "SELECT id, name FROM products "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL LIMIT 1"
+        ))).first()
+        if not row:
+            print("out: headlamp row not found")
+            return
+        print("out: found id=" + str(row[0])[:8] + " old=" + str(row[1])[:40])
+        await conn.execute(text(
+            "UPDATE products SET name = :n, description = :d "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
+        ), {"n": NEW_NAME, "d": NEW_DESC})
+        chk = (await conn.execute(text(
+            "SELECT name, length(description) FROM products "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
+        ))).first()
+        print("out: new=" + str(chk[0])[:70])
+        print("out: desc_len=" + str(chk[1]))
+        print("out: cjk=" + str(sum(1 for c in str(chk[0]) if '\u4e00' <= c <= '\u9fff')))
+    await engine.dispose()
+
+asyncio.run(main())
+PYEOF
+            python /tmp/fix_hl.py 2>&1 | grep -a '^out:'
+            rm -f /tmp/fix_hl.py
+
   ci-gate:
     name: Pre-deploy check (syntax + imports + smoke)
     runs-on: ubuntu-latest
