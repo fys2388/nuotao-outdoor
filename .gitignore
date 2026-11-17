@@ -179,3 +179,7 @@ releases/
 _archive/
 woo_images/
 
+# --- WC 凭证保护（2026-11-17 安全审计）---
+# backend 根目录一次性检查脚本（曾含真实 WC key，误提交风险）
+/backend/check_*.py
+
