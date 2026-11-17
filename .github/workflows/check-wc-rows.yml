@@ -1,0 +1,66 @@
+name: M420 Check existing WC rows images (read-only)
+
+# 只读：查 4+1 款有记录 WC 产品的 meta.images 现状 + 启用状态。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/check-wc-rows.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check WC rows images
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/check_wc_rows.py << 'PYEOF'
+            import asyncio, json
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            s = get_settings()
+            TARGETS = "'2687','2698','2818','2864'"
+
+            async def main():
+                engine = create_async_engine(s.database_url)
+                async with engine.connect() as conn:
+                    print("===== CHECK BEGIN =====")
+                    rows = (await conn.execute(text(
+                        f"SELECT id, sku, name, "
+                        f"CASE WHEN b2b_showcase_enabled THEN 'enabled' ELSE 'disabled' END AS st, "
+                        f"COALESCE(meta->>'woocommerce_id','') AS wcid, "
+                        f"jsonb_array_length(COALESCE(meta->'images','[]'::jsonb)) AS n_imgs, "
+                        f"COALESCE(meta->'images','[]'::jsonb)::text AS imgs "
+                        f"FROM products WHERE deleted_at IS NULL AND "
+                        f"COALESCE(meta->>'woocommerce_id','') IN ({TARGETS}) ORDER BY wcid"
+                    ))).fetchall()
+                    print(f"count={len(rows)}")
+                    for r in rows:
+                        imgs = json.loads(r[6]) if r[6] else []
+                        first = imgs[0][:60] if imgs else "(none)"
+                        print(f"  id={r[0]} wc={r[4]} st={r[3]} n_imgs={r[5]} name={r[2][:36]}")
+                        print(f"      first_img={first}")
+                    # 818 存储袋（by_sku，wc 为空）
+                    rows2 = (await conn.execute(text(
+                        "SELECT id, sku, name, CASE WHEN b2b_showcase_enabled THEN 'enabled' ELSE 'disabled' END, "
+                        "COALESCE(meta->>'woocommerce_id',''), jsonb_array_length(COALESCE(meta->'images','[]'::jsonb)) "
+                        "FROM products WHERE deleted_at IS NULL AND sku='NT-818076845448'"
+                    ))).fetchall()
+                    print(f"[sku_818] count={len(rows2)}")
+                    for r in rows2:
+                        print(f"  id={r[0]} wc={r[4]} st={r[3]} n_imgs={r[5]} name={r[2][:36]}")
+                await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/check_wc_rows.py 2>&1 | grep -E "CHECK BEGIN|count=|  id=|first_img=|\[sku_818\]"
+            rm -f /tmp/check_wc_rows.py
