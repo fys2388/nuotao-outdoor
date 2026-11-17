@@ -85,5 +85,5 @@ jobs:
 
             asyncio.run(main())
             PYEOF
-            python3 /tmp/deep_mapping.py 2>&1 | grep -E "DEEP BEGIN|\[mappings\]|\[products_by_|\[name_kw=|^out:   (nuotao|id=)"
+            python3 /tmp/deep_mapping.py 2>&1 | grep -E "DEEP BEGIN|\[mappings\]|\[products_by_|\[name_kw=|id=|nuotao="
             rm -f /tmp/deep_mapping.py
