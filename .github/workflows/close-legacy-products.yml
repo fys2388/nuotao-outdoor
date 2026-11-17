@@ -1,0 +1,67 @@
+name: M420 Close legacy showcase products (user-approved)
+
+# 关闭无 WC 对应、无真实图的旧启用产品（b2b_showcase_enabled=false）。
+# 仅关闭 woocommerce_id 不在 WC 已上架 12 款（2549-2864）范围内的启用产品。
+# 先列出受影响，再 UPDATE（幂等）。保留 12 款 WC 产品。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/close-legacy-products.yml"
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close legacy showcase products
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/close_legacy.py << 'PYEOF'
+            import asyncio
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            s = get_settings()
+            WC_IDS = "'2864','2838','2818','2785','2763','2743','2698','2687','2669','2593','2565','2549'"
+
+            async def main():
+                engine = create_async_engine(s.database_url)
+                async with engine.connect() as conn:
+                    print("===== CLOSE BEGIN =====")
+                    # 列出当前启用且不在 WC 12 款的产品
+                    rows = (await conn.execute(text(
+                        f"SELECT id, sku, name, COALESCE(meta->>'woocommerce_id','') AS wcid, "
+                        f"jsonb_array_length(COALESCE(meta->'images','[]'::jsonb)) AS nimg "
+                        f"FROM products WHERE b2b_showcase_enabled = true AND deleted_at IS NULL AND "
+                        f"COALESCE(meta->>'woocommerce_id','') NOT IN ({WC_IDS}) "
+                        f"ORDER BY name"
+                    ))).fetchall()
+                    print(f"to_close={len(rows)}")
+                    for r in rows:
+                        print(f"  id={r[0]} wc={r[3]} imgs={r[4]} sku={r[1]} name={r[2][:40]}")
+                    # 关闭
+                    await conn.execute(text(
+                        f"UPDATE products SET b2b_showcase_enabled = false "
+                        f"WHERE b2b_showcase_enabled = true AND deleted_at IS NULL AND "
+                        f"COALESCE(meta->>'woocommerce_id','') NOT IN ({WC_IDS})"
+                    ))
+                    await conn.commit()
+                    # 确认剩余启用数
+                    cnt = (await conn.execute(text(
+                        "SELECT count(*) FROM products WHERE b2b_showcase_enabled = true AND deleted_at IS NULL"
+                    ))).scalar()
+                    print(f"remaining_enabled={cnt}")
+                await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/close_legacy.py 2>&1
+            rm -f /tmp/close_legacy.py
