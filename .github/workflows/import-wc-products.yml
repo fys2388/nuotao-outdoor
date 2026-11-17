@@ -85,7 +85,7 @@ jobs:
                                     "workspace_id = :ws AND sku = :sku AND deleted_at IS NULL LIMIT 1"
                                 ), {"ws": WS, "sku": sku})).fetchone()
                                 if row:
-                                    pid = row[0]
+                                    pid = str(row[0])
                                     meta_json = json.loads(row[1]) if row[1] else {}
                                     meta_json.setdefault("__prev_images", meta_json.get("images", []))
                                     meta_json["images"] = imgs
