@@ -64,9 +64,27 @@ export const publicApi = {
     return publicRequest<PublicProductListResponse>(`/products?${params.toString()}`)
   },
   getProduct: (slug: string) => publicRequest<PublicProduct>(`/products/${slug}`),
-  submitLead: (data: Record<string, any>) =>
-    publicRequest<LeadSubmitResponse>('/leads', {
+  submitLead: (data: Record<string, any>) => {
+    // The public form uses friendlier field names; the backend schema expects
+    // `email` / `country` and `products_of_interest` as a list. Map here so a
+    // submission never fails validation on naming alone.
+    const { business_email, country_region, products_of_interest, ...rest } = data
+    const productsList = Array.isArray(products_of_interest)
+      ? products_of_interest
+      : products_of_interest
+        ? String(products_of_interest)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : null
+    return publicRequest<LeadSubmitResponse>('/leads', {
       method: 'POST',
-      body: JSON.stringify(data),
-    }),
+      body: JSON.stringify({
+        ...rest,
+        email: business_email,
+        country: country_region,
+        products_of_interest: productsList,
+      }),
+    })
+  },
 }
