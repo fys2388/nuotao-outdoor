@@ -4,10 +4,9 @@ name: M420 Sync WC images for showcase
 # 从 WC 拉真实图写入 products.meta.images，并启用 B2B 展示。
 # 安全约束：
 #   - 凭证经 envs 注入（GitHub 自动 mask，不写仓库/不打印）
-#   - 仅写 meta.images 键，不覆盖其他 meta（原值备份到 meta.__prev_images）
+#   - Python 端合并 meta，仅改 images 键 + 备份到 __prev_images（不覆盖其他 meta）
 #   - 幂等：已有 images 且与 WC 一致则跳过
 #   - 仅允许可信 WC 图域（nuotaooutdoor.com / wp-content/uploads/）
-#   - 不输出任何凭证值
 on:
   workflow_dispatch:
   push:
@@ -34,7 +33,7 @@ jobs:
             cd /opt/nuotao-ai-os/backend
             source .venv/bin/activate
             cat > /tmp/sync_wc_images.py << 'PYEOF'
-            import asyncio, json, re
+            import asyncio, json, os, re
             import requests
             from sqlalchemy import text
             from sqlalchemy.ext.asyncio import create_async_engine
@@ -45,12 +44,9 @@ jobs:
 
             async def main():
                 s = get_settings()
-                base = (s.woocommerce_base_url or "").rstrip("/")
-                # 环境注入的凭证优先（GitHub secrets 经 envs）
-                key = __import__("os").environ.get("WC_KEY") or s.woocommerce_consumer_key
-                sec = __import__("os").environ.get("WC_SEC") or s.woocommerce_consumer_secret
-                wc_base = __import__("os").environ.get("WC_BASE") or base or "https://nuotaooutdoor.com"
-                # 占位符防御
+                key = os.environ.get("WC_KEY") or s.woocommerce_consumer_key
+                sec = os.environ.get("WC_SEC") or s.woocommerce_consumer_secret
+                wc_base = (os.environ.get("WC_BASE") or s.woocommerce_base_url or "https://nuotaooutdoor.com").rstrip("/")
                 if re.search(r"[\${]", key) or re.search(r"[\${]", sec):
                     print("ABORT: creds are placeholders; no request made")
                     return
@@ -61,45 +57,41 @@ jobs:
                 try:
                     async with engine.connect() as conn:
                         for wid in WC_IDS:
-                            # 找 products 行
                             row = (await conn.execute(text(
-                                "SELECT id FROM products WHERE deleted_at IS NULL AND "
-                                "COALESCE(meta->>'woocommerce_id','') = :wid LIMIT 1"
+                                "SELECT id, COALESCE(meta,'{}'::jsonb) FROM products "
+                                "WHERE deleted_at IS NULL AND COALESCE(meta->>'woocommerce_id','') = :wid LIMIT 1"
                             ), {"wid": str(wid)})).fetchone()
                             if row is None:
                                 print(f"  NOROW wc={wid}")
                                 err += 1
                                 continue
-                            pid = row[0]
+                            pid, meta_json = row
+                            meta = dict(meta_json) if isinstance(meta_json, dict) else {}
                             try:
-                                r = requests.get(
-                                    f"{wc_base}/wp-json/wc/v3/products/{wid}",
-                                    auth=(key, sec), timeout=25,
-                                )
+                                r = requests.get(f"{wc_base}/wp-json/wc/v3/products/{wid}",
+                                                 auth=(key, sec), timeout=25)
                                 if r.status_code != 200:
                                     print(f"  HTTP {r.status_code} wc={wid}")
                                     err += 1
                                     continue
-                                data = r.json()
-                                imgs = [im.get("src") for im in data.get("images", []) if im.get("src")]
+                                imgs = [im.get("src") for im in r.json().get("images", []) if im.get("src")]
                                 imgs = [u for u in imgs if TRUSTED.match(u)][:5]
                                 if not imgs:
-                                    print(f"  NIMG wc={wid} (no trusted images)")
+                                    print(f"  NIMG wc={wid}")
                                     noimg += 1
                                     continue
-                                # 备份原值 + 写入（幂等：仅写 images 键）
+                                if meta.get("images") == imgs:
+                                    print(f"  SKIP wc={wid} (unchanged)")
+                                    skip += 1
+                                    await conn.execute(text(
+                                        "UPDATE products SET b2b_showcase_enabled = true WHERE id = :pid"), {"pid": pid})
+                                    continue
+                                meta.setdefault("__prev_images", meta.get("images", []))
+                                meta["images"] = imgs
                                 await conn.execute(text(
-                                    "UPDATE products SET "
-                                    "meta = jsonb_set(meta, '{__prev_images}', "
-                                    "  COALESCE(meta->'images','[]'::jsonb)) "
-                                    "WHERE id = :pid"
-                                ), {"pid": pid})
-                                await conn.execute(text(
-                                    "UPDATE products SET "
-                                    "meta = jsonb_set(meta, '{images}', :imgs::jsonb), "
-                                    "b2b_showcase_enabled = true "
-                                    "WHERE id = :pid"
-                                ), {"imgs": json.dumps(imgs), "pid": pid})
+                                    "UPDATE products SET meta = CAST(:meta AS jsonb), "
+                                    "b2b_showcase_enabled = true WHERE id = :pid"
+                                ), {"meta": json.dumps(meta), "pid": pid})
                                 print(f"  OK wc={wid} imgs={len(imgs)} {imgs[0][:58]}")
                                 ok += 1
                             except Exception as e:
@@ -112,5 +104,5 @@ jobs:
 
             asyncio.run(main())
             PYEOF
-            python3 /tmp/sync_wc_images.py 2>&1 | grep -E "SYNC BEGIN|  OK |  NIMG|  ERR |  HTTP|  NOROW|summary:|ABORT"
+            python3 /tmp/sync_wc_images.py 2>&1 | grep -E "SYNC BEGIN|  OK |  NIMG|  ERR |  HTTP|  NOROW|  SKIP|summary:|ABORT"
             rm -f /tmp/sync_wc_images.py
