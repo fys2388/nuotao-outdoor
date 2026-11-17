@@ -3,6 +3,7 @@ import { Row, Col, Card, Select, Pagination, Spin, Empty, Typography, Alert } fr
 import { publicApi, navigate, PublicCategory, PublicProduct } from '../../api/publicApi'
 import PublicLayout, { COLORS } from './PublicLayout'
 import { useSeo } from '../../hooks/useSeo'
+import { stripHtml } from '../../utils/text'
 
 const { Title, Text } = Typography
 
@@ -147,9 +148,9 @@ export default function PublicCatalog() {
                           )}
                           <Text style={{ display: 'block' }}>
                             {product.description
-                              ? product.description.length > 90
-                                ? product.description.slice(0, 90) + '…'
-                                : product.description
+                              ? stripHtml(product.description).length > 90
+                                ? stripHtml(product.description).slice(0, 90) + '…'
+                                : stripHtml(product.description)
                               : ''}
                           </Text>
                         </>

@@ -3,6 +3,7 @@ import { Row, Col, Card, Button, Typography, Spin, Alert, Descriptions, Space } 
 import { publicApi, navigate, PublicProduct } from '../../api/publicApi'
 import PublicLayout, { COLORS } from './PublicLayout'
 import { useSeo } from '../../hooks/useSeo'
+import { stripHtml } from '../../utils/text'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -132,7 +133,7 @@ export default function PublicProductDetail({ slug }: { slug: string }) {
               )}
               {product.description && (
                 <Paragraph style={{ color: COLORS.charcoal, fontSize: 15 }}>
-                  {product.description}
+                  {stripHtml(product.description)}
                 </Paragraph>
               )}
 

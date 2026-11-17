@@ -60,6 +60,69 @@ def _slugify(value: str) -> str:
     return slug[:160] or "product"
 
 
+# ============================================
+# B2B 展示类别中英映射（M420-04）
+# ============================================
+# 数据库里 category 字段历史上有三种形态：早期手工启用的内部英文 key
+# （hiking_accessories 等）、早期写入的 WooCommerce 类别 ID（"58"/"120"）、
+# 以及 WooCommerce 英文类别名（含 HTML 实体 &amp;）。统一映射为中文显示名 + 英文 slug。
+_CATEGORY_CN: dict[str, tuple[str, str]] = {
+    # 内部英文 key（早期手工启用产品）
+    "hiking_accessories": ("徒步配件", "hiking-accessories"),
+    "outdoor_storage": ("户外收纳", "outdoor-storage"),
+    "hydration": ("补水装备", "hydration"),
+    "camping_lighting": ("露营照明", "camping-lighting"),
+    "camping_cooking": ("露营炊具", "camping-cooking"),
+    "camping_furniture": ("露营家具", "camping-furniture"),
+    # 数字：早期写入的 WooCommerce 类别 ID
+    "58": ("户外配件", "outdoor-accessories"),
+    "120": ("露营桌", "camping-tables"),
+    # WooCommerce 英文类别名（含 HTML 实体 &amp;）
+    "Sleeping Gear &amp; Mattress": ("睡眠装备", "sleeping-gear-mattress"),
+    "Backpacks &amp; Hiking Gear": ("背包与徒步装备", "backpacks-hiking-gear"),
+    "Lighting &amp; Power": ("照明与电源", "lighting-power"),
+    "Camping": ("露营", "camping"),
+    "Sports Bottles": ("运动水瓶", "sports-bottles"),
+    "Ice Crampons": ("冰爪", "ice-crampons"),
+    "Camping Chairs": ("露营椅", "camping-chairs"),
+    "Storage &amp; Organizers": ("收纳与整理", "storage-organizers"),
+    "Winter Gear &amp; Snow Traction": ("冬季装备", "winter-gear-snow-traction"),
+    "Outdoor Accessories": ("户外配件", "outdoor-accessories"),
+    "Camping Tables": ("露营桌", "camping-tables"),
+}
+
+# slug -> 可能的数据库原始值集合（用于按 slug 筛选时匹配多种形态）
+_CATEGORY_SLUG_TO_DB: dict[str, list[str]] = {}
+for _db_val, (_cn, _slug) in _CATEGORY_CN.items():
+    _CATEGORY_SLUG_TO_DB.setdefault(_slug, []).append(_db_val)
+
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _category_display(category: str | None) -> tuple[str, str]:
+    """返回 (中文显示名, 英文 slug)。未命中映射时兜底：中文保留原文，其他原值 slugify。"""
+    if not category:
+        return ("未分类", "uncategorized")
+    raw = str(category).strip()
+    if raw in _CATEGORY_CN:
+        return _CATEGORY_CN[raw]
+    if _CJK.search(raw):
+        return (raw, _slugify(raw) or "category")
+    return (raw, _slugify(raw) or "category")
+
+
+def _category_db_values(slug_or_raw: str) -> list[str]:
+    """把前端传入的 slug（或原始值）映射回数据库原始值列表，用于筛选。"""
+    slug = slug_or_raw.strip()
+    if slug in _CATEGORY_SLUG_TO_DB:
+        return _CATEGORY_SLUG_TO_DB[slug]
+    # 直接是某个原始值
+    if slug in _CATEGORY_CN:
+        return [slug]
+    # 兜底：按原值
+    return [slug]
+
+
 def _public_slug(product: Product) -> str:
     """公开 URL slug：优先用显式 b2b_public_slug，否则由 name 派生（绝不暴露内部 SKU）。"""
     if product.b2b_public_slug:
@@ -105,7 +168,8 @@ async def list_public_products(
         Product.deleted_at.is_(None),
     )
     if category:
-        base = base.where(Product.category == category)
+        db_vals = _category_db_values(category)
+        base = base.where(Product.category.in_(db_vals))
 
     total_result = await db.execute(
         select(func.count()).select_from(base.subquery())
@@ -124,7 +188,7 @@ async def list_public_products(
             "slug": _public_slug(p),
             "title": p.name,
             "images": _extract_images(p),
-            "category": p.category,
+            "category": _category_display(p.category)[0],
             "description": p.description,
             "specifications": _extract_specs(p),
             "enquiry_cta_context": {"product": _public_slug(p), "title": p.name},
@@ -154,7 +218,7 @@ async def get_public_product(
                 "slug": _public_slug(p),
                 "title": p.name,
                 "images": _extract_images(p),
-                "category": p.category,
+                "category": _category_display(p.category)[0],
                 "description": p.description,
                 "specifications": _extract_specs(p),
                 "enquiry_cta_context": {"product": _public_slug(p), "title": p.name},
@@ -179,10 +243,19 @@ async def list_public_categories(
         .group_by(Product.category)
         .order_by(Product.category)
     )
-    return [
-        {"slug": _slugify(category), "name": category, "product_count": int(count)}
-        for category, count in result.all()
-    ]
+    result_rows = result.all()
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for category, count in result_rows:
+        cn_name, cn_slug = _category_display(category)
+        key = (cn_name, cn_slug)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {"slug": cn_slug, "name": cn_name, "product_count": int(count)}
+        )
+    return items
 
 
 # ============================================
