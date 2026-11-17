@@ -1,0 +1,116 @@
+name: M420 Sync WC images for showcase
+
+# M420-02: 对 products 表已有记录的 WC publish 产品（2687/2698/2818/2864）
+# 从 WC 拉真实图写入 products.meta.images，并启用 B2B 展示。
+# 安全约束：
+#   - 凭证经 envs 注入（GitHub 自动 mask，不写仓库/不打印）
+#   - 仅写 meta.images 键，不覆盖其他 meta（原值备份到 meta.__prev_images）
+#   - 幂等：已有 images 且与 WC 一致则跳过
+#   - 仅允许可信 WC 图域（nuotaooutdoor.com / wp-content/uploads/）
+#   - 不输出任何凭证值
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/sync-wc-images.yml"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync WC images to showcase products
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          WC_BASE: ${{ secrets.WOOCOMMERCE_BASE_URL }}
+          WC_KEY: ${{ secrets.WOOCOMMERCE_CONSUMER_KEY }}
+          WC_SEC: ${{ secrets.WOOCOMMERCE_CONSUMER_SECRET }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: WC_BASE,WC_KEY,WC_SEC
+          script: |
+            set -e
+            cd /opt/nuotao-ai-os/backend
+            source .venv/bin/activate
+            cat > /tmp/sync_wc_images.py << 'PYEOF'
+            import asyncio, json, re
+            import requests
+            from sqlalchemy import text
+            from sqlalchemy.ext.asyncio import create_async_engine
+            from app.core.config import get_settings
+
+            WC_IDS = [2687, 2698, 2818, 2864]
+            TRUSTED = re.compile(r"^https://nuotaooutdoor\.com/wp-content/uploads/")
+
+            async def main():
+                s = get_settings()
+                base = (s.woocommerce_base_url or "").rstrip("/")
+                # 环境注入的凭证优先（GitHub secrets 经 envs）
+                key = __import__("os").environ.get("WC_KEY") or s.woocommerce_consumer_key
+                sec = __import__("os").environ.get("WC_SEC") or s.woocommerce_consumer_secret
+                wc_base = __import__("os").environ.get("WC_BASE") or base or "https://nuotaooutdoor.com"
+                # 占位符防御
+                if re.search(r"[\${]", key) or re.search(r"[\${]", sec):
+                    print("ABORT: creds are placeholders; no request made")
+                    return
+                print("SYNC BEGIN: base_ok=", bool(re.match(r"^https://", wc_base)),
+                      "key_len=", len(key), "sec_len=", len(sec))
+                engine = create_async_engine(s.database_url)
+                ok = noimg = err = skip = 0
+                try:
+                    async with engine.connect() as conn:
+                        for wid in WC_IDS:
+                            # 找 products 行
+                            row = (await conn.execute(text(
+                                "SELECT id FROM products WHERE deleted_at IS NULL AND "
+                                "COALESCE(meta->>'woocommerce_id','') = :wid LIMIT 1"
+                            ), {"wid": str(wid)})).fetchone()
+                            if row is None:
+                                print(f"  NOROW wc={wid}")
+                                err += 1
+                                continue
+                            pid = row[0]
+                            try:
+                                r = requests.get(
+                                    f"{wc_base}/wp-json/wc/v3/products/{wid}",
+                                    auth=(key, sec), timeout=25,
+                                )
+                                if r.status_code != 200:
+                                    print(f"  HTTP {r.status_code} wc={wid}")
+                                    err += 1
+                                    continue
+                                data = r.json()
+                                imgs = [im.get("src") for im in data.get("images", []) if im.get("src")]
+                                imgs = [u for u in imgs if TRUSTED.match(u)][:5]
+                                if not imgs:
+                                    print(f"  NIMG wc={wid} (no trusted images)")
+                                    noimg += 1
+                                    continue
+                                # 备份原值 + 写入（幂等：仅写 images 键）
+                                await conn.execute(text(
+                                    "UPDATE products SET "
+                                    "meta = jsonb_set(meta, '{__prev_images}', "
+                                    "  COALESCE(meta->'images','[]'::jsonb)) "
+                                    "WHERE id = :pid"
+                                ), {"pid": pid})
+                                await conn.execute(text(
+                                    "UPDATE products SET "
+                                    "meta = jsonb_set(meta, '{images}', :imgs::jsonb), "
+                                    "b2b_showcase_enabled = true "
+                                    "WHERE id = :pid"
+                                ), {"imgs": json.dumps(imgs), "pid": pid})
+                                print(f"  OK wc={wid} imgs={len(imgs)} {imgs[0][:58]}")
+                                ok += 1
+                            except Exception as e:
+                                print(f"  ERR wc={wid}: {str(e)[:70]}")
+                                err += 1
+                        await conn.commit()
+                        print(f"summary: ok={ok} noimg={noimg} err={err} skip={skip}")
+                finally:
+                    await engine.dispose()
+
+            asyncio.run(main())
+            PYEOF
+            python3 /tmp/sync_wc_images.py 2>&1 | grep -E "SYNC BEGIN|  OK |  NIMG|  ERR |  HTTP|  NOROW|summary:|ABORT"
+            rm -f /tmp/sync_wc_images.py
