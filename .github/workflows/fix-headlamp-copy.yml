@@ -1,8 +1,9 @@
 name: Fix headlamp English copy
 
-# One-off (M420-05): translate the MH1 headlamp (WC 2565) showcase title/description
-# from Chinese to English in the nuotao products table (B2B display layer only;
-# WooCommerce source listing is NOT touched). Removed after verification.
+# One-off (M420-05, user-approved): translate the MH1 headlamp (WC 2565) showcase
+# title/description from Chinese to English in the nuotao products table.
+# B2B display layer only - the WooCommerce source listing is NOT touched.
+# Deleted after verification (M420-06 cleanup policy).
 on:
   workflow_dispatch:
   push:
@@ -10,10 +11,11 @@ on:
       - ".github/workflows/fix-headlamp-copy.yml"
 
 jobs:
-  fix-copy:
+  fix_copy:
     runs-on: ubuntu-latest
     steps:
-      - uses: appleboy/ssh-action@v1.0.3
+      - name: Fix headlamp copy
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
@@ -23,8 +25,9 @@ jobs:
             cd /opt/nuotao-ai-os/backend
             source .venv/bin/activate
             cat > /tmp/fix_hl.py << 'PYEOF'
-import asyncio, json
+import asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import get_settings
 
 NEW_NAME = (
@@ -46,26 +49,27 @@ NEW_DESC = (
 
 async def main():
     s = get_settings()
-    from sqlalchemy.ext.asyncio import create_async_engine
     engine = create_async_engine(s.database_url)
     async with engine.begin() as conn:
         row = (await conn.execute(text(
-            "SELECT id, name FROM products WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL LIMIT 1"
+            "SELECT id, name FROM products "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL LIMIT 1"
         ))).first()
         if not row:
             print("out: headlamp row not found")
             return
-        print("out: found id=" + str(row[0])[:8] + " old_name=" + str(row[1])[:40])
+        print("out: found id=" + str(row[0])[:8] + " old=" + str(row[1])[:40])
         await conn.execute(text(
-            "UPDATE products SET name = :n, description = :d WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
+            "UPDATE products SET name = :n, description = :d "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
         ), {"n": NEW_NAME, "d": NEW_DESC})
         chk = (await conn.execute(text(
-            "SELECT name, length(description) FROM products WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
+            "SELECT name, length(description) FROM products "
+            "WHERE slug = 'nuotao-mh1' AND deleted_at IS NULL"
         ))).first()
-        print("out: new_name=" + str(chk[0])[:60])
+        print("out: new=" + str(chk[0])[:60])
         print("out: desc_len=" + str(chk[1]))
-        cjk = sum(1 for c in str(chk[0]) if '\u4e00' <= c <= '\u9fff')
-        print("out: cjk_in_name=" + str(cjk))
+        print("out: cjk=" + str(sum(1 for c in str(chk[0]) if '\u4e00' <= c <= '\u9fff')))
     await engine.dispose()
 
 asyncio.run(main())
