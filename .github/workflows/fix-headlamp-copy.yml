@@ -1,7 +1,7 @@
-name: Inspect LED headlamp record
+name: Finalize headlamp copy
 
-# One-off diagnostic (M420-05): inspect the wrongly-touched LED headlamp row to
-# recover its original description from meta / source_snapshot. Deleted after use.
+# One-off (M420-05): clear the wrongly-touched LED description and confirm the MH1
+# English copy. Deleted after verification.
 on:
   workflow_dispatch:
   push:
@@ -13,11 +13,11 @@ env:
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
 jobs:
-  inspect:
-    name: Inspect LED headlamp (SSH)
+  finalize:
+    name: Finalize headlamp copy (SSH)
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect LED headlamp (SSH)
+      - name: Finalize headlamp copy (SSH)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SERVER_HOST }}
@@ -28,6 +28,6 @@ jobs:
             set -e
             cd /opt/nuotao-ai-os/backend
             . .venv/bin/activate 2>/dev/null || source .venv/bin/activate
-            echo 'aW1wb3J0IGFzeW5jaW8KZnJvbSBzcWxhbGNoZW15IGltcG9ydCB0ZXh0CmZyb20gc3FsYWxjaGVteS5leHQuYXN5bmNpbyBpbXBvcnQgY3JlYXRlX2FzeW5jX2VuZ2luZQpmcm9tIGFwcC5jb3JlLmNvbmZpZyBpbXBvcnQgZ2V0X3NldHRpbmdzCgpMRUQgPSAiNzM1NWZiZGUtNzExMy00MjkzLWFkYjYtYjMxODE1OWNhMWRlIgoKYXN5bmMgZGVmIG1haW4oKToKICAgIGVuZ2luZSA9IGNyZWF0ZV9hc3luY19lbmdpbmUoZ2V0X3NldHRpbmdzKCkuZGF0YWJhc2VfdXJsKQogICAgYXN5bmMgd2l0aCBlbmdpbmUuYmVnaW4oKSBhcyBjb25uOgogICAgICAgIHJvdyA9IChhd2FpdCBjb25uLmV4ZWN1dGUodGV4dCgKICAgICAgICAgICAgIlNFTEVDVCBza3UsIG1ldGE6OnRleHQsIHNvdXJjZV9zbmFwc2hvdDo6dGV4dCwgc291cmNlX3VybCAiCiAgICAgICAgICAgICJGUk9NIHByb2R1Y3RzIFdIRVJFIGlkID0gOmkiCiAgICAgICAgKSwgeyJpIjogTEVEfSkpLmZpcnN0KCkKICAgICAgICBwcmludCgib3V0OiBza3U9IiArIHN0cihyb3dbMF0pKQogICAgICAgIHByaW50KCJvdXQ6IHNvdXJjZV91cmw9IiArIHN0cihyb3dbM10pKQogICAgICAgIG1ldGEgPSByb3dbMV0gb3IgIiIKICAgICAgICBzbmFwID0gcm93WzJdIG9yICIiCiAgICAgICAgcHJpbnQoIm91dDogbWV0YV9sZW49IiArIHN0cihsZW4obWV0YSkpICsgIiBzbmFwX2xlbj0iICsgc3RyKGxlbihzbmFwKSkpCiAgICAgICAgIyBtZXRhIG1heSBob2xkIHdvb2NvbW1lcmNlX2lkCiAgICAgICAgaW1wb3J0IHJlCiAgICAgICAgd2lkID0gcmUuc2VhcmNoKHInd29vY29tbWVyY2VfaWRbXjAtOV0qKFswLTldezMsOH0pJywgbWV0YSkKICAgICAgICBwcmludCgib3V0OiB3b29jb21tZXJjZV9pZD0iICsgKHdpZC5ncm91cCgxKSBpZiB3aWQgZWxzZSAibm9uZSIpKQogICAgICAgICMgc25hcHNob3QgbWF5IGhvbGQgb3JpZ2luYWwgZGVzY3JpcHRpb24KICAgICAgICBkcyA9IHJlLnNlYXJjaChyJyJkZXNjcmlwdGlvbiJccyo6XHMqIihbXiJdezIwLH0pIicsIHNuYXApCiAgICAgICAgcHJpbnQoIm91dDogc25hcF9kZXNjX2ZvdW5kPSIgKyBzdHIoYm9vbChkcykpKQogICAgICAgIGlmIGRzOgogICAgICAgICAgICBwcmludCgib3V0OiBzbmFwX2Rlc2M9IiArIGRzLmdyb3VwKDEpWzoxMjBdKQogICAgICAgIGRtID0gcmUuc2VhcmNoKHInImRlc2NyaXB0aW9uIlxzKjpccyoiKFteIl17MjAsfSkiJywgbWV0YSkKICAgICAgICBwcmludCgib3V0OiBtZXRhX2Rlc2NfZm91bmQ9IiArIHN0cihib29sKGRtKSkpCiAgICAgICAgaWYgZG06CiAgICAgICAgICAgIHByaW50KCJvdXQ6IG1ldGFfZGVzYz0iICsgZG0uZ3JvdXAoMSlbOjEyMF0pCiAgICBhd2FpdCBlbmdpbmUuZGlzcG9zZSgpCgphc3luY2lvLnJ1bihtYWluKCkp' | base64 -d > /tmp/inspect_led.py
-            python /tmp/inspect_led.py 2>&1 | tail -20
-            rm -f /tmp/inspect_led.py
+            echo 'aW1wb3J0IGFzeW5jaW8KZnJvbSBzcWxhbGNoZW15IGltcG9ydCB0ZXh0CmZyb20gc3FsYWxjaGVteS5leHQuYXN5bmNpbyBpbXBvcnQgY3JlYXRlX2FzeW5jX2VuZ2luZQpmcm9tIGFwcC5jb3JlLmNvbmZpZyBpbXBvcnQgZ2V0X3NldHRpbmdzCgpNSDEgPSAiYjhjZTc0ZjEtYjgwNS00YzJjLTllMDctOWFjNTI0NzM4ZTBiIgpMRUQgPSAiNzM1NWZiZGUtNzExMy00MjkzLWFkYjYtYjMxODE1OWNhMWRlIgoKYXN5bmMgZGVmIG1haW4oKToKICAgIGVuZ2luZSA9IGNyZWF0ZV9hc3luY19lbmdpbmUoZ2V0X3NldHRpbmdzKCkuZGF0YWJhc2VfdXJsKQogICAgYXN5bmMgd2l0aCBlbmdpbmUuYmVnaW4oKSBhcyBjb25uOgogICAgICAgICMgTEVEIChub24tc2hvd2Nhc2UsIG5vIHJlY292ZXJhYmxlIG9yaWdpbmFsKSAtPiBjbGVhciB0aGUgd3JvbmcgTUgxIGRlc2NyaXB0aW9uCiAgICAgICAgYXdhaXQgY29ubi5leGVjdXRlKHRleHQoCiAgICAgICAgICAgICJVUERBVEUgcHJvZHVjdHMgU0VUIGRlc2NyaXB0aW9uID0gOmQgV0hFUkUgaWQgPSA6aSIKICAgICAgICApLCB7ImQiOiAiIiwgImkiOiBMRUR9KQogICAgICAgIGxlZCA9IChhd2FpdCBjb25uLmV4ZWN1dGUodGV4dCgKICAgICAgICAgICAgIlNFTEVDVCBuYW1lLCBsZW5ndGgoZGVzY3JpcHRpb24pLCBiMmJfc2hvd2Nhc2VfZW5hYmxlZCBGUk9NIHByb2R1Y3RzIFdIRVJFIGlkID0gOmkiCiAgICAgICAgKSwgeyJpIjogTEVEfSkpLmZpcnN0KCkKICAgICAgICBwcmludCgib3V0OiBsZWQgbmFtZT0iICsgc3RyKGxlZFswXSlbOjMwXSArICIgZGVzY19sZW49IiArIHN0cihsZWRbMV0pICsgIiBzaG93Y2FzZT0iICsgc3RyKGxlZFsyXSkpCiAgICAgICAgIyBjb25maXJtIE1IMSBFbmdsaXNoCiAgICAgICAgbWggPSAoYXdhaXQgY29ubi5leGVjdXRlKHRleHQoCiAgICAgICAgICAgICJTRUxFQ1QgbmFtZSwgbGVuZ3RoKGRlc2NyaXB0aW9uKSwgYjJiX3Nob3djYXNlX2VuYWJsZWQgRlJPTSBwcm9kdWN0cyBXSEVSRSBpZCA9IDppIgogICAgICAgICksIHsiaSI6IE1IMX0pKS5maXJzdCgpCiAgICAgICAgcHJpbnQoIm91dDogbWgxIG5hbWU9IiArIHN0cihtaFswXSlbOjcwXSkKICAgICAgICBwcmludCgib3V0OiBtaDEgZGVzY19sZW49IiArIHN0cihtaFsxXSkgKyAiIHNob3djYXNlPSIgKyBzdHIobWhbMl0pKQogICAgICAgIHByaW50KCJvdXQ6IG1oMSBjams9IiArIHN0cihzdW0oMSBmb3IgYyBpbiBzdHIobWhbMF0pIGlmICdcdTRlMDAnIDw9IGMgPD0gJ1x1OWZmZicpKSkKICAgIGF3YWl0IGVuZ2luZS5kaXNwb3NlKCkKCmFzeW5jaW8ucnVuKG1haW4oKSk=' | base64 -d > /tmp/fix_hl.py
+            python /tmp/fix_hl.py 2>&1 | tail -20
+            rm -f /tmp/fix_hl.py
