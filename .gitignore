@@ -183,3 +183,5 @@ woo_images/
 # backend 根目录一次性检查脚本（曾含真实 WC key，误提交风险）
 /backend/check_*.py
 
+# M420-06 credential audit: backend check_*.py one-off scripts stay out of git
+/backend/check_*.py
