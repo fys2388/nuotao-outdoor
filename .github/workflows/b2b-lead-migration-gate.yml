@@ -19,6 +19,7 @@ on:
           - mark-test-leads-dry
           - mark-test-leads
           - pii-staging-verify
+          - rollback-0087-prod
         default: preflight
 
 env:
@@ -244,6 +245,19 @@ jobs:
               sudo -u postgres psql -d nuotao_staging -tAc \
                 "SELECT 'after_reupgrade='||version_num FROM alembic_version;" 2>&1 || true
               echo "=== PII STAGING VERIFY DONE ==="
+            elif [ "${{ inputs.phase }}" = "rollback-0087-prod" ]; then
+              echo "=== 回滚生产 0087（Owner 未批生产 PII 迁移；列空，安全 DROP）==="
+              cd "$CODE_ROOT/backend" || { echo "CODE_MISSING"; printf 'verdict=failed\n' >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0; }
+              echo "--- pre revision ---"
+              $PSQL "SELECT 'pre='||version_num FROM alembic_version;"
+              .venv/bin/alembic downgrade 0086 2>&1 | tail -6
+              echo "--- post revision ---"
+              $PSQL "SELECT 'post='||version_num FROM alembic_version;"
+              echo "--- 列不存在验证 ---"
+              $PSQL "
+              SELECT 'still_exists='||COUNT(*) FROM information_schema.columns
+              WHERE table_name='b2b_leads' AND column_name='email_encrypted';"
+              echo "=== ROLLBACK 0087 DONE ==="
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
               $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;"
