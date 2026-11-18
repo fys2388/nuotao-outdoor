@@ -1,0 +1,9 @@
+/* =============================================================================
+   WordPress「额外 CSS」备份 — 应用 P0-1 修复前
+   备份时间: 2026-11-18 (UTC)
+   来源: nuotaooutdoor.com /wp-admin/customize.php → Additional CSS → CSS code
+   用途: P0-1 首页 Featured 产品网格塌陷修复，应用前完整备份（Owner 硬要求）。
+   回滚: 若异常，将「额外 CSS」恢复为本文件内容并清缓存。
+   ============================================================================= */
+
+.nuotao-footer a[href*="b2b.nuotaooutdoor.com"], footer a[href*="b2b.nuotaooutdoor.com"] { display:none !important; }
