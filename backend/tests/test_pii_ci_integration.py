@@ -37,7 +37,7 @@ from app.core.pii_crypto import (
 
 # 测试密钥（临时，非生产）
 TEST_HMAC_KEY = "test-hmac-key-001"
-TEST_ENC_KEY = "AAECAwQFBgcICQoLDA0ODw=="  # 32B base64（AES-256-GCM）
+TEST_ENC_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="  # 0x00..0x1F = 32B base64（AES-256-GCM）
 
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..")
 
@@ -223,7 +223,7 @@ def test_key_missing_fail_closed(migrated, engine):
 # ---------------------------------------------------------------------------
 def test_wrong_key_rejects(keys, migrated, engine):
     ct = encrypt_field("wrong-key@example.com")
-    os.environ["PII_ENCRYPTION_KEY"] = "FQIDBAUGBwgJCgsMDQ4PEA=="  # 不同 32B
+    os.environ["PII_ENCRYPTION_KEY"] = "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="  # 不同 32B
     with pytest.raises(PiiCryptoError):
         decrypt_field(ct)
     os.environ["PII_ENCRYPTION_KEY"] = TEST_ENC_KEY
