@@ -18,6 +18,7 @@ on:
           - postverify
           - mark-test-leads-dry
           - mark-test-leads
+          - pii-staging-verify
         default: preflight
 
 env:
@@ -215,6 +216,34 @@ jobs:
               FROM event_log
               WHERE event_type = 'b2b_lead.test_flagged'
               ORDER BY created_at DESC LIMIT 4;"
+            elif [ "${{ inputs.phase }}" = "pii-staging-verify" ]; then
+              STAGE=/opt/nuotao/staging
+              echo "=== PII Staging 验证（0087 + 回填 + 对账 + 回滚演练，仅 staging）==="
+              cd "$STAGE/backend" || { echo "STAGE_MISSING"; printf 'verdict=failed\n' >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0; }
+              echo "--- [1] staging alembic current（pre）---"
+              .venv/bin/alembic current 2>&1 | tail -2
+              echo "--- [2] 应用 0087（alembic upgrade head）---"
+              .venv/bin/alembic upgrade head 2>&1 | tail -6
+              echo "--- [3] staging 列验证（nuotao_staging）---"
+              sudo -u postgres psql -d nuotao_staging -tAc "
+                SELECT 'col:'||column_name FROM information_schema.columns
+                WHERE table_name='b2b_leads' AND column_name IN
+                  ('email_hash','email_encrypted','contact_name_encrypted','pii_key_version')
+                ORDER BY 1;" 2>&1 || echo "host psql failed (staging db access)"
+              echo "--- [4] staging 回填 dry-run ---"
+              .venv/bin/python scripts/backfill_pii_fields_m440.py --dry-run 2>&1 | tail -12
+              echo "--- [5] staging 回填执行（测试密钥）---"
+              PII_HMAC_KEY="staging-pii-hmac-m440" \
+              PII_ENCRYPTION_KEY="$(head -c 32 /dev/urandom | base64 -w0)" \
+                .venv/bin/python scripts/backfill_pii_fields_m440.py 2>&1 | tail -16
+              echo "--- [6] 回滚演练（downgrade 0086 -> 0086，再 re-upgrade）---"
+              .venv/bin/alembic downgrade 0086 2>&1 | tail -3
+              sudo -u postgres psql -d nuotao_staging -tAc \
+                "SELECT 'after_downgrade='||version_num FROM alembic_version;" 2>&1 || true
+              .venv/bin/alembic upgrade head 2>&1 | tail -3
+              sudo -u postgres psql -d nuotao_staging -tAc \
+                "SELECT 'after_reupgrade='||version_num FROM alembic_version;" 2>&1 || true
+              echo "=== PII STAGING VERIFY DONE ==="
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
               $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;"
