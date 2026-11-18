@@ -57,18 +57,24 @@ check "empty approved_revision" 1
 # 7. 测试A（Owner APR-INC-002 补测）: 容器读取批准清单权限不足。
 #    文件存在但运行用户无读取权限 -> gate 必须拒绝迁移，无默认版本、无 head 回退、
 #    错误日志明确。先确认测试环境确实能触发权限拒绝（cat as nobody 失败）。
-cp "$ROOT/migration_approvals.yaml" /tmp/noaccess_approvals.yaml
-chmod 000 /tmp/noaccess_approvals.yaml
+#    注意：runner 家目录通常为 700，nobody 无法进入；须把 gate+清单复制到
+#    nobody 可访问的 /tmp 下，再以 nobody 运行，确保是"读清单权限不足"而非
+#    "读不到脚本"。
+mkdir -p /tmp/gate_perm_test
+cp "$ROOT/migration_gate.sh" /tmp/gate_perm_test/gate.sh
+chmod 755 /tmp/gate_perm_test/gate.sh
+cp "$ROOT/migration_approvals.yaml" /tmp/gate_perm_test/migration_approvals.yaml
+chmod 000 /tmp/gate_perm_test/migration_approvals.yaml
 if command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
-  if ! runuser -u nobody -- cat /tmp/noaccess_approvals.yaml >/dev/null 2>&1; then
+  if ! runuser -u nobody -- cat /tmp/gate_perm_test/migration_approvals.yaml >/dev/null 2>&1; then
     echo "confirmed: permission denied is reproducible (nobody cannot read chmod 000 file)"
-    MIGRATION_APPROVALS=/tmp/noaccess_approvals.yaml \
-      runuser -u nobody -- bash "$ROOT/migration_gate.sh" 0086 >"$TMPLOG" 2>&1
+    MIGRATION_APPROVALS=/tmp/gate_perm_test/migration_approvals.yaml \
+      runuser -u nobody -- bash /tmp/gate_perm_test/gate.sh 0086 >"$TMPLOG" 2>&1
     check "container read approval list permission denied" 1
     if grep -q "FAIL-CLOSED" "$TMPLOG"; then
       PASS=$((PASS + 1)); echo "PASS: permission denied emits FAIL-CLOSED"
     else
-      FAIL=$((FAIL + 1)); echo "FAIL: permission denied missing FAIL-CLOSED"
+      FAIL=$((FAIL + 1)); echo "FAIL: permission denied missing FAIL-CLOSED :: $(head -2 "$TMPLOG" | tr '\n' ' ')"
     fi
   else
     echo "SKIP: permission denied not reproducible (nobody can read chmod 000 file)"
@@ -76,7 +82,7 @@ if command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
 else
   echo "SKIP: no runuser/nobody on this host"
 fi
-rm -f /tmp/noaccess_approvals.yaml
+rm -rf /tmp/gate_perm_test
 
 # 8. 测试B（Owner APR-INC-002 补测）: 容器恢复不自动迁移。
 #    docker-restore 的容器启动命令不得包含任何迁移调用（alembic / migration_gate /
