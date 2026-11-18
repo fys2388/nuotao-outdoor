@@ -43,7 +43,10 @@ jobs:
           timeout: 600s
           script: |
             set -uo pipefail
-            PSQL="sudo -u postgres psql -d nuotao -tAc"
+            # 生产 PostgreSQL 在 docker 容器内（宿主机无 postgres 用户）：
+            # docker exec -u postgres nuotao-ai-os-postgres-1 psql -d nuotao
+            PSQL="docker exec -u postgres nuotao-ai-os-postgres-1 psql -d nuotao -tAc"
+            PSQLT="docker exec -u postgres nuotao-ai-os-postgres-1 psql -d nuotao -c"
             echo "=== M440 ${{ inputs.phase }} start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
             echo "=== [0] 生产连通性 ==="
@@ -63,10 +66,10 @@ jobs:
             $PSQL "SELECT 'lead_null_status=' || COUNT(*) FROM b2b_leads WHERE status IS NULL;" 2>&1
             $PSQL "SELECT 'lead_null_created_at=' || COUNT(*) FROM b2b_leads WHERE created_at IS NULL;" 2>&1
             echo "--- 状态值分布 ---"
-            sudo -u postgres psql -d nuotao -c "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;" 2>&1
+            $PSQLT "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;" 2>&1
 
             echo "=== [4] 状态约束兼容性检查（非空即存在非法状态）==="
-            sudo -u postgres psql -d nuotao -c "
+            $PSQLT "
             SELECT status, COUNT(*) AS n
             FROM b2b_leads
             WHERE status NOT IN (
