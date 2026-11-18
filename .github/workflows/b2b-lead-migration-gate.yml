@@ -118,39 +118,37 @@ jobs:
                 exit 0
               fi
 
-              ALEMBIC=""
-              ALEMBIC_HOW=""
-              ALEMBIC_CTR=nuotao-ai-os-scheduler-1
-              if docker exec "$ALEMBIC_CTR" sh -lc 'command -v alembic' >/dev/null 2>&1; then
-                ALEMBIC="container:$ALEMBIC_CTR"
-                ALEMBIC_HOW=container-scheduler
-              elif [ -x /opt/nuotao/backend/.venv/bin/alembic ]; then
-                ALEMBIC=/opt/nuotao/backend/.venv/bin/alembic
-                ALEMBIC_HOW=host-venv
-              fi
+              echo "=== 迁移前置：宿主机代码中的迁移文件核对 ==="
+              ls -la /opt/nuotao/backend/alembic/versions/0085_b2b_lead_workflow.py \
+                     /opt/nuotao/backend/alembic/versions/0086_b2b_lead_quotes.py 2>&1 \
+                || { echo "MIGRATION_FILES_MISSING: 宿主机无 0085/0086 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
 
-              echo "=== 迁移前置：容器内 head 与迁移文件核对 ==="
-              if [ "$ALEMBIC_HOW" = "container-scheduler" ]; then
-                docker exec "$ALEMBIC_CTR" sh -lc 'ls alembic/versions/0085_b2b_lead_workflow.py alembic/versions/0086_b2b_lead_quotes.py 2>&1'
-                HEADS=$(docker exec "$ALEMBIC_CTR" sh -lc 'alembic heads 2>&1' | grep -oE '00[0-9]{2}' | head -1)
-                echo "CONTAINER_HEAD=$HEADS"
-                if [ "$HEADS" != "0086" ]; then
-                  echo "HEAD_MISMATCH: 容器内 head=$HEADS（期望 0086）-> STOP，不强行迁移"
-                  printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
-                  exit 0
-                fi
+              # scheduler 容器镜像内的代码是旧版（无 0085/0086），故挂载宿主机最新代码执行；
+              # 复用 scheduler 的网络栈，使连接串中的 postgres 主机名可解析。
+              DBU=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env | cut -d'=' -f2- \
+                | sed 's/+asyncpg//; s|://localhost:|://postgres:|g; s|://127.0.0.1:|://postgres:|g; s|://postgres:|://postgres:|g')
+              if [ -z "${DBU:-}" ]; then
+                echo "DATABASE_URL_MISSING: /opt/nuotao/backend/.env 无 DATABASE_URL -> STOP"
+                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                exit 0
               fi
+              echo "DATABASE_URL_USER_HOST_MASKED=$(echo "$DBU" | sed -E 's#(postgresql[^:]*://[^:/]+):[^@]+@#(\1):***@#')"
 
-              echo "=== 执行迁移（alembic=$ALEMBIC how=$ALEMBIC_HOW）==="
-              if [ "$ALEMBIC_HOW" = "container-scheduler" ]; then
-                # 容器代码卷与宿主机 /opt/nuotao 同源；repo head=0086，故只应用 0085 -> 0086。
-                docker exec "$ALEMBIC_CTR" sh -lc 'alembic upgrade head' 2>&1
-              elif [ -n "$ALEMBIC" ]; then
-                cd /opt/nuotao/backend
-                "$ALEMBIC" upgrade head 2>&1
-              else
-                echo "NO_ALEMBIC_PATH: 未在已诊断路径上找到 alembic，本轮 STOP（不强行迁移）"
-                printf 'verdict=blocked\n' >> "$GITHUB_OUTPUT"
+              echo "=== 容器内代码头版本（对照）==="
+              docker exec nuotao-ai-os-scheduler-1 sh -lc 'ls alembic/versions/ | tail -4' 2>&1 || true
+
+              echo "=== 执行迁移（docker run：挂载宿主机代码 + 共享 scheduler 网络栈）==="
+              docker run --rm \
+                --network container:nuotao-ai-os-scheduler-1 \
+                -v /opt/nuotao/backend:/app -w /app \
+                -e "DATABASE_URL=$DBU" \
+                nuotao-ai-os-scheduler:latest \
+                sh -lc 'alembic heads; echo "--- upgrade ---"; alembic upgrade head' 2>&1
+              MIG_RC=$?
+              echo "MIGRATE_RC=$MIG_RC"
+              if [ "$MIG_RC" != "0" ]; then
+                echo "MIGRATION_FAILED: 保留证据，不手工改 revision、不 stamp -> STOP"
+                printf 'verdict=failed\n' >> "$GITHUB_OUTPUT"
                 exit 0
               fi
 
