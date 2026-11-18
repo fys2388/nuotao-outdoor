@@ -1,19 +1,20 @@
 name: B2B Lead Migration Gate (M440)
 
-# Owner 授权（APR-M440-DB-001）下的 B2B Lead 迁移门禁。
-# phase=preflight ：只读前置检查，绝不改动数据库。
-# phase=postverify：迁移后的独立验证，同样只读。
-# 迁移本身由 db-migration-and-scheduler.yml 手动触发（run_migration=true，其余 false）。
-# 生产访问沿用仓库既有约定：sudo -u postgres psql -d nuotao（peer 认证），
-# revision 从 alembic_version 表读取（不依赖容器内 venv）。
+# Owner 授权（APR-M440-DB-001）下的 B2B Lead 迁移门禁，三步分开执行：
+#   phase=preflight  ：只读前置检查（绝不改动数据库）。
+#   phase=migrate    ：执行 0085/0086 迁移（Owner 已批；前置检查须先通过）。
+#   phase=postverify ：迁移后只读独立验证。
+# 生产访问：PostgreSQL 在 docker 容器 nuotao-ai-os-postgres-1，
+# 镜像用 POSTGRES_USER 覆盖了默认 postgres 角色 → 从容器 env 探测角色名。
 on:
   workflow_dispatch:
     inputs:
       phase:
-        description: 'preflight = 只读前置检查；postverify = 只读迁移后验证'
+        description: 'preflight = 只读前置检查；migrate = 执行迁移；postverify = 只读迁移后验证'
         type: choice
         options:
           - preflight
+          - migrate
           - postverify
         default: preflight
 
@@ -32,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run ${{ inputs.phase }} checks (read-only)
+      - name: Run ${{ inputs.phase }}
         id: gate
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -40,11 +41,9 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
-          timeout: 600s
+          timeout: 900s
           script: |
             set -uo pipefail
-            # 生产 PostgreSQL 在 docker 容器内（宿主机无 postgres 用户），
-            # 且镜像用 POSTGRES_USER 覆盖了默认 postgres 角色 → 从容器 env 探测角色名。
             PGC=nuotao-ai-os-postgres-1
             PGU=$(docker exec "$PGC" sh -c 'printenv POSTGRES_USER' 2>/dev/null | head -1)
             [ -z "${PGU:-}" ] && PGU=postgres
@@ -54,88 +53,130 @@ jobs:
             echo "=== M440 ${{ inputs.phase }} start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
             echo "=== [0] 生产连通性 ==="
-            $PSQL "SELECT current_database() || ' @ ' || inet_server_addr() || ':' || inet_server_port();" 2>&1 || echo "DB_CHECK_FAILED"
-            $PSQL "SELECT CASE WHEN pg_is_in_recovery() THEN 'IN RECOVERY' ELSE 'primary (recovery=off)' END;" 2>&1
+            $PSQL "SELECT 'db=' || current_database() || ' recovery=' || pg_is_in_recovery();" || echo "DB_CHECK_FAILED"
 
-            echo "=== [1] Alembic revision / 待应用迁移 ==="
-            $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;" 2>&1
-            $PSQL "SELECT 'table_count=' || COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>&1
-
-            echo "=== [2] 库大小 ==="
-            $PSQL "SELECT pg_size_pretty(pg_database_size(current_database()));" 2>&1
-
-            echo "=== [3] b2b_leads 基线 ==="
-            $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;" 2>&1
-            $PSQL "SELECT 'lead_null_email=' || COUNT(*) FROM b2b_leads WHERE email IS NULL;" 2>&1
-            $PSQL "SELECT 'lead_null_status=' || COUNT(*) FROM b2b_leads WHERE status IS NULL;" 2>&1
-            $PSQL "SELECT 'lead_null_created_at=' || COUNT(*) FROM b2b_leads WHERE created_at IS NULL;" 2>&1
-            echo "--- 状态值分布 ---"
-            $PSQLT "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;" 2>&1
-
-            echo "=== [4] 状态约束兼容性检查（非空即存在非法状态）==="
-            $PSQLT "
-            SELECT status, COUNT(*) AS n
-            FROM b2b_leads
-            WHERE status NOT IN (
-              'new','assigned','contacted','qualified','quoting','quoted',
-              'negotiating','converted','closed_won','closed_lost','spam'
-            )
-            GROUP BY status ORDER BY status;" 2>&1
-
-            echo "=== [5] 测试 Lead 存在性（APR-M440-DATA-001）==="
-            $PSQL "
-            SELECT reference_number || ' | id=' || id || ' | status=' || COALESCE(status,'NULL')
-                   || ' | is_test_col_exists=' || (SELECT COUNT(*) FROM information_schema.columns
-                      WHERE table_name='b2b_leads' AND column_name='is_test')
-                   || ' | updated_at=' || COALESCE(updated_at::text,'NULL')
-            FROM b2b_leads
-            WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
-            $PSQL "SELECT 'matched_count=' || COUNT(*) FROM b2b_leads WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
+            echo "=== [1] Alembic revision ==="
+            $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;" || echo "REVISION_READ_FAILED"
 
             if [ "${{ inputs.phase }}" = "preflight" ]; then
+              echo "=== [2] 库大小 / 表数 ==="
+              $PSQL "SELECT pg_size_pretty(pg_database_size(current_database()));"
+              $PSQL "SELECT 'table_count=' || COUNT(*) FROM information_schema.tables WHERE table_schema='public';"
+
+              echo "=== [3] b2b_leads 基线 ==="
+              $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;"
+              $PSQL "SELECT 'lead_null_email=' || COUNT(*) FROM b2b_leads WHERE email IS NULL;"
+              $PSQL "SELECT 'lead_null_status=' || COUNT(*) FROM b2b_leads WHERE status IS NULL;"
+              $PSQL "SELECT 'lead_null_created_at=' || COUNT(*) FROM b2b_leads WHERE created_at IS NULL;"
+              echo "--- 状态值分布 ---"
+              $PSQLT "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;"
+
+              echo "=== [4] 状态约束兼容性检查（非空即存在非法状态，必须为空）==="
+              $PSQLT "
+              SELECT status, COUNT(*) AS n
+              FROM b2b_leads
+              WHERE status NOT IN (
+                'new','assigned','contacted','qualified','quoting','quoted',
+                'negotiating','converted','closed_won','closed_lost','spam'
+              )
+              GROUP BY status ORDER BY status;"
+
+              echo "=== [5] 测试 Lead 存在性（APR-M440-DATA-001，必须恰好 2 条）==="
+              $PSQL "
+              SELECT reference_number || ' | id=' || id || ' | status=' || COALESCE(status,'NULL')
+                     || ' | is_test_col_exists=' || (SELECT COUNT(*) FROM information_schema.columns
+                        WHERE table_name='b2b_leads' AND column_name='is_test')
+                     || ' | updated_at=' || COALESCE(updated_at::text,'NULL')
+              FROM b2b_leads
+              WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');"
+              $PSQL "SELECT 'matched_count=' || COUNT(*) FROM b2b_leads WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');"
+
               echo "=== [6] 备份验证 ==="
-              echo "--- /var/backups 目录 ---"
-              ls -lht /var/backups/nuotao 2>/dev/null | head -10 || echo "no /var/backups/nuotao"
-              ls -lht /opt/nuotao/backups 2>/dev/null | head -10 || echo "no /opt/nuotao/backups"
-              echo "--- 近 7 天 dump 文件 ---"
-              find /var/backups /opt/nuotao -maxdepth 4 -type f \( -name '*.sql*.gz' -o -name '*.sql.gz' -o -name '*.dump*' \) -newermt '-7 days' 2>/dev/null | head -10 || true
-              echo "--- 备份 cron ---"
-              crontab -l 2>/dev/null | grep -iE 'dump|backup|pg_' || echo "no backup cron in this user crontab"
-              sudo -n crontab -l 2>/dev/null | grep -iE 'dump|backup|pg_' || echo "no backup cron in root crontab"
-              echo "--- PostgreSQL 容器 ---"
-              docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | grep -iE 'postgres|nuotao' | head -10 || echo "docker not available"
-              echo "--- WAL / 恢复点 ---"
-              $PSQL "SELECT pg_current_wal_lsn();" 2>&1
+              ls -lht /opt/nuotao/backups 2>/dev/null | head -8 || echo "no /opt/nuotao/backups"
+              $PSQL "SELECT 'wal_lsn=' || pg_current_wal_lsn();"
+
+              echo "=== [7] 迁移执行能力诊断（决定 migrate 阶段用哪条路径）==="
+              echo "--- 宿主 venv alembic ---"
+              ls -la /opt/nuotao/backend/.venv/bin/alembic 2>/dev/null || echo "venv alembic MISSING"
+              echo "--- which alembic ---"
+              command -v alembic 2>/dev/null || echo "no alembic on PATH"
+              echo "--- 容器列表 ---"
+              docker ps --format '{{.Names}} {{.Image}} {{.Status}}' 2>/dev/null | head -12
+              echo "--- 容器内是否有 alembic ---"
+              for c in nuotao-ai-os-scheduler-1 nuotao-ai-os-api-1 nuotao-ai-os-backend-1 nuotao-ai-os-app-1; do
+                echo -n "$c: "
+                docker exec "$c" sh -lc 'command -v alembic || ls /app/alembic.ini 2>/dev/null || echo none' 2>/dev/null || echo "container not found"
+              done
+            elif [ "${{ inputs.phase }}" = "migrate" ]; then
+              set -e
+              echo "=== 迁移前再次确认 revision 与 pending ==="
+              CUR_BEFORE=$($PSQL "SELECT version_num FROM alembic_version;" | tr -d '[:space:]')
+              echo "CURRENT_REVISION_BEFORE=$CUR_BEFORE"
+              if [ "$CUR_BEFORE" != "0084" ]; then
+                echo "PREFLIGHT_MISMATCH: expected 0084 but got $CUR_BEFORE -> STOP"
+                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
+              ALEMBIC=""
+              ALEMBIC_HOW=""
+              if [ -x /opt/nuotao/backend/.venv/bin/alembic ]; then
+                ALEMBIC=/opt/nuotao/backend/.venv/bin/alembic
+                ALEMBIC_HOW=host-venv
+              elif command -v alembic >/dev/null 2>&1; then
+                ALEMBIC=$(command -v alembic)
+                ALEMBIC_HOW=host-path
+              fi
+
+              echo "=== 执行迁移（alembic=$ALEMBIC how=$ALEMBIC_HOW）==="
+              if [ -n "$ALEMBIC" ]; then
+                cd /opt/nuotao/backend
+                # 只执行 head；repo head = 0086，因此本次只会应用 0085 -> 0086 两步。
+                "$ALEMBIC" upgrade head 2>&1
+              else
+                echo "HOST_ALEMBIC_MISSING: 需要容器内 alembic，本轮 STOP（不在未诊断路径上强行迁移）"
+                printf 'verdict=blocked\n' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
+              CUR_AFTER=$($PSQL "SELECT version_num FROM alembic_version;" | tr -d '[:space:]')
+              echo "CURRENT_REVISION_AFTER=$CUR_AFTER"
+              if [ "$CUR_AFTER" != "0086" ]; then
+                echo "MIGRATION_MISMATCH: expected 0086 but got $CUR_AFTER -> 保留证据，人工介入"
+              else
+                echo "MIGRATION_OK: 0084 -> 0086"
+              fi
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
-              $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;" 2>&1
+              $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;"
               echo "--- b2b_lead_quotes ---"
-              $PSQL "SELECT 'quotes_table_exists=' || (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='b2b_lead_quotes');" 2>&1
-              $PSQL "SELECT 'quotes_rows=' || COUNT(*) FROM b2b_lead_quotes;" 2>&1
-              $PSQL "SELECT 'quote_index=' || indexname FROM pg_indexes WHERE tablename='b2b_lead_quotes' ORDER BY indexname;" 2>&1
+              $PSQL "SELECT 'quotes_table_exists=' || (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='b2b_lead_quotes');"
+              $PSQL "SELECT 'quotes_rows=' || COUNT(*) FROM b2b_lead_quotes;"
+              $PSQL "SELECT 'quote_index=' || indexname FROM pg_indexes WHERE tablename='b2b_lead_quotes' ORDER BY indexname;"
               echo "--- b2b_leads 新增列 ---"
               $PSQL "
               SELECT column_name || ':' || data_type
               FROM information_schema.columns
               WHERE table_schema='public' AND table_name='b2b_leads'
                 AND column_name IN ('trace_id','is_test','notify_status','notify_attempts','notify_last_error','notified_at','closed_won_reason')
-              ORDER BY column_name;" 2>&1
+              ORDER BY column_name;"
               echo "--- 状态 CHECK 约束定义 ---"
               $PSQL "
               SELECT conname || ' => ' || pg_get_constraintdef(oid)
               FROM pg_constraint
-              WHERE conrelid='b2b_leads'::regclass AND contype='c' ORDER BY conname;" 2>&1
-              echo "--- Lead 完整性复核 ---"
-              $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;" 2>&1
+              WHERE conrelid='b2b_leads'::regclass AND contype='c' ORDER BY conname;"
+              echo "--- Lead 完整性复核（应仍为 2 条）---"
+              $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;"
               $PSQL "
               SELECT 'matched_count=' || COUNT(*) FROM b2b_leads
-              WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
+              WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');"
               echo "--- 经营统计排除验证（排除 is_test 与 spam）---"
               $PSQL "
               SELECT 'valid_leads=' || COUNT(*) FROM b2b_leads
-              WHERE is_test IS DISTINCT FROM true AND status <> 'spam';" 2>&1
+              WHERE is_test IS DISTINCT FROM true AND status <> 'spam';"
             fi
 
             echo "=== M440 gate end: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
             echo "GATE_PHASE=${{ inputs.phase }}"
             printf 'verdict=checked\n' >> "$GITHUB_OUTPUT"
+            exit 0
