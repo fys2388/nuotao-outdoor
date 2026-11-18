@@ -91,6 +91,18 @@ class Settings(BaseSettings):
     # when the key above actually changes.
     customer_identity_key_version: str = "v1"
 
+    # --- PII field encryption (APR-M440-PII-001 design; staging-only) --------
+    # HMAC-SHA-256 key for email_hash (email lookup index). Empty in production
+    # is a hard failure via pii_crypto._pii_hmac_key(). Key separated from the
+    # customer_identity_hmac_key so PII lookup digests are not reusable across
+    # domains and can be rotated independently.
+    pii_hmac_key: str = ""
+    # AES-256-GCM key (base64, 32 bytes) for email_encrypted / contact_name_encrypted.
+    # Must NOT be committed to Git or the database; production empty => hard failure.
+    pii_encryption_key: str = ""
+    # Version label recorded on every encrypted column value (pii_key_version).
+    pii_key_version: str = "v1"
+
     # GDPR data subject request (access / export / delete) response deadline,
     # in days, per Art. 12(3): respond within one month of receipt. Used to set
     # DataSubjectRequest.due_at in customer_privacy_service. Overridable per
