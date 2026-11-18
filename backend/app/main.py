@@ -98,7 +98,6 @@ app = FastAPI(
         "displayRequestDuration": True,
         "showExtensions": True,
     },
-    on_event=("startup", "shutdown"),
 )
 
 # Add rate limiter to app state
