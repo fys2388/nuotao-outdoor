@@ -62,23 +62,38 @@
 
 **信任度结论**：**结构与流程信任已达基础线**（合作模式、流程、多渠道、隐私同意齐全），但**硬信任背书几乎空白**——无工厂实拍、无认证资质、无年限产能、无客户案例、无 DTC 动销证明。这是 B2B 外贸转化最大短板：采购商无法判断"是否真实工厂/可靠供应商"。
 
-### 3.2 流量（Traffic / SEO）
+### 3.2 流量（Traffic / SEO）— 实测数据（2026-11-18）
+
+#### SEO 基线实测（只读 curl）
+
+| 指标 | B2B (`b2b.nuotaooutdoor.com`) | B2C (`nuotaooutdoor.com`, WooCommerce) |
+|---|---|---|
+| 原始 HTML 体积 | **583–595 字节（SPA 空壳）** | **~129 KB（SSR 完整正文）** |
+| SSR 正文 | ❌ 无（`<div id="root">` + JS） | ✅ WooCommerce SSR |
+| h1 数量（原始 HTML） | **0** | 1 |
+| JSON-LD 结构化数据 | **0** | 1 |
+| OG 标签 | **0** | 10 |
+| sitemap.xml | ❌ **返回 SPA index.html（路由 miss 回退壳），无 `<url>/<loc>`** | ✅ 301 → `sitemap_index.xml`（200，真实） |
+| robots.txt | ⚠️ 存在（content-signal 说明），未见 Sitemap 指令 | ✅ 存在 |
+| 首页 TTFB/体积 | 200 / 1.0s / 583B | 200 / 2.0s / 128KB |
+| products 页 | 200 / 3.7s / 583B（壳） | — |
+
+#### SEO 要素逐项
 
 | SEO 要素 | 同行通行做法 | 本站现状 | 差距 |
 |---|---|---|---|
-| 服务端渲染 / 预渲染 | SSR / SSG / prerender，首屏有正文 | ❌ **纯 CSR，原始 HTML 仅 595B 空壳** | **致命** |
-| 首屏 h1/h2 | 语义化标题 | ❌ 原始 HTML h1=0 h2=0（JS 渲染后才出现） | **大** |
-| 结构化数据 JSON-LD | Organization / Product | ❌ 无 | **大** |
-| OG / Twitter 卡片 | 分享预览 | ❌ 无 | 中 |
-| canonical / hreflang | 多语言/规范 URL | ❌ 无 | 中 |
-| sitemap.xml | 真实 URL 列表 | ❌ **返回 SPA index.html（路由 miss 回退壳）** | **大** |
-| robots.txt | 允许抓取 + Sitemap 指令 | ⚠️ 存在（含 content-signal 说明），未见 Sitemap 指向 | 中 |
-| 每产品独立 SEO 落地页 | 关键词优化 URL + 内容 | ⚠️ 有详情页 URL，但 CSR 空壳 + 薄内容 | 大 |
-| 内容营销（博客/指南） | 月更博客、批发指南、行业报告 | ❌ 无 | 大 |
+| 服务端渲染 / 预渲染 | SSR / SSG / prerender，首屏有正文 | ❌ **纯 CSR，原始 HTML 583B 空壳** | **致命** |
+| 首屏 h1/h2 | 语义化标题 | ❌ 原始 HTML h1=0（JS 渲染后才出现） | **大** |
+| 结构化数据 JSON-LD | Organization / Product | ❌ 0 | **大** |
+| OG / Twitter 卡片 | 分享预览 | ❌ 0 | 中 |
+| canonical / hreflang | 规范 URL / 多语言 | ❌ 无 | 中 |
+| sitemap.xml | 真实 URL 列表 | ❌ **返回 SPA 壳，无 URL** | **大** |
+| 内容营销（博客/指南） | 月更博客、批发指南 | ❌ 无 | 大 |
 | 内容厚度 | 每产品完整 spec/FAQ | ⚠️ 12 产品，描述偏薄 | 中 |
-| 核心词布局 | outdoor gear wholesale 等 | ❌ 未在静态 HTML 体现 | 大 |
 
-**流量结论**：**SEO 技术底座存在致命缺陷**——整站纯客户端渲染，搜索引擎抓到的首屏是 595 字节空壳，无 h1/结构化数据/sitemap 正文。即使内容再好，自然搜索流量也几乎无法获取。这是当前流量问题的**第一优先级技术阻塞**。
+**关键对照**：同集团的 **B2C WooCommerce 站 SEO 是健康的**（SSR 129KB、h1、JSON-LD、10 个 OG、真实 sitemap_index），而 **B2B React SPA 站 SEO 几乎为零**（583B 空壳、0 结构化数据、sitemap 缺失）。两者技术栈差异（WooCommerce SSR vs React CSR）直接造成 SEO 可见性天差地别。
+
+**流量结论**：**B2B 站 SEO 技术底座存在致命缺陷**——纯客户端渲染，搜索引擎抓到的首屏是 583 字节空壳，无 h1/结构化数据/sitemap 正文。即使内容再好、投放再猛，自然搜索流量也几乎无法获取，且付费流量的落地页 SEO 权重极低。这是当前流量问题的**第一优先级技术阻塞**。
 
 ---
 
