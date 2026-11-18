@@ -118,17 +118,29 @@ jobs:
                 exit 0
               fi
 
-              echo "=== 迁移前置：宿主机代码中的迁移文件核对 ==="
-              ls -la /opt/nuotao/backend/alembic/versions/0085_b2b_lead_workflow.py \
-                     /opt/nuotao/backend/alembic/versions/0086_b2b_lead_quotes.py 2>&1 \
-                || { echo "MIGRATION_FILES_MISSING: 宿主机无 0085/0086 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
+              echo "=== 迁移前置：生产代码（/opt/nuotao-ai-os）中的迁移文件核对 ==="
+              CODE_ROOT=/opt/nuotao-ai-os
+              ls -la "$CODE_ROOT/backend/alembic/versions/0085_b2b_lead_workflow.py" \
+                     "$CODE_ROOT/backend/alembic/versions/0086_b2b_lead_quotes.py" 2>&1 \
+                || { echo "MIGRATION_FILES_MISSING: 生产代码无 0085/0086 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
+              echo "--- 生产代码 HEAD ---"
+              git -C "$CODE_ROOT" log -1 --oneline 2>&1 || true
 
-              # scheduler 容器镜像内的代码是旧版（无 0085/0086），故挂载宿主机最新代码执行；
-              # 复用 scheduler 的网络栈，使连接串中的 postgres 主机名可解析。
-              DBU=$(grep '^DATABASE_URL=' /opt/nuotao/backend/.env | cut -d'=' -f2- \
-                | sed 's/+asyncpg//; s|://localhost:|://postgres:|g; s|://127.0.0.1:|://postgres:|g; s|://postgres:|://postgres:|g')
+              # 连接串来源：优先 backend/.env，其次旧目录
+              if [ -f "$CODE_ROOT/backend/.env" ] && grep -q '^DATABASE_URL=' "$CODE_ROOT/backend/.env"; then
+                ENV_FILE="$CODE_ROOT/backend/.env"
+              elif [ -f /opt/nuotao/backend/.env ] && grep -q '^DATABASE_URL=' /opt/nuotao/backend/.env; then
+                ENV_FILE=/opt/nuotao/backend/.env
+              else
+                echo "DATABASE_URL_MISSING: 未找到含 DATABASE_URL 的 .env -> STOP"
+                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "ENV_FILE=$ENV_FILE"
+              DBU=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d'=' -f2- \
+                | sed 's/+asyncpg//; s|://localhost:|://postgres:|g; s|://127.0.0.1:|://postgres:|g')
               if [ -z "${DBU:-}" ]; then
-                echo "DATABASE_URL_MISSING: /opt/nuotao/backend/.env 无 DATABASE_URL -> STOP"
+                echo "DATABASE_URL_MISSING: $ENV_FILE 无 DATABASE_URL -> STOP"
                 printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
                 exit 0
               fi
@@ -137,10 +149,10 @@ jobs:
               echo "=== 容器内代码头版本（对照）==="
               docker exec nuotao-ai-os-scheduler-1 sh -lc 'ls alembic/versions/ | tail -4' 2>&1 || true
 
-              echo "=== 执行迁移（docker run：挂载宿主机代码 + 共享 scheduler 网络栈）==="
+              echo "=== 执行迁移（docker run：挂载生产代码 + 共享 scheduler 网络栈）==="
               docker run --rm \
                 --network container:nuotao-ai-os-scheduler-1 \
-                -v /opt/nuotao/backend:/app -w /app \
+                -v "$CODE_ROOT/backend":/app -w /app \
                 -e "DATABASE_URL=$DBU" \
                 nuotao-ai-os-scheduler:latest \
                 sh -lc 'alembic heads; echo "--- upgrade ---"; alembic upgrade head' 2>&1
