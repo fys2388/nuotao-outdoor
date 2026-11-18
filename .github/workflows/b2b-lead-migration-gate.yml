@@ -112,10 +112,13 @@ jobs:
               echo "=== 迁移前再次确认 revision 与 pending ==="
               CUR_BEFORE=$($PSQL "SELECT version_num FROM alembic_version;" | tr -d '[:space:]')
               echo "CURRENT_REVISION_BEFORE=$CUR_BEFORE"
-              if [ "$CUR_BEFORE" != "0084" ]; then
-                echo "PREFLIGHT_MISMATCH: expected 0084 but got $CUR_BEFORE -> STOP"
+              if [ "$CUR_BEFORE" != "0084" ] && [ "$CUR_BEFORE" != "0085" ]; then
+                echo "PREFLIGHT_MISMATCH: expected 0084 or 0085 but got $CUR_BEFORE -> STOP"
                 printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
                 exit 0
+              fi
+              if [ "$CUR_BEFORE" = "0085" ]; then
+                echo "NOTE: 0085 已应用（上一轮 0086 失败回滚），本轮仅应用 0086。"
               fi
 
               echo "=== 迁移前置：生产代码（/opt/nuotao-ai-os）中的迁移文件核对 ==="
