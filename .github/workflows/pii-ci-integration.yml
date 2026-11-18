@@ -52,6 +52,8 @@ jobs:
           DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/nuotao_pii_ci
           PII_HMAC_KEY: ci-test-hmac-key-0001
           PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODw==
+          JWT_SECRET_KEY: ci-test-jwt-secret-0000000000000000000000000000
+          SECRET_KEY: ci-test-app-secret-00000000000000000000000000
         run: |
           cd backend
           python -m pytest tests/test_pii_ci_integration.py -v -x --tb=short
