@@ -171,7 +171,10 @@ fi
 echo "[db] 鎵ц鏁版嵁搴撹縼绉?.."
 if [ -z "$DB_VAL" ]; then
   echo "[db] SKIP alembic upgrade (DATABASE_URL unavailable, no migrations in this deploy)"
-elif ! alembic upgrade head; then
+  # 生产迁移只应用 Owner 已批准的 revision（0086）。未批准迁移（如 APR-M440-PII-001
+  # 的 0087）由受控门禁 b2b-lead-migration-gate 单独管理，禁止 deploy 自动应用。
+  # 提升批准 revision 时必须显式更新本行并获 Owner 授权。
+elif ! alembic upgrade 0086; then
   echo "WARN: 鏁版嵁搴撹縼绉诲け璐ワ紙褰撳墠 deploy 鏃犳柊杩佺Щ锛屼笉闃诲锛?, 璇锋墜鍔ㄦ煡: alembic current"
 fi
 echo "[db] ensure all model tables exist (create_all idempotent)..."

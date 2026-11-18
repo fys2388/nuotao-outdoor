@@ -220,6 +220,15 @@ jobs:
             elif [ "${{ inputs.phase }}" = "pii-staging-verify" ]; then
               STAGE=/opt/nuotao/staging
               echo "=== PII Staging 验证（0087 + 回填 + 对账 + 回滚演练，仅 staging）==="
+              echo "--- [0] staging 环境探测 ---"
+              echo "[dir] /opt/nuotao:"
+              ls -la /opt/nuotao/ 2>&1 | head -14
+              echo "[dir] $STAGE:"
+              ls -la "$STAGE" 2>&1 | head -6 || echo "STAGE dir missing"
+              echo "[db] host postgres staging db:"
+              sudo -u postgres psql -l 2>&1 | grep -i staging | head -4 || echo "none (host postgres)"
+              echo "[db] postgres container staging db:"
+              docker exec "$PGC" psql -U "$PGU" -l 2>&1 | grep -i staging | head -4 || echo "none (container)"
               cd "$STAGE/backend" || { echo "STAGE_MISSING"; printf 'verdict=failed\n' >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0; }
               echo "--- [1] staging alembic current（pre）---"
               .venv/bin/alembic current 2>&1 | tail -2
