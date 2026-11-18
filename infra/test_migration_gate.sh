@@ -65,11 +65,10 @@ cp "$ROOT/migration_gate.sh" /tmp/gate_perm_test/gate.sh
 chmod 755 /tmp/gate_perm_test/gate.sh
 cp "$ROOT/migration_approvals.yaml" /tmp/gate_perm_test/migration_approvals.yaml
 chmod 000 /tmp/gate_perm_test/migration_approvals.yaml
-if command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
-  if ! runuser -u nobody -- cat /tmp/gate_perm_test/migration_approvals.yaml >/dev/null 2>&1; then
+if command -v sudo >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
+  if ! sudo -n -u nobody cat /tmp/gate_perm_test/migration_approvals.yaml >/dev/null 2>&1; then
     echo "confirmed: permission denied is reproducible (nobody cannot read chmod 000 file)"
-    MIGRATION_APPROVALS=/tmp/gate_perm_test/migration_approvals.yaml \
-      runuser -u nobody -- bash /tmp/gate_perm_test/gate.sh 0086 >"$TMPLOG" 2>&1
+    sudo -n -u nobody bash /tmp/gate_perm_test/gate.sh 0086 >"$TMPLOG" 2>&1
     check "container read approval list permission denied" 1
     if grep -q "FAIL-CLOSED" "$TMPLOG"; then
       PASS=$((PASS + 1)); echo "PASS: permission denied emits FAIL-CLOSED"
@@ -80,7 +79,7 @@ if command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
     echo "SKIP: permission denied not reproducible (nobody can read chmod 000 file)"
   fi
 else
-  echo "SKIP: no runuser/nobody on this host"
+  echo "SKIP: no sudo/nobody on this host"
 fi
 rm -rf /tmp/gate_perm_test
 
