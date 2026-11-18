@@ -150,6 +150,8 @@ admin_token*.txt
 !/backend/scripts/seed_agent_config.py
 # M440 受控数据维护脚本：Owner 批准（APR-M440-DATA-001），须入库以可审计、可复现
 !/backend/scripts/mark_test_leads_m440.py
+# M440 PII 回填脚本（APR-M440-PII-001）：仅 Staging 验证，须入库以可审计
+!/backend/scripts/backfill_pii_fields_m440.py
 
 # Graphflow output artifacts
 graphflow-out/

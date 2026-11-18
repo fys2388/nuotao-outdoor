@@ -136,6 +136,15 @@ class B2BLead(Base, TimestampMixin, WorkspaceMixin):
     notify_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- PII 加密字段（APR-M440-PII-001 设计/Staging 阶段；生产未批）------
+    # email_hash：HMAC-SHA-256 摘要，唯一索引（等值检索用，不用明文查库）。
+    # email_encrypted / contact_name_encrypted：AES-256-GCM base64(iv||ct||tag)。
+    # pii_key_version：轮换版本标签。
+    email_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contact_name_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pii_key_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     __table_args__ = (
         UniqueConstraint("reference_number", name="uq_b2b_leads_reference_number"),
         CheckConstraint(
