@@ -148,6 +148,8 @@ admin_token*.txt
 /backend/scripts/*.py
 # CI 必需的幂等种子脚本：非临时脚本，必须入库供 deploy.yml §3.6 调用
 !/backend/scripts/seed_agent_config.py
+# M440 受控数据维护脚本：Owner 批准（APR-M440-DATA-001），须入库以可审计、可复现
+!/backend/scripts/mark_test_leads_m440.py
 
 # Graphflow output artifacts
 graphflow-out/
