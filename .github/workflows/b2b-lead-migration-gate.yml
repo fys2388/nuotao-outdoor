@@ -2,8 +2,10 @@ name: B2B Lead Migration Gate (M440)
 
 # Owner 授权（APR-M440-DB-001）下的 B2B Lead 迁移门禁。
 # phase=preflight ：只读前置检查，绝不改动数据库。
-# phase=postverify：迁移后的独立验证，也只读。
+# phase=postverify：迁移后的独立验证，同样只读。
 # 迁移本身由 db-migration-and-scheduler.yml 手动触发（run_migration=true，其余 false）。
+# 生产访问沿用仓库既有约定：sudo -u postgres psql -d nuotao（peer 认证），
+# revision 从 alembic_version 表读取（不依赖容器内 venv）。
 on:
   workflow_dispatch:
     inputs:
@@ -41,37 +43,30 @@ jobs:
           timeout: 600s
           script: |
             set -uo pipefail
-            cd /opt/nuotao/backend
-            source .venv/bin/activate
+            PSQL="sudo -u postgres psql -d nuotao -tAc"
             echo "=== M440 ${{ inputs.phase }} start: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
-            echo "=== [1] 生产 Alembic revision / heads ==="
-            echo "--- alembic current ---"
-            alembic current 2>&1
-            echo "--- alembic heads ---"
-            alembic heads 2>&1
-            HEADS=$(alembic heads 2>/dev/null | grep -c '^[0-9a-z]' || true)
-            echo "HEADS_COUNT=$HEADS"
-            echo "--- 待应用迁移 (current -> head) ---"
-            alembic history 2>&1 | head -20
+            echo "=== [0] 生产连通性 ==="
+            $PSQL "SELECT current_database() || ' @ ' || inet_server_addr() || ':' || inet_server_port();" 2>&1 || echo "DB_CHECK_FAILED"
+            $PSQL "SELECT CASE WHEN pg_is_in_recovery() THEN 'IN RECOVERY' ELSE 'primary (recovery=off)' END;" 2>&1
 
-            echo "=== [2] 数据库连接 / 库大小 ==="
-            DB_URL=$(grep '^DATABASE_URL=' .env | cut -d'=' -f2- | sed 's/+.*/ /')
-            echo "DB_URL_SCHEME_ONLY=$(echo "$DB_URL" | sed -E 's#[a-zA-Z]+://([^:/]+):[^@]+@#\1://<user>:***@#' | sed -E 's#//[^@]+@#//<user>:***@#')"
-            psql "$DB_URL" -At -c "SELECT pg_size_pretty(pg_database_size(current_database()));" 2>&1
+            echo "=== [1] Alembic revision / 待应用迁移 ==="
+            $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;" 2>&1
+            $PSQL "SELECT 'table_count=' || COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>&1
+
+            echo "=== [2] 库大小 ==="
+            $PSQL "SELECT pg_size_pretty(pg_database_size(current_database()));" 2>&1
 
             echo "=== [3] b2b_leads 基线 ==="
-            psql "$DB_URL" -At -c "
-            SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;
-            SELECT 'lead_null_email=' || COUNT(*) FROM b2b_leads WHERE email IS NULL;
-            SELECT 'lead_null_status=' || COUNT(*) FROM b2b_leads WHERE status IS NULL;
-            SELECT 'lead_null_created_at=' || COUNT(*) FROM b2b_leads WHERE created_at IS NULL;
-            " 2>&1
+            $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;" 2>&1
+            $PSQL "SELECT 'lead_null_email=' || COUNT(*) FROM b2b_leads WHERE email IS NULL;" 2>&1
+            $PSQL "SELECT 'lead_null_status=' || COUNT(*) FROM b2b_leads WHERE status IS NULL;" 2>&1
+            $PSQL "SELECT 'lead_null_created_at=' || COUNT(*) FROM b2b_leads WHERE created_at IS NULL;" 2>&1
             echo "--- 状态值分布 ---"
-            psql "$DB_URL" -c "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;" 2>&1
+            sudo -u postgres psql -d nuotao -c "SELECT status, COUNT(*) FROM b2b_leads GROUP BY status ORDER BY status;" 2>&1
 
-            echo "=== [4] 状态约束兼容性检查 ==="
-            psql "$DB_URL" -c "
+            echo "=== [4] 状态约束兼容性检查（非空即存在非法状态）==="
+            sudo -u postgres psql -d nuotao -c "
             SELECT status, COUNT(*) AS n
             FROM b2b_leads
             WHERE status NOT IN (
@@ -81,50 +76,55 @@ jobs:
             GROUP BY status ORDER BY status;" 2>&1
 
             echo "=== [5] 测试 Lead 存在性（APR-M440-DATA-001）==="
-            psql "$DB_URL" -At -c "
-            SELECT reference_number || ' | id=' || id || ' | status=' || COALESCE(status,'NULL') || ' | is_test=' || COALESCE(is_test::text,'NULL') || ' | updated_at=' || COALESCE(updated_at::text,'NULL')
+            $PSQL "
+            SELECT reference_number || ' | id=' || id || ' | status=' || COALESCE(status,'NULL')
+                   || ' | is_test_col_exists=' || (SELECT COUNT(*) FROM information_schema.columns
+                      WHERE table_name='b2b_leads' AND column_name='is_test')
+                   || ' | updated_at=' || COALESCE(updated_at::text,'NULL')
             FROM b2b_leads
-            WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');
-            SELECT 'matched_count=' || COUNT(*) FROM b2b_leads
-            WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');
-            " 2>&1
+            WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
+            $PSQL "SELECT 'matched_count=' || COUNT(*) FROM b2b_leads WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
 
             if [ "${{ inputs.phase }}" = "preflight" ]; then
               echo "=== [6] 备份验证 ==="
-              echo "--- pg_dump 目录 ---"
+              echo "--- /var/backups 目录 ---"
               ls -lht /var/backups/nuotao 2>/dev/null | head -10 || echo "no /var/backups/nuotao"
-              find / -maxdepth 4 -type f -name '*.sql*.gz' -newermt '-7 days' 2>/dev/null | head -10
-              echo "--- 自动备份 cron ---"
-              crontab -l 2>/dev/null | grep -iE 'dump|backup' || echo "no backup cron in root crontab"
-              echo "--- WAL 归档 / 恢复点 ---"
-              psql "$DB_URL" -At -c "SELECT timeline_id, lsn FROM pg_current_wal_lsn() f(lsn);" 2>&1
-              psql "$DB_URL" -At -c "SELECT CASE WHEN pg_is_in_recovery() THEN 'in recovery' ELSE 'primary (recovery=off)' END;" 2>&1
+              ls -lht /opt/nuotao/backups 2>/dev/null | head -10 || echo "no /opt/nuotao/backups"
+              echo "--- 近 7 天 dump 文件 ---"
+              find /var/backups /opt/nuotao -maxdepth 4 -type f \( -name '*.sql*.gz' -o -name '*.sql.gz' -o -name '*.dump*' \) -newermt '-7 days' 2>/dev/null | head -10 || true
+              echo "--- 备份 cron ---"
+              crontab -l 2>/dev/null | grep -iE 'dump|backup|pg_' || echo "no backup cron in this user crontab"
+              sudo -n crontab -l 2>/dev/null | grep -iE 'dump|backup|pg_' || echo "no backup cron in root crontab"
+              echo "--- PostgreSQL 容器 ---"
+              docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | grep -iE 'postgres|nuotao' | head -10 || echo "docker not available"
+              echo "--- WAL / 恢复点 ---"
+              $PSQL "SELECT pg_current_wal_lsn();" 2>&1
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
-              echo "--- b2b_lead_quotes 存在性与索引 ---"
-              psql "$DB_URL" -At -c "
-              SELECT 'quotes_table=' || (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='b2b_lead_quotes');
-              SELECT 'quotes_rows=' || COUNT(*) FROM b2b_lead_quotes;
-              " 2>&1
-              psql "$DB_URL" -At -c "
-              SELECT indexname FROM pg_indexes WHERE tablename='b2b_lead_quotes' ORDER BY indexname;" 2>&1
+              $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;" 2>&1
+              echo "--- b2b_lead_quotes ---"
+              $PSQL "SELECT 'quotes_table_exists=' || (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='b2b_lead_quotes');" 2>&1
+              $PSQL "SELECT 'quotes_rows=' || COUNT(*) FROM b2b_lead_quotes;" 2>&1
+              $PSQL "SELECT 'quote_index=' || indexname FROM pg_indexes WHERE tablename='b2b_lead_quotes' ORDER BY indexname;" 2>&1
               echo "--- b2b_leads 新增列 ---"
-              psql "$DB_URL" -At -c "
-              SELECT column_name || ':' || data_type FROM information_schema.columns
+              $PSQL "
+              SELECT column_name || ':' || data_type
+              FROM information_schema.columns
               WHERE table_schema='public' AND table_name='b2b_leads'
-                AND column_name IN ('trace_id','is_test','notify_status','notify_attempts','notify_last_error','notified_at','closed_won_reason','notify_channel')
+                AND column_name IN ('trace_id','is_test','notify_status','notify_attempts','notify_last_error','notified_at','closed_won_reason')
               ORDER BY column_name;" 2>&1
-              echo "--- 状态约束 SQL（含 CHECK 定义）---"
-              psql "$DB_URL" -At -c "
-              SELECT pg_get_constraintdef(oid) FROM pg_constraint
+              echo "--- 状态 CHECK 约束定义 ---"
+              $PSQL "
+              SELECT conname || ' => ' || pg_get_constraintdef(oid)
+              FROM pg_constraint
               WHERE conrelid='b2b_leads'::regclass AND contype='c' ORDER BY conname;" 2>&1
               echo "--- Lead 完整性复核 ---"
-              psql "$DB_URL" -At -c "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;" 2>&1
-              psql "$DB_URL" -At -c "
+              $PSQL "SELECT 'lead_total=' || COUNT(*) FROM b2b_leads;" 2>&1
+              $PSQL "
               SELECT 'matched_count=' || COUNT(*) FROM b2b_leads
               WHERE reference_number IN ('LD-20261117-6B43B6','LD-20261117-3ECF02');" 2>&1
-              echo "--- 统计排除验证（排除 is_test 与 spam）---"
-              psql "$DB_URL" -At -c "
+              echo "--- 经营统计排除验证（排除 is_test 与 spam）---"
+              $PSQL "
               SELECT 'valid_leads=' || COUNT(*) FROM b2b_leads
               WHERE is_test IS DISTINCT FROM true AND status <> 'spam';" 2>&1
             fi
