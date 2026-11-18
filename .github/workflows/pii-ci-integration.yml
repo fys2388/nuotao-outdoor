@@ -1,0 +1,56 @@
+name: PII CI Integration Test (APR-PII-CI-001)
+
+# 临时 PostgreSQL 集成验证：0086 init -> 0087 apply -> 合成回填 -> 对账 ->
+# 重复/中断/重试 -> 密钥缺失/错误/密文损坏 -> 回滚 -> 清理。
+# Owner 边界：不连接生产、无真实数据、无生产密钥；本次不批准任何生产 PII 操作。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "backend/tests/test_pii_ci_integration.py"
+      - "backend/app/core/pii_crypto.py"
+      - "backend/alembic/versions/0087_b2b_pii_encryption.py"
+      - "backend/app/models/b2b_leads.py"
+      - "backend/scripts/backfill_pii_fields_m440.py"
+
+jobs:
+  pii-ci:
+    name: PII CI Integration Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nuotao_pii_ci
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest
+
+      - name: Run PII CI integration test
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/nuotao_pii_ci
+          PII_HMAC_KEY: ci-test-hmac-key-0001
+          PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODw==
+        run: |
+          cd backend
+          python -m pytest tests/test_pii_ci_integration.py -v -x --tb=short
