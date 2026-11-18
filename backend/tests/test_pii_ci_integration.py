@@ -28,6 +28,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, text
 
+from app.core.config import get_settings
 from app.core.pii_crypto import (
     PiiCryptoError,
     build_email_hash,
@@ -230,9 +231,11 @@ def test_repeat_idempotent(migrated, engine, keys):
 # ---------------------------------------------------------------------------
 def test_key_missing_fail_closed(migrated, engine):
     os.environ.pop("PII_ENCRYPTION_KEY", None)
+    get_settings.cache_clear()
     with pytest.raises(PiiCryptoError):
         encrypt_field("x@example.com")
     os.environ["PII_ENCRYPTION_KEY"] = TEST_ENC_KEY
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +244,11 @@ def test_key_missing_fail_closed(migrated, engine):
 def test_wrong_key_rejects(keys, migrated, engine):
     ct = encrypt_field("wrong-key@example.com")
     os.environ["PII_ENCRYPTION_KEY"] = "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="  # 不同 32B
+    get_settings.cache_clear()
     with pytest.raises(PiiCryptoError):
         decrypt_field(ct)
     os.environ["PII_ENCRYPTION_KEY"] = TEST_ENC_KEY
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
