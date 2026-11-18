@@ -92,7 +92,7 @@ def keys():
 
 
 def _insert_lead(engine, email: str, name: str, ref: str, workspace: str = "ci-ws"):
-    lead_id = uuid.uuid4().int & 0xFFFFFFFFFFFFFFFF
+    lead_id = str(uuid.uuid4())
     with engine.begin() as conn:
         conn.execute(
             text(
