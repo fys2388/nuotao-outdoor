@@ -31,12 +31,20 @@ from app.models.base import AI_JSON, Base, TimestampMixin, WorkspaceMixin
 # Public lead lifecycle (distinct from b2b_agents account statuses).
 # M2.5.1: split terminal "closed" into converted / closed_lost / spam so that
 # commercial reporting can distinguish won, lost and junk enquiries.
+# M440-02: expand to the full sales-workflow state machine required by the
+# M4.4 instruction (NEW/ASSIGNED/CONTACTED/QUALIFIED/QUOTING/QUOTED/
+# NEGOTIATING/CONVERTED/CLOSED_WON/CLOSED_LOST/SPAM). "reviewing" is dropped
+# (replaced by ASSIGNED) and the quoting/negotiating/closed_won states are added.
 B2B_LEAD_STATUSES = [
     "new",
-    "reviewing",
-    "qualified",
+    "assigned",
     "contacted",
+    "qualified",
+    "quoting",
+    "quoted",
+    "negotiating",
     "converted",
+    "closed_won",
     "closed_lost",
     "spam",
 ]
@@ -114,10 +122,25 @@ class B2BLead(Base, TimestampMixin, WorkspaceMixin):
     closed_lost_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     spam_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # M440-02/M440-05/M440-07: full sales-workflow state machine additions.
+    # - closed_won_reason: documented win note for the closed_won terminal state.
+    # - trace_id: provenance trace for the lead request chain.
+    # - is_test: validation/test lead marker (excluded from real commercial stats).
+    # - notify_status/notify_attempts/notify_last_error/notified_at:
+    #   notification reliability (M440-05) - track, retry, never double-notify.
+    closed_won_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_test: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    notify_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    notify_attempts: Mapped[int | None] = mapped_column(nullable=True)
+    notify_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         UniqueConstraint("reference_number", name="uq_b2b_leads_reference_number"),
         CheckConstraint(
-            "status IN ('new','reviewing','qualified','contacted','converted','closed_lost','spam')",
+            "status IN ('new','assigned','contacted','qualified','quoting',"
+            "'quoted','negotiating','converted','closed_won','closed_lost','spam')",
             name="ck_b2b_leads_status",
         ),
         CheckConstraint(

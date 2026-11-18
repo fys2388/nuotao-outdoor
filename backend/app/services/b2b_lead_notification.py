@@ -99,6 +99,23 @@ async def notify_new_lead(db: AsyncSession, lead) -> dict[str, Any]:
         if result.get("success"):
             any_success = True
 
+    # M440-05: record notification lifecycle on the lead so failures are
+    # traceable and retryable. Never includes PII.
+    lead.notify_attempts = int(lead.notify_attempts or 0) + 1
+    lead.notify_status = "sent" if any_success else "failed"
+    if any_success:
+        from datetime import datetime, timezone
+
+        lead.notified_at = datetime.now(timezone.utc)
+        lead.notify_last_error = None
+    else:
+        last_error = next(
+            (r.get("error") for r in results if not r.get("success")),
+            "all recipients failed",
+        )
+        lead.notify_last_error = str(last_error)[:500]
+    await db.commit()
+
     if not any_success:
         # Append-only audit event; retryable. Contains reference only, no PII.
         await event_service.create_event(

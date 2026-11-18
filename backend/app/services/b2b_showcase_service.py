@@ -27,17 +27,25 @@ from app.services import event_service
 
 logger = logging.getLogger(__name__)
 
-# 合法的线索状态迁移（内部管理用）。M2.5.1 终态拆分：
-# - converted: 赢单（由 convert_lead_to_application 显式设置，须关联真实 agent）。
+# 合法的线索状态迁移（内部管理用）。M2.5.1 终态拆分；M440-02 扩展为
+# 完整销售工作流（NEW/ASSIGNED/CONTACTED/QUALIFIED/QUOTING/QUOTED/
+# NEGOTIATING/CONVERTED/CLOSED_WON/CLOSED_LOST/SPAM）：
+# - converted: 转正式伙伴申请（由 convert_lead_to_application 显式设置，须关联真实 agent）。
+# - closed_won: 赢单（报价/谈判后成交，须记录成交信息）。
 # - closed_lost: 有记录的流失（须提供 reason）。
 # - spam: 垃圾询盘（须提供 reason，区别于正当 closed_lost）。
 LEAD_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "new": {"reviewing", "qualified", "closed_lost", "spam"},
-    "reviewing": {"qualified", "contacted", "closed_lost", "spam"},
-    "qualified": {"contacted", "closed_lost", "spam"},
-    "contacted": {"qualified", "closed_lost", "spam"},
-    # converted / closed_lost / spam 是终态（converted 由专门的 convert 动作进入）。
+    "new": {"assigned", "contacted", "qualified", "closed_lost", "spam"},
+    "assigned": {"contacted", "qualified", "closed_lost", "spam"},
+    "contacted": {"qualified", "quoting", "closed_lost", "spam"},
+    "qualified": {"contacted", "quoting", "closed_lost", "spam"},
+    "quoting": {"quoted", "qualified", "closed_lost", "spam"},
+    "quoted": {"negotiating", "closed_won", "closed_lost", "spam"},
+    "negotiating": {"quoted", "closed_won", "closed_lost", "spam"},
+    # converted / closed_won / closed_lost / spam 是终态。
+    # converted 由专门的 convert 动作进入；closed_won 由报价/谈判后显式设置。
     "converted": set(),
+    "closed_won": set(),
     "closed_lost": set(),
     "spam": set(),
 }
@@ -423,6 +431,10 @@ async def update_lead(
             lead.spam_reason = (internal_notes or "").strip() or lead.spam_reason
             if not (lead.spam_reason or "").strip():
                 raise LeadStateError("spam requires a documented reason")
+        if status == "closed_won":
+            # M440-02: closed_won is a terminal won state. A win note is
+            # encouraged (recorded in closed_won_reason) but not mandatory.
+            lead.closed_won_reason = (internal_notes or "").strip() or lead.closed_won_reason
         events.append(
             (
                 "b2b_lead.status_changed",
@@ -510,3 +522,97 @@ async def convert_lead_to_application(
         "Lead %s converted to agent %s", lead.reference_number, agent_id
     )
     return lead
+
+
+# ============================================
+# 内部 admin：Lead 经营统计（M440-08）
+# ============================================
+
+
+async def lead_stats(
+    db: AsyncSession,
+    *,
+    workspace_id: UUID = DEFAULT_WORKSPACE_ID,
+) -> dict[str, Any]:
+    """Lead 经营统计（M440-08）。
+
+    测试/垃圾/无效 Lead（is_test=true 或 status=spam）排除在 valid_* 之外；
+    缺失数据不补造（conversion_rate 在无有效 Lead 时为 None）。
+    """
+    scope = B2BLead.workspace_id == workspace_id
+    total = int((await db.execute(select(func.count()).where(scope))).scalar_one())
+    valid = int(
+        (
+            await db.execute(
+                select(func.count()).where(scope, B2BLead.is_test.isnot(True))
+            )
+        ).scalar_one()
+    )
+    valid_and_real = int(
+        (
+            await db.execute(
+                select(func.count()).where(
+                    scope,
+                    B2BLead.is_test.isnot(True),
+                    B2BLead.status != "spam",
+                )
+            )
+        ).scalar_one()
+    )
+    status_rows = (
+        await db.execute(
+            select(B2BLead.status, func.count()).where(scope).group_by(B2BLead.status)
+        )
+    ).all()
+    by_status = {str(status): int(count) for status, count in status_rows}
+    country_rows = (
+        await db.execute(
+            select(B2BLead.country, func.count())
+            .where(scope, B2BLead.is_test.isnot(True))
+            .group_by(B2BLead.country)
+        )
+    ).all()
+    by_country = {str(country): int(count) for country, count in country_rows}
+
+    from app.models.b2b_lead_quote import B2BLeadQuote
+
+    quotes_total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(B2BLeadQuote)
+                .join(B2BLead, B2BLeadQuote.lead_id == B2BLead.id)
+                .where(scope)
+            )
+        ).scalar_one()
+    )
+    quotes_approved = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(B2BLeadQuote)
+                .join(B2BLead, B2BLeadQuote.lead_id == B2BLead.id)
+                .where(scope, B2BLeadQuote.approval_status == "approved")
+            )
+        ).scalar_one()
+    )
+    converted = int(
+        (
+            await db.execute(
+                select(func.count()).where(
+                    scope, B2BLead.status.in_(["converted", "closed_won"])
+                )
+            )
+        ).scalar_one()
+    )
+    conversion_rate = (converted / valid_and_real) if valid_and_real else None
+    return {
+        "total_leads": total,
+        "valid_leads": valid_and_real,
+        "by_status": by_status,
+        "by_country": by_country,
+        "quotes_total": quotes_total,
+        "quotes_approved": quotes_approved,
+        "converted_leads": converted,
+        "conversion_rate": conversion_rate,
+    }

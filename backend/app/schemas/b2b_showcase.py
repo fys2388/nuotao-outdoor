@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
@@ -114,6 +115,62 @@ class B2BLeadUpdateRequest(BaseModel):
     assigned_to: str | None = Field(None, max_length=128)
     internal_notes: str | None = None
     follow_up: dict[str, Any] | None = None
+
+
+class B2BQuoteCreate(BaseModel):
+    """Create the next quote version for a lead (internal only, M440-04)."""
+
+    unit_price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    currency: str = Field(min_length=3, max_length=8, default="USD")
+    quantity: int = Field(ge=1, default=1)
+    shipping_cost: Decimal = Field(ge=0, max_digits=12, decimal_places=2, default=0)
+    valid_until: datetime | None = None
+    payment_terms: str | None = Field(max_length=64)
+    shipping_terms: str | None = Field(max_length=64)
+    notes: str | None = None
+
+
+class B2BQuoteResponse(BaseModel):
+    quote_id: UUID
+    lead_id: UUID
+    quote_number: str
+    quote_version: int
+    currency: str
+    unit_price: Decimal
+    quantity: int
+    shipping_cost: Decimal
+    estimated_total: Decimal
+    valid_until: datetime | None
+    payment_terms: str | None
+    shipping_terms: str | None
+    approval_status: str
+    approved_by: str | None
+    approved_at: datetime | None
+    created_by: str | None
+    notes: str | None
+    created_at: datetime
+
+
+class B2BQuoteListResponse(BaseModel):
+    total: int
+    items: list[B2BQuoteResponse]
+
+
+class B2BLeadStatsResponse(BaseModel):
+    """M440-08: lead commercial statistics.
+
+    Test / spam / invalid leads are excluded from valid counts (``valid_*``),
+    never fabricated when data is missing.
+    """
+
+    total_leads: int
+    valid_leads: int
+    by_status: dict[str, int]
+    by_country: dict[str, int]
+    quotes_total: int
+    quotes_approved: int
+    converted_leads: int
+    conversion_rate: float | None
 
 
 class B2BLeadConvertResponse(BaseModel):

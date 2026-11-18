@@ -14,7 +14,12 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
+from app.api.v1.endpoints.auth import (
+    UserResponse,
+    get_current_user,
+    get_current_workspace_id,
+    require_role,
+)
 from app.core.database import get_db
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product
@@ -23,8 +28,12 @@ from app.schemas.b2b_showcase import (
     B2BLeadAdminResponse,
     B2BLeadConvertResponse,
     B2BLeadListResponse,
+    B2BLeadStatsResponse,
     B2BLeadUpdateRequest,
     B2BPublicCategory,
+    B2BQuoteCreate,
+    B2BQuoteListResponse,
+    B2BQuoteResponse,
     B2BPublicLeadCreate,
     B2BPublicLeadCreatedResponse,
     B2BPublicProduct,
@@ -37,6 +46,7 @@ from app.services.b2b_showcase_service import (
     convert_lead_to_application,
     create_public_lead,
     get_lead,
+    lead_stats,
     get_public_product,
     list_leads,
     list_public_categories,
@@ -177,6 +187,16 @@ def _lead_to_response(lead) -> B2BLeadAdminResponse:
     )
 
 
+@admin_router.get("/stats", response_model=B2BLeadStatsResponse)
+async def admin_lead_stats(
+    db: AsyncSession = Depends(get_db),
+    workspace_id: UUID = Depends(get_current_workspace_id),
+    _user=Depends(get_current_user),
+) -> B2BLeadStatsResponse:
+    """Lead 经营统计（M440-08）：排除测试/垃圾/无效 Lead；缺失数据不补造。"""
+    return B2BLeadStatsResponse(**lead_stats(db, workspace_id=workspace_id))
+
+
 @admin_router.get("", response_model=B2BLeadListResponse)
 async def admin_list_leads(
     page: int = Query(1, ge=1),
@@ -218,7 +238,7 @@ async def admin_update_lead(
     payload: B2BLeadUpdateRequest,
     db: AsyncSession = Depends(get_db),
     workspace_id: UUID = Depends(get_current_workspace_id),
-    user=Depends(get_current_user),
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> B2BLeadAdminResponse:
     lead = await get_lead(db, lead_id, workspace_id=workspace_id)
     if lead is None:
@@ -231,7 +251,7 @@ async def admin_update_lead(
             assigned_to=payload.assigned_to,
             internal_notes=payload.internal_notes,
             follow_up=payload.follow_up,
-            actor=str(getattr(user, "email", None) or getattr(user, "id", user)),
+            actor=str(getattr(_user, "email", None) or getattr(_user, "id", _user)),
         )
     except LeadStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -248,7 +268,7 @@ async def admin_convert_lead(
     payload: B2BLeadConvertRequest,
     db: AsyncSession = Depends(get_db),
     workspace_id: UUID = Depends(get_current_workspace_id),
-    _user=Depends(get_current_user),
+    _user: UserResponse = Depends(require_role("operator")),
 ) -> B2BLeadConvertResponse:
     lead = await get_lead(db, lead_id, workspace_id=workspace_id)
     if lead is None:
@@ -264,6 +284,121 @@ async def admin_convert_lead(
         application_id=str(lead.converted_application_id),
         message="Lead converted into a formal B2B partner application.",
     )
+
+
+# ============================================
+# 内部 admin：报价管理（M440-04）
+# ============================================
+
+
+def _quote_to_schema(quote) -> B2BQuoteResponse:
+    return B2BQuoteResponse(
+        quote_id=quote.id,
+        lead_id=quote.lead_id,
+        quote_number=quote.quote_number,
+        quote_version=quote.quote_version,
+        currency=quote.currency,
+        unit_price=quote.unit_price,
+        quantity=quote.quantity,
+        shipping_cost=quote.shipping_cost,
+        estimated_total=quote.estimated_total,
+        valid_until=quote.valid_until,
+        payment_terms=quote.payment_terms,
+        shipping_terms=quote.shipping_terms,
+        approval_status=quote.approval_status,
+        approved_by=quote.approved_by,
+        approved_at=quote.approved_at,
+        created_by=quote.created_by,
+        notes=quote.notes,
+        created_at=quote.created_at,
+    )
+
+
+@admin_router.post("/{lead_id}/quotes", response_model=B2BQuoteResponse)
+async def admin_create_quote(
+    lead_id: UUID,
+    body: B2BQuoteCreate,
+    db: AsyncSession = Depends(get_db),
+    workspace_id: UUID = Depends(get_current_workspace_id),
+    _user: UserResponse = Depends(require_role("operator")),
+) -> B2BQuoteResponse:
+    """创建 Lead 的下一版报价（内部，未审批；不会自动发送给客户）。"""
+    from app.services.b2b_lead_quote_service import QuoteError, create_quote
+
+    lead = await get_lead(db, lead_id, workspace_id=workspace_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    try:
+        quote = await create_quote(
+            db,
+            lead=lead,
+            unit_price=float(body.unit_price),
+            currency=body.currency,
+            quantity=body.quantity,
+            shipping_cost=float(body.shipping_cost),
+            valid_until=body.valid_until,
+            payment_terms=body.payment_terms,
+            shipping_terms=body.shipping_terms,
+            notes=body.notes,
+            actor=str(getattr(_user, "email", None) or getattr(_user, "id", _user)),
+            workspace_id=workspace_id,
+        )
+    except QuoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _quote_to_schema(quote)
+
+
+@admin_router.get("/{lead_id}/quotes", response_model=B2BQuoteListResponse)
+async def admin_list_quotes(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    workspace_id: UUID = Depends(get_current_workspace_id),
+    _user=Depends(get_current_user),
+) -> B2BQuoteListResponse:
+    """列出 Lead 的全部报价版本（内部）。"""
+    from app.services.b2b_lead_quote_service import list_quotes
+
+    lead = await get_lead(db, lead_id, workspace_id=workspace_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    quotes = await list_quotes(db, lead_id=lead_id, workspace_id=workspace_id)
+    return B2BQuoteListResponse(total=len(quotes), items=[_quote_to_schema(q) for q in quotes])
+
+
+@admin_router.post("/quotes/{quote_id}/approve", response_model=B2BQuoteResponse)
+async def admin_approve_quote(
+    quote_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    workspace_id: UUID = Depends(get_current_workspace_id),
+    _user: UserResponse = Depends(require_role("operator")),
+) -> B2BQuoteResponse:
+    """审批报价（人工闸门；审批后报价不可覆盖，只能创建新版本）。"""
+    from app.services.b2b_lead_quote_service import QuoteError, approve_quote
+
+    actor = str(getattr(_user, "email", None) or getattr(_user, "id", _user))
+    try:
+        quote = await approve_quote(db, quote_id=quote_id, actor=actor, workspace_id=workspace_id)
+    except QuoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _quote_to_schema(quote)
+
+
+@admin_router.post("/quotes/{quote_id}/reject", response_model=B2BQuoteResponse)
+async def admin_reject_quote(
+    quote_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    workspace_id: UUID = Depends(get_current_workspace_id),
+    _user: UserResponse = Depends(require_role("operator")),
+) -> B2BQuoteResponse:
+    """拒绝报价（人工闸门）。"""
+    from app.services.b2b_lead_quote_service import QuoteError, reject_quote
+
+    actor = str(getattr(_user, "email", None) or getattr(_user, "id", _user))
+    try:
+        quote = await reject_quote(db, quote_id=quote_id, actor=actor, workspace_id=workspace_id)
+    except QuoteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _quote_to_schema(quote)
 
 
 # ============================================
