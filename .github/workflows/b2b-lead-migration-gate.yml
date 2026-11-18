@@ -149,14 +149,28 @@ jobs:
               echo "=== 容器内代码头版本（对照）==="
               docker exec nuotao-ai-os-scheduler-1 sh -lc 'ls alembic/versions/ | tail -4' 2>&1 || true
 
-              echo "=== 执行迁移（docker run：挂载生产代码 + 共享 scheduler 网络栈）==="
-              docker run --rm \
-                --network container:nuotao-ai-os-scheduler-1 \
-                -v "$CODE_ROOT/backend":/app -w /app \
-                -e "DATABASE_URL=$DBU" \
-                nuotao-ai-os-scheduler:latest \
-                sh -lc 'alembic heads; echo "--- upgrade ---"; alembic upgrade head' 2>&1
-              MIG_RC=$?
+              echo "=== 迁移执行路径选择 ==="
+              VENV_ALEMBIC="$CODE_ROOT/backend/.venv/bin/alembic"
+              ls -la "$VENV_ALEMBIC" 2>&1 || echo "host venv alembic MISSING"
+              # 宿主机后端 Python 环境用 psycopg，连接串为 localhost:5432（容器已做端口映射）；
+              # scheduler 镜像只装了 asyncpg，缺 psycopg，故优先走宿主 venv。
+              if [ -x "$VENV_ALEMBIC" ]; then
+                echo "=== 执行迁移（宿主 venv alembic）==="
+                cd "$CODE_ROOT/backend"
+                "$VENV_ALEMBIC" heads 2>&1
+                echo "--- upgrade ---"
+                "$VENV_ALEMBIC" upgrade head 2>&1
+                MIG_RC=$?
+              else
+                echo "=== 执行迁移（docker run：挂载生产代码 + 补装 psycopg）==="
+                docker run --rm \
+                  --network container:nuotao-ai-os-scheduler-1 \
+                  -v "$CODE_ROOT/backend":/app -w /app \
+                  -e "DATABASE_URL=$DBU" \
+                  nuotao-ai-os-scheduler:latest \
+                  sh -lc 'pip install --quiet "psycopg[binary]" >/dev/null 2>&1 || pip install --quiet psycopg >/dev/null 2>&1; alembic upgrade head' 2>&1
+                MIG_RC=$?
+              fi
               echo "MIGRATE_RC=$MIG_RC"
               if [ "$MIG_RC" != "0" ]; then
                 echo "MIGRATION_FAILED: 保留证据，不手工改 revision、不 stamp -> STOP"
