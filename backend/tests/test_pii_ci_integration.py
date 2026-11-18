@@ -256,11 +256,10 @@ def test_wrong_key_rejects(keys, migrated, engine):
 # ---------------------------------------------------------------------------
 def test_corrupted_ciphertext_rejects(keys, migrated, engine):
     ct = encrypt_field("corrupt@example.com")
-    raw = bytearray(ct)
-    # 翻转 payload 中间若干字节（iv 之后的密文段）
-    idx = len(raw) // 2
-    raw[idx] ^= 0x01
-    corrupted = bytes(raw)
+    # 在 base64 密文字符串中间替换一个字符（保持合法 base64，破坏 iv/密文/tag）
+    mid = len(ct) // 2
+    alt = "A" if ct[mid] != "A" else "B"
+    corrupted = ct[:mid] + alt + ct[mid + 1 :]
     with pytest.raises(PiiCryptoError):
         decrypt_field(corrupted)
 
