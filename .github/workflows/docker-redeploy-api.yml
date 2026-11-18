@@ -105,19 +105,15 @@ jobs:
                 [ -z "$line" ] && continue
                 ARGS="$ARGS -e $line"
               done <<< "$WENV"
+              # M4.4-INC-001/APR-INC-002 (Owner 核心): 普通应用部署不自动迁移。
+              # 容器重建/部署只启动服务；数据库迁移统一走
+              # B2B Lead Migration Gate workflow（fail-closed 门禁）。
               docker run -d --name nuotao-ai-os-api-1 \
                 --network "$NET" --restart unless-stopped \
                 -p 8000:8000 \
-                -v /opt/nuotao-ai-os/infra:/app/infra:ro \
                 $ARGS \
                 nuotao-ai-os-api:latest \
-                sh -c "
-                  # M4.4-INC-001/APR-INC-002: 容器迁移授权门禁（fail-closed）
-                  APP=/app/infra/migration_approvals.yaml
-                  if [ ! -r \"\$APP\" ]; then echo 'MIGRATE_GATE_FAIL: approval list missing/unreadable'; exit 1; fi
-                  APPROVED=\$(grep -E '^approved_revision:' \"\$APP\" | awk '{print \$2}' | tr -d '\"')
-                  bash /app/infra/migration_gate.sh \"\$APPROVED\" || exit 1
-                  alembic upgrade \"\$APPROVED\" && uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
+                sh -c "exec uvicorn app.main:app --host 0.0.0.0 --port 8000" 2>&1 || echo "(docker run failed)"
               sleep 15
             fi
             docker compose -f docker-compose.yml ps api 2>&1

@@ -54,6 +54,49 @@ MIGRATION_APPROVALS="/tmp/empty_approvals.yaml" \
   bash "$ROOT/migration_gate.sh" 0086 >"$TMPLOG" 2>&1
 check "empty approved_revision" 1
 
+# 7. 测试A（Owner APR-INC-002 补测）: 容器读取批准清单权限不足。
+#    文件存在但运行用户无读取权限 -> gate 必须拒绝迁移，无默认版本、无 head 回退、
+#    错误日志明确。先确认测试环境确实能触发权限拒绝（cat as nobody 失败）。
+cp "$ROOT/migration_approvals.yaml" /tmp/noaccess_approvals.yaml
+chmod 000 /tmp/noaccess_approvals.yaml
+if command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
+  if ! runuser -u nobody -- cat /tmp/noaccess_approvals.yaml >/dev/null 2>&1; then
+    echo "confirmed: permission denied is reproducible (nobody cannot read chmod 000 file)"
+    MIGRATION_APPROVALS=/tmp/noaccess_approvals.yaml \
+      runuser -u nobody -- bash "$ROOT/migration_gate.sh" 0086 >"$TMPLOG" 2>&1
+    check "container read approval list permission denied" 1
+    if grep -q "FAIL-CLOSED" "$TMPLOG"; then
+      PASS=$((PASS + 1)); echo "PASS: permission denied emits FAIL-CLOSED"
+    else
+      FAIL=$((FAIL + 1)); echo "FAIL: permission denied missing FAIL-CLOSED"
+    fi
+  else
+    echo "SKIP: permission denied not reproducible (nobody can read chmod 000 file)"
+  fi
+else
+  echo "SKIP: no runuser/nobody on this host"
+fi
+rm -f /tmp/noaccess_approvals.yaml
+
+# 8. 测试B（Owner APR-INC-002 补测）: 容器恢复不自动迁移。
+#    docker-restore 的容器启动命令不得包含任何迁移调用（alembic / migration_gate /
+#    upgrade），批准清单存在也不得自动升级；容器启动只执行 uvicorn。
+RESTORE_WF="$ROOT/../.github/workflows/docker-restore-api.yml"
+if [ -f "$RESTORE_WF" ]; then
+  if grep -qE 'alembic (upgrade|current)|migration_gate|upgrade head' "$RESTORE_WF"; then
+    FAIL=$((FAIL + 1)); echo "FAIL: docker-restore contains migration call (must have none)"
+  else
+    PASS=$((PASS + 1)); echo "PASS: docker-restore container start has no migration call"
+  fi
+  if grep -qE 'sh -c "exec uvicorn' "$RESTORE_WF"; then
+    PASS=$((PASS + 1)); echo "PASS: docker-restore starts only uvicorn (no alembic)"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: docker-restore does not start uvicorn-only"
+  fi
+else
+  echo "SKIP: docker-restore-api.yml not found"
+fi
+
 rm -f "$TMPLOG" /tmp/bad_approvals.yaml /tmp/empty_approvals.yaml
 
 echo "=== migration_gate negative tests: pass=$PASS fail=$FAIL ==="
