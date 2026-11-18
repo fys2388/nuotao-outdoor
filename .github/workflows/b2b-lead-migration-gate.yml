@@ -16,6 +16,8 @@ on:
           - preflight
           - migrate
           - postverify
+          - mark-test-leads-dry
+          - mark-test-leads
         default: preflight
 
 env:
@@ -188,6 +190,28 @@ jobs:
               else
                 echo "MIGRATION_OK: 0084 -> 0086"
               fi
+            elif [ "${{ inputs.phase }}" = "mark-test-leads-dry" ]; then
+              echo "=== 标记测试 Lead（APR-M440-DATA-001）：dry-run，只读 ==="
+              cd "$CODE_ROOT/backend"
+              .venv/bin/python scripts/mark_test_leads_m440.py --dry-run 2>&1
+            elif [ "${{ inputs.phase }}" = "mark-test-leads" ]; then
+              echo "=== 标记测试 Lead（APR-M440-DATA-001）：执行 + 审计 + 复核 ==="
+              ls -la "$CODE_ROOT/backend/scripts/mark_test_leads_m440.py" 2>&1 \
+                || { echo "SCRIPT_MISSING: 生产无受控脚本 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
+              cd "$CODE_ROOT/backend"
+              .venv/bin/python scripts/mark_test_leads_m440.py 2>&1
+              MARK_RC=$?
+              echo "MARK_RC=$MARK_RC"
+              if [ "$MARK_RC" != "0" ]; then
+                echo "MARK_FAILED: 脚本中止（命中数不是 2 或写库失败）-> 保留证据"
+              fi
+              echo "=== 事件审计复核（event_log 中的 test_flagged 事件）==="
+              $PSQL "
+              SELECT 'event=' || event_type || ' | entity=' || entity_type || ':' || entity_id
+                     || ' | payload=' || COALESCE(payload::text, '{}') || ' | at=' || COALESCE(created_at::text, 'NULL')
+              FROM event_log
+              WHERE event_type = 'b2b_lead.test_flagged'
+              ORDER BY created_at DESC LIMIT 4;"
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
               $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;"
