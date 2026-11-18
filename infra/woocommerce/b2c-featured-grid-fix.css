@@ -1,0 +1,36 @@
+/* =============================================================================
+   B2C 首页 Featured Outdoor Gear 产品网格塌陷修复（P0-1）
+   Owner 决策：批准 B 方案（CSS 定点修复），生产发布前须二次确认。
+   详见 docs/reports/B2C_FEATURED_GRID_P0_FIX.md
+
+   根因：
+     WooCommerce 默认布局 woocommerce-layout.css 仍给
+     `.woocommerce ul.products li.product` 设 `width:22.05%`（float 时代 4 列遗留值）。
+     本站首页该 ul 被 Elementor/Jeg Kit 主题设为 display:grid（4 列 × ~258px）。
+     22.05% × grid track(258px) ≈ 57px → 8 个产品卡片塌陷成内容宽，几乎不可见。
+
+   作用域（Owner 硬约束：禁止全站通用 li.product）：
+     整页唯一 ul.products 位于首页 Elementor widget data-id="58c34fe9"
+     （parent container data-id="36daa0a"，page id 778）。
+     故用 Elementor 唯一 widget id 限定，绝不外溢到分类页/相关产品模块。
+
+   回滚：删除下方整段规则即可 100% 还原（无其他文件改动）。
+   ============================================================================= */
+
+/* 修复前实测（2026-11-18，桌面 1320×631）：
+   ul.products.columns-4  width=1092  grid-template-columns=258px×4  display=grid
+   li.product             width=56.89px（应为 ~258px）  display=list-item  justify-self=auto
+   WooCommerce 规则来源：.woocommerce ul.products li.product { width:22.05% }
+*/
+
+/* 定点修复：仅首页 Featured widget 内的产品卡片填满 grid 列 */
+.elementor-element-58c34fe9 ul.products.columns-4 > li.product {
+  width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+/* 可选加固：确保卡片在 grid 轨道内正常排布（若主题未覆盖 display） */
+.elementor-element-58c34fe9 ul.products.columns-4 {
+  display: grid;
+}
