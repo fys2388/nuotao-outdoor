@@ -51,9 +51,12 @@ jobs:
             alembic current 2>&1 || echo "alembic current failed (may need fix)"
 
             echo ""
-            echo "=== Try alembic upgrade head ==="
+            echo "=== Try alembic upgrade (approved revision only, M4.4-INC-001) ==="
             set +e
-            UPGRADE_OUTPUT=$(alembic upgrade head 2>&1)
+            APPROVED=$(grep -E '^approved_revision:' /opt/nuotao-ai-os/infra/migration_approvals.yaml | awk '{print $2}' | tr -d '"' || echo "")
+            if [ -z "$APPROVED" ]; then echo "MIGRATE_GATE_FAIL: no approved_revision"; exit 1; fi
+            bash /opt/nuotao-ai-os/infra/migration_gate.sh "$APPROVED"
+            UPGRADE_OUTPUT=$(alembic upgrade "$APPROVED" 2>&1)
             UPGRADE_EXIT=$?
             echo "$UPGRADE_OUTPUT"
             set -e
@@ -61,13 +64,15 @@ jobs:
               echo "alembic upgrade failed (exit=$UPGRADE_EXIT)"
               if echo "$UPGRADE_OUTPUT" | grep -qiE "DuplicateTable|already exists|relation .* already exists"; then
                 echo "Detected DuplicateTable — tables likely created via create_all. Stamping 0026 and continuing..."
+                # WARN(M4.4-INC-001): stamp 是应急修复手段，仅限本工具人工触发，
+                # 且目标 revision 必须仍在批准清单内；禁止用于未批准 revision。
                 alembic stamp 0026
-                echo "Stamped to 0026. Continuing upgrade to head..."
-                alembic upgrade head
+                echo "Stamped to 0026. Continuing upgrade to approved..."
+                alembic upgrade "$APPROVED"
               else
                 echo "Non-DuplicateTable failure. Attempting stamp 0025 and retry..."
                 alembic stamp 0025
-                alembic upgrade head || echo "still failed, manual intervention needed"
+                alembic upgrade "$APPROVED" || echo "still failed, manual intervention needed"
               fi
             fi
 

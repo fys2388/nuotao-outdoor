@@ -1,0 +1,25 @@
+# 生产迁移批准清单（Owner 审批制，M4.4-INC-001 整改）
+#
+# 硬性原则（Owner 2026-11-18 指令）：
+#   1. 普通应用部署不自动迁移数据库。
+#   2. 生产迁移目标 revision 必须来自本独立批准清单。
+#   3. 未批准 revision 必须 fail-closed（中止，不执行）。
+#   4. 每次生产迁移记录 approval_id / target_revision / actor / run_id / 时间 / 结果。
+#
+# 提升 approved_revision 必须先获 Owner 明确授权（记录 approval_id），
+# 并把新 revision 加入 approved_list；任何未列入的 revision 一律拒绝。
+#
+# 注意：PII 加密（0087）未获生产批准，禁止加入本清单。
+
+approved_revision: "0086"
+
+approved_list:
+  - "0085"
+  - "0086"
+
+# 最近一次 Owner 批准记录（供审计追溯）
+last_approval:
+  approval_id: "APR-M440-DB-001"
+  approved_by: "Owner"
+  approved_at: "2026-11-18"
+  target_revision: "0086"

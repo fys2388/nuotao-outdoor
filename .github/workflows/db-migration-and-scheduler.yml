@@ -39,14 +39,17 @@ jobs:
           port: 22
           script: |
             set -e
-            cd /opt/nuotao/backend
+            cd /opt/nuotao-ai-os/backend
             source .venv/bin/activate
 
-            echo "=== 1. Running alembic upgrade head ==="
+            echo "=== 1. Running alembic upgrade (approved revision only, M4.4-INC-001) ==="
             # 注意：不在生产环境执行 `alembic revision --autogenerate`。
             # 迁移文件在仓库内版本化（backend/alembic/versions/），生产只消费。
             # 本地开发仍可用 autogenerate 生成新迁移后提交 PR。
-            alembic upgrade head 2>&1
+            # 生产迁移授权门禁：目标 revision 必须来自 Owner 批准清单，否则 fail-closed。
+            APPROVED=$(grep -E '^approved_revision:' /opt/nuotao-ai-os/infra/migration_approvals.yaml | awk '{print $2}' | tr -d '"')
+            bash /opt/nuotao-ai-os/infra/migration_gate.sh "$APPROVED"
+            alembic upgrade "$APPROVED" 2>&1
 
             echo "=== 2. Seeding agent config (idempotent) ==="
             python3 /opt/nuotao/backend/scripts/seed_agent_config.py 2>&1 || echo "[seed] seed failed (non-blocking)"

@@ -20,6 +20,7 @@ on:
           - mark-test-leads
           - pii-staging-verify
           - rollback-0087-prod
+          - inc001-schema-audit
         default: preflight
 
 env:
@@ -267,6 +268,32 @@ jobs:
               SELECT 'still_exists='||COUNT(*) FROM information_schema.columns
               WHERE table_name='b2b_leads' AND column_name='email_encrypted';"
               echo "=== ROLLBACK 0087 DONE ==="
+            elif [ "${{ inputs.phase }}" = "inc001-schema-audit" ]; then
+              echo "=== M4.4-INC-001 0087 回滚副作用审计（只读）==="
+              echo "--- revision ---"
+              $PSQL "SELECT 'revision='||version_num FROM alembic_version;"
+              echo "--- 0087 PII 列残留（应为 0）---"
+              $PSQL "
+              SELECT 'pii_columns='||COUNT(*) FROM information_schema.columns
+              WHERE table_name='b2b_leads' AND column_name IN
+                ('email_hash','email_encrypted','contact_name_encrypted','pii_key_version');"
+              echo "--- ux_b2b_leads_email_hash 索引残留（应为 0）---"
+              $PSQL "
+              SELECT 'pii_index='||COUNT(*) FROM pg_indexes
+              WHERE tablename='b2b_leads' AND indexname='ux_b2b_leads_email_hash';"
+              echo "--- b2b_lead_pii 相关触发器残留（应为 0）---"
+              $PSQL "
+              SELECT 'pii_triggers='||COUNT(*) FROM information_schema.triggers
+              WHERE event_object_table='b2b_leads' AND trigger_name LIKE '%pii%';"
+              echo "--- b2b_lead_quotes 完整性（应存在）---"
+              $PSQL "
+              SELECT 'quotes_table='||COUNT(*) FROM information_schema.tables
+              WHERE table_name='b2b_lead_quotes';"
+              echo "--- Lead 数据完整（应为 2，无删除）---"
+              $PSQL "SELECT 'lead_total='||COUNT(*) FROM b2b_leads;"
+              echo "--- 约束 ck_b2b_leads_status（应 11 态）---"
+              $PSQL "SELECT 'status_ck='||COUNT(*) FROM pg_constraint WHERE conname='ck_b2b_leads_status';"
+              echo "=== INC001 SCHEMA AUDIT DONE ==="
             else
               echo "=== [6] postverify：迁移后结构验证 ==="
               $PSQL "SELECT 'current_revision=' || version_num FROM alembic_version;"

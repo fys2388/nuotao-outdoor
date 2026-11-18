@@ -51,10 +51,13 @@ jobs:
             [ -f "$BAK/.env" ] && cp "$BAK/.env" "$PROD/.env" || true
             echo "$SHA" > "$PROD/.deploy_sha"
             echo "$SHORT" > "$PROD/version.txt"
-            echo "--- migrate ---"
+            echo "--- migrate (approved revision only, M4.4-INC-001) ---"
             cd "$PROD"
             source .venv/bin/activate
-            alembic upgrade head 2>&1
+            APPROVED=$(grep -E '^approved_revision:' "$PROD/infra/migration_approvals.yaml" | awk '{print $2}' | tr -d '"' || echo "")
+            if [ -z "$APPROVED" ]; then echo "MIGRATE_GATE_FAIL: no approved_revision"; exit 1; fi
+            bash "$PROD/infra/migration_gate.sh" "$APPROVED"
+            alembic upgrade "$APPROVED" 2>&1
             echo "MIGRATE_OK=$?"
             alembic current 2>&1
             echo "--- columns ---"
