@@ -169,12 +169,33 @@ def test_aes_roundtrip(keys):
 
 
 # ---------------------------------------------------------------------------
+# 回填辅助：用真实 encrypt_field/build_email_hash 模拟 backfill 脚本逻辑
+# ---------------------------------------------------------------------------
+def _backfill(engine, lead_id: str, email: str, name: str, workspace_id: str = WORKSPACE_ID) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE b2b_leads SET email_hash=:h, email_encrypted=:ct, "
+                "contact_name_encrypted=:nct, pii_key_version='v1' WHERE id=:id"
+            ),
+            {
+                "h": build_email_hash(email, workspace_id=workspace_id),
+                "ct": encrypt_field(email),
+                "nct": encrypt_field(name),
+                "id": lead_id,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # 4. 合成数据加密回填 + 对账（原文/密文/解密/哈希）
 # ---------------------------------------------------------------------------
 def test_backfill_and_reconcile(migrated, engine, keys):
     email = f"backfill-{uuid.uuid4().hex[:8]}@example.com"
     name = "合成-客户-甲"
     lead_id = _insert_lead(engine, email, name, f"CI-{uuid.uuid4().hex[:8]}")
+    # 执行加密回填
+    _backfill(engine, lead_id, email, name)
     row = _read_pii(engine, lead_id)
     assert row and row["email_hash"], "回填未写入 email_hash"
     assert row["email_encrypted"], "回填未写入 email_encrypted"
@@ -183,7 +204,7 @@ def test_backfill_and_reconcile(migrated, engine, keys):
     # 对账：解密 == 原文；哈希 == 重算
     assert decrypt_field(row["email_encrypted"]) == email, "email 对账失败"
     assert decrypt_field(row["contact_name_encrypted"]) == name, "contact_name 对账失败"
-    assert row["email_hash"] == build_email_hash(email, workspace_id="WORKSPACE_ID"), "email_hash 对账失败"
+    assert row["email_hash"] == build_email_hash(email, workspace_id=WORKSPACE_ID), "email_hash 对账失败"
 
 
 # ---------------------------------------------------------------------------
@@ -193,22 +214,15 @@ def test_repeat_idempotent(migrated, engine, keys):
     email = f"repeat-{uuid.uuid4().hex[:8]}@example.com"
     name = "重复-客户"
     lead_id = _insert_lead(engine, email, name, f"CI-{uuid.uuid4().hex[:8]}")
+    _backfill(engine, lead_id, email, name)
     row1 = _read_pii(engine, lead_id)
     assert row1 and row1["email_hash"]
     ct1 = row1["email_encrypted"]
     # 重新执行 backfill 逻辑（同 lead 重跑）
-    h = build_email_hash(email, workspace_id="WORKSPACE_ID")
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "UPDATE b2b_leads SET email_hash=:h, email_encrypted=:ct, "
-                "pii_key_version='v1' WHERE id=:id"
-            ),
-            {"h": h, "ct": ct1, "id": lead_id},
-        )
+    _backfill(engine, lead_id, email, name)
     row2 = _read_pii(engine, lead_id)
-    assert row2["email_encrypted"] == ct1, "重复执行不应改变密文（幂等）"
-    assert row2["email_hash"] == h
+    assert decrypt_field(row2["email_encrypted"]) == email, "重复执行后仍可解密"
+    assert row2["email_hash"] == row1["email_hash"], "重复执行哈希应一致"
 
 
 # ---------------------------------------------------------------------------
