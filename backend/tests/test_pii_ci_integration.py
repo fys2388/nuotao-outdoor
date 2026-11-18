@@ -277,16 +277,36 @@ def _pii_col_present(engine) -> int:
         ).scalar()
 
 
+def _alembic_version(engine) -> str:
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+
+
+def _pii_cols(engine) -> list:
+    with engine.connect() as conn:
+        return [
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='b2b_leads' AND column_name IN "
+                    "('email_hash','email_encrypted','contact_name_encrypted','pii_key_version')"
+                )
+            )
+        ]
+
+
 def test_rollback_0087(migrated, engine, db_url):
     # 手动再升级一次 0087 后回滚，验证列消失（保证本用例独立）
     _alembic_upgrade("0087", db_url)
-    assert _pii_col_present(engine) == 1
+    assert _pii_col_present(engine) == 1, f"升级 0087 后应存在 PII 列（version={_alembic_version(engine)}）"
     _alembic_upgrade("0086", db_url)
     has = _pii_col_present(engine)
-    assert has == 0, f"回滚 0087 后 email_encrypted 列应消失（实际={has}）"
-    with engine.connect() as conn:
-        rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert rev == "0086"
+    assert has == 0, (
+        f"回滚 0087 后 email_encrypted 列应消失（实际={has}，"
+        f"version={_alembic_version(engine)}，pii_cols={_pii_cols(engine)}）"
+    )
+    assert _alembic_version(engine) == "0086"
 
 
 # ---------------------------------------------------------------------------
