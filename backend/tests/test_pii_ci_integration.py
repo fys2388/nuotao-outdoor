@@ -38,6 +38,7 @@ from app.core.pii_crypto import (
 # 测试密钥（临时，非生产）
 TEST_HMAC_KEY = "test-hmac-key-001"
 TEST_ENC_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="  # 0x00..0x1F = 32B base64（AES-256-GCM）
+WORKSPACE_ID = str(uuid.uuid4())  # b2b_leads.workspace_id 为 UUID 列
 
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..")
 
@@ -91,14 +92,16 @@ def keys():
     os.environ.pop("PII_ENCRYPTION_KEY", None)
 
 
-def _insert_lead(engine, email: str, name: str, ref: str, workspace: str = "ci-ws"):
+def _insert_lead(engine, email: str, name: str, ref: str, workspace: str = WORKSPACE_ID):
     lead_id = str(uuid.uuid4())
     with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO b2b_leads (id, reference_number, workspace_id, email, "
-                "contact_name, status, is_test, created_at, updated_at) "
-                "VALUES (:id, :ref, :ws, :email, :name, 'new', true, now(), now()) "
+                "contact_name, company_name, country, business_type, message, "
+                "privacy_consent, consent_at, status, is_test, created_at, updated_at) "
+                "VALUES (:id, :ref, :ws, :email, :name, 'Synthetic Co', 'DE', 'retailer', "
+                "'synthetic integration test lead', true, now(), 'new', true, now(), now()) "
                 "ON CONFLICT (id) DO NOTHING"
             ),
             {"id": lead_id, "ref": ref, "ws": workspace, "email": email, "name": name},
@@ -180,7 +183,7 @@ def test_backfill_and_reconcile(migrated, engine, keys):
     # 对账：解密 == 原文；哈希 == 重算
     assert decrypt_field(row["email_encrypted"]) == email, "email 对账失败"
     assert decrypt_field(row["contact_name_encrypted"]) == name, "contact_name 对账失败"
-    assert row["email_hash"] == build_email_hash(email, workspace_id="ci-ws"), "email_hash 对账失败"
+    assert row["email_hash"] == build_email_hash(email, workspace_id="WORKSPACE_ID"), "email_hash 对账失败"
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +197,7 @@ def test_repeat_idempotent(migrated, engine, keys):
     assert row1 and row1["email_hash"]
     ct1 = row1["email_encrypted"]
     # 重新执行 backfill 逻辑（同 lead 重跑）
-    h = build_email_hash(email, workspace_id="ci-ws")
+    h = build_email_hash(email, workspace_id="WORKSPACE_ID")
     with engine.begin() as conn:
         conn.execute(
             text(
