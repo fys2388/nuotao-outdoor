@@ -57,6 +57,19 @@ def _alembic_upgrade(target: str, db_url: str) -> None:
     )
 
 
+def _alembic_downgrade(target: str, db_url: str) -> None:
+    """alembic downgrade <target>（回滚；upgrade 对更低 revision 是 no-op）。"""
+    env = {**os.environ, "DATABASE_URL": db_url}
+    subprocess.run(
+        ["python", "-m", "alembic", "downgrade", target],
+        cwd=BACKEND_DIR,
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.fixture(scope="module")
 def db_url() -> str:
     url = os.environ.get("PII_CI_DB_URL") or os.environ.get("DATABASE_URL")
@@ -300,7 +313,7 @@ def test_rollback_0087(migrated, engine, db_url):
     # 手动再升级一次 0087 后回滚，验证列消失（保证本用例独立）
     _alembic_upgrade("0087", db_url)
     assert _pii_col_present(engine) == 1, f"升级 0087 后应存在 PII 列（version={_alembic_version(engine)}）"
-    _alembic_upgrade("0086", db_url)
+    _alembic_downgrade("0086", db_url)
     has = _pii_col_present(engine)
     assert has == 0, (
         f"回滚 0087 后 email_encrypted 列应消失（实际={has}，"
