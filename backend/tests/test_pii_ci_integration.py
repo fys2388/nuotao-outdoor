@@ -267,27 +267,25 @@ def test_corrupted_ciphertext_rejects(keys, migrated, engine):
 # ---------------------------------------------------------------------------
 # 9. 回滚 0087：列消失、revision=0086（fixture 已回滚）
 # ---------------------------------------------------------------------------
+def _pii_col_present(engine) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_name='b2b_leads' AND column_name='email_encrypted'"
+            )
+        ).scalar()
+
+
 def test_rollback_0087(migrated, engine, db_url):
     # 手动再升级一次 0087 后回滚，验证列消失（保证本用例独立）
     _alembic_upgrade("0087", db_url)
-    with engine.connect() as conn:
-        has = conn.execute(
-            text(
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_name='b2b_leads' AND column_name='email_encrypted'"
-            )
-        ).scalar()
-    assert has == 1
+    assert _pii_col_present(engine) == 1
     _alembic_upgrade("0086", db_url)
+    has = _pii_col_present(engine)
+    assert has == 0, f"回滚 0087 后 email_encrypted 列应消失（实际={has}）"
     with engine.connect() as conn:
-        has = conn.execute(
-            text(
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_name='b2b_leads' AND column_name='email_encrypted'"
-            )
-        ).scalar()
-    assert has == 0, "回滚 0087 后 email_encrypted 列应消失"
-    rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     assert rev == "0086"
 
 
