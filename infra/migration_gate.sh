@@ -30,11 +30,23 @@ if [ -z "$APPROVED_REV" ]; then
   exit 1
 fi
 
+# 格式校验：approved_revision 必须是 4 位数字（malformed YAML / 错误类型 -> 拒绝）
+if ! echo "$APPROVED_REV" | grep -qxE '[0-9]{4}'; then
+  echo "[migration-gate] FAIL-CLOSED: approved_revision malformed: '$APPROVED_REV'"
+  exit 1
+fi
+
 if ! echo "$APPROVED_LIST" | grep -qx "$TARGET"; then
   echo "[migration-gate] FAIL-CLOSED: revision '$TARGET' is NOT in approved_list"
   echo "[migration-gate]   allowed=$(echo "$APPROVED_LIST" | tr '\n' ' ')"
   echo "[migration-gate]   approved_revision=$APPROVED_REV"
   echo "[migration-gate] 未批准迁移禁止执行；先获 Owner 授权并更新 migration_approvals.yaml"
+  exit 1
+fi
+
+# 版本一致性：生产迁移目标必须精确等于当前 approved_revision（不允许低于或猜测）
+if [ "$TARGET" != "$APPROVED_REV" ]; then
+  echo "[migration-gate] FAIL-CLOSED: target '$TARGET' != approved_revision '$APPROVED_REV' (版本不一致)"
   exit 1
 fi
 

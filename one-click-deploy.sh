@@ -105,8 +105,13 @@ sleep 10
 # 步骤 5: 运行数据库迁移
 # ============================================================
 log_info "步骤 5/6: 运行数据库迁移..."
-
-docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade head || log_warn "数据库迁移失败，请手动运行"
+# M4.4-INC-001/APR-INC-002: 部署与迁移解耦；有批准清单才迁移到 approved_revision
+if [ -r infra/migration_approvals.yaml ]; then
+  APPROVED=$(grep -E '^approved_revision:' infra/migration_approvals.yaml | awk '{print $2}' | tr -d '"')
+  bash infra/migration_gate.sh "$APPROVED" && docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade "$APPROVED"
+else
+  echo "[db] no approval list; skip migration (use migration gate workflow)"
+fi
 log_success "数据库迁移完成"
 
 # ============================================================

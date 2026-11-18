@@ -97,9 +97,12 @@ jobs:
             cd /opt/nuotao/backend
             .venv/bin/python -m compileall -q app && echo compile-ok
 
-            echo "=== 4. migration ==="
+            echo "=== 4. migration (approved revision only, M4.4-INC-001/APR-INC-002) ==="
             echo "-- before:"; .venv/bin/alembic current 2>&1 | tail -2
-            .venv/bin/alembic upgrade head 2>&1 | tail -15
+            APPROVED=$(grep -E '^approved_revision:' /opt/nuotao-ai-os/infra/migration_approvals.yaml | awk '{print $2}' | tr -d '"' || echo "")
+            if [ -z "$APPROVED" ]; then echo "MIGRATE_GATE_FAIL: no approved_revision"; exit 1; fi
+            bash /opt/nuotao-ai-os/infra/migration_gate.sh "$APPROVED"
+            .venv/bin/alembic upgrade "$APPROVED" 2>&1 | tail -15
             echo "-- after:"; .venv/bin/alembic current 2>&1 | tail -2
 
             echo "=== 5. restart backend (wait until ready) ==="

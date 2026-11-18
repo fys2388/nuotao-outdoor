@@ -38,6 +38,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # M4.4-INC-001/APR-INC-002: 生产迁移授权门禁负向测试（ubuntu，本地无 WSL 时由 CI 覆盖）
+      - name: Migration gate negative tests
+        run: bash infra/test_migration_gate.sh
+
       - name: Run ${{ inputs.phase }}
         id: gate
         uses: appleboy/ssh-action@v1.0.3

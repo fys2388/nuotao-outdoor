@@ -81,9 +81,14 @@ deploy() {
     log_info "等待服务启动..."
     sleep 10
 
-    # 7. 运行数据库迁移
-    log_info "运行数据库迁移..."
-    docker compose -f "${COMPOSE_FILE}" exec -T backend alembic upgrade head 2>/dev/null || log_warn "数据库迁移失败，请手动运行"
+    # 7. 运行数据库迁移（M4.4-INC-001/APR-INC-002：部署与迁移解耦；有批准清单才迁移）
+    INFRA_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ -r "$INFRA_DIR/migration_approvals.yaml" ]; then
+      APPROVED=$(grep -E '^approved_revision:' "$INFRA_DIR/migration_approvals.yaml" | awk '{print $2}' | tr -d '"')
+      bash "$INFRA_DIR/migration_gate.sh" "$APPROVED" && docker compose -f "${COMPOSE_FILE}" exec -T backend alembic upgrade "$APPROVED" 2>/dev/null || log_warn "数据库迁移失败，请手动运行"
+    else
+      log_info "[db] no approval list; skip migration (use migration gate workflow)"
+    fi
 
     # 8. 健康检查
     log_info "健康检查..."
