@@ -119,7 +119,7 @@ jobs:
               echo "CURRENT_REVISION_BEFORE=$CUR_BEFORE"
               if [ "$CUR_BEFORE" != "0084" ] && [ "$CUR_BEFORE" != "0085" ]; then
                 echo "PREFLIGHT_MISMATCH: expected 0084 or 0085 but got $CUR_BEFORE -> STOP"
-                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                printf 'verdict=stopped\n' >> "${GITHUB_OUTPUT:-/dev/null}"
                 exit 0
               fi
               if [ "$CUR_BEFORE" = "0085" ]; then
@@ -130,7 +130,7 @@ jobs:
               CODE_ROOT=/opt/nuotao-ai-os
               ls -la "$CODE_ROOT/backend/alembic/versions/0085_b2b_lead_workflow.py" \
                      "$CODE_ROOT/backend/alembic/versions/0086_b2b_lead_quotes.py" 2>&1 \
-                || { echo "MIGRATION_FILES_MISSING: 生产代码无 0085/0086 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
+                || { echo "MIGRATION_FILES_MISSING: 生产代码无 0085/0086 -> STOP"; printf 'verdict=stopped\n' >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0; }
               echo "--- 生产代码 HEAD ---"
               git -C "$CODE_ROOT" log -1 --oneline 2>&1 || true
 
@@ -141,7 +141,7 @@ jobs:
                 ENV_FILE=/opt/nuotao/backend/.env
               else
                 echo "DATABASE_URL_MISSING: 未找到含 DATABASE_URL 的 .env -> STOP"
-                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                printf 'verdict=stopped\n' >> "${GITHUB_OUTPUT:-/dev/null}"
                 exit 0
               fi
               echo "ENV_FILE=$ENV_FILE"
@@ -149,7 +149,7 @@ jobs:
                 | sed 's/+asyncpg//; s|://localhost:|://postgres:|g; s|://127.0.0.1:|://postgres:|g')
               if [ -z "${DBU:-}" ]; then
                 echo "DATABASE_URL_MISSING: $ENV_FILE 无 DATABASE_URL -> STOP"
-                printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"
+                printf 'verdict=stopped\n' >> "${GITHUB_OUTPUT:-/dev/null}"
                 exit 0
               fi
               echo "DATABASE_URL_USER_HOST_MASKED=$(echo "$DBU" | sed -E 's#(postgresql[^:]*://[^:/]+):[^@]+@#(\1):***@#')"
@@ -182,7 +182,7 @@ jobs:
               echo "MIGRATE_RC=$MIG_RC"
               if [ "$MIG_RC" != "0" ]; then
                 echo "MIGRATION_FAILED: 保留证据，不手工改 revision、不 stamp -> STOP"
-                printf 'verdict=failed\n' >> "$GITHUB_OUTPUT"
+                printf 'verdict=failed\n' >> "${GITHUB_OUTPUT:-/dev/null}"
                 exit 0
               fi
 
@@ -200,7 +200,7 @@ jobs:
             elif [ "${{ inputs.phase }}" = "mark-test-leads" ]; then
               echo "=== 标记测试 Lead（APR-M440-DATA-001）：执行 + 审计 + 复核 ==="
               ls -la "$CODE_ROOT/backend/scripts/mark_test_leads_m440.py" 2>&1 \
-                || { echo "SCRIPT_MISSING: 生产无受控脚本 -> STOP"; printf 'verdict=stopped\n' >> "$GITHUB_OUTPUT"; exit 0; }
+                || { echo "SCRIPT_MISSING: 生产无受控脚本 -> STOP"; printf 'verdict=stopped\n' >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0; }
               cd "$CODE_ROOT/backend"
               .venv/bin/python scripts/mark_test_leads_m440.py 2>&1
               MARK_RC=$?
@@ -247,5 +247,5 @@ jobs:
 
             echo "=== M440 gate end: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
             echo "GATE_PHASE=${{ inputs.phase }}"
-            printf 'verdict=checked\n' >> "$GITHUB_OUTPUT"
+            printf 'verdict=checked\n' >> "${GITHUB_OUTPUT:-/dev/null}"
             exit 0
