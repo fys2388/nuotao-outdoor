@@ -63,7 +63,7 @@ def upgrade() -> None:
         return
     bind = op.get_bind()
     insp = sa.inspect(bind)
-    if _TABLE in [t["name"] for t in insp.get_table_names()]:
+    if _TABLE in insp.get_table_names():
         return
     _create_table()
 
@@ -74,5 +74,5 @@ def downgrade() -> None:
         return
     bind = op.get_bind()
     insp = sa.inspect(bind)
-    if _TABLE in [t["name"] for t in insp.get_table_names()]:
+    if _TABLE in insp.get_table_names():
         op.drop_table(_TABLE)
