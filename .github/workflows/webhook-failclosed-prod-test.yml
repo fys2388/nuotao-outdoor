@@ -1,0 +1,64 @@
+name: Webhook Fail-Closed Production Read-Only Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Production read-only webhook fail-closed verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify fail-closed mechanism (read-only, no writes)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /opt/nuotao-ai-os
+            echo "=== 1. fail-closed code present ==="
+            grep -c "webhook_secret_is_insecure" backend/app/core/config.py
+            grep -c "fail closed" backend/app/api/v1/endpoints/webhooks.py
+
+            echo ""
+            echo "=== 2. webhook secret strength (length only, no plaintext) ==="
+            SECRET_SET=$(grep -c "WEBHOOK_SECRET" backend/.env 2>/dev/null || echo 0)
+            echo "WEBHOOK_SECRET lines in .env: $SECRET_SET"
+            /opt/nuotao-ai-os/backend/.venv/bin/python -c "
+            import os
+            from dotenv import load_dotenv
+            load_dotenv('backend/.env')
+            s = os.getenv('WEBHOOK_SECRET','')
+            default='dev-webhook-secret-change-me'
+            print(f'secret_length={len(s)}')
+            print(f'is_default={s==default}')
+            print(f'is_empty={len(s)==0}')
+            print(f'is_strong={len(s)>=32 and s!=default}')
+            "
+
+            echo ""
+            echo "=== 3. discover webhook routes ==="
+            /opt/nuotao-ai-os/backend/.venv/bin/python -c "
+            import sys; sys.path.insert(0, '/opt/nuotao-ai-os/backend')
+            from app.main import app
+            wh = [r.path for r in app.routes if hasattr(r,'path') and 'webhook' in r.path.lower()]
+            print('webhook routes:', wh)
+            " 2>&1 | tail -3
+
+            echo ""
+            echo "=== 4. endpoint behavior: no signature should be rejected (read-only, 401 does not write) ==="
+            for path in /api/v1/webhooks/wc /api/v1/webhooks/generic /api/v1/wc-clickback; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000$path" -H "Content-Type: application/json" -d '{"test":1}' --max-time 8)
+              echo "no-signature POST $path => HTTP $code (expect 401/403/422 = rejected)"
+            done
+
+            echo ""
+            echo "=== 5. endpoint behavior: wrong signature should be rejected ==="
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/webhooks/wc" -H "Content-Type: application/json" -H "X-WC-Webhook-Signature: invalid_sig_123" -d '{"test":1}' --max-time 8)
+            echo "wrong-signature POST => HTTP $code (expect 401/403 = rejected)"
+
+            echo ""
+            echo "=== 6. backend still healthy (no crash from tests) ==="
+            systemctl is-active nuotao-backend
+            curl -s -o /dev/null -w "healthz => HTTP %{http_code}\n" http://127.0.0.1:8000/healthz --max-time 8 || echo "healthz endpoint differs"
