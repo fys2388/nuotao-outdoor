@@ -39,7 +39,7 @@ def _resolve_secret_key() -> str:
 
 SECRET_KEY = _resolve_secret_key()
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 小时
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8  # 8 小时（P0-4：自 24h 缩短，缩小泄露窗口；前端自动 refresh 为 tech-debt）
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 
