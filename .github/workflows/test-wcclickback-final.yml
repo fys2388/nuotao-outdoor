@@ -1,0 +1,39 @@
+name: Final wc-clickback verify (after backend ready)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify wc-clickback returns 401 after backend ready
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for backend ready then test
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== wait for backend ready (port 8000) ==="
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if curl -s -o /dev/null --max-time 2 http://127.0.0.1:8000/openapi.json 2>/dev/null; then
+                echo "backend ready after ${i}0s-ish"
+                break
+              fi
+              sleep 5
+            done
+            systemctl is-active nuotao-backend
+            echo ""
+            echo "=== wc-clickback no-signature (expect 401) ==="
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/wc-clickback/webhook" -H "Content-Type: application/json" -d '{"product_id":"00000000-0000-0000-0000-000000000001","event_type":"click"}' --max-time 8)
+            echo "no-sig => HTTP $code"
+            echo ""
+            echo "=== wc-clickback wrong-signature (expect 401) ==="
+            code2=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/wc-clickback/webhook" -H "Content-Type: application/json" -H "X-WC-Webhook-Signature: invalid" -d '{"product_id":"00000000-0000-0000-0000-000000000001","event_type":"click"}' --max-time 8)
+            echo "wrong-sig => HTTP $code2"
+            echo ""
+            echo "=== main woocommerce webhook still 401 (regression check) ==="
+            code3=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/webhooks/woocommerce" -H "Content-Type: application/json" -d '{"id":999999}' --max-time 8)
+            echo "main webhook no-sig => HTTP $code3"
