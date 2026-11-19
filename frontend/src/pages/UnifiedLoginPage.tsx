@@ -35,43 +35,46 @@ export default function UnifiedLoginPage() {
   const handleSubmit = async (values: LoginValues) => {
     setSubmitting(true)
     setError(null)
-    
+
     try {
       // First try B2B portal login
-      const portalResponse = await portalApi.login(values.email, values.password)
-      setPortalToken(portalResponse.access_token)
-      message.success(`欢迎回来，${portalResponse.agent.company_name}`)
-      navigate('/portal', { replace: true })
-      return
-    } catch (portalError: any) {
-      // If B2B login fails with 401/403, try admin login
-      const isPortalNotFound = portalError?.status === 404
-      
-      if (!isPortalNotFound) {
-        // B2B credentials exist but wrong status (pending/rejected), show specific error
-        const detail = portalError?.detail || ''
-        if (detail.includes('pending')) {
-          setError('您的申请正在审核中，请耐心等待。')
-        } else if (detail.includes('rejected')) {
-          setError('您的申请已被拒绝，请联系管理员。')
-        } else if (detail.includes('suspended')) {
-          setError('您的账号已被暂停，请联系客服。')
-        } else if (detail.includes('verify')) {
-          setError('请先验证您的邮箱地址，请检查收件箱中的验证链接。')
-        } else {
-          setError(detail || '用户名或密码错误')
-        }
+      try {
+        const portalResponse = await portalApi.login(values.email, values.password)
+        setPortalToken(portalResponse.access_token)
+        message.success(`欢迎回来，${portalResponse.agent.company_name}`)
+        navigate('/portal', { replace: true })
         return
+      } catch (portalError: any) {
+        // 仅当 B2B 明确返回"账号状态类"错误时才提示并终止；其余（401/404/网络等）fall through 到 admin 登录
+        const detail = typeof portalError?.detail === 'string' ? portalError.detail : ''
+        const isPortalStatusError = ['pending', 'rejected', 'suspended', 'verify'].some((k) =>
+          detail.includes(k),
+        )
+        if (isPortalStatusError) {
+          if (detail.includes('pending')) {
+            setError('您的申请正在审核中，请耐心等待。')
+          } else if (detail.includes('rejected')) {
+            setError('您的申请已被拒绝，请联系管理员。')
+          } else if (detail.includes('suspended')) {
+            setError('您的账号已被暂停，请联系客服。')
+          } else {
+            setError('请先验证您的邮箱地址，请检查收件箱中的验证链接。')
+          }
+          return
+        }
       }
-    }
-    
-    // Fall back to admin login
-    try {
-      await adminLogin(values.email.trim(), values.password)
-      message.success('登录成功')
-      navigate(nextPath, { replace: true })
-    } catch (adminError) {
-      setError('用户名或密码错误，或您没有访问该系统的权限')
+
+      // Fall back to admin login
+      try {
+        await adminLogin(values.email.trim(), values.password)
+        message.success('登录成功')
+        navigate(nextPath, { replace: true })
+      } catch (adminError) {
+        setError('用户名或密码错误，或您没有访问该系统的权限')
+      }
+    } finally {
+      // 无论成功失败都复位 loading（成功路径 navigate 后复位无害，React 18 无卸载警告）
+      setSubmitting(false)
     }
   }
 
