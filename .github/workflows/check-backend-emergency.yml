@@ -1,0 +1,31 @@
+name: Emergency check backend status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check backend active + startup errors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== backend status ==="
+            systemctl is-active nuotao-backend
+            systemctl status nuotao-backend --no-pager 2>&1 | head -8
+            echo ""
+            echo "=== port 8000 listening? ==="
+            ss -tlnp 2>/dev/null | grep 8000 || echo "NOT LISTENING"
+            echo ""
+            echo "=== last 30 journal (startup errors?) ==="
+            sudo journalctl -u nuotao-backend --no-pager -n 30 2>/dev/null | tail -30
+            echo ""
+            echo "=== retest wc-clickback ==="
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/wc-clickback/webhook" -H "Content-Type: application/json" -d '{"product_id":"00000000-0000-0000-0000-000000000001","event_type":"click"}' --max-time 8)
+            echo "wc-clickback => HTTP $code"
