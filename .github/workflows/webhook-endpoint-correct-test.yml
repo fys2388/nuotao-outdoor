@@ -1,0 +1,47 @@
+name: Webhook Endpoint Test (Correct Paths)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Correct-path webhook fail-closed endpoint test (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test real webhook endpoints reject bad signatures
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== Correct webhook routes found ==="
+            echo "POST /api/v1/webhooks/woocommerce  (main order webhook)"
+            echo "POST /api/v1/webhooks/woocommerce/generic"
+            echo "POST /api/v1/wc-clickback/webhook"
+
+            echo ""
+            echo "=== A. NO signature -> expect 401/403 (rejected, no write) ==="
+            for p in /api/v1/webhooks/woocommerce /api/v1/webhooks/woocommerce/generic /api/v1/wc-clickback/webhook; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000$p" -H "Content-Type: application/json" -d '{"id":999999,"status":"testing"}' --max-time 8)
+              echo "no-sig POST $p => HTTP $code"
+            done
+
+            echo ""
+            echo "=== B. WRONG signature -> expect 401/403 (rejected, no write) ==="
+            for p in /api/v1/webhooks/woocommerce /api/v1/wc-clickback/webhook; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000$p" -H "Content-Type: application/json" -H "X-WC-Webhook-Signature: deadbeef_invalid" -d '{"id":999999,"status":"testing"}' --max-time 8)
+              echo "wrong-sig POST $p => HTTP $code"
+            done
+
+            echo ""
+            echo "=== C. TAMPERED payload (sig computed for different body) -> expect 401 ==="
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:8000/api/v1/webhooks/woocommerce" -H "Content-Type: application/json" -H "X-WC-Webhook-Signature: $(echo -n '{"legit":1}' | openssl dgst -sha256 -hmac 'wrongsecret' | sed 's/.* //')" -d '{"id":999999,"tampered":true}' --max-time 8)
+            echo "tampered POST => HTTP $code"
+
+            echo ""
+            echo "=== D. backend healthy after tests ==="
+            systemctl is-active nuotao-backend
+            echo ""
+            echo "NOTE: 401/403 = fail-closed/verify rejected (GOOD). 200 with real secret would write - NOT tested on prod per Owner red-line."
