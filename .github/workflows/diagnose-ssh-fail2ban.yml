@@ -1,0 +1,33 @@
+name: Diagnose SSH Fail2ban Status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Diagnose fail2ban / sshd (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check fail2ban status and sshd limits
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== fail2ban status (sshd) ==="
+            sudo fail2ban-client status sshd 2>&1 || echo "fail2ban-client not available"
+            echo ""
+            echo "=== fail2ban banned IPs ==="
+            sudo fail2ban-client get sshd banned 2>&1 || echo "n/a"
+            echo ""
+            echo "=== fail2ban bantime / maxretry ==="
+            sudo fail2ban-client get sshd bantime 2>&1 || echo "n/a"
+            sudo fail2ban-client get sshd maxretry 2>&1 || echo "n/a"
+            echo ""
+            echo "=== recent sshd rejected/closed (last 20) ==="
+            sudo journalctl -u ssh --no-pager -n 200 2>/dev/null | grep -iE "closed|refused|fail|invalid|maxstartups" | tail -20 || sudo grep -iE "closed|refused|fail" /var/log/auth.log 2>/dev/null | tail -20 || echo "no journal/auth.log access"
+            echo ""
+            echo "=== current sshd connections count ==="
+            ss -tn state established '( sport = :22 )' 2>/dev/null | wc -l
