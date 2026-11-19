@@ -131,7 +131,7 @@ async def receive_clickback_webhook(
     1. 单条事件：{product_id, event_type, count, window_start, ...}
     2. 批量事件：{events: [{...}, ...]}
     """
-    trace_id = get_trace_id(request)
+    trace_id = get_trace_id()
     body = await request.body()
 
     # HMAC 签名验证。生产环境必须配置强 secret，否则 fail closed（空 secret 也不允许跳过验签）。
