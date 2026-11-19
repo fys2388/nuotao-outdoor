@@ -48,9 +48,13 @@ async def main() -> None:
         async with async_session_factory() as session:
             admin = await ensure_default_admin_db(session)
             await session.commit()
-            print(f"✅ 管理员用户: {admin.username} ({admin.email})")
-            print(f"   角色: {admin.role}")
-            print(f"   ID: {admin.id}")
+            if admin is None:
+                print("⚠️  无管理员用户，且未设置 INITIAL_ADMIN_PASSWORD，已跳过自动创建（安全）。")
+                print("   请运行: python -m app.scripts.create_admin_user 创建强密码管理员。")
+            else:
+                print(f"✅ 管理员用户: {admin.username} ({admin.email})")
+                print(f"   角色: {admin.role}")
+                print(f"   ID: {admin.id}")
     except Exception as e:
         print(f"❌ 创建管理员失败: {e}")
         sys.exit(1)
@@ -76,11 +80,11 @@ async def main() -> None:
     print("\n" + "=" * 60)
     print("✅ 初始化完成！")
     print("=" * 60)
-    print(f"\n管理员账号: admin / ***REMOVED***")
+    print("\n管理员账号: 见上方创建输出（硬编码默认密码已移除，安全修复 D7）")
     print(f"API 地址: http://localhost:8012/api/v1")
     print(f"\n下一步：")
     print("  1. 启动后端服务: uvicorn app.main:app --reload --port 8012")
-    print("  2. 登录测试: curl -X POST http://localhost:8012/api/v1/auth/login -d 'username=admin&password=***REMOVED***'")
+    print("  2. 登录测试: 用你创建的管理员账号和强密码登录（不再有硬编码默认密码）")
     print("  3. 执行迁移: alembic upgrade head")
     print("  4. 运行选品流程: python -m app.scripts.run_selection_to_listing --dry-run")
 

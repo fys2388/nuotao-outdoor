@@ -208,19 +208,33 @@ def change_password(user_id: str, old_password: str, new_password: str) -> bool:
     return True
 
 
-def ensure_default_admin() -> UserResponse:
-    """确保默认管理员用户存在"""
+def ensure_default_admin() -> UserResponse | None:
+    """确保管理员用户存在。
+
+    安全修复 (D7)：移除硬编码弱密码自动创建。此 JSON 文件版用户服务已由
+    user_db_service.ensure_default_admin_db 取代；保留时同样拒绝创建弱密码默认 admin。
+    """
     users = _load_users()
     for user in users.values():
         if user.get("role") == "admin":
             return _user_to_response(user)
 
-    # 创建默认管理员
+    import os
+
+    initial_pwd = os.getenv("INITIAL_ADMIN_PASSWORD")
+    if not initial_pwd:
+        logger.warning(
+            "ensure_default_admin: no admin and INITIAL_ADMIN_PASSWORD not set; "
+            "refusing to auto-create a weak-password default admin. Use the DB path "
+            "(user_db_service.ensure_default_admin_db) or scripts/create_admin_user.py."
+        )
+        return None
+
     admin = UserCreate(
         username="admin",
-        email="admin@nuotao.com",
+        email=os.getenv("INITIAL_ADMIN_EMAIL", "admin@nuotao.com"),
         full_name="系统管理员",
-        password="***REMOVED***",
+        password=initial_pwd,
         role="admin",
         is_active=True,
     )

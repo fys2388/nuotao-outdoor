@@ -177,19 +177,36 @@ async def change_password_db(db: AsyncSession, user_id: str, old_password: str, 
     return True
 
 
-async def ensure_default_admin_db(db: AsyncSession) -> UserResponse:
-    """确保默认管理员用户存在（数据库）"""
+async def ensure_default_admin_db(db: AsyncSession) -> UserResponse | None:
+    """确保管理员用户存在（数据库）。
+
+    安全修复 (D7)：不再使用硬编码弱密码自动创建默认 admin。
+    若数据库无 admin 用户：优先从 INITIAL_ADMIN_PASSWORD 环境变量读取初始密码创建；
+    未设置该环境变量时拒绝创建（避免公开弱密码账户），需通过
+    scripts/create_admin_user.py 手动创建强密码 admin。
+    """
     result = await db.execute(select(User).where(User.role == "admin"))
     admin = result.scalar_one_or_none()
     if admin:
         return _user_to_response(admin)
 
-    # 创建默认管理员
+    import os
+
+    initial_pwd = os.getenv("INITIAL_ADMIN_PASSWORD")
+    if not initial_pwd:
+        logger.warning(
+            "No admin user found and INITIAL_ADMIN_PASSWORD is not set. "
+            "Refusing to auto-create a default admin with a hardcoded weak password. "
+            "Create an admin with a strong password via scripts/create_admin_user.py, "
+            "or set INITIAL_ADMIN_PASSWORD explicitly."
+        )
+        return None
+
     admin_create = UserCreate(
         username="admin",
-        email="admin@nuotao.com",
+        email=os.getenv("INITIAL_ADMIN_EMAIL", "admin@nuotao.com"),
         full_name="系统管理员",
-        password="***REMOVED***",
+        password=initial_pwd,
         role="admin",
         is_active=True,
     )
