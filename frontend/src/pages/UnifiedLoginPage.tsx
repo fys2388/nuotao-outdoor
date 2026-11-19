@@ -68,7 +68,11 @@ export default function UnifiedLoginPage() {
       try {
         await adminLogin(values.email.trim(), values.password)
         message.success('登录成功')
-        navigate(nextPath, { replace: true })
+        // 整页跳转：UnifiedLoginPage 在 AuthProvider 之外，用 navigate 不会触发
+        // AuthProvider.refreshUser，导致登录后右上角仍显示"未登录"。整页跳转让
+        // AuthProvider 重新挂载并从已存 token 恢复 user 状态。
+        window.location.replace(nextPath)
+        return
       } catch (adminError) {
         setError('用户名或密码错误，或您没有访问该系统的权限')
       }
