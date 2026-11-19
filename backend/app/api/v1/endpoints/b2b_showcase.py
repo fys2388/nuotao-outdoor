@@ -194,7 +194,7 @@ async def admin_lead_stats(
     _user=Depends(get_current_user),
 ) -> B2BLeadStatsResponse:
     """Lead 经营统计（M440-08）：排除测试/垃圾/无效 Lead；缺失数据不补造。"""
-    return B2BLeadStatsResponse(**lead_stats(db, workspace_id=workspace_id))
+    return B2BLeadStatsResponse(**await lead_stats(db, workspace_id=workspace_id))
 
 
 @admin_router.get("", response_model=B2BLeadListResponse)
