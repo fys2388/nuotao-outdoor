@@ -1,14 +1,34 @@
 # Nuotao AI OS — Authentication & Authorization Policy
 
 > **文件**：`docs/AUTHENTICATION_POLICY.md`
-> **版本**：v1.0（2026-08-24）
+> **版本**：v1.1（2026-11-19）— **认证架构已变更，见下方 v1.1 声明**
 > **阶段**：P0-Critical Security Remediation — 策略基线
 > **依据**：`docs/AUTHENTICATION_COVERAGE_MATRIX.md`（652 路由全量 AST 审计）
->
-> 本文件定义**唯一**的认证/授权语义。任何新路由必须先归类，再选择依赖。
-> 本文件不引入第二套权限系统——它描述的是既有
-> `app/core/identity.py` + `app/api/deps.py` + `app/services/approval_rbac.py`
-> 三件套应有的行为。
+
+---
+
+## ⚠️ v1.1 变更声明（2026-11-19）：认证架构 Clerk → 自建统一登录
+
+> **本节为最新事实，下方正文中的 Clerk 相关描述为 v1.0 历史背景，生产已不再使用 Clerk。**
+
+**生产环境（admin.nuotaooutdoor.com）认证已从 Clerk 迁移为自建统一登录**：
+
+| 维度 | v1.0（已过时） | v1.1 现状（生产） |
+|---|---|---|
+| **Authentication** | Clerk RS256 JWT（JWKS 密码学校验） | **自建**：邮箱+密码 → 后端签发 HS256 JWT（`app/core/security.py`）|
+| **登录入口** | Clerk Hosted UI / Clerk JS | 统一登录页 `UnifiedLoginPage`（B2B portal + admin 双 fallback）|
+| **admin 账户来源** | Clerk Dashboard 创建 | 自建 `users` 表（`role=admin`），由 `scripts/create_admin_user.py` 自举 |
+| **access token 有效期** | Clerk 默认 | **24 小时**（`ACCESS_TOKEN_EXPIRE_MINUTES = 60*24`，偏长，建议缩短至 60min）|
+| **refresh token 有效期** | Clerk 默认 | **7 天**（`REFRESH_TOKEN_EXPIRE_DAYS = 7`）|
+| **B2C 前台** | Clerk | WooCommerce 自带会话（WordPress），不经过 AI OS JWT |
+
+**v1.1 安全基线（P0-4 已落地）**：
+- 生产 `.env` 权限 `600`（含密钥，禁止 world-readable）
+- WooCommerce Webhook Secret 使用强随机值（禁用 `dev-webhook-secret-change-me` 默认值）
+- 生产 admin 账户：`owner`（admin）、`admin`（admin），均活跃；密码策略由 Owner 维护
+- JWT_SECRET_KEY 强度 ≥ 86 字符
+
+**未变更（仍然有效）**：下方正文定义的四个正交概念、9 类策略矩阵、RBAC/Workspace Authorization 语义、`app/core/identity.py` + `app/api/deps.py` + `app/services/approval_rbac.py` 三件套行为。仅 Authentication 的**签发与校验实现**从 Clerk 换为自建 JWT，鉴权语义不变。
 
 ---
 
