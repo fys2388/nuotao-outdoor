@@ -9,6 +9,45 @@
 
 ---
 
+## ⚠️ 报告状态：SUPERSEDED / CORRECTED（2026-11-19 纠偏）
+
+> **本报告基于一个错误前提，其"根本性发现"与最终结论已被后续生产实测推翻。保留原文仅作历史记录，当前有效结论以下方纠偏块为准。**
+
+### 错误前提
+
+本报告在执行时**查错了服务器**：只审计了 Hetzner 服务器（Nuotao AI OS 后端）上的代码与配置，据此得出"Stripe 支付链路完全不存在、需从零自研"的结论。
+
+### 纠偏后的真实情况（生产实测）
+
+B2C 站点 **nuotaooutdoor.com 是独立托管的 WooCommerce**（不在 Hetzner 服务器上）。实测其 WooCommerce REST API `payment_gateways` 端点（HTTP 200）发现：
+
+| 已启用支付网关 | 类型 | 模式 |
+|---|---|---|
+| `stripe` (Credit/Debit Card) | **WooCommerce 官方 Stripe Gateway 插件** | **LIVE（真实收款）** |
+| `stripe_klarna` / `stripe_link` | Stripe 子支付方式 | LIVE |
+| `woocommerce_payments` (Card) | WooPayments | LIVE |
+| `woocommerce_payments_p24/wechat_pay/apple_pay/google_pay` | WooPayments 子方式 | LIVE |
+
+### 纠偏后的正确结论
+
+1. **Stripe 支付链路并非不存在，而是已由 WooCommerce 官方 Stripe Gateway 插件承担，且已在 LIVE 模式真实收款通畅。**
+2. 本报告第 5 节主张的"从零构建完整自研 Stripe 链路"（自研 PaymentIntent / webhook / 前端 Stripe.js）**应作废**——官方插件已全包，正是审核人强调的"若官方支付插件能承担，就没必要重复开发一套支付系统"。
+3. AI OS 后端 `integrations/payment.py` 的 Stripe 死代码（create_payment_intent / verify_stripe_webhook）：**不激活、不扩建**，清理留待技术债务评估。
+4. 支付由 WooCommerce 官方插件负责；AI OS 仅通过 WooCommerce REST API / webhook 获取订单（该链路已验证通畅）。
+
+### 最终状态标记
+
+| 项 | 最终状态 |
+|---|---|
+| `WOOCOMMERCE_STRIPE_GATEWAY` | **VERIFIED_LIVE**（官方插件，LIVE 收款通畅） |
+| `STRIPE_CUSTOM_IMPLEMENTATION`（自研路线） | **NOT_APPLICABLE / CLOSED** |
+| 本报告自研构建主张 | **SUPERSEDED**（由本纠偏块取代） |
+| Owner 决策 | 关闭 Stripe 自研路线，不动现有双支付插件 |
+
+> 审核记录：ChatGPT 第六轮确认关闭 Stripe 自研路线；Owner 确认"两个都部署好，不用动"。本纠偏经 ChatGPT 第七轮要求修订（保留历史版本 + 纠偏说明，不得抹掉）。
+
+---
+
 ## 0. 执行摘要（给审核人的一页结论）
 
 D8-A 授权验证 Stripe Test Mode 支付链路。经**生产环境实测 + 后端/前端/webhook 全链路代码审查**，得到一个根本性发现：
