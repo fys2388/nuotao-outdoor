@@ -42,6 +42,15 @@ def _verify_signature(body: bytes, header_value: str | None, secret: str) -> boo
     if not header_value:
         return False
 
+    # Fail closed：生产环境使用默认弱 secret 时拒绝所有 webhook（防伪造签名）
+    _settings = get_settings()
+    if _settings.is_production and _settings.webhook_secret_is_insecure:
+        logger.error(
+            "webhook rejected: insecure webhook secret in production "
+            "(WOOCOMMERCE_WEBHOOK_SECRET missing or default) — fail closed"
+        )
+        return False
+
     import base64
 
     # 计算 Base64 编码的签名

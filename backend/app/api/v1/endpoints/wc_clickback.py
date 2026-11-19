@@ -101,6 +101,13 @@ def _compute_signature(body: bytes, secret: str) -> str:
 def _verify_signature(body: bytes, header_value: str | None, secret: str) -> bool:
     if not header_value:
         return False
+    # Fail closed：生产环境使用默认弱 secret 时拒绝（防伪造签名）
+    _settings = get_settings()
+    if _settings.is_production and _settings.webhook_secret_is_insecure:
+        logger.error(
+            "clickback webhook rejected: insecure webhook secret in production — fail closed"
+        )
+        return False
     import base64
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
     expected_base64 = base64.b64encode(digest).decode("utf-8")
@@ -127,8 +134,16 @@ async def receive_clickback_webhook(
     trace_id = get_trace_id(request)
     body = await request.body()
 
-    # HMAC 签名验证（如果配置了 secret）。
+    # HMAC 签名验证。生产环境必须配置强 secret，否则 fail closed（空 secret 也不允许跳过验签）。
     settings = get_settings()
+    if settings.is_production and settings.webhook_secret_is_insecure:
+        logger.error(
+            "clickback webhook rejected: insecure webhook secret in production — fail closed"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="webhook secret not securely configured",
+        )
     secret = getattr(settings, "woocommerce_webhook_secret", None)
     if secret:
         signature = request.headers.get(SIGNATURE_HEADER)

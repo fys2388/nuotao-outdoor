@@ -6,6 +6,10 @@ from functools import lru_cache
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Insecure default for the WooCommerce webhook secret. Production MUST override
+# this; a known default lets attackers forge valid HMAC-SHA256 signatures.
+INSECURE_WEBHOOK_SECRET_DEFAULT = "dev-webhook-secret-change-me"
+
 
 class Settings(BaseSettings):
     """Central configuration for the Nuotao AI OS backend.
@@ -396,6 +400,16 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """Return True when running in a production environment."""
         return self.environment == "production"
+
+    @property
+    def webhook_secret_is_insecure(self) -> bool:
+        """True if the WooCommerce webhook secret is empty or the insecure dev default.
+
+        Production must fail closed (reject webhooks) when this is True, because a
+        known default secret lets attackers forge valid HMAC-SHA256 signatures.
+        """
+        s = self.woocommerce_webhook_secret.strip()
+        return (not s) or s == INSECURE_WEBHOOK_SECRET_DEFAULT
 
 
 @lru_cache

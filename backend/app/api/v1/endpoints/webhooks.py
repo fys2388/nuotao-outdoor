@@ -63,6 +63,16 @@ def _verify_signature(body: bytes, header_value: str | None, secret: str) -> boo
     """Compare Base64 or legacy hex signatures in constant time."""
     if not header_value:
         return False
+    # Fail closed: in production, reject any webhook when the secret is the
+    # insecure dev default or empty — a known default lets attackers forge
+    # valid HMAC signatures. Emit a loud alert for on-call visibility.
+    _settings = get_settings()
+    if _settings.is_production and _settings.webhook_secret_is_insecure:
+        logger.error(
+            "webhook rejected: insecure webhook secret in production "
+            "(WOOCOMMERCE_WEBHOOK_SECRET missing or default) — fail closed"
+        )
+        return False
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
     expected_base64 = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(header_value, expected_base64) or hmac.compare_digest(
