@@ -60,11 +60,40 @@ D8-A2 由一个疑似生产故障触发：AI OS 后端调 WooCommerce REST API �
 | `reports/top_sellers` | **HTTP 200** | — |
 | `system_status` | — | HTTP 200 |
 
-### 3.2 那次 401 的性质
+### 3.2 原始 401 异常登记（按 ChatGPT 第七轮要求补充）
 
-- 触发本任务的那次 `payment_gateways` 401，在同一凭证下**连续 3 次复测全部 HTTP 200**。
-- 判定为**一次性偶发误报**，可能原因：请求时序/网络瞬断/WooCommerce 短暂故障。
-- **不是稳定的认证失效**——consumer key/secret 本身有效。
+#### 3.2.1 异常发生记录
+
+| 项 | 内容 |
+|---|---|
+| 发生时间 | 2026-11-19（D8-A2 首次连接诊断时） |
+| 请求端点 | `GET https://nuotaooutdoor.com/wp-json/wc/v3/payment_gateways` |
+| 认证方式 | WooCommerce Consumer Key/Secret（HTTP Basic） |
+| HTTP 状态码 | **401** |
+| 响应摘要 | `{"code":"woocommerce_rest_authentication_error","message":"Consumer secret is invalid.","data":{"status":401}}` |
+| 当时结论 | 据此怀疑 consumer key/secret 失效，触发本任务 |
+
+#### 3.2.2 后续连续成功请求记录（同一凭证，未更换）
+
+| 时间 | 端点 | HTTP 状态码 | 备注 |
+|---|---|---|---|
+| 2026-11-19 | `GET /wc/v3/payment_gateways` | **200** | 第 1 次复测 |
+| 2026-11-19 | `GET /wc/v3/payment_gateways` | **200** | 第 2 次复测 |
+| 2026-11-19 | `GET /wc/v3/payment_gateways` | **200** | 第 3 次复测 |
+| 2026-11-19 | `GET /wc/v3/orders?per_page=1` | **200** | count=0 |
+| 2026-11-19 | `GET /wc/v3/products?per_page=1` | **200** | count=1 |
+| 2026-11-19 | `GET /wc/v3/settings` | **200** | |
+| 2026-11-19 | `GET /wc/v3/settings/general` | **200** | |
+| 2026-11-19 | `GET /wc/v3/reports/top_sellers` | **200** | |
+
+#### 3.2.3 凭证状态与根因判定
+
+- **当前凭证未更换**：整个诊断过程中 `WOOCOMMERCE_CONSUMER_KEY/SECRET` 保持原值，未轮换、未重新生成。
+- **暂不认定根因**：原始 401 归类为**一次性偶发异常**，但**不能直接认定为网络瞬断或 WooCommerce 故障**——目前没有足够证据确定根因。
+- **后续处置**：通过监控观察是否复现。若复现，再深入排查（网络路径、WooCommerce 服务端状态、请求时序等）。
+- **状态标记**：原始 401 = **MONITORED**（保留记录，观察复现）；当前连接 = **VERIFIED**。
+
+> ChatGPT 第七轮审核要求："一次性 401 可以暂时归类为偶发异常，但不能直接认定为网络瞬断或 WooCommerce 故障，因为目前没有足够证据确定根因。"本节据此如实登记，不臆断根因。
 
 ### 3.3 凭证格式检查
 
