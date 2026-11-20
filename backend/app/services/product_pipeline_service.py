@@ -3175,7 +3175,29 @@ async def import_from_1688(
     # Step 1-3：阻塞抓取放线程池，避免卡死事件循环
     # ROUND-4E: 牛顿抓取可能超过入口网关超时导致客户端 499，缓存供幂等重试
     result = await _cached_fetch_1688_product(url_or_id)
-    if not result.get("success") or not auto_run_pipeline:
+    if not result.get("success"):
+        return result
+
+    # 闸门：禁止用兜底假数据自动流转/上架。硬编码 fallback（_KNOWN_PRODUCTS 快照）
+    # 只是抓取失败时的降级占位，不代表当前真实商品。若放行 auto_run_pipeline，
+    # 过期价格/SKU 会静默流入选品闸门甚至自动上架 WooCommerce（违反 Human-in-the-loop
+    # 与"禁止硬编码业务数据"铁律）。这里仍返回导入结果（success=True），但阻断自动流转，
+    # 并带显式标记让调用方知情——真实抓取恢复后重跑即可流转。
+    data_source = result.get("data", {}).get("data_source")
+    if data_source == "hardcoded_fallback" and auto_run_pipeline:
+        logger.warning(
+            "1688 import %s: data_source=hardcoded_fallback — skip auto pipeline "
+            "(fallback data must not auto-list); set auto_run_pipeline=False or "
+            "restore real 1688 scraping.",
+            url_or_id,
+        )
+        result["data"]["pipeline_skipped_reason"] = (
+            "data_source=hardcoded_fallback: 兜底假数据禁止自动流转/上架，"
+            "请恢复真实 1688 抓取后重跑。"
+        )
+        return result
+
+    if not auto_run_pipeline:
         return result
 
     # Step 4: 自动运行完整工作流
