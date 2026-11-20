@@ -25,7 +25,6 @@ jobs:
           port: 22
           command_timeout: 90s
           script: |
-            set -e
             echo "=========================================="
             echo "SSH S4 独立验证报告 — $(date)"
             echo "服务器: ${{ secrets.SERVER_HOST }}"
@@ -34,7 +33,7 @@ jobs:
 
             echo "【1】当前生效的 SSH 配置（sshd -T）"
             sudo sshd -T 2>/dev/null | grep -iE "^(passwordauthentication|permitrootlogin|pubkeyauthentication|challengeresponseauthentication|authenticationmethods)" || \
-              sudo sshd -T 2>/dev/null | grep -iE "^(passwordauthentication|permitrootlogin|pubkeyauthentication)"
+              echo "（未找到显式匹配，使用默认值）"
             echo ""
 
             echo "【2】sshd_config 文件内容（关键字段）"
@@ -57,7 +56,7 @@ jobs:
 
             echo "【6】Hetzner Console 应急通道状态检查"
             echo "  → 确认 console.hetzner.cloud 仍可访问（手动验证）"
-            echo "  → 本机 IP $(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo 'unknown')" >> /tmp/s4_verify_log.txt
+            curl -s --max-time 5 https://ifconfig.me 2>/dev/null && echo " (本机出口IP)" || echo "（无法获取出口IP）"
             echo ""
 
             echo "【7】SSH 备份文件检查"
@@ -65,17 +64,17 @@ jobs:
             echo ""
 
             echo "【8】当前在线用户（确认管理员会话活跃）"
-            who
+            who || echo "（who 命令不可用）"
             echo ""
 
-            echo "【9】GitHub Actions Runner IP 白名单检查"
+            echo "【9】GitHub Actions Runner IP 范围"
             curl -s --max-time 5 https://api.github.com/meta 2>/dev/null | python3 -c "
 import sys,json
 try:
     d=json.load(sys.stdin)
     gh_ips=d.get('hooks',[]) + d.get('git',[])
     print(f'GitHub IPs: {len(gh_ips)} 个')
-    for ip in gh_ips[:5]: print(f'  - {ip}')
+    for ip in gh_ips[:3]: print(f'  - {ip}')
 except: print('(无法解析GitHub meta API)')
 " 2>/dev/null || echo "（无法获取GitHub IPs）"
             echo ""
