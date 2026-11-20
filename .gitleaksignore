@@ -1,0 +1,6 @@
+# CI test keys — not real secrets, used only in CI environment
+ci-test-hmac-key-0001
+AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+ci-test-jwt-secret-0000000000000000000000000000
+ci-test-app-secret-00000000000000000000000000
+ci-test-only-not-for-production
