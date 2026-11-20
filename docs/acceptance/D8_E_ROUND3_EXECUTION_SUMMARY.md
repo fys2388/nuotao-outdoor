@@ -22,13 +22,13 @@
 ## 2. F2 机密整改（核心成果）
 
 ### 2.1 硬编码清除（✅）
-- deploy.yml L246 `DB_PW='UFMmchfTXuRk'` → 从服务器 .env 读取
+- deploy.yml L246 `DB_PW='[REDACTED]'` → 从服务器 .env 读取
 - deploy.yml L563 硬编码 Cookie → 检查 .env LOGIN_COOKIE 存在性
 - **gitleaks：deploy.yml no leaks found** ✅
 
 ### 2.2 DB 密码轮换（✅）
-- 新密码 `Nuotao_AxRGQV8wTqbu6EkcLg3r0zKs`（31 字符）已生效
-- 旧密码 `Nuotao2024SecureDB!` 已失效（认证失败验证）
+- 新密码 `[REDACTED]`（31 字符）已生效
+- 旧密码 `[REDACTED]` 已失效（认证失败验证）
 - 后端重启 active，无 DB 错误 ✅
 
 ### 2.3 CI 全绿（✅ commit 3a76d4f）

@@ -130,7 +130,7 @@ jobs:
 ### 4.2 F2：deploy.yml hotfix-env 硬编码生产机密（安全红线）
 
 **位置**：`.github/workflows/deploy.yml` L171-649
-**硬编码**：`DB_PW='UFMmchfTXuRk'`（L246）、1688 `LOGIN_COOKIE`（L563）
+**硬编码**：`DB_PW='[REDACTED]'`（L246）、1688 `LOGIN_COOKIE`（L563）
 **风险**：密码 + 1688 Cookie 在 GitHub Actions 日志/仓库明文暴露；Gitleaks 未捕获
 **建议**：迁移到 GitHub Secrets + 轮换（**需 Owner 批准，红线禁止擅自动生产 Secret**）
 
