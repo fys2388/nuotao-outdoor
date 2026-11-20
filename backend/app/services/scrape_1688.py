@@ -432,9 +432,12 @@ async def _scrape_1688_product_impl(url: str) -> ScrapedProductData:
         if price_match:
             price = float(price_match.group(1))
 
-    # If price still 0, use default from known product
-    if price == 0:
-        price = 35.8  # Default for moon chair
+    # D8-F (审计 N1, 最高危): 不再伪造默认价。price 解析失败保持 0，由上游
+    # _fetch_1688_product 的 generic/占位判定（价格缺失 → fail-closed）处理。
+    # 旧逻辑 `price = 35.8  # Default for moon chair` 会把「抓取失败」伪装成
+    # 真实 scrapling 数据（data_source=scrapling），假价格流入选品/利润/定价，
+    # 而闸门按定义无法识别（它只拦 hardcoded_fallback）。宁可少采集一个商品，
+    # 也不能让伪造价格进入决策（D8-F 核心原则）。
 
     images = parse_images(html)
     variations = parse_variations(html)
