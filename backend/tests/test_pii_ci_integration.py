@@ -102,9 +102,11 @@ def migrated(db_url, engine):
 def keys():
     os.environ["PII_HMAC_KEY"] = TEST_HMAC_KEY
     os.environ["PII_ENCRYPTION_KEY"] = TEST_ENC_KEY
+    get_settings.cache_clear()
     yield
     os.environ.pop("PII_HMAC_KEY", None)
     os.environ.pop("PII_ENCRYPTION_KEY", None)
+    get_settings.cache_clear()
 
 
 def _insert_lead(engine, email: str, name: str, ref: str, workspace: str = WORKSPACE_ID):

@@ -1,6 +1,13 @@
-# CI test keys — not real secrets, used only in CI environment
+# Gitleaks ignore rules — CI test keys and known safe values
+# Format: each line is a regex pattern matched against the secret value
+
+# CI test HMAC key (not a real secret)
 ci-test-hmac-key-0001
+
+# CI test AES encryption key (base64 encoded 32 zero-bytes, not a real key)
 AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+
+# CI JWT/App secrets (throwaway values, never used in production)
 ci-test-jwt-secret-0000000000000000000000000000
 ci-test-app-secret-00000000000000000000000000
 ci-test-only-not-for-production
