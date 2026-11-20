@@ -7,9 +7,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api.v1.endpoints.auth import get_current_user
+from app.schemas.user import UserResponse
 from app.services.product_listing_service import (
     batch_list_to_woocommerce,
     check_experiment_status,
@@ -22,6 +24,10 @@ from app.services.product_listing_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products/listing", tags=["product_listing"])
+
+# D8-F(审计 C2): legacy 上架端点原先无鉴权，任意 JSON 可直推 WooCommerce（Critical）。
+# 对齐 listing_publish.py 补鉴权——所有上架入口都必须是已认证用户。
+CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 class ProductItem(BaseModel):
@@ -60,14 +66,14 @@ async def api_listing_status() -> dict[str, Any]:
 
 
 @router.post("/queue")
-async def api_create_queue(req: QueueCreateRequest) -> dict[str, Any]:
+async def api_create_queue(req: QueueCreateRequest, _current_user: CurrentUser) -> dict[str, Any]:
     """创建上架队列（自动过滤管制物品和实验产品）"""
     products = [p.model_dump() for p in req.products]
     return create_listing_queue(products, auto_filter_restricted=req.auto_filter_restricted)
 
 
 @router.post("/single")
-async def api_single_list(product: ProductItem) -> dict[str, Any]:
+async def api_single_list(product: ProductItem, _current_user: CurrentUser) -> dict[str, Any]:
     """单个产品上架到 WooCommerce"""
     result = list_to_woocommerce(product.model_dump())
     if not result.get("success"):
@@ -87,7 +93,7 @@ async def api_single_list(product: ProductItem) -> dict[str, Any]:
 
 
 @router.post("/batch")
-async def api_batch_list(req: BatchListRequest) -> dict[str, Any]:
+async def api_batch_list(req: BatchListRequest, _current_user: CurrentUser) -> dict[str, Any]:
     """批量上架到 WooCommerce"""
     products = [p.model_dump() for p in req.products]
     result = batch_list_to_woocommerce(products, status=req.status, auto_filter=req.auto_filter)
@@ -101,7 +107,7 @@ async def api_experiment_status() -> dict[str, Any]:
 
 
 @router.post("/replace-1688-data")
-async def api_replace_1688(req: Replace1688Request) -> dict[str, Any]:
+async def api_replace_1688(req: Replace1688Request, _current_user: CurrentUser) -> dict[str, Any]:
     """替换产品的示例 1688 数据为真实数据"""
     result = replace_1688_mock_data(req.product_id, req.real_data)
     if not result.get("success"):
