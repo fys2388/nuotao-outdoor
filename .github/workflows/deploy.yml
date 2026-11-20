@@ -171,6 +171,10 @@ jobs:
   hotfix-env:
     name: Hotfix DATABASE_URL (read from backend process)
     runs-on: ubuntu-latest
+    # F2 remediation: credentials come from GitHub Secrets, not hardcoded.
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      ALI1688_LOGIN_COOKIE: ${{ secrets.ALI1688_LOGIN_COOKIE }}
     steps:
       - name: Hotfix .env via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -179,6 +183,8 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
+          # F2: pass DB_PASSWORD + ALI1688_LOGIN_COOKIE to the remote SSH environment
+          envs: DB_PASSWORD,ALI1688_LOGIN_COOKIE
           script: |
             set -x
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
@@ -243,7 +249,7 @@ jobs:
             fi
             # 3.5) 用户提供的数据库密码 fallback：用 asyncpg（服务器 .venv 已安装）测试连通性
             if [ -z "$DB_VAL" ]; then
-              DB_PW='UFMmchfTXuRk'
+              DB_PW="${DB_PASSWORD:-}"
               for DB_USER in nuotao root postgres; do
                 if /opt/nuotao-ai-os/backend/.venv/bin/python -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect(host='localhost',port=5432,user='$DB_USER',password='$DB_PW',database='nuotao',timeout=6)); print('OK')" 2>/dev/null | grep -q OK; then
                   DB_VAL="postgresql+asyncpg://${DB_USER}:${DB_PW}@localhost:5432/nuotao"
@@ -560,7 +566,7 @@ jobs:
                 echo "[hotfix] None.get 防御 in place: $(grep -c 'if product is None' /opt/nuotao-ai-os/backend/app/services/product_pipeline_service.py || echo 0)"
                 # 1688 登录 Cookie（绕过 tmd 登录墙）——注入 LOGIN_COOKIE 到 backend/.env
                 sed -i '/^LOGIN_COOKIE=/d' "$ENV_FILE"
-                printf 'LOGIN_COOKIE=lid=tb638676; cna=Y6otIx2+7ncCARsmor681Jo0; t=2c37fe3eb51bf21f6fb0c2cf9e96ca17; unb=492426082; __last_loginid__=b2b-492426082; __cn_logon__=true; __cn_logon_id__=tb638676; _tb_token_=38f67b3338913\n' >> "$ENV_FILE"
+                printf 'LOGIN_COOKIE=%s\n' "${{ secrets.ALI1688_LOGIN_COOKIE }}" >> "$ENV_FILE"
                 echo "[hotfix] LOGIN_COOKIE written (len=$(grep '^LOGIN_COOKIE=' "$ENV_FILE" | wc -c))"
                 systemctl daemon-reload
                 systemctl restart nuotao-backend
