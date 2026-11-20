@@ -1,50 +1,57 @@
-"""Decisive diagnostic v3: reproduce the API channel exactly.
+"""Decisive 1688 LOGIN_COOKIE diagnostic.
 
-The API path is: import_from_1688 -> _cached_fetch_1688_product (async)
-  -> asyncio.to_thread(_fetch_1688_product, url)   # worker thread
-  -> _fetch_1688_product internally calls _asyncio.run(scrape_1688_product(...))
+Goal: answer ONE question — does the server's LOGIN_COOKIE still let a Playwright
+fetch render a real 1688 product page (bypassing the anti-bot login wall), or has
+it expired so the page degrades to a generic/login shell?
 
-diag v1/v2 called _fetch_1688_product SYNCHRONOUSLY (main thread) and got a
-dict. The API channel calls it via asyncio.to_thread (worker thread) and got
-None. This script reproduces the worker-thread call and prints what comes back,
-plus catches the actual exception if the Future carries one.
+Why NOT call _fetch_1688_product: it pre-checks a hardcoded _KNOWN_PRODUCTS map
+and returns canned data for known IDs, so it never exercises the cookie path.
+Instead we call scrape_1688_product() directly (the function that injects
+LOGIN_COOKIE into Playwright) on a product ID that is NOT in _KNOWN_PRODUCTS, so
+the result reflects the live cookie-driven fetch.
+
+Verdict logic: a real page yields a specific product name; an expired cookie
+yields a generic/placeholder name (or empty). We never print the cookie itself.
 """
 import asyncio
 import os
 import traceback
 
+# A real 1688 offer that is deliberately NOT in _KNOWN_PRODUCTS, so the fetch
+# must run live through the cookie-injected browser path.
+TEST_PRODUCT_ID = "994387007112"
+
+GENERIC_NAMES = {"1688 Product", "1688产品", "Product", "商品", ""}
+
 print("DIAG LOGIN_COOKIE len:", len(os.environ.get("LOGIN_COOKIE", "")))
 
-import app.services.product_pipeline_service as m  # noqa: E402
+from app.services.scrape_1688 import scrape_1688_product  # noqa: E402
 
 
 async def main():
-    # _fetch_1688_product is a coroutine function; await it directly. Wrapping it
-    # in asyncio.to_thread returns an unawaited coroutine object and never runs
-    # the fetch (the RuntimeWarning 'coroutine was never awaited' proves it).
     try:
-        result = await m._fetch_1688_product("964465929482")
-        print("DIAG await result type:", type(result).__name__)
-        print("DIAG await raw:", repr(result)[:300])
+        scraped = await scrape_1688_product(TEST_PRODUCT_ID)
     except Exception as e:
-        print("DIAG await RAISED:", type(e).__name__, ":", str(e)[:300])
+        print("DIAG scrape RAISED:", type(e).__name__, ":", str(e)[:300])
         traceback.print_exc()
+        print("DIAG VERDICT: INCONCLUSIVE (scrape raised)")
         return
 
-    if result is None:
-        print("DIAG VERDICT: fetch returned None — likely blocked by login wall / captcha / empty page")
+    if scraped is None:
+        print("DIAG VERDICT: LOGIN_COOKIE EXPIRED (scrape returned None — login wall / empty page)")
         return
 
-    if isinstance(result, dict):
-        keys = sorted(result.keys())
-        print("DIAG VERDICT: got dict with keys:", keys[:20])
-        title = str(result.get("title") or result.get("name") or "")[:80]
-        print("DIAG VERDICT: title field:", title or "(empty)")
-        # A live login wall yields an empty/None title; a real product has one.
-        if title:
-            print("DIAG VERDICT: LOGIN_COOKIE VALID (real product data returned)")
-        else:
-            print("DIAG VERDICT: LOGIN_COOKIE LIKELY EXPIRED (dict but no product title — probable login/captcha page)")
+    name = (getattr(scraped, "name", "") or "").strip()
+    n_images = len(getattr(scraped, "images", []) or [])
+    n_skus = len(getattr(scraped, "variations", []) or [])
+    print("DIAG scraped name:", name[:80])
+    print("DIAG scraped images:", n_images, "variations:", n_skus)
+
+    if name in GENERIC_NAMES or len(name) < 10:
+        print("DIAG VERDICT: LOGIN_COOKIE EXPIRED "
+              "(generic/placeholder name — page rendered as login shell, not real product)")
+    else:
+        print("DIAG VERDICT: LOGIN_COOKIE VALID (real product name rendered through cookie path)")
 
 
 asyncio.run(main())
