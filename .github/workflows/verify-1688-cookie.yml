@@ -1,0 +1,44 @@
+name: Verify 1688 LOGIN_COOKIE
+
+# 目的：验证生产服务器 backend/.env 里现有的 LOGIN_COOKIE 是否仍能通过 1688 登录墙抓取商品详情。
+# 安全：只在服务器上跑 hotfix_decisive_diag.py，它仅打印 Cookie 长度和抓取结果（None/dict），
+#       绝不回显 Cookie 明文。本 workflow 不写任何 Secret、不改动 .env、不触发部署。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-cookie:
+    name: Run decisive 1688 cookie diagnostic
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify LOGIN_COOKIE via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -u
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
+            echo "=== 1) Cookie 存在性与长度（不回显值）==="
+            if grep -q '^LOGIN_COOKIE=' "$ENV_FILE" 2>/dev/null; then
+              LEN=$(grep '^LOGIN_COOKIE=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '\n' | wc -c)
+              echo "LOGIN_COOKIE present, length=$LEN"
+            else
+              echo "LOGIN_COOKIE MISSING from $ENV_FILE — 1688 抓取将无法通过登录墙"
+              exit 0
+            fi
+
+            echo ""
+            echo "=== 2) 用该 Cookie 实际抓一次 1688 商品详情 ==="
+            cd /opt/nuotao-ai-os/backend && timeout 120 su - nuotao -s /bin/bash -c "\
+              cd /opt/nuotao-ai-os/backend && \
+              export LOGIN_COOKIE=\"\$(grep '^LOGIN_COOKIE=' $ENV_FILE | head -1 | cut -d= -f2-)\" && \
+              export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && \
+              timeout 110 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_decisive_diag.py" 2>&1 | tail -30
+
+            echo ""
+            echo "=== 3) 判定 ==="
+            echo "若上方 'DIAG to_thread result type' 为 dict 且 raw 含商品字段 → Cookie 有效。"
+            echo "若为 None / RAISED / 含 login 或验证码字样 → Cookie 已失效，需轮换。"
