@@ -73,7 +73,8 @@ def _alembic_downgrade(target: str, db_url: str) -> None:
 @pytest.fixture(scope="module")
 def db_url() -> str:
     url = os.environ.get("PII_CI_DB_URL") or os.environ.get("DATABASE_URL")
-    assert url, "需要 PII_CI_DB_URL / DATABASE_URL（CI 临时 postgres）"
+    if not url:
+        pytest.skip("需要 PII_CI_DB_URL / DATABASE_URL（CI 临时 postgres）— 无 DB 环境跳过")
     return url
 
 
