@@ -19,19 +19,32 @@ import app.services.product_pipeline_service as m  # noqa: E402
 
 
 async def main():
-    # Reproduce exactly what _cached_fetch_1688_product does at line ~2447
+    # _fetch_1688_product is a coroutine function; await it directly. Wrapping it
+    # in asyncio.to_thread returns an unawaited coroutine object and never runs
+    # the fetch (the RuntimeWarning 'coroutine was never awaited' proves it).
     try:
-        result = await asyncio.to_thread(m._fetch_1688_product, "964465929482")
-        print("DIAG to_thread result type:", type(result).__name__)
-        print("DIAG to_thread raw:", repr(result)[:300])
+        result = await m._fetch_1688_product("964465929482")
+        print("DIAG await result type:", type(result).__name__)
+        print("DIAG await raw:", repr(result)[:300])
     except Exception as e:
-        print("DIAG to_thread RAISED:", type(e).__name__, ":", str(e)[:300])
+        print("DIAG await RAISED:", type(e).__name__, ":", str(e)[:300])
         traceback.print_exc()
         return
 
-    # Also reproduce the None-guard branch
     if result is None:
-        print("DIAG >>> _cached_fetch would set: Fetch returned None <<<")
+        print("DIAG VERDICT: fetch returned None — likely blocked by login wall / captcha / empty page")
+        return
+
+    if isinstance(result, dict):
+        keys = sorted(result.keys())
+        print("DIAG VERDICT: got dict with keys:", keys[:20])
+        title = str(result.get("title") or result.get("name") or "")[:80]
+        print("DIAG VERDICT: title field:", title or "(empty)")
+        # A live login wall yields an empty/None title; a real product has one.
+        if title:
+            print("DIAG VERDICT: LOGIN_COOKIE VALID (real product data returned)")
+        else:
+            print("DIAG VERDICT: LOGIN_COOKIE LIKELY EXPIRED (dict but no product title — probable login/captcha page)")
 
 
 asyncio.run(main())
