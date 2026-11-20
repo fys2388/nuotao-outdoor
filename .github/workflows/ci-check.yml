@@ -18,6 +18,8 @@ jobs:
     # 这里提供 CI 专用测试值（不连真实生产，仅让导入完整性检查可运行）。
     env:
       JWT_SECRET_KEY: ci-test-only-not-for-production
+      PII_HMAC_KEY: ci-test-hmac-key-0001
+      PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
