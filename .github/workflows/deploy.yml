@@ -29,6 +29,8 @@ jobs:
     env:
       ENVIRONMENT: test
       JWT_SECRET_KEY: ci-only-throwaway-test-key-not-for-production
+      PII_HMAC_KEY: ci-test-hmac-key-0001
+      PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
       WOOCOMMERCE_BASE_URL: https://nuotaooutdoor.com
       WOOCOMMERCE_CONSUMER_KEY: ci-test
       WOOCOMMERCE_CONSUMER_SECRET: ci-test
