@@ -41,5 +41,5 @@ jobs:
 
             echo ""
             echo "=== 3) 判定 ==="
-            echo "若上方 'DIAG to_thread result type' 为 dict 且 raw 含商品字段 → Cookie 有效。"
-            echo "若为 None / RAISED / 含 login 或验证码字样 → Cookie 已失效，需轮换。"
+            echo "若上方出现 'DIAG VERDICT: LOGIN_COOKIE VALID'（真实商品名）→ Cookie 有效。"
+            echo "若为 EXPIRED（generic 占位名 / 登录墙外壳）→ Cookie 已失效，需轮换。"
