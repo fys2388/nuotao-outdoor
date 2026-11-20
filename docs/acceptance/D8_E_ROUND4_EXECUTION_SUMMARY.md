@@ -36,22 +36,27 @@
 
 ---
 
-## 2. P1：CMP Staging B 方案（🔴 BLOCKED）
+## 2. P1：CMP Staging C 方案（Hetzner Docker，环境评估完成）
 
-**Owner 决策**：批准 B 方案（Hostinger 手动独立子站）
-- 需：独立网站目录/数据库/账号，不复制生产凭据；关闭邮件/支付/Webhook/自动订单
-- **实施依赖**：Hostinger 面板创建独立子站 + 手动 WP 安装（需 Owner 提供 Hostinger 子站创建权限或确认剩余网站位使用）
-- 未直接改生产
+**Owner 决策**：批准 C 方案（Hetzner Docker），但须先核实隔离条件（已评估：资源充足 2.5GiB/59G，Docker 29.1.3 可用）
+- **隔离等级**：共享宿主机容器级隔离（无独立 VM，如实记录，非基础设施级）
+- 可建独立 Docker Network + 独立 MySQL/WP 容器 + 资源限制
+- **完整部署（WP+MySQL+Complianz + 8 项测试）**：需独立上下文完整实施（标记 PARTIAL）
+- 未安装新 Docker 组件、未修改生产网络（符合 Owner 前置评估要求）
+- 详见：`CMP_STAGING_INFRASTRUCTURE_REPORT.md`
 
 ---
 
-## 3. P2：WordPress 21 项漏洞审计（🟡 PARTIAL）
+## 3. P2：WordPress 漏洞审计 + Core 更新（🟡 PARTIAL）
 
-**实测（Hostinger/Patchstack）**：
-- **18 个核心漏洞**（WP 7.1.4 → 7.1.5）
-- **3 个插件"漏洞问题"**：Elementor 4.3.6 / ElementsKit Lite 4.0.7 / Jeg Kit for Elementor 3.2.20
-- 15 个插件无漏洞标记
-- **待核实**：21 是"21 漏洞"还是"21 发现"（Hostinger 显示 18 核心 + 3 插件 = 21 发现，需按 Owner 要求逐个核对 CVE）
+**Owner 纠正（截至 2026-11-20 漏洞记录）**：
+- **Elementor 4.3.6**：CVE-2026-104718 受影响版本为低于 4.3.6，**4.3.6 是修复版本，不应因该 CVE 单独认定当前版本受影响**（不代表无其他漏洞）
+- **ElementsKit Lite 4.0.7**：新披露受影响范围 ≤ 4.1.0，修复版本 4.2.0 → **优先升级验证**
+- **Jeg Kit 3.2.20**：11月18日新漏洞影响 ≤ 3.3.0，修复版本 3.3.1 → **优先升级验证**
+- **WordPress Core 7.1.5**（2026-11-18 官方安全版）：修复 SQLi/XSS/权限提升/信息泄露 → **优先备份 + 兼容性预检查 + 受控生产更新**（Owner 批准）
+
+**实测**：Hostinger 显示 18 核心 + 3 插件"漏洞问题" = 21 发现（需按 Owner 要求逐个核对 CVE，区分"21 漏洞"vs"21 发现"）
+- 处置：三个插件先在 CMP Staging 升级验证（不直接改生产）；Core 7.1.5 受控更新
 
 ---
 
