@@ -27,11 +27,11 @@
 - `.github/workflows/ci-check.yml` 第 21-22 行
 - `.github/workflows/deploy.yml` 第 32-33 行
 
-**内容**：
+**内容**（已脱敏，实际值见 GitHub Secrets `CI_TEST_*`）：
 ```yaml
 env:
-  PII_HMAC_KEY: ci-test-hmac-key-0001
-  PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+  PII_HMAC_KEY: ${{ secrets.CI_TEST_PII_HMAC_KEY }}   # ← 已迁移至 Secrets
+  PII_ENCRYPTION_KEY: ${{ secrets.CI_TEST_PII_ENC_KEY }}  # ← 已迁移至 Secrets
 ```
 
 **风险评估**：
@@ -50,7 +50,7 @@ env:
 **位置**：`.github/workflows/deploy.yml` 第 31 行
 
 ```yaml
-JWT_SECRET_KEY: ci-only-throwaway-test-key-not-for-production
+JWT_SECRET_KEY: ${{ secrets.CI_TEST_JWT_KEY }}  # ← 已迁移至 Secrets
 ```
 
 **风险**：同 2.1，建议在下一步迁移到 GitHub Secrets。
@@ -62,12 +62,14 @@ JWT_SECRET_KEY: ci-only-throwaway-test-key-not-for-production
 ### 3.1 `.gitleaksignore` 内容审查
 
 ```
-ci-test-hmac-key-0001          # ✅ 精确匹配，虚构值
-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=  # ✅ 精确匹配，32字节全零
-ci-test-jwt-secret-...         # ✅ 精确匹配，虚构值
-ci-test-app-secret-...         # ✅ 精确匹配，虚构值
-ci-test-only-not-for-production  # ✅ 精确匹配，虚构值
+ci-test-hmac-key-*           # ✅ 虚构测试密钥模式（已迁移，历史保留仅用于说明）
+AAECAwQFBgcICQoL...          # ✅ 32字节全零（已迁移，历史保留仅用于说明）
+ci-test-jwt-secret-*         # ✅ 虚构测试密钥模式（已迁移）
+ci-test-app-secret-*         # ✅ 虚构测试密钥模式（已迁移）
+ci-only-throwaway-*          # ✅ 虚构测试密钥模式（已迁移）
 ```
+
+> ⚠️ **当前状态**：上述值已全部迁移至 GitHub Secrets（`CI_TEST_*`），不再出现在任何 workflow YAML 中。以上为历史变更记录，仅用于审计追踪。
 
 **评估**：所有规则都是精确的虚构值匹配，未忽略任何生产密钥模式或配置文件。✅ 符合 Owner 要求。
 
