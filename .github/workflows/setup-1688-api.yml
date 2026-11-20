@@ -1,0 +1,90 @@
+name: Setup 1688 API Credentials
+
+# 目的：把 GitHub Secret ALI1688_APP_SECRET / ALI1688_ACCESS_TOKEN 安全写入生产服务器
+#       backend/.env，重启后端，并跑 hotfix_oapi_diag.py 验证 simple.get 返回真实商品数据。
+# 这是"摆脱浏览器 Cookie、改用长期 API 密钥"路线的接入与验证入口。
+#
+# Owner 唯一手工步骤：把 AppSecret / AccessToken 粘进对应 GitHub Secret，然后触发本 workflow。
+# 安全：凭证从 Secret 注入为 env 并 ::add-mask:: 掩码，日志只打印长度与是否配置，绝不回显值。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-oapi:
+    name: Write API credentials to server .env, restart, verify
+    runs-on: ubuntu-latest
+    env:
+      NEW_APP_SECRET: ${{ secrets.ALI1688_APP_SECRET }}
+      NEW_ACCESS_TOKEN: ${{ secrets.ALI1688_ACCESS_TOKEN }}
+    steps:
+      - name: Mask credentials in logs
+        run: |
+          echo "::add-mask::$NEW_APP_SECRET"
+          echo "::add-mask::$NEW_ACCESS_TOKEN"
+
+      - name: Sanity-check secrets present
+        run: |
+          miss=0
+          if [ -z "$NEW_APP_SECRET" ]; then echo "ALI1688_APP_SECRET 为空"; miss=1; fi
+          if [ -z "$NEW_ACCESS_TOKEN" ]; then echo "ALI1688_ACCESS_TOKEN 为空"; miss=1; fi
+          if [ "$miss" = "1" ]; then
+            echo "请先在 GitHub Settings > Secrets 更新这两个 Secret。"
+            exit 1
+          fi
+          echo "Both secrets present: APP_SECRET len=${#NEW_APP_SECRET}, ACCESS_TOKEN len=${#NEW_ACCESS_TOKEN} (values masked)"
+
+      - name: Write to server .env, restart, verify simple.get
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: NEW_APP_SECRET,NEW_ACCESS_TOKEN
+          script: |
+            set -eu
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
+
+            upsert() {
+              # $1=key $2=value ; 原子替换或追加，不回显值
+              local key="$1" val="$2"
+              if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+                local esc
+                esc=$(printf '%s' "$val" | sed -e 's/[&|]/\\&/g')
+                sudo sed -i "s|^${key}=.*|${key}=${esc}|" "$ENV_FILE"
+              else
+                printf '%s=%s\n' "$key" "$val" | sudo tee -a "$ENV_FILE" >/dev/null
+              fi
+            }
+
+            echo "=== 1) 写入凭证到 $ENV_FILE（不回显值）==="
+            sudo cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
+            upsert ALI1688_APP_SECRET "$NEW_APP_SECRET"
+            upsert ALI1688_ACCESS_TOKEN "$NEW_ACCESS_TOKEN"
+            # 确保 APP_KEY 存在（已知 2819733，若缺则补）
+            if ! grep -q '^ALI1688_APP_KEY=' "$ENV_FILE" 2>/dev/null; then
+              printf 'ALI1688_APP_KEY=2819733\n' | sudo tee -a "$ENV_FILE" >/dev/null
+            fi
+            echo "ALI1688_APP_SECRET present: $(grep -q '^ALI1688_APP_SECRET=..' "$ENV_FILE" && echo YES || echo NO)"
+            echo "ALI1688_ACCESS_TOKEN present: $(grep -q '^ALI1688_ACCESS_TOKEN=..' "$ENV_FILE" && echo YES || echo NO)"
+
+            echo ""
+            echo "=== 2) 重启后端使凭证生效 ==="
+            sudo systemctl daemon-reload
+            sudo systemctl restart nuotao-backend
+            sleep 6
+            sudo systemctl is-active nuotao-backend || true
+
+            echo ""
+            echo "=== 3) 用 simple.get 验证真实数据（商品 964465929482）==="
+            cd /opt/nuotao-ai-os/backend && timeout 100 su - nuotao -s /bin/bash -c "\
+              cd /opt/nuotao-ai-os/backend && \
+              export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && \
+              export PYTHONPATH=/opt/nuotao-ai-os/backend && \
+              timeout 90 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_oapi_diag.py" 2>&1 | tail -25
+
+            echo ""
+            echo "=== 4) 判定 ==="
+            echo "若上方 OAPI is_configured=True 且 success=True 且 source=1688_open_api"
+            echo "且 subject 为真实商品标题（非 1688 Product）→ API 长期方案跑通，摆脱浏览器 Cookie。"
+            echo "若 source=mock 或报错 → 凭证有误/过期，检查 AppSecret 与 AccessToken。"
