@@ -90,6 +90,13 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     )
     data_integrity_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_integrity_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    # D8-F 来源追溯（P0-2）。区别于 `source`（来源类别 manual/1688/woocommerce）：
+    # data_source 记录采集方式/Provider，provenance 记录字段级来源与证据状态。
+    # 详见 D8F_ARCHITECTURE.md §3.2/§5 与审计 D8F_P0_DATA_TRUST_AUDIT.md（R4/R5/R7/N3）。
+    data_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evidence_grade: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    provenance: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True)
     # Soft delete: NULL means the product is live; a timestamp hides it from all
     # business reads while keeping the row for audit and later re-creation.
     deleted_at: Mapped[datetime | None] = mapped_column(
