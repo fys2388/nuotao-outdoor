@@ -225,16 +225,24 @@ async def _step_pricing(run: dict[str, Any]) -> dict[str, Any]:
                              run["product_data"].get("sourcing_data", {}))
     if ok:
         return {"pricing_data": result, "pricing_status": "completed"}
-    return {"pricing_data": {"price": 29.99, "currency": "USD"},
-            "pricing_status": "default", "note": "定价服务待接入，使用默认价格"}
+    # D8-F(审计 C3): 不再返回硬编码 $29.99 伪造定价（违反 AGENTS.md §1.2.5）。
+    # 定价服务不可用时 fail-closed——宁可缺价，也不能让伪造价格进入上架/利润决策。
+    raise PipelineOrchestratorError("定价服务不可用：拒绝用默认价格继续（fail-closed）")
 
 
 async def _step_listing(run: dict[str, Any]) -> dict[str, Any]:
     ok, result = _safe_call("app.services.product_listing_service", "list_to_woocommerce",
                              run["product_data"])
-    if ok:
-        return {"listing_result": result, "listing_status": "completed"}
-    raise PipelineOrchestratorError("WooCommerce上架服务待接入")
+    if not ok:
+        raise PipelineOrchestratorError("WooCommerce上架服务待接入")
+    # D8-F(审计 C3): ok=True 只表示函数未抛异常，V3.0 闸门拒绝时 result.success=False。
+    # 必须检查业务结果，否则被闸门拦截的 fallback/非真实数据会被误标 completed。
+    if isinstance(result, dict) and not result.get("success", True):
+        gate_codes = result.get("gate_codes") or []
+        raise PipelineOrchestratorError(
+            f"WooCommerce上架被闸门拒绝：{result.get('error', '未知原因')} codes={gate_codes}"
+        )
+    return {"listing_result": result, "listing_status": "completed"}
 
 
 async def _step_seo(run: dict[str, Any]) -> dict[str, Any]:

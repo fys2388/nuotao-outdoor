@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.product import Product
+from app.services.pricing_policy import suggested_retail_price
 from app.services.product_source_identity import (
     resolve_source_offer_id,
 )
@@ -228,8 +229,12 @@ async def import_products_to_candidates(
         # 落地成本虚高、V10 利润率否决对每个候选都误触发。
         purchase_cost_cny = float(price) if price else 0
         purchase_cost = round(purchase_cost_cny * _CNY_TO_USD, 2)
-        # 基于采购价计算建议零售价（采购价 * 3 倍，最低 $5）
-        retail_price_usd = max(round(purchase_cost * 3, 2), 5.0)
+        # D8-F(审计 C4): 移除硬编码「采购价×3/最低$5」伪造售价（违反 AGENTS.md §1.2.5）。
+        # 改用集中定价策略 pricing_policy.suggested_retail_price：无真实采购价时返回
+        # None（不写 meta.regular_price），使下游 profit_analysis 保持 MISSING fail-closed，
+        # 而不是拿 $5 伪造售价算出虚假利润率污染 V9/V10 选品否决。
+        suggested_price = suggested_retail_price(purchase_cost) if purchase_cost > 0 else None
+        retail_price_usd = float(suggested_price) if suggested_price is not None else None
         
         candidate_data = {
             "name": product_name[:200],
