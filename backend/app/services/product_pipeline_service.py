@@ -2890,7 +2890,11 @@ async def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
                     scraped.name in ("1688 Product", "1688产品", "Product", "商品") or
                     (scraped.name and len(scraped.name) < 10) or
                     (scraped.variations and len(scraped.variations) == 1 and
-                     scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1"))
+                     scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1")) or
+                    # D8-F(审计 N1): 价格缺失/为0 也算 generic——删 price=35.8 伪造后，
+                    # price 解析失败会保持 0，必须判 generic 走 fallback/fail-closed，
+                    # 否则 price=0 会被标 scrapling 当真实数据放行。
+                    (not scraped.price_cny or float(scraped.price_cny or 0) <= 0)
                 )
                 if not _is_generic:
                     break
@@ -2911,7 +2915,9 @@ async def _fetch_1688_product(url_or_id: str) -> dict[str, Any]:
                 scraped.name in ("1688 Product", "1688产品", "Product", "商品") or
                 (scraped.name and len(scraped.name) < 10) or
                 (scraped.variations and len(scraped.variations) == 1 and
-                 scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1"))
+                 scraped.variations[0].get("name", "") in ("", "SKU", "SKU1", "Variation 1")) or
+                # D8-F(审计 N1): 价格缺失/为0 判 generic（配套删 price=35.8 伪造）
+                (not scraped.price_cny or float(scraped.price_cny or 0) <= 0)
             )
         else:
             is_generic_data = True
@@ -3178,24 +3184,31 @@ async def import_from_1688(
     if not result.get("success"):
         return result
 
-    # 闸门：禁止用兜底假数据自动流转/上架。硬编码 fallback（_KNOWN_PRODUCTS 快照）
-    # 只是抓取失败时的降级占位，不代表当前真实商品。若放行 auto_run_pipeline，
-    # 过期价格/SKU 会静默流入选品闸门甚至自动上架 WooCommerce（违反 Human-in-the-loop
-    # 与"禁止硬编码业务数据"铁律）。这里仍返回导入结果（success=True），但阻断自动流转，
-    # 并带显式标记让调用方知情——真实抓取恢复后重跑即可流转。
+    # 闸门（D8-F 白名单化，审计 N3/N4/R1）：禁止用兜底假数据自动流转/上架。
+    # 旧逻辑只在 `data_source==hardcoded_fallback AND auto_run_pipeline` 时拦，
+    # 漏掉 unknown、登录墙占位，且 auto_run_pipeline=False 的分析路径完全绕过。
+    # 新逻辑：只有真实抓取（scrapling/1688_open_api）才放行自动流转；任何降级/
+    # 占位/未知来源一律阻断 auto pipeline 并带显式标记——但仍返回导入结果
+    # （success=True）供人工复核，不静默丢数据。真实抓取恢复后重跑即可流转。
     data_source = result.get("data", {}).get("data_source")
-    if data_source == "hardcoded_fallback" and auto_run_pipeline:
+    _AUTHENTIC_SOURCES = {"scrapling", "1688_open_api", "manual"}
+    _is_authentic = data_source in _AUTHENTIC_SOURCES
+    if not _is_authentic:
         logger.warning(
-            "1688 import %s: data_source=hardcoded_fallback — skip auto pipeline "
-            "(fallback data must not auto-list); set auto_run_pipeline=False or "
-            "restore real 1688 scraping.",
+            "1688 import %s: data_source=%s — 非真实来源，阻断自动流转/上架 "
+            "(fail-closed); 仅供人工复核。",
             url_or_id,
+            data_source,
         )
         result["data"]["pipeline_skipped_reason"] = (
-            "data_source=hardcoded_fallback: 兜底假数据禁止自动流转/上架，"
-            "请恢复真实 1688 抓取后重跑。"
+            f"data_source={data_source}: 非真实来源（兜底/占位/未知）禁止自动流转/上架，"
+            "请恢复真实 1688 抓取或改用人工采集 Provider 后重跑。"
         )
+        result["data"]["is_authentic"] = False
+        # 无论 auto_run_pipeline 取值，非真实来源都不得自动流转
         return result
+
+    result["data"]["is_authentic"] = True
 
     if not auto_run_pipeline:
         return result
