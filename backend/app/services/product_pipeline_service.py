@@ -472,6 +472,9 @@ def _generate_listing_data(
             "images": images,
             "main_images": main_images,
             "detail_images": detail_images,
+            # D8-F(C5): 透传来源标记供 V3.0 闸门 unauthentic_source 判定，防 fallback 上架
+            "data_source": _safe_get(product_info, "data_source", ""),
+            "is_authentic": _safe_get(product_info, "is_authentic", None),
             # G3 (2026-10-12): 显式给出可变属性轴，交由上架层直接使用。
             # 英文店铺不允许出现中文属性名；选项顺序即前台展示顺序，故去重且保序。
             "attributes": [
@@ -510,6 +513,9 @@ def _generate_listing_data(
             "categories": categories,
             "tags": tags,
             "images": images,
+            # D8-F(C5): 透传来源标记供 V3.0 闸门 unauthentic_source 判定
+            "data_source": _safe_get(product_info, "data_source", ""),
+            "is_authentic": _safe_get(product_info, "is_authentic", None),
             "main_images": main_images,
             "detail_images": detail_images,
             "meta_data": [
@@ -2839,6 +2845,12 @@ def convert_1688_to_pipeline_input(
             "login_id": product.get("supplier_login_id", ""),
         },
         "variations": variations,  # 所有 SKU 变体（用于变量产品）
+        # D8-F(审计 C6): 透传来源标记。旧逻辑只取 product_detail["product"]，
+        # 丢弃顶层 source="hardcoded_fallback"/"scrapling"，导致下游 run_pipeline/
+        # confirm_and_list/AI 分析全程对数据来源失明，fallback 假数据被当真实流转。
+        # 下游必须读 data_source/is_authentic 决定能否自动化（fail-closed）。
+        "data_source": product_detail.get("source") or "unknown",
+        "is_authentic": product_detail.get("source") in ("scrapling", "1688_open_api", "manual"),
     }
 
 
