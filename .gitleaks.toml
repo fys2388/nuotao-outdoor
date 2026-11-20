@@ -1,8 +1,9 @@
 # Gitleaks configuration for Nuotao AI OS
 # See https://github.com/gitleaks/gitleaks
 #
-# Default rules are extended (useDefault = true). The allowlist below
-# suppresses false positives that match legitimate, non-secret values.
+# Default rules are extended (useDefault = true).
+# Test keys are managed via GitHub Secrets, not hardcoded in workflows.
+
 [extend]
 useDefault = true
 

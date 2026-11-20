@@ -28,14 +28,14 @@ jobs:
     # lives for the duration of this job.
     env:
       ENVIRONMENT: test
-      JWT_SECRET_KEY: ci-only-throwaway-test-key-not-for-production
-      PII_HMAC_KEY: ci-test-hmac-key-0001
-      PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+      JWT_SECRET_KEY: ${{ secrets.CI_TEST_JWT_KEY }}
+      PII_HMAC_KEY: ${{ secrets.CI_TEST_PII_HMAC_KEY }}
+      PII_ENCRYPTION_KEY: ${{ secrets.CI_TEST_PII_ENC_KEY }}
       WOOCOMMERCE_BASE_URL: https://nuotaooutdoor.com
-      WOOCOMMERCE_CONSUMER_KEY: ci-test
-      WOOCOMMERCE_CONSUMER_SECRET: ci-test
-      WP_USERNAME: ci-test
-      WP_APPLICATION_PASSWORD: ci-test
+      WOOCOMMERCE_CONSUMER_KEY: ${{ secrets.CI_TEST_WC_KEY }}
+      WOOCOMMERCE_CONSUMER_SECRET: ${{ secrets.CI_TEST_WC_SECRET }}
+      WP_USERNAME: ${{ secrets.CI_TEST_WP_USER }}
+      WP_APPLICATION_PASSWORD: ${{ secrets.CI_TEST_WP_PASS }}
     defaults:
       run:
         working-directory: backend

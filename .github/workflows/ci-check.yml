@@ -17,9 +17,9 @@ jobs:
     # 缺它会抛 RuntimeError 导致 check_app_imports 全模块失败。
     # 这里提供 CI 专用测试值（不连真实生产，仅让导入完整性检查可运行）。
     env:
-      JWT_SECRET_KEY: ci-test-only-not-for-production
-      PII_HMAC_KEY: ci-test-hmac-key-0001
-      PII_ENCRYPTION_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+      JWT_SECRET_KEY: ${{ secrets.CI_TEST_JWT_KEY }}
+      PII_HMAC_KEY: ${{ secrets.CI_TEST_PII_HMAC_KEY }}
+      PII_ENCRYPTION_KEY: ${{ secrets.CI_TEST_PII_ENC_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
