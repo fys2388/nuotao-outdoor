@@ -171,10 +171,8 @@ jobs:
   hotfix-env:
     name: Hotfix DATABASE_URL (read from backend process)
     runs-on: ubuntu-latest
-    # F2 remediation: credentials come from GitHub Secrets, not hardcoded.
-    env:
-      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      ALI1688_LOGIN_COOKIE: ${{ secrets.ALI1688_LOGIN_COOKIE }}
+    # F2: no hardcoded credentials; DB_PW and LOGIN_COOKIE are read from the
+    # server's backend/.env (the server holds the real rotated values).
     steps:
       - name: Hotfix .env via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -183,8 +181,6 @@ jobs:
           username: ${{ env.SERVER_USER }}
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: 22
-          # F2: pass DB_PASSWORD + ALI1688_LOGIN_COOKIE to the remote SSH environment
-          envs: DB_PASSWORD,ALI1688_LOGIN_COOKIE
           script: |
             set -x
             ENV_FILE=/opt/nuotao-ai-os/backend/.env
@@ -247,9 +243,9 @@ jobs:
                 fi
               done
             fi
-            # 3.5) 用户提供的数据库密码 fallback：用 asyncpg（服务器 .venv 已安装）测试连通性
+            # 3.5) 数据库密码 fallback：从服务器 backend/.env 读取真实 DATABASE_URL（避免硬编码，F2）
             if [ -z "$DB_VAL" ]; then
-              DB_PW="${DB_PASSWORD:-}"
+              DB_PW=$(grep '^DATABASE_URL=' "$ENV_FILE" 2>/dev/null | head -1 | sed -E 's#^[^:]+://[^:]+:([^@]+)@.*#\1#')
               for DB_USER in nuotao root postgres; do
                 if /opt/nuotao-ai-os/backend/.venv/bin/python -c "import asyncio,asyncpg; asyncio.run(asyncpg.connect(host='localhost',port=5432,user='$DB_USER',password='$DB_PW',database='nuotao',timeout=6)); print('OK')" 2>/dev/null | grep -q OK; then
                   DB_VAL="postgresql+asyncpg://${DB_USER}:${DB_PW}@localhost:5432/nuotao"
@@ -564,10 +560,12 @@ jobs:
                 echo "[hotfix] ProtectHome: $(grep -E '^ProtectHome=' /etc/systemd/system/nuotao-backend.service || echo NONE)"
                 echo "[hotfix] unit PLAYWRIGHT env: $(grep -E '^Environment=.PLAYWRIGHT' /etc/systemd/system/nuotao-backend.service || echo NONE)"
                 echo "[hotfix] None.get 防御 in place: $(grep -c 'if product is None' /opt/nuotao-ai-os/backend/app/services/product_pipeline_service.py || echo 0)"
-                # 1688 登录 Cookie（绕过 tmd 登录墙）——注入 LOGIN_COOKIE 到 backend/.env
-                sed -i '/^LOGIN_COOKIE=/d' "$ENV_FILE"
-                printf 'LOGIN_COOKIE=%s\n' "${{ secrets.ALI1688_LOGIN_COOKIE }}" >> "$ENV_FILE"
-                echo "[hotfix] LOGIN_COOKIE written (len=$(grep '^LOGIN_COOKIE=' "$ENV_FILE" | wc -c))"
+                # 1688 登录 Cookie：从服务器 backend/.env 读取真实值（F2，不硬编码）
+                if ! grep -q '^LOGIN_COOKIE=' "$ENV_FILE" 2>/dev/null; then
+                  echo "[hotfix] WARNING: LOGIN_COOKIE not in backend/.env; 1688 login may fail (no hardcoded fallback)"
+                else
+                  echo "[hotfix] LOGIN_COOKIE present in backend/.env (len=$(grep '^LOGIN_COOKIE=' "$ENV_FILE" | head -1 | cut -d= -f2- | wc -c))"
+                fi
                 systemctl daemon-reload
                 systemctl restart nuotao-backend
                 sleep 10
