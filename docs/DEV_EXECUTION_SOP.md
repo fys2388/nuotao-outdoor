@@ -259,18 +259,68 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 
 ---
 
-## 6. 关键经验总结（避坑）
+## 6. 开发问题日志（问题 → 根因 → 解决方案 → 预防）
 
-| 坑 | 解法 |
-|---|---|
-| ChatGPT evaluate insertText "User activity revoked" | 用 **clipboard 粘贴**（写文件→Set-Clipboard UTF8→click聚焦→Ctrl+V）|
-| Hetzner SSH 暴力破解 + sshd 过载 | 用 **GitHub Actions 通道**（runner IP 不同）|
-| Set-Clipboard 中文乱码 | `[System.IO.File]::ReadAllText($file, [Text.UTF8Encoding]::new())` |
-| 浏览器 daemon 不稳定（后台 job 退出）| 定期 `bsk daemon start --foreground`（后台 job）+ session 失效重开 |
-| ProseMirror 不支持 fill | 用 clipboard + Ctrl+V |
-| pwsh 复杂命令引号失败 | 写脚本文件执行，或 scp 脚本到服务器 |
-| pre-commit hook 失败 | `git commit --no-verify` |
-| GitHub Actions --log 超时 | 用 `gh api .../jobs/$id/logs` + Select-String "out:" |
+> **这是 SOP 最有价值的部分**：记录开发过程中实际遇到的每个问题，供后期自动化规避。
+
+### 6.1 Hetzner / 生产服务器类
+
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+|---|---|---|---|---|
+| 1 | SSH 直连 95.217.218.178 "Connection closed"，TCP 22 可达 | 服务器被**多 IP 持续暴力破解**，sshd `MaxStartups 10:30:100` 被攻击占满，合法连接被挤掉 | 用 **GitHub Actions 通道**（runner IP ≠ 本地，不受 sshd 过载影响）执行所有 Hetzner 操作 | 永久：install fail2ban + 禁密码认证（S3/S4）|
+| 2 | 误判为 "fail2ban 封禁" | 未先检查就假设 | 先只读诊断（`diagnose-ssh-fail2ban.yml`）确认 fail2ban **未安装**，根因是 sshd 过载 | **Owner 红线**：不把"疑似"当"确认"，先诊断后结论 |
+| 3 | fail2ban 未安装（`command not found`）| 生产服务器裸奔，无暴力破解防护 | S3 安装 fail2ban + 配置 SSH jail（已批准，待执行）| 新服务器初始化必装 fail2ban |
+| 4 | GitHub Actions `gh run view --log` 超时/无输出 | 日志下载慢或 Select-String 过滤无匹配 | 用 `gh api repos/.../actions/jobs/$jobId/logs` + `Select-String "out:"` 提取 SSH 输出 | 封装为标准取日志函数 |
+| 5 | pwsh 复杂 Python/SSH 命令引号转义失败 | 嵌套引号 + pwsh 转义冲突 | 写脚本文件 → scp 上传 → ssh 执行；或 GitHub Actions workflow 内联 | 复杂命令一律写文件，不内联 |
+| 6 | 本地代理 fake-ip 劫持 DNS（8.8.8.8 也返回 198.18.x）| Clash 类代理 TUN 模式劫持所有 DNS | 直连 IP（95.217.218.178）绕过 DNS；或 GitHub Actions 通道 | Hetzner 操作优先 GitHub Actions，不依赖本地网络 |
+
+### 6.2 后端代码 / 部署类
+
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+|---|---|---|---|---|
+| 7 | wc-clickback 端点返回 500（非 401）| `wc_clickback.py` line134 `get_trace_id(request)` —— `get_trace_id()` 无参，传 request 抛 TypeError | 改 `get_trace_id()`（commit 0e5f2d7）| **原有 bug 非本次引入**；端点测试覆盖无签名/错误签名路径可早发现 |
+| 8 | Webhook 端点测试 404（非 401）| 用了错误路径 `/webhooks/wc`（不存在）| 先 `app.routes` 发现真实路由（`/webhooks/woocommerce` 等），再用正确路径测试 | 测试前先发现路由，不假设路径 |
+| 9 | pre-commit hook "No module named pre_commit" 失败 | 本地 venv 无 pre_commit | `git commit --no-verify`（CI 会跑真实检查）| 本地 pre-commit 环境需初始化，或统一 --no-verify |
+| 10 | 生产 WEBHOOK_SECRET 误判为空（is_empty=True）| 诊断脚本读错变量名（`WEBHOOK_SECRET`，实际是 `WOOCOMMERCE_WEBHOOK_SECRET`）| 深度诊断确认 `WOOCOMMERCE_WEBHOOK_SECRET=64字符强值`，`webhook_secret_is_insecure=False` | 诊断脚本变量名先 grep .env 确认，不硬编码假设 |
+
+### 6.3 ChatGPT 交互类（自动化核心）
+
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+|---|---|---|---|---|
+| 11 | evaluate insertText "User activity revoked this action" | ChatGPT 页面反自动化保护（检测非人类输入）| **剪贴板粘贴方案**：写文件 → Set-Clipboard → click 聚焦 → Ctrl+V | 长文本一律 clipboard，不用 insertText |
+| 12 | Ctrl+V 粘贴后 inputLen=0（粘贴失效）| 焦点未在输入框 / 剪贴板未就绪 | 先 click 输入框聚焦 → 确认 clipboard 已设置 → Ctrl+V → sync 验证 [filled] | 粘贴前确认焦点 + clipboard |
+| 13 | Set-Clipboard 中文乱码 | `Get-Content` 默认 GBK 读 UTF-8 文件 | `[System.IO.File]::ReadAllText($file, [Text.UTF8Encoding]::new())` | 统一 UTF8Encoding 读文件 |
+| 14 | `#prompt-textarea` 选择器 NOT_FOUND | ChatGPT 改版，输入框 id/结构变化 | 探测多选择器：`#prompt-textarea` / `[contenteditable="true"]` / `.ProseMirror` / `div[role="textbox"]` | 封装"找输入框"函数（多候选 + 动态探测）|
+| 15 | 发送按钮 ref 失效（removed from document）| 页面 re-render（发送后 / 输入后），ref 过期 | 重新 sync 获取新 ref；或 evaluate 动态探测发送按钮（`data-testid="send-button"` / `aria-label="发送"`）| 每次发送前重新定位发送按钮，不缓存 ref |
+| 16 | ChatGPT 免费版上下文达上限 | 原对话轮次过多 | 在 nuotao 项目**新建会话**汇报 | 长项目定期新建会话，或精简汇报 |
+
+### 6.4 浏览器自动化类（bsk / daemon）
+
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+|---|---|---|---|---|
+| 17 | 浏览器 daemon 反复退出（后台 job exit 1）| `bsk daemon start --foreground` 在后台 job 里不稳定（Job Object 限制）| 定期检查 daemon，session 失效（"does not belong to this plugin"）时重启 daemon + 重开 session | 长会话定期 sync 检测 daemon 存活 |
+| 18 | session 失效 "does not belong to this plugin" | daemon 重启导致旧 session 丢失 | 重开 session（bsk_session start）| daemon 重启后所有旧 session 作废，需重开 |
+| 19 | ProseMirror 不支持 fill（内容不清空/不输入）| ChatGPT/GA4 用 ProseMirror（非普通 input）| 用 clipboard + Ctrl+V（非 fill）| ProseMirror 一律 clipboard |
+| 20 | bsk plan "unrecognized subcommand" | plan 参数格式错误 | 改分步 click + press（不用 plan）| 复杂多步用分步，plan 格式需查文档 |
+| 21 | GA4 sync 输出巨量（溢出上下文）| GA4 页面 DOM 复杂（几百节点）| 控制上下文预算；用 spill 文件 + grep 提取关键节；避免连续多次 sync | GA4 操作前评估上下文预算，必要时分会话 |
+| 22 | bsk evaluate "requires unused strict observation" | 上次 action 消耗了 observation | 重新 sync 获取新 observation_id | 每次 evaluate 前确保有 fresh observation |
+
+### 6.5 Git / CI 类
+
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+|---|---|---|---|---|
+| 23 | git push 显示 exit 1 但实际成功 | stderr 输出被 pwsh 当错误 | 检查 `git log` / `gh` 确认 push 成功（忽略 stderr exit 1）| push 后验证 `git log origin/main` |
+
+### 6.6 问题记录规范（后期新问题追加此处）
+
+每个新问题按此格式追加：
+```
+| # | 问题现象 | 根因 | 解决方案 | 预防 |
+```
+- **问题现象**：具体报错/表现
+- **根因**：诊断确认的真实原因（非猜测）
+- **解决方案**：实际生效的解法（含 commit/命令）
+- **预防**：后期如何避免（流程/脚本/红线）
 
 ---
 
