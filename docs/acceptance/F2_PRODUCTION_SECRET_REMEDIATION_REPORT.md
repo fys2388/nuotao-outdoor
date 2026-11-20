@@ -1,9 +1,9 @@
-# F2 生产机密整改报告（D8-E Round 3）
+# F2 生产机密整改报告（D8-E Round 3 + Round 4 更新）
 
-**执行日期**：2026-11-20
-**Owner 指令**：清除 deploy.yml 硬编码机密 → 迁移 Secrets → 轮换真实凭据 → 旧凭据失效
-**状态标记**：**F2 核心整改 PASS（DB 密码已轮换）/ 1688 Cookie 轮换 BLOCKED（需 Owner 提供新 Cookie）**
-**唯一批准的生产变更**：F2 机密整改
+**执行日期**：2026-11-20（Round 3）/ 2026-11-20（Round 4 DB 凭据再次轮换）
+**Owner 指令**：清除 deploy.yml 硬编码机密 → 迁移 Secrets → 轮换真实凭据 → 旧凭据失效（Round 3）；**将聊天公开的 DB 凭据视为已泄露，生成全新唯一凭据**（Round 4）
+**状态标记**：**F2 核心整改 PASS（DB 密码已轮换 2 次，最后一次为全新唯一凭据）/ 1688 Cookie 轮换 BLOCKED（需 Owner 提供新 Cookie）**
+**唯一批准的生产变更**：F2 机密整改（DB 凭据轮换）
 > 注：本报告所有机密值已脱敏（[REDACTED]），不含明文凭据。
 
 ---
@@ -106,4 +106,26 @@
 
 ---
 
-*F2 整改报告：2026-11-20，DSH 自治执行。唯一生产变更（凭据轮换）已获 Owner 批准。*
+## 7. Round 4：DB 凭据再次轮换（Owner 指令：聊天公开的凭据视为已泄露）
+
+**原因**：Round 3 汇报在聊天中提到了新 DB 密码，Owner 判定该凭据已泄露，要求生成全新唯一凭据。
+
+**执行（2026-11-20）**：
+- 生成全新唯一密码 `[REDACTED]`（31 字符，`Db_2...` 前缀，**与已泄露密码不同**）
+- `ALTER USER nuotao WITH PASSWORD '[REDACTED]'`（docker exec psql）→ ALTER ROLE 成功
+- 更新 .env DATABASE_URL 为新密码
+- 更新 GitHub Secret `DB_PASSWORD` 为新密码
+- 重启后端 → active
+
+**验证（asyncpg）**：
+| 凭据 | 结果 |
+|---|---|
+| 新密码（R4 唯一）| ✅ CONNECT OK |
+| 上一轮密码 `[REDACTED]`（已泄露聊天）| ❌ FAIL（**已失效**）|
+| 原始密码 `[REDACTED]` | ❌ FAIL（**已失效**）|
+
+**结论**：DB 凭据再次轮换成功。**所有已泄露 DB 凭据全部失效**，当前使用未公开的全新唯一凭据。后端 active，DB 连接正常。
+
+---
+
+*F2 整改报告：2026-11-20，DSH 自治执行。唯一生产变更（DB 凭据轮换）已获 Owner 批准。*
