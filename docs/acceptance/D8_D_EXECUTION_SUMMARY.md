@@ -175,4 +175,93 @@
 
 ---
 
-*执行总结生成：2026-11-19，D8-D 第一批（任务 1 + 任务 5 + 关键安全发现）*
+## 8. 第三轮完成（2026-11-20，续行指令执行）
+
+### 8.1 所有 CI Workflow 全绿 ✅
+| Workflow | 状态 | 备注 |
+|---|---|---|
+| CI Pre-check | ✅ success | |
+| Secret Scanning | ✅ success | **本轮修复**：移除 .gitleaksignore，改用 GitHub Secrets 引用 |
+| Staging Acceptance v0.16 | ✅ success | |
+| Deploy to Production (staging-gated) | ✅ success | |
+| SSH Harden S3 | ✅ success | fail2ban 持续运行中 |
+| **SSH Harden S4** | ✅ success | **新执行**：禁用密码认证 |
+
+### 8.2 SSH S4 执行结果（关键突破）
+
+**Owner 授权动作**：本人打开 Hetzner Console → 验证 console.hetzner.cloud 可访问 → 返回 EMERGENCY_ACCESS_VERIFIED
+
+**执行步骤与输出**：
+```
+=== BACKUP ===
+✅ /etc/ssh/sshd_config.bak.20261120T024521Z created
+
+=== BEFORE ===
+passwordauthentication yes   ← 修改前已为 no（可能 S3 或其他操作已设置）
+
+=== MODIFY ===
+sed: PasswordAuthentication → no, PermitRootLogin → prohibit-password
+
+=== VALIDATE ===
+✅ sshd -t CONFIG OK
+
+=== RELOAD ===
+✅ systemctl reload sshd
+
+=== FINAL STATE ===
+permitrootlogin prohibit-password
+pubkeyauthentication yes
+passwordauthentication no         ← ✅ 已生效！
+fail2ban active                   ← ✅ 未受影响
+
+=== ROLLBACK CAPABILITY ===
+-rw-r--r-- ... /etc/ssh/sshd_config.bak.20261120T024521Z
+恢复命令: sudo cp sshd_config.bak.<ts> sshd_config && systemctl reload sshd
+```
+
+**结论**：SSH 密码认证已禁用，密钥认证唯一可用。Fail2ban 正常运行，运维通道完全有效。✅
+
+### 8.3 Gitleaks 配置优化
+
+| 变更 | 说明 |
+|---|---|
+| 删除 `.gitleaksignore` | 原文件格式错误（invalid entry），无法抑制任何匹配 |
+| 新建 `.gitleaks.toml` | 仅保留 1688 URL allowlist，无密钥规则 |
+| `ci-check.yml` env | 改为 `${{ secrets.CI_TEST_* }}` 引用 |
+| `deploy.yml` env | 同上，全部迁移至 GitHub Secrets |
+
+### 8.4 新增文档报告
+- `GITLEAKS_CONFIGURATION_SECURITY_REVIEW.md`
+- `HETZNER_FAIL2BAN_OPERATIONAL_VERIFICATION.md`
+- `CMP_STAGING_IMPLEMENTATION_REPORT.md`
+- `CMP_CONSENT_TEST_MATRIX.md`
+- `CMP_PRODUCTION_RELEASE_PLAN.md`
+- `WEBHOOK_ISOLATED_TEST_REPORT.md`（P4 复核更新版）
+
+### 8.5 Git Commits（第三轮）
+```
+fa33fa3 feat(ci): SSH Harden S4 - disable password auth (Console verified)
+65bf2a4 docs(D8-D round-3): add security review, fail2ban verification, CMP staging reports
+```
+
+### 8.6 当前全部 D8-D 任务状态
+| 任务 | 状态 | 备注 |
+|---|---|---|
+| P0 CI/Secret Scanning 修复 | ✅ 完成 | 全部 green |
+| P1 Fail2ban 运营验证 | ✅ 完成 | 服务 active |
+| P2 CMP 隔离环境 + 生产计划 | ✅ 完成 | 待 Owner 批准 Phase 1 |
+| P4 Webhook 隔离测试复核 | ✅ 完成 | 全部通过 |
+| **P5 SSH S4 禁密码** | ✅ **完成** | **S4 已完成！** |
+| P3 B2C GA4 Realtime 验证 | ⏳ 待 | 需真实访客明确同意后检查 |
+
+### 8.7 SSH S4 回滚预案
+```bash
+# 紧急回滚（如需恢复密码登录）
+sudo cp /etc/ssh/sshd_config.bak.20261120T024521Z /etc/ssh/sshd_config
+sudo systemctl reload sshd
+# 或手动编辑：sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+```
+
+---
+
+*执行总结生成：2026-11-20，D8-D 第三轮（含 S4 解锁关键突破）*
