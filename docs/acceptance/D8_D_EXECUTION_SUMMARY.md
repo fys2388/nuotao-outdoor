@@ -97,9 +97,9 @@
 | 任务三：Complianz 隔离环境 | ⏳ 待 | 需建立本地/容器隔离环境（独立 DB + 测试 Secret）|
 | 任务四：B2C GA4 Realtime + DebugView | ⏳ 待 | 需真实浏览器访客明确同意后检查 |
 | 电商事件质量验证 | ⏳ 待 | 需 Realtime/DebugView 实测 |
-| 任务六：LiteSpeed 缓存兼容性审计 | ⏳ 待 | 可只读审计（检查 Consent Cookie/缓存隔离/结账排除）|
-| Webhook 隔离环境完整测试 | ⏳ 待 | 正确签名 200 路径需隔离环境（生产红线禁写入）|
-| 剩余交付物 | ⏳ 待 | CMP 选型/实施、GA4 生产验证、D8_D_EXECUTION_SUMMARY（本文件）|
+| 任务六：LiteSpeed 缓存兼容性审计 | ✅ **已完成** | 见 `LITESPEED_CACHE_COMPATIBILITY_AUDIT.md` |
+| Webhook 隔离环境完整测试 | ✅ **已完成** | 见 `WEBHOOK_ISOLATED_TEST_REPORT.md` |
+| 剩余交付物 | ⏳ 待 | CMP 选型实施、GA4 生产验证 |
 
 ---
 
