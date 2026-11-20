@@ -146,6 +146,32 @@
 | a10ff04 | ci: wc-clickback 最终验证 |
 | 8adddd3 | docs: webhook 最终验收 VERIFIED |
 | **fd9549f** | **docs: B2B GA4 Property 创建（G-39BRDMLCB3）** |
+| 935d6e1 | fix(ci): add PII test keys to CI env |
+| d6f200e | docs: add gitleaks ignore for CI test keys |
+| 6d4b3fe | docs(D8-D): LiteSpeed audit + Webhook isolated test |
+| 9c31014 | fix(ci): add PII keys to deploy workflow |
+| **398f552** | **fix(tests): cache_clear in PII keys fixture** |
+
+---
+
+## 7. 第二轮续行完成（2026-11-20）
+
+### 7.1 CI 全绿 ✅
+| Workflow | 状态 |
+|---|---|
+| CI Pre-check | ✅ success |
+| Secret Scanning | ✅ success |
+| Staging Acceptance v0.16 | ✅ success |
+| PII CI Integration Test | ✅ success |
+| Deploy to Production | ✅ success（已落生产）|
+| SSH Harden S3 | ✅ success（fail2ban 持续运行）|
+
+### 7.2 根因修复
+- **PII 测试失败**：`keys` fixture 未调用 `get_settings.cache_clear()`，lru_cache 缓存空 settings → 加 cache_clear 修复
+- **Secret Scanning 误报**：`.gitleaksignore` 格式错误（需 regex pattern 而非字面量）→ 修正格式
+
+### 7.3 仍阻塞
+- **SSH S4 禁密码**：需 Hetzner Console 应急通道验证（我无账号凭证）
 
 ---
 
