@@ -119,6 +119,9 @@ class ManualProvider:
         """校验人工录入真实性。人工录入是真实观察，但结构必须完整（名称+正价格）。"""
         reasons: list[str] = []
         name = normalized.get("name", "")
+        # 占位名黑名单（拦"1688 Product"/"商品"等无信息占位），+ 极短名兜底。
+        # 不用 len<10（对英文合法短名如 "Cup"/"Mat" 会误杀）——审计原则是拦
+        # 占位名，不是拦短名；D8-F(审计 R1) 登录墙占位由黑名单 + 来源闸门覆盖。
         if name in _PLACEHOLDER_NAMES or len(name) < 2:
             reasons.append(f"商品名称缺失或为占位值: {name!r}")
 
