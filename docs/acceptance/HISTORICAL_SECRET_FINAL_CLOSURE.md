@@ -2,7 +2,7 @@
 
 **执行日期**：2026-11-20
 **Owner 验收看板**：DB / 1688 / Hetzner API / Rescue / JWT
-**状态标记**：DB ✅ / JWT ✅ / 1688 ⏸️ / Hetzner ⏸️ / Rescue ⏸️
+**状态标记**：DB ✅ / JWT ✅ / 1688 ⏸️ / Hetzner ✅ / Rescue ✅
 
 ---
 
@@ -32,15 +32,28 @@
 - Owner 官方登录 → 安全渠道写入 Secret（禁发聊天明文）
 - DSH 待验证：调用位置 / Secret 一致性 / 旧会话失效 / 新会话有效 / 只读验证 / 无泄露
 
-## 4. Hetzner API Token — ⏸️ 需 Owner 控制台
+## 4. Hetzner API Token — ✅ 已闭环（Round 5 收尾）
 
-- 新旧 Token 并行验证 → 确认新 Token 可用后撤销旧 Token
-- 仅存在于 git 历史（hotfix 分支），当前服务器配置无残留
+| 项 | 结果 |
+|---|---|
+| 新 Token | `nuotao-agent-2026-rotated`（Read & Write，64 字符）创建成功 |
+| 验证 | ✅ GET /v1/servers → HTTP 200，server_count=1 |
+| 旧 Token 撤销 | ✅ nuotao-unban-agent / rescue-fix / rescue-fix-write / server-fix-2026 全部删除 |
+| 安全存储 | 服务器 `/root/.hetzner/api_token_new`（chmod 600），明文未进聊天/Git |
+| 报告 | HETZNER_API_TOKEN_ROTATION_REPORT.md（commit 7baae60）|
+| 备注 | 阶段验收（Owner）；最小权限复核待后续 |
 
-## 5. Rescue 凭据 — ⏸️ 需 Owner 确认
+## 5. Rescue 凭据 — ✅ 已闭环（Round 5 收尾）
 
-- 先确认实际使用方式及暴露证据，**不得误撤销生产 SSH 运维密钥**
-- 若为 Hostinger/Hetzner rescue，需对应控制台重置
+| 项 | 结果 |
+|---|---|
+| 暴露证据 | ✅ 14 天前 Rescue enabled/disabled + 2 次 reboot（活动日志）|
+| 当前 Rescue 系统 | 未启用（无活跃 Rescue 密码）|
+| root 密码 | ✅ 已重置（Hetzner Console），新密码存 `/root/.hetzner/rescue_root_password_new`（chmod 600），明文未进聊天/Git |
+| 旧凭据失效 | ✅ 已重置替换 |
+| 日常 SSH | ✅ 密钥登录正常（whoami=root），PasswordAuthentication no |
+| nuotao-deploy-2024 | ✅ 未修改（authorized_keys 保留）|
+| 报告 | HETZNER_RESCUE_CREDENTIALS_CLOSURE_REPORT.md（commit 71903ff）|
 
 ---
 
@@ -51,10 +64,10 @@
 | DB 密码 | ✅ 闭环 | 两次轮换，旧凭据全部失效 |
 | JWT | ✅ 闭环 | 当前密钥未泄露，历史 token 过期，伪造路径已修复 |
 | 1688 Cookie | ⏸️ 待 Owner | 安全渠道更新 |
-| Hetzner API | ⏸️ 待 Owner | 并行验证 + 撤销旧 |
-| Rescue | ⏸️ 待 Owner | 确认暴露证据 + 重置 |
+| Hetzner API | ✅ 闭环 | 新 Token 验证 + 旧 4 Token 撤销 |
+| Rescue | ✅ 闭环 | root 密码重置 + 日常 SSH 未受影响 |
 
-**核心安全成果**：DB + JWT 已闭环（当前无有效历史暴露凭据）。1688/Hetzner/Rescue 待 Owner 安全渠道操作。
+**核心安全成果**：DB + JWT + Hetzner API + Rescue 已闭环（当前无有效历史暴露凭据）。1688 仍待 Owner 安全渠道操作。
 
 ---
 
