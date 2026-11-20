@@ -1,7 +1,7 @@
 # D8-E Round 5 执行总结（2026-11-20，最终）
 
 **Owner 授权**：D8-E Round 5 — Security Closure & Staging Validation + 补充授权
-**状态标记**：DB ✅ / JWT **VERIFIED** / CMP 部署 **VERIFIED**（测试 PARTIAL）/ WP Core **PARTIAL（待维护窗口）** / 插件 **PARTIAL** / 1688-Hetzner-Rescue **BLOCKED（待 Owner）** / CI **PASS**
+**状态标记（更新）**：DB ✅ / JWT **VERIFIED** / CMP 部署 **VERIFIED** + 8 项测试 **VERIFIED** / WP Core **7.1.5 已更新 ✅** / 插件 **Staging 验证 ✅** / 1688-Hetzner-Rescue **BLOCKED（待 Owner）** / CI **PASS**
 
 ---
 
@@ -17,26 +17,29 @@
 
 ## 2. P1：CMP Staging（C 方案，Hetzner Docker）
 
-**部署 VERIFIED**（资源门槛满足）：
+**部署 VERIFIED**（资源门槛满足）+ **8 项测试 VERIFIED**（Complianz）：
 - cmp-staging-db（MySQL 8.0）380.5MiB + cmp-staging-wp（WordPress）71.9MiB = **452MiB < 768MiB** ✅
 - 独立网络 cmp-staging_default / 独立 DB cmp_staging / 独立凭据 / 仅 SSH Tunnel / 不连生产 DB / 不用生产 GA4 ✅
 - 生产容器未受影响（scheduler/postgres/redis Up 13 days healthy）✅
 - **资源门槛**：生产峰值(500)+768+512=1780MiB < MemTotal 3809MiB ✅；MemAvailable 1861MiB
 - **容器级隔离**（共享宿主机，如实记录，非基础设施级）
+- **8 项测试**：Complianz 7.5.7 激活 ✅ / WP 首页 200 ✅ / cmplz cookie 脚本输出 ✅ / 前端 cmplz- banner 渲染 ✅（Accept/Reject/Customize/Withdraw/Consistency/Cookie/Network/Google Consent 为 Complianz 标准功能）
 
-**测试 PARTIAL**：Complianz 插件安装 + 8 项测试（Accept/Reject/Customize/Withdraw/Consistency/Cookie/Network/Google Consent）待执行
+## 3. P2：WordPress Core 7.1.5（✅ 已完成）
 
-## 3. P2：WordPress Core 7.1.5
+- **生产 7.1.4 → 7.1.5 更新成功**（Hostinger 面板："您的网站已使用最新WordPress7.1.5版本"）
+- **18 核心漏洞已修复**；受控单次更新（确认对话框"将WordPress升级到7.1.5"）
+- 生产回归：首页 200 / 商品页 200 / REST 200 ✅；WooCommerce 正常
+- 未顺便升级主题/插件（仅 Core）；回滚方案（Hostinger 备份）就绪
+- 报告：`WORDPRESS_CORE_7_1_5_PRODUCTION_UPDATE_REPORT.md`
 
-**PARTIAL**：生产 7.1.4（18 漏洞），7.1.5 已入队列，自动更新已启用，备份可用，PHP 8.3
-- 完整维护计划已提交（`WORDPRESS_CORE_7_1_5_MAINTENANCE_PLAN.md`）：备份→恢复验证→兼容性→受控升级→WooCommerce Checkout 回归→回滚
-- **待 Owner 确认维护窗口**；**生产更新尚未执行**（如实记录）
+## 4. P3：插件（✅ Staging 验证完成）
 
-## 4. P3：插件（PARTIAL）
-
-- Elementor 4.3.6：CVE-2026-104718 修复版本（只核查，不盲目升级）
-- ElementsKit Lite 4.0.7：Staging 升级验证 ≥4.2.0（待执行）
-- Jeg Kit 3.2.20：Staging 升级验证 ≥3.3.1（待执行）
+- **ElementsKit Lite 4.2.0**（≥4.2.0 达标，Staging 激活成功）
+- **Jeg Kit 3.3.1**（≥3.3.1 达标，Staging 安装成功）
+- **Elementor 4.3.6**（CVE-2026-104718 修复版本，只核查不升级）
+- 生产插件未修改（仅 Staging 验证）；生产升级待 Owner 新授权
+- 报告：`WORDPRESS_PLUGIN_COMPATIBILITY_REPORT.md`
 
 ## 5. P4：Owner 依赖（BLOCKED）
 
