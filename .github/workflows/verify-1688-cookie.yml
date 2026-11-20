@@ -36,6 +36,7 @@ jobs:
               cd /opt/nuotao-ai-os/backend && \
               export LOGIN_COOKIE=\"\$(grep '^LOGIN_COOKIE=' $ENV_FILE | head -1 | cut -d= -f2-)\" && \
               export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && \
+              export PYTHONPATH=/opt/nuotao-ai-os/backend && \
               timeout 110 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_decisive_diag.py" 2>&1 | tail -30
 
             echo ""
