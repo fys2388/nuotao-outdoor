@@ -1,0 +1,80 @@
+name: Rotate 1688 LOGIN_COOKIE
+
+# 目的：把 GitHub Secret ALI1688_LOGIN_COOKIE 的新值安全地轮换到生产服务器
+#       backend/.env 的 LOGIN_COOKIE，重启后端，并自动验证新 Cookie 能否通过
+#       1688 登录墙抓取真实商品。
+#
+# Owner 唯一手工步骤：在 GitHub 网页把新 Cookie 粘进 Secret ALI1688_LOGIN_COOKIE，
+# 然后触发本 workflow。Cookie 值全程不经过聊天/issue/日志明文。
+#
+# 安全：
+#   - Cookie 从 GitHub Secret 注入为 env，用 ::add-mask:: 掩码，日志绝不回显值。
+#   - 写 .env 用 sed 原子替换，不 echo 值。
+#   - 验证只打印 Cookie 长度和“有效/失效”判定（复用 hotfix_decisive_diag.py）。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rotate:
+    name: Write new cookie to server .env, restart, verify
+    runs-on: ubuntu-latest
+    env:
+      NEW_COOKIE: ${{ secrets.ALI1688_LOGIN_COOKIE }}
+    steps:
+      - name: Mask cookie in logs
+        run: echo "::add-mask::$NEW_COOKIE"
+
+      - name: Sanity-check secret is present
+        run: |
+          if [ -z "$NEW_COOKIE" ]; then
+            echo "ALI1688_LOGIN_COOKIE secret is empty — 先在 GitHub Settings > Secrets 更新它。"
+            exit 1
+          fi
+          echo "Secret present, length=${#NEW_COOKIE} (value masked)"
+
+      - name: Write cookie to server .env, restart backend, verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: NEW_COOKIE
+          script: |
+            set -eu
+            ENV_FILE=/opt/nuotao-ai-os/backend/.env
+
+            echo "=== 1) 原子替换 $ENV_FILE 的 LOGIN_COOKIE 行（不回显值）==="
+            # 备份
+            sudo cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%s)"
+            # 构造新行；用 printf 避免 echo 对特殊字符的处理差异
+            NEWLINE=$(printf 'LOGIN_COOKIE=%s' "$NEW_COOKIE")
+            if grep -q '^LOGIN_COOKIE=' "$ENV_FILE"; then
+              # 用 | 作分隔符避免 cookie 里的 / = 等干扰；& 转义避免 sed 替换符
+              ESCAPED=$(printf '%s' "$NEW_COOKIE" | sed -e 's/[&|]/\\&/g')
+              sudo sed -i "s|^LOGIN_COOKIE=.*|LOGIN_COOKIE=${ESCAPED}|" "$ENV_FILE"
+            else
+              printf 'LOGIN_COOKIE=%s\n' "$NEW_COOKIE" | sudo tee -a "$ENV_FILE" >/dev/null
+            fi
+            echo "LOGIN_COOKIE line written, new length in .env: $(grep '^LOGIN_COOKIE=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '\n' | wc -c)"
+
+            echo ""
+            echo "=== 2) 重启后端使新 Cookie 生效 ==="
+            sudo systemctl daemon-reload
+            sudo systemctl restart nuotao-backend
+            sleep 6
+            sudo systemctl is-active nuotao-backend || true
+
+            echo ""
+            echo "=== 3) 用新 Cookie 实际抓一次 1688（非硬编码商品）验证 ==="
+            cd /opt/nuotao-ai-os/backend && timeout 120 su - nuotao -s /bin/bash -c "\
+              cd /opt/nuotao-ai-os/backend && \
+              export LOGIN_COOKIE=\"\$(grep '^LOGIN_COOKIE=' $ENV_FILE | head -1 | cut -d= -f2-)\" && \
+              export PLAYWRIGHT_BROWSERS_PATH=/home/nuotao/.cache/ms-playwright && \
+              export PYTHONPATH=/opt/nuotao-ai-os/backend && \
+              timeout 110 .venv/bin/python /opt/nuotao-ai-os/scripts/hotfix_decisive_diag.py" 2>&1 | tail -20
+
+            echo ""
+            echo "=== 4) 判定 ==="
+            echo "若上方出现 'DIAG VERDICT: LOGIN_COOKIE VALID' → 轮换成功，真实抓取恢复。"
+            echo "若为 EXPIRED / INCONCLUSIVE → 新 Cookie 无效，检查是否复制完整或已过期。"
