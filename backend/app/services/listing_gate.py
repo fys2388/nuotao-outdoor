@@ -38,6 +38,10 @@ HARD_BLOCK: set[str] = {
     # Never forceable - this is exactly the defect that let product 2230 ship at
     # $5.83 against a $6.30 purchase cost.
     "negative_margin",
+    # D8-F(审计 C5): 数据来源非真实（兜底/占位/未知）禁止上架。fallback 假数据
+    # 一旦进入 WooCommerce，反向同步与利润分析都会把它当真实商品。不可 force——
+    # 宁可少上架一个商品，也不能让虚假商品信息进入采购/销售决策（D8-F 核心原则）。
+    "unauthentic_source",
 }
 # Reasons that require human review but are overridable (-> 409).
 REVIEW_REQUIRED: set[str] = {
@@ -188,6 +192,19 @@ def evaluate_gate(
             "message": "缺少 SKU，无法建立 WooCommerce 渠道映射",
         })
 
+    # D8-F(审计 C5): Product 行来源真实性硬门禁。products.data_source（0088 迁移）
+    # 记录采集方式；非真实来源（兜底/占位/未知/空）禁止上架，与 dict 路径一致。
+    _product_data_source = str(getattr(product, "data_source", "") or "").strip()
+    _AUTHENTIC_SOURCES_ROW = {"scrapling", "1688_open_api", "manual"}
+    if _product_data_source not in _AUTHENTIC_SOURCES_ROW:
+        reasons.append({
+            "code": "unauthentic_source",
+            "message": (
+                f"商品数据来源非真实或不可追溯（data_source={_product_data_source or '缺失'}），"
+                "兜底/占位/无来源数据禁止上架 WooCommerce"
+            ),
+        })
+
     if not prices.get("regular_price"):
         reasons.append({
             "code": "missing_price",
@@ -305,6 +322,25 @@ def evaluate_gate_from_dict(listing_data: dict[str, Any]) -> dict[str, Any]:
     """
     data = listing_data or {}
     reasons: list[dict[str, str]] = []
+
+    # D8-F(审计 C5): 来源真实性硬门禁。convert_1688_to_pipeline_input 现已透传
+    # data_source；任何非真实来源（hardcoded_fallback/unknown/空）都不得上架。
+    # is_authentic=False 或 data_source 缺失/非白名单一律 fail-closed。真实来源
+    # 白名单：scrapling / 1688_open_api / manual（与 import_from_1688 闸门一致）。
+    data_source = str(data.get("data_source") or "").strip()
+    is_authentic = data.get("is_authentic")
+    _AUTHENTIC_SOURCES = {"scrapling", "1688_open_api", "manual"}
+    # 收紧(D8-F C5)：来源缺失也拦——1688 链路经 convert 必有 data_source，缺失说明
+    # 绕过了带来源追溯的正常路径。先探破坏面，若误杀 non-1688 合法调用则回退为
+    # "仅明确非真实才拦"。
+    if is_authentic is False or data_source not in _AUTHENTIC_SOURCES:
+        reasons.append({
+            "code": "unauthentic_source",
+            "message": (
+                f"商品数据来源非真实或不可追溯（data_source={data_source or '缺失'}），"
+                "兜底/占位/无来源数据禁止上架 WooCommerce；请恢复真实抓取或改用人工采集后重试"
+            ),
+        })
 
     sku = str(data.get("sku") or "").strip()
     if not sku:
