@@ -1,0 +1,56 @@
+name: SSH Harden S1 - Read-Only Diagnosis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  s1:
+    name: S1 Read SSH config, auth, logs, MaxStartups, admin IPs
+    runs-on: ubuntu-latest
+    steps:
+      - name: S1 read-only diagnosis
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== 1. sshd_config key directives ==="
+            sudo sshd -T 2>/dev/null | grep -iE "^(passwordauthentication|permitrootlogin|pubkeyauthentication|maxstartups|maxauthtries|port|listenaddress|allowusers|allowgroups)" || \
+              sudo grep -iE "^(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|MaxStartups|MaxAuthTries|Port|AllowUsers|AllowGroups)" /etc/ssh/sshd_config
+
+            echo ""
+            echo "=== 2. current SSH sessions (who) ==="
+            who 2>/dev/null || echo "no who"
+            echo "--- established :22 ---"
+            ss -tn state established '( sport = :22 )' 2>/dev/null | head -20
+
+            echo ""
+            echo "=== 3. recent successful logins (last 15) ==="
+            sudo last -n 15 2>/dev/null | head -20 || echo "no last"
+
+            echo ""
+            echo "=== 4. recent SSH accepted logins (journalctl) ==="
+            sudo journalctl -u ssh --no-pager -n 500 2>/dev/null | grep -iE "accepted|session opened" | tail -15 || echo "no journal"
+
+            echo ""
+            echo "=== 5. authorized_keys (count + fingerprints, no keys) ==="
+            for u in root $(logname 2>/dev/null) $USER; do
+              f="/home/$u/.ssh/authorized_keys"; [ "$u" = "root" ] && f="/root/.ssh/authorized_keys"
+              if sudo test -f "$f"; then
+                cnt=$(sudo wc -l < "$f")
+                echo "$u: $cnt keys"
+                sudo ssh-keygen -lf "$f" 2>/dev/null | awk '{print "  fp:", $2}'
+              fi
+            done
+
+            echo ""
+            echo "=== 6. fail2ban present? ==="
+            which fail2ban-client 2>/dev/null || echo "fail2ban NOT installed"
+            systemctl is-active fail2ban 2>/dev/null || echo "fail2ban not running"
+
+            echo ""
+            echo "=== 7. OS + uptime ==="
+            lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY
+            uptime
