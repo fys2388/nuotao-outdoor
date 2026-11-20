@@ -310,6 +310,24 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 | # | 问题现象 | 根因 | 解决方案 | 预防 |
 |---|---|---|---|---|
 | 23 | git push 显示 exit 1 但实际成功 | stderr 输出被 pwsh 当错误 | 检查 `git log` / `gh` 确认 push 成功（忽略 stderr exit 1）| push 后验证 `git log origin/main` |
+| 24 | **CI Pre-check 持续 failure**（所有 push 都失败）| `test_pii_ci_integration.py:76` `db_url` fixture 用 `assert` —— 无 DB 环境（CI Pre-check 无 postgres）直接 fail，阻塞 Deploy gated | 改 `db_url` fixture：无 DB URL 时 `pytest.skip`（非 assert fail），有 DB 环境正常跑（commit 707ebfe）| 集成测试（需 DB）应 skip 无 DB 环境，而非 fail；CI Pre-check 与专门 DB workflow 分离 |
+
+### 6.5.1 GitHub 推送运行监控（强制步骤）
+
+**每次 git push 后必须检查 workflow 运行情况**（用户要求"时刻关注 github 实际推送运行情况"）：
+
+```powershell
+# push 后检查所有触发的 workflow 状态
+gh run list --limit 10 2>&1 | Select-Object -First 12
+# 关注：CI Pre-check（语法/测试）、Deploy to Production（gated）、Secret Scanning
+# 失败的 workflow：gh run view <run-id> --log-failed 查原因
+```
+
+**监控要点**：
+- **CI Pre-check**：语法 + imports + 单测 + smoke —— 失败会阻塞 Deploy gated
+- **Deploy to Production (staging-gated)**：CI 失败时被 cancelled（正确 gating）
+- **专门 workflow**（PII CI / SSH Harden 等）：workflow_dispatch 或 push 触发
+- **失败必查根因**（不忽略），修复后重新 push 验证
 
 ### 6.6 问题记录规范（后期新问题追加此处）
 
