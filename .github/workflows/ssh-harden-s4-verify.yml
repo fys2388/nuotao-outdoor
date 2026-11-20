@@ -5,6 +5,11 @@ name: SSH Harden S4 Independent Verification
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ssh-harden-s4-verify.yml'
+      - '.github/workflows/ssh-harden-s3-fail2ban.yml'
 
 jobs:
   verify-s4:
