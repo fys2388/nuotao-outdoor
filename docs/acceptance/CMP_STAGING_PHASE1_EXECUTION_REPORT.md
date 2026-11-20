@@ -1,56 +1,50 @@
-# CMP Staging Phase 1 执行报告（D8-E 第二轮 P1）
+# CMP Staging Phase 1 执行报告（D8-E Round 3）
 
 **执行日期**：2026-11-20
-**Owner 指令**：获得 Staging URL + 独立管理员账号后实测；否则明确记录外部阻塞
-**状态**：**BLOCKED**（外部依赖：Staging 环境未就绪 / Hostinger 套餐限制）
-**说明**：按 Owner 验收标准"完成真实环境验收，**或者明确记录外部阻塞**"——本报告如实记录 BLOCKED 状态，未将未经验证结果标为 PASS。
+**Owner 指令**：建立独立、安全、可复现的 WordPress CMP Staging 环境；不直接修改生产 Banner/CMP
+**状态标记**：**BLOCKED**（外部依赖：WordPress CMP Staging 环境未搭建，需 Owner 选择路径）
+**说明**：按 Owner 状态体系，BLOCKED 如实记录，未虚报 PASS
 
 ---
 
-## 1. 外部阻塞根因
+## 1. 环境实测（Round 3 复检）
 
-### 1.1 核心：Hostinger staging 需升级套餐
-
-**实测证据**（Hostinger 控制面板 → 暂存页面）：
-```
-"您当前的套餐是 Premium Web Hosting。要继续创建暂存环境，建议您升级您的套餐。"
-```
-
-### 1.2 补充环境事实（实测）
-
-| 项 | 实测结果 | 证据 |
+| 项 | 实测结果 | 结论 |
 |---|---|---|
-| `staging.nuotaooutdoor.com` | 不可达 | curl 连接关闭 |
-| 服务器 staging 代码 | 存在但 :8001 未监听 | `ls /opt/.../staging` |
-| 本地 Docker | 不可用 | `docker` 未安装 |
-| 生产 WP 位置 | Hostinger 托管 | 服务器无 wp-config.php |
+| Hostinger 官方 staging | "创建暂存环境需升级套餐" | 🔴 需付费升级 |
+| 服务器 FastAPI staging | `/opt/nuotao-ai-os/staging/` + `nuotao-backend-staging.service` | ✅ 后端 staging 就绪 |
+| **WordPress CMP Staging** | **无 WP 容器**（wp/wordpress/complianz 空）| 🔴 **未搭建** |
+| B2C WP 位置 | Hostinger 托管 | — |
+| 本地 Docker | 不可用 | — |
+
+**核心阻塞**：CMP Staging 需要 **WordPress + Complianz 插件** 的独立隔离环境，当前不存在。
 
 ---
 
-## 2. 测试范围状态（全部 BLOCKED）
+## 2. 三条可行路径（需 Owner 决策）
 
-| # | 测试项目 | 验收目标 | 状态 |
+| 路径 | 方式 | 费用 | 隔离 | 可复现 |
+|---|---|---|---|---|
+| **A** | Hostinger 官方 staging（升级套餐）| 💰 | 高 | ✅ |
+| **B** | Hostinger 手动子站（剩余 2 网站位）| 免费 | 中 | ✅ |
+| **C** | Hetzner Docker（WordPress + MySQL + Complianz）| 免费 | **高（完全隔离）** | ✅ |
+
+**推荐路径 C**：完全隔离 + 免费 + 可复现，符合 Owner"独立、安全、可复现"要求。
+
+---
+
+## 3. Owner 测试范围状态（T1-T8，均 BLOCKED 因 staging 未就绪）
+
+| # | 测试 | 目标 | 状态 |
 |---|---|---|---|
-| T1 | 首次访问 | Consent Banner 显示 | 🔴 BLOCKED |
-| T2 | Accept All | 同意状态记录 | 🔴 BLOCKED |
+| T1 | 首次访问 | Banner 显示 | 🔴 BLOCKED |
+| T2 | Accept All | 同意记录 | 🔴 BLOCKED |
 | T3 | Reject All | 非必要 Cookie 不加载 | 🔴 BLOCKED |
-| T4 | Customize | 分类设置有效 | 🔴 BLOCKED |
-| T5 | Withdraw Consent | 撤回后状态正确 | 🔴 BLOCKED |
-| T6 | 页面刷新 | Consent 持久化 | 🔴 BLOCKED |
-| T7 | 不同浏览器 | 行为一致 | 🔴 BLOCKED |
-| T8 | 网络/脚本异常 | Fail-closed | 🔴 BLOCKED |
-
-**✅ 全部如实标记 BLOCKED，无 PASS 误标。**
-
----
-
-## 3. 解除阻塞的三条路径（需 Owner 决策）
-
-| 路径 | 方式 | 费用 | 风险 |
-|---|---|---|---|
-| A | Hostinger 官方 staging（升级套餐）| 💰 | 低 |
-| B | Hostinger 手动子站（剩余 2 网站位）| 免费 | 中 |
-| C | Hetzner Docker 隔离环境 | 免费 | 低 |
+| T4 | Customize | 分类有效 | 🔴 BLOCKED |
+| T5 | Withdraw | 撤回正确 | 🔴 BLOCKED |
+| T6 | 刷新 | 持久化 | 🔴 BLOCKED |
+| T7 | 浏览器 | 一致 | 🔴 BLOCKED |
+| T8 | 网络异常 | Fail-closed | 🔴 BLOCKED |
 
 ---
 
@@ -59,22 +53,22 @@
 | 项 | 内容 |
 |---|---|
 | 执行时间 | 2026-11-20 |
-| 执行命令 | `curl staging.nuotaooutdoor.com` / `ssh ... 'ls /opt/...'` |
-| 原始证据 | Hostinger 套餐提示 + staging URL 不可达 |
+| 执行命令 | ssh 检查 / docker ps |
+| 原始证据 | 服务器无 WP 容器 + Hostinger 套餐提示 |
 | 测试结果 | 8/8 BLOCKED |
-| 遗留问题 | Staging 环境未就绪 |
-| 风险等级 | 中（合规缺口 F1 持续）|
-| 需 Owner 决策 | ✅ 路径 A/B/C 选择 |
+| 遗留问题 | WP CMP Staging 未搭建 |
+| 风险等级 | 中（GDPR 缺口 F1 持续）|
+| 需 Owner 决策 | ✅ 路径 A/B/C |
 
 ---
 
 ## 5. 红线遵守
 
+- ✅ 未修改生产 Banner/CMP
 - ✅ 未触碰生产 B2C/B2B（只读）
 - ✅ 未创建订单/请求
-- ✅ 未修改生产 GA4/Secret/DB
-- ✅ 未执行套餐升级（需 Owner 批准）
+- ✅ 未执行套餐升级（需批准）
 
 ---
 
-*执行报告：2026-11-20，DSH 自治。等待 Owner 选择路径后解除阻塞。*
+*CMP Staging 执行报告：2026-11-20，DSH 自治。BLOCKED（需 Owner 选路径）。*
