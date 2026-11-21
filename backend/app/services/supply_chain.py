@@ -48,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 ZERO = Decimal("0")
 
+# Roles authorized to approve a purchase order. Enforced at the service-layer
+# choke point so authorization holds even for callers that bypass the API RBAC
+# layer. Mirrors UserRole.ADMIN / UserRole.OPERATOR (app.schemas.user).
+_APPROVAL_ROLES: set[str] = {"admin", "operator"}
+
 # Allowed PO state transitions (draft/approved can be cancelled).
 # ordered -> partial_received -> received supports split deliveries.
 # pending_cost_confirmation -> draft (after cost confirmed) or cancelled.
@@ -547,13 +552,18 @@ async def _transition_purchase_order(
     received: bool = False,
     approved_by: str | None = None,
     approval_note: str | None = None,
+    caller_role: str | None = None,
 ) -> PurchaseOrder:
     """Shared PO lifecycle transition with state-machine validation.
 
     When ``target == "approved"`` the caller MUST pass ``approved_by`` (the
-    human operator identity). This is the single choke point that guarantees no
-    purchase order reaches ``approved`` without an attributable approver, so an
-    AI Agent can never be the authorizing subject of its own approval.
+    human operator identity) AND ``caller_role`` (an authorized role). This is
+    the single choke point that guarantees no purchase order reaches
+    ``approved`` without an attributable, role-authorized approver, so an AI
+    Agent — or any caller that bypasses the API RBAC layer (a script, notebook
+    or future agent path) — can never be the authorizing subject of its own
+    approval. A non-empty ``approved_by`` string alone is NOT sufficient proof
+    of an authenticated human; the role check closes that gap.
     """
     purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
     if purchase_order is None:
@@ -563,10 +573,16 @@ async def _transition_purchase_order(
         raise SupplyChainError(
             f"cannot transition purchase order from '{purchase_order.status}' to '{target}'"
         )
-    if target == "approved" and not approved_by:
-        raise SupplyChainError(
-            "approving a purchase order requires an explicit operator identity (approved_by)"
-        )
+    if target == "approved":
+        if not approved_by:
+            raise SupplyChainError(
+                "approving a purchase order requires an explicit operator identity (approved_by)"
+            )
+        if caller_role not in _APPROVAL_ROLES:
+            raise SupplyChainError(
+                "approving a purchase order requires an authorized role "
+                f"({'/'.join(sorted(_APPROVAL_ROLES))}); got '{caller_role}'"
+            )
     purchase_order.status = target
     purchase_order.updated_at = datetime.now(UTC)
     if received:
@@ -599,9 +615,16 @@ async def approve_purchase_order(
     po_id: UUID,
     approved_by: str | None = None,
     approval_note: str | None = None,
+    caller_role: str | None = None,
     trace_id: str | None = None,
 ) -> PurchaseOrder:
-    """draft -> approved. Requires an explicit operator identity (approved_by)."""
+    """draft -> approved.
+
+    Requires an attributable operator identity (``approved_by``) AND an
+    authorized role (``caller_role`` in admin/operator). The API endpoint passes
+    the authenticated user's role; direct service callers must do the same. This
+    keeps "who may approve" enforced where it cannot be bypassed.
+    """
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -611,6 +634,7 @@ async def approve_purchase_order(
         trace_id=trace_id,
         approved_by=approved_by,
         approval_note=approval_note,
+        caller_role=caller_role,
     )
 
 

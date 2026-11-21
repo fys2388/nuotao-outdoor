@@ -364,8 +364,10 @@ async def approve_purchase_order(
 ) -> PurchaseOrderOut:
     """Move the PO from draft to approved.
 
-    RBAC: operator+. The approving operator identity is recorded on the PO and
-    in the audit event, so an AI Agent can never be the authorizing subject.
+    RBAC: operator+. The approving operator identity AND role are recorded on
+    the PO and in the audit event, so an AI Agent can never be the authorizing
+    subject. The role is passed to the service-layer choke point so approval
+    authorization holds even for callers that bypass this endpoint.
     """
     try:
         purchase_order = await supply_chain.approve_purchase_order(
@@ -373,6 +375,7 @@ async def approve_purchase_order(
             workspace_id=workspace_id,
             po_id=po_id,
             approved_by=getattr(approver, "email", None) or str(getattr(approver, "id", "")),
+            caller_role=getattr(approver, "role", None),
             trace_id=get_trace_id(),
         )
     except supply_chain.SupplyChainError as exc:

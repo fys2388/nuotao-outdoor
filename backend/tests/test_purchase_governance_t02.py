@@ -144,6 +144,46 @@ async def test_service_approve_requires_operator_identity(db_session, api_client
 
 
 @pytest.mark.asyncio
+async def test_service_approve_requires_authorized_role(db_session, api_client) -> None:
+    """A non-empty approved_by is NOT enough: an unauthorized role is rejected.
+
+    This closes the gap the Owner flagged — the service layer must independently
+    prove the approver is a role-authorized human, not just accept any identity
+    string. Even a direct service call (bypassing API RBAC) with a forged
+    identity but no/insufficient role fails closed.
+    """
+    po_id = await _make_draft_po(db_session, api_client, "GOV-001B")
+
+    # No role at all -> rejected even though approved_by is present.
+    with pytest.raises(supply_chain.SupplyChainError, match="authorized role"):
+        await supply_chain.approve_purchase_order(
+            db_session,
+            workspace_id=WORKSPACE,
+            po_id=po_id,
+            approved_by="ghost@nuotao.com",
+            caller_role=None,
+        )
+
+    # Read-only / customer-service role -> rejected (not an approver).
+    for insufficient in ("viewer", "customer_service"):
+        with pytest.raises(supply_chain.SupplyChainError, match="authorized role"):
+            await supply_chain.approve_purchase_order(
+                db_session,
+                workspace_id=WORKSPACE,
+                po_id=po_id,
+                approved_by="ghost@nuotao.com",
+                caller_role=insufficient,
+            )
+
+    # PO must remain draft after all rejected attempts (fail-closed).
+    stored = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    assert stored.status == "draft"
+    assert stored.approved_by is None
+
+
+@pytest.mark.asyncio
 async def test_approve_records_operator_and_time(db_session, api_client) -> None:
     """A legitimate approval records who approved and when, plus an audit event."""
     po_id = await _make_draft_po(db_session, api_client, "GOV-002")
@@ -153,6 +193,7 @@ async def test_approve_records_operator_and_time(db_session, api_client) -> None
         po_id=po_id,
         approved_by="buyer@nuotao.com",
         approval_note="stock replenishment",
+        caller_role="operator",
     )
     assert po.status == "approved"
     assert po.approved_by == "buyer@nuotao.com"
