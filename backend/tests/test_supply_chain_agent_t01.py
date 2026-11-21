@@ -124,8 +124,9 @@ async def test_l2_agent_cannot_self_approve_purchase_order(db_session, api_clien
 
     # A PO proposed/created by the agent starts in draft. Even if the L2 agent
     # then tried to approve it, the approval choke point requires an
-    # attributable human operator identity (approved_by) — the agent can never
-    # be the authorizing subject of its own proposal.
+    # authenticated human operator (caller_user_id) that the service verifies
+    # against the users table — the agent can never be the authorizing subject
+    # of its own proposal (M4.2.0-R2).
     created = api_client.post(
         "/api/v1/purchase-orders",
         json={
@@ -137,7 +138,11 @@ async def test_l2_agent_cannot_self_approve_purchase_order(db_session, api_clien
     assert created.status_code == 201, created.text
     po_id = UUID(created.json()["id"])
 
-    with pytest.raises(supply_chain.SupplyChainError, match="approved_by"):
+    with pytest.raises(supply_chain.SupplyChainError, match="operator user id"):
         await supply_chain.approve_purchase_order(
-            db_session, workspace_id=WORKSPACE, po_id=po_id, approved_by=None
+            db_session,
+            workspace_id=WORKSPACE,
+            po_id=po_id,
+            approved_by=None,
+            caller_user_id=None,
         )

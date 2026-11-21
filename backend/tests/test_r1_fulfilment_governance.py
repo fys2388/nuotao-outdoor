@@ -16,6 +16,8 @@ These tests prove the remediation:
   through the unified machine.
 """
 
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
@@ -26,7 +28,6 @@ from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.supply_chain import PurchaseOrder
 from app.schemas.user import UserResponse
-from datetime import UTC, datetime
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 
@@ -61,6 +62,19 @@ async def _make_draft_po(db_session, api_client, po_number: str) -> UUID:
     )
     assert response.status_code == 201, response.text
     return UUID(response.json()["id"])
+
+
+async def _confirm_cost(db_session, po_id: UUID) -> None:
+    """Mark a PO's real cost confirmed so it can pass the R2.3 approval gate."""
+    po = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    po.cost_confirmed = True
+    po.cost_source = "verified"
+    po.cost_confidence = Decimal("0.95")
+    po.cost_confirmed_at = datetime.now(UTC)
+    po.cost_confirmed_by = "buyer@nuotao.com"
+    await db_session.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -161,6 +175,7 @@ async def test_fulfilment_status_routes_through_canonical_machine(db_session, ap
 async def test_approved_only_via_dedicated_endpoint(db_session, api_client) -> None:
     """End-to-end: approved is reachable ONLY through the dedicated approve endpoint."""
     po_id = await _make_draft_po(db_session, api_client, "R1-E2E")
+    await _confirm_cost(db_session, po_id)
 
     # Legacy endpoint refuses approved...
     via_status = api_client.patch(
@@ -192,6 +207,7 @@ async def test_approved_only_via_dedicated_endpoint(db_session, api_client) -> N
 async def test_repeated_approve_is_fail_closed(db_session, api_client) -> None:
     """A second approve on an already-approved PO is rejected (no double-authorize)."""
     po_id = await _make_draft_po(db_session, api_client, "R1-DOUBLE")
+    await _confirm_cost(db_session, po_id)
     first = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
     assert first.status_code == 200, first.text
 
@@ -218,6 +234,7 @@ async def test_concurrent_approve_attempts_single_winner(db_session, api_client)
     double-granted, and the winner is recorded exactly once.
     """
     po_id = await _make_draft_po(db_session, api_client, "R1-CONCURRENT")
+    await _confirm_cost(db_session, po_id)
 
     first = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
     second = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())

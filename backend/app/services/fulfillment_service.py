@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.services import supply_chain
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -25,20 +26,17 @@ logger = logging.getLogger(__name__)
 # 默认工作空间 ID
 DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
+
+def _canonical_next_statuses(status: str) -> set[str]:
+    """Return allowed next statuses from the SINGLE canonical PO state machine.
+
+    M4.2.0-R2 (R2.1): the fulfilment service no longer owns a parallel state
+    machine. All next-status derivation delegates to supply_chain.PO_TRANSITIONS
+    so there is exactly one source of truth for purchase-order transitions.
+    """
+    return set(supply_chain.PO_TRANSITIONS.get(status, set()))
+
 # 采购单状态流转
-PO_STATUS_FLOW = {
-    "draft": ["approved", "cancelled"],
-    "approved": ["ordered", "cancelled"],
-    "ordered": ["partial_received", "received", "shipped"],
-    "partial_received": ["received"],
-    "received": ["shipped"],
-    "shipped": ["delivered", "completed"],
-    "delivered": ["completed"],
-    "completed": [],
-    "cancelled": [],
-}
-
-
 def _safe_decimal(value: Any, default: float = 0.0) -> Decimal:
     """安全转换为 Decimal"""
     try:
@@ -362,69 +360,6 @@ async def create_purchase_order_from_order(
     return purchase_order, True
 
 
-async def update_purchase_order_status(
-    session: AsyncSession,
-    po_id: UUID,
-    new_status: str,
-    workspace_id: UUID | None = None,
-    trace_id: str | None = None,
-) -> PurchaseOrder:
-    """
-    更新采购单状态
-
-    Args:
-        session: 数据库会话
-        po_id: 采购单 ID
-        new_status: 新状态
-        workspace_id: 工作空间 ID
-        trace_id: 追踪 ID
-
-    Returns:
-        更新后的采购单
-    """
-    if workspace_id is None:
-        workspace_id = DEFAULT_WORKSPACE_ID
-
-    # 获取采购单
-    result = await session.execute(
-        select(PurchaseOrder).where(
-            PurchaseOrder.id == po_id,
-            PurchaseOrder.workspace_id == workspace_id,
-        )
-    )
-    po = result.scalar_one_or_none()
-    if not po:
-        raise ValueError(f"Purchase order not found: {po_id}")
-
-    # 验证状态流转
-    allowed_statuses = PO_STATUS_FLOW.get(po.status, [])
-    if new_status not in allowed_statuses:
-        raise ValueError(
-            f"Invalid status transition: {po.status} -> {new_status}. "
-            f"Allowed: {allowed_statuses}"
-        )
-
-    old_status = po.status
-    po.status = new_status
-    po.trace_id = trace_id
-
-    # 如果状态为 received，记录收货时间
-    if new_status == "received" and not po.received_at:
-        po.received_at = datetime.utcnow()
-
-    await session.flush()
-
-    logger.info(
-        "Purchase order status updated: po=%s, %s -> %s, trace=%s",
-        po.po_number,
-        old_status,
-        new_status,
-        trace_id,
-    )
-
-    return po
-
-
 async def add_tracking_to_order(
     session: AsyncSession,
     order_id: UUID,
@@ -618,7 +553,9 @@ async def get_purchase_order_detail(
             }
             for item in items
         ],
-        "allowed_next_statuses": PO_STATUS_FLOW.get(po.status, []),
+        "allowed_next_statuses": sorted(
+            _canonical_next_statuses(po.status)
+        ),
     }
 
 

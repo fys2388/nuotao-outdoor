@@ -364,10 +364,10 @@ async def approve_purchase_order(
 ) -> PurchaseOrderOut:
     """Move the PO from draft to approved.
 
-    RBAC: operator+. The approving operator identity AND role are recorded on
-    the PO and in the audit event, so an AI Agent can never be the authorizing
-    subject. The role is passed to the service-layer choke point so approval
-    authorization holds even for callers that bypass this endpoint.
+    RBAC: operator+. The approving operator's real identity is verified by the
+    service layer against the users table (active + admin/operator role), and
+    the verified user.id is recorded on the PO and in the audit event, so an AI
+    Agent can never be the authorizing subject (M4.2.0-R2).
     """
     try:
         purchase_order = await supply_chain.approve_purchase_order(
@@ -376,6 +376,7 @@ async def approve_purchase_order(
             po_id=po_id,
             approved_by=getattr(approver, "email", None) or str(getattr(approver, "id", "")),
             caller_role=getattr(approver, "role", None),
+            caller_user_id=str(getattr(approver, "id", "")),
             trace_id=get_trace_id(),
         )
     except supply_chain.SupplyChainError as exc:
@@ -392,11 +393,21 @@ async def order_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO from approved to ordered (sent to supplier)."""
+    """Move the PO from approved to ordered (sent to supplier).
+
+    RBAC: operator+ (M4.2.0-R2). Ordering a PO is a procurement-authority action
+    that commits spend with a supplier, so it requires an authenticated
+    operator/admin and records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.order_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -412,11 +423,19 @@ async def partial_receive_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO to partial_received (first delivery batch arrived)."""
+    """Move the PO to partial_received (first delivery batch arrived).
+
+    RBAC: operator+ (M4.2.0-R2); records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.partial_receive_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -432,11 +451,19 @@ async def receive_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Mark the PO as received with a received_at timestamp."""
+    """Mark the PO as received with a received_at timestamp.
+
+    RBAC: operator+ (M4.2.0-R2); records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.receive_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -452,11 +479,20 @@ async def cancel_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Cancel the PO from draft or approved."""
+    """Cancel the PO from draft or approved.
+
+    RBAC: operator+ (M4.2.0-R2); cancelling a PO is a procurement action and
+    records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.cancel_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc

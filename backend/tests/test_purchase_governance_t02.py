@@ -13,7 +13,7 @@ not merely that one function was patched. These tests assert:
 """
 
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -23,6 +23,7 @@ from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.product import Product
 from app.models.supply_chain import PurchaseOrder
+from app.models.user import User
 from app.schemas.user import UserResponse
 from app.services import procurement_service, purchase_automation_service, supply_chain
 from datetime import UTC, datetime
@@ -60,6 +61,43 @@ async def _make_draft_po(db_session, api_client, po_number: str) -> UUID:
     po = response.json()
     assert po["status"] == "draft", "creation must never be approved"
     return UUID(po["id"])
+
+
+async def _confirm_cost(db_session, po_id: UUID) -> None:
+    """Mark a PO's real cost as confirmed so it can pass the R2.3 approval gate.
+
+    Simulates the outcome of the cost-confirmation flow (verified landed cost,
+    source='verified') directly on the PO row. Tests that exercise the LEGITIMATE
+    approval path use this to satisfy the cost hard-gate; tests that exercise the
+    cost-blocker itself leave cost_confirmed=False and expect rejection.
+    """
+    from decimal import Decimal
+
+    po = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    po.cost_confirmed = True
+    po.cost_source = "verified"
+    po.cost_confidence = Decimal("0.95")
+    po.cost_confirmed_at = datetime.now(UTC)
+    po.cost_confirmed_by = "buyer@nuotao.com"
+    await db_session.commit()
+
+
+async def _seed_user(db_session, role: str, is_active: bool = True) -> User:
+    """Seed a real user row with the given role so approver validation can load it."""
+    user = User(
+        id=uuid4(),
+        username=f"user-{role}-{uuid4().hex[:8]}",
+        email=f"{role}-{uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role=role,
+        is_active=is_active,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
 
 
 def _override_role(api_client, role: str) -> None:
@@ -137,9 +175,14 @@ async def test_low_value_automation_never_auto_approves(db_session) -> None:
 async def test_service_approve_requires_operator_identity(db_session, api_client) -> None:
     """Approving without an operator identity fails closed (AI cannot self-approve)."""
     po_id = await _make_draft_po(db_session, api_client, "GOV-001")
-    with pytest.raises(supply_chain.SupplyChainError, match="approved_by"):
+    await _confirm_cost(db_session, po_id)
+    with pytest.raises(supply_chain.SupplyChainError, match="operator user id"):
         await supply_chain.approve_purchase_order(
-            db_session, workspace_id=WORKSPACE, po_id=po_id, approved_by=None
+            db_session,
+            workspace_id=WORKSPACE,
+            po_id=po_id,
+            approved_by=None,
+            caller_user_id=None,
         )
 
 
@@ -153,19 +196,33 @@ async def test_service_approve_requires_authorized_role(db_session, api_client) 
     identity but no/insufficient role fails closed.
     """
     po_id = await _make_draft_po(db_session, api_client, "GOV-001B")
+    await _confirm_cost(db_session, po_id)
 
-    # No role at all -> rejected even though approved_by is present.
-    with pytest.raises(supply_chain.SupplyChainError, match="authorized role"):
+    # No user id at all -> rejected even though approved_by is present.
+    with pytest.raises(supply_chain.SupplyChainError, match="operator user id"):
         await supply_chain.approve_purchase_order(
             db_session,
             workspace_id=WORKSPACE,
             po_id=po_id,
             approved_by="ghost@nuotao.com",
             caller_role=None,
+            caller_user_id=None,
         )
 
-    # Read-only / customer-service role -> rejected (not an approver).
+    # An unknown / forged user id -> rejected (user not found in DB).
+    with pytest.raises(supply_chain.SupplyChainError, match="not found"):
+        await supply_chain.approve_purchase_order(
+            db_session,
+            workspace_id=WORKSPACE,
+            po_id=po_id,
+            approved_by="ghost@nuotao.com",
+            caller_role="admin",
+            caller_user_id=str(uuid4()),
+        )
+
+    # Read-only / customer-service users -> rejected (not approvers).
     for insufficient in ("viewer", "customer_service"):
+        u = await _seed_user(db_session, role=insufficient)
         with pytest.raises(supply_chain.SupplyChainError, match="authorized role"):
             await supply_chain.approve_purchase_order(
                 db_session,
@@ -173,6 +230,7 @@ async def test_service_approve_requires_authorized_role(db_session, api_client) 
                 po_id=po_id,
                 approved_by="ghost@nuotao.com",
                 caller_role=insufficient,
+                caller_user_id=str(u.id),
             )
 
     # PO must remain draft after all rejected attempts (fail-closed).
@@ -187,16 +245,19 @@ async def test_service_approve_requires_authorized_role(db_session, api_client) 
 async def test_approve_records_operator_and_time(db_session, api_client) -> None:
     """A legitimate approval records who approved and when, plus an audit event."""
     po_id = await _make_draft_po(db_session, api_client, "GOV-002")
+    await _confirm_cost(db_session, po_id)
+    operator = await _seed_user(db_session, role="operator")
     po = await supply_chain.approve_purchase_order(
         db_session,
         workspace_id=WORKSPACE,
         po_id=po_id,
-        approved_by="buyer@nuotao.com",
         approval_note="stock replenishment",
         caller_role="operator",
+        caller_user_id=str(operator.id),
     )
     assert po.status == "approved"
-    assert po.approved_by == "buyer@nuotao.com"
+    # approved_by records the verified user.id (stable identity), not an email.
+    assert po.approved_by == str(operator.id)
     assert po.approved_at is not None
     assert po.approval_note == "stock replenishment"
     assert "supply.purchase_order_approved" in await _event_types(db_session)
@@ -206,6 +267,7 @@ async def test_approve_records_operator_and_time(db_session, api_client) -> None
 async def test_api_approve_endpoint_records_identity(db_session, api_client) -> None:
     """The approve endpoint (RBAC operator+) persists the approving identity."""
     po_id = await _make_draft_po(db_session, api_client, "GOV-003")
+    await _confirm_cost(db_session, po_id)
     # api_client resolves an admin user (email admin@example.com) by default.
     response = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
     assert response.status_code == 200, response.text
@@ -249,6 +311,7 @@ async def test_readonly_role_cannot_approve(db_session, api_client) -> None:
 async def test_double_approve_rejected(db_session, api_client) -> None:
     """Approving an already-approved PO is an illegal jump -> 400."""
     po_id = await _make_draft_po(db_session, api_client, "GOV-005")
+    await _confirm_cost(db_session, po_id)
     first = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
     assert first.status_code == 200
     second = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())

@@ -156,6 +156,7 @@ async def update_po_status(
             target=request.status,
             operator_id=operator_id,
             caller_role=operator_role,
+            caller_user_id=str(getattr(operator, "id", "")),
             trace_id=get_trace_id(),
         )
         await db.commit()

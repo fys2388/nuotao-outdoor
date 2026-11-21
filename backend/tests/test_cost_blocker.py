@@ -10,6 +10,7 @@ Tests cover:
 """
 
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -17,10 +18,27 @@ import pytest_asyncio
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.models.user import User
 from app.services import fulfillment_service, supply_chain
 
 
 DEFAULT_WORKSPACE = __import__("uuid").UUID("00000000-0000-0000-0000-000000000001")
+
+
+async def _seed_admin(db_session) -> User:
+    """Seed a real active admin so the R2.2 approver validation can verify it."""
+    admin = User(
+        id=uuid4(),
+        username=f"admin-{uuid4().hex[:8]}",
+        email=f"admin-{uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    return admin
 
 
 # --------------------------------------------------------------------------- #
@@ -206,9 +224,11 @@ async def test_real_cost_po_can_be_approved(db_session, order_with_real_cost_ite
     )
     assert po.status == "draft"
 
+    admin = await _seed_admin(db_session)
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
         approved_by="buyer@nuotao.com", caller_role="admin",
+        caller_user_id=str(admin.id),
     )
     assert po.status == "approved"
 
@@ -292,9 +312,11 @@ async def test_confirmed_po_can_be_approved(db_session, sample_order_with_items,
     )
     assert po.status == "draft"
 
+    admin = await _seed_admin(db_session)
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
         approved_by="buyer@nuotao.com", caller_role="admin",
+        caller_user_id=str(admin.id),
     )
     assert po.status == "approved"
 

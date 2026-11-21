@@ -1,7 +1,8 @@
 """Shared pytest fixtures for the backend test suite."""
 
+import asyncio
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from app.api.v1.endpoints.auth import get_current_user, get_current_workspace_id
 from app.core.database import Base, get_db
 from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.main import app
+from app.models.user import User
 from app.schemas.user import UserResponse
 
 
@@ -45,17 +47,43 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def api_client(db_session):
-    """TestClient with get_db overridden to the in-memory SQLite session."""
+    """TestClient with get_db overridden to the in-memory SQLite session.
+
+    Seeds a real, active admin User row so the procurement approval choke point
+    (M4.2.0-R2) can verify the approver against the users table — the service
+    layer independently loads the authenticated user and checks it is active
+    with an admin/operator role. The override returns that real user id.
+    """
+    import hashlib
+
+    def _hash(pw: str) -> str:
+        return hashlib.sha256(pw.encode()).hexdigest()
+
+    async def _seed_admin() -> User:
+        admin = User(
+            id=uuid4(),
+            username="admin",
+            email="admin@example.com",
+            hashed_password=_hash("x"),
+            role="admin",
+            is_active=True,
+        )
+        db_session.add(admin)
+        await db_session.commit()
+        await db_session.refresh(admin)
+        return admin
+
+    admin_row = asyncio.run(_seed_admin())
 
     async def override_get_db():
         yield db_session
 
     admin = UserResponse(
-        id="test-admin",
-        username="admin",
-        email="admin@example.com",
-        role="admin",
-        is_active=True,
+        id=str(admin_row.id),
+        username=admin_row.username,
+        email=admin_row.email,
+        role=admin_row.role,
+        is_active=admin_row.is_active,
         created_at=datetime.now(UTC),
     )
 
