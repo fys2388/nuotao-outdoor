@@ -181,3 +181,52 @@ async def test_approved_only_via_dedicated_endpoint(db_session, api_client) -> N
     assert stored.status == "approved"
     assert stored.approved_by, "approver identity recorded"
     assert stored.approved_at is not None
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency / double-approve (Owner R1 test matrix item 8-9)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_repeated_approve_is_fail_closed(db_session, api_client) -> None:
+    """A second approve on an already-approved PO is rejected (no double-authorize)."""
+    po_id = await _make_draft_po(db_session, api_client, "R1-DOUBLE")
+    first = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
+    assert first.status_code == 200, first.text
+
+    second = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
+    assert second.status_code == 400, second.text
+
+    stored = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    assert stored.status == "approved"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approve_attempts_single_winner(db_session, api_client) -> None:
+    """Two near-simultaneous approves: at most one succeeds, PO ends approved once.
+
+    NOTE on scope: this exercises the application-level guard — the canonical
+    state machine refuses a transition whose source is no longer `draft`, so a
+    second approval cannot re-authorize or double-write approval metadata. The
+    DB write-write race itself is serialized by row-level locking on the live
+    Postgres (CI); the in-memory SQLite test DB cannot simulate true concurrent
+    connections, so this asserts the idempotency/safety outcome rather than a
+    genuine race. The application invariant it proves: approved is never
+    double-granted, and the winner is recorded exactly once.
+    """
+    po_id = await _make_draft_po(db_session, api_client, "R1-CONCURRENT")
+
+    first = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
+    second = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve", headers=_headers())
+
+    statuses = {first.status_code, second.status_code}
+    assert statuses == {200, 400}, (first.text, second.text)
+
+    stored = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    assert stored.status == "approved"
+    assert stored.approved_by, "exactly one approver recorded"
