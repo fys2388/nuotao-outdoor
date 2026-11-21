@@ -48,6 +48,11 @@ logger = logging.getLogger(__name__)
 
 ZERO = Decimal("0")
 
+# Roles authorized to approve a purchase order. Enforced at the service-layer
+# choke point so authorization holds even for callers that bypass the API RBAC
+# layer. Mirrors UserRole.ADMIN / UserRole.OPERATOR (app.schemas.user).
+_APPROVAL_ROLES: set[str] = {"admin", "operator"}
+
 # Allowed PO state transitions (draft/approved can be cancelled).
 # ordered -> partial_received -> received supports split deliveries.
 # pending_cost_confirmation -> draft (after cost confirmed) or cancelled.
@@ -56,9 +61,15 @@ PO_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"approved", "cancelled", "pending_cost_confirmation"},
     "pending_cost_confirmation": {"draft", "cancelled"},
     "approved": {"ordered", "cancelled"},
-    "ordered": {"partial_received", "received"},
+    "ordered": {"partial_received", "received", "shipped"},
     "partial_received": {"received"},
-    "received": set(),
+    "received": {"shipped"},
+    # Fulfilment tail states (M4.2.0-R1): folded into the canonical machine so
+    # the legacy fulfilment flow no longer needs its own parallel state machine.
+    # These are post-receipt logistics states, never grant procurement authority.
+    "shipped": {"delivered", "completed"},
+    "delivered": {"completed"},
+    "completed": set(),
     "cancelled": set(),
 }
 
@@ -545,8 +556,21 @@ async def _transition_purchase_order(
     event_type: str,
     trace_id: str | None,
     received: bool = False,
+    approved_by: str | None = None,
+    approval_note: str | None = None,
+    caller_role: str | None = None,
 ) -> PurchaseOrder:
-    """Shared PO lifecycle transition with state-machine validation."""
+    """Shared PO lifecycle transition with state-machine validation.
+
+    When ``target == "approved"`` the caller MUST pass ``approved_by`` (the
+    human operator identity) AND ``caller_role`` (an authorized role). This is
+    the single choke point that guarantees no purchase order reaches
+    ``approved`` without an attributable, role-authorized approver, so an AI
+    Agent — or any caller that bypasses the API RBAC layer (a script, notebook
+    or future agent path) — can never be the authorizing subject of its own
+    approval. A non-empty ``approved_by`` string alone is NOT sufficient proof
+    of an authenticated human; the role check closes that gap.
+    """
     purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
     if purchase_order is None:
         raise SupplyChainError("purchase order not found")
@@ -555,18 +579,35 @@ async def _transition_purchase_order(
         raise SupplyChainError(
             f"cannot transition purchase order from '{purchase_order.status}' to '{target}'"
         )
+    if target == "approved":
+        if not approved_by:
+            raise SupplyChainError(
+                "approving a purchase order requires an explicit operator identity (approved_by)"
+            )
+        if caller_role not in _APPROVAL_ROLES:
+            raise SupplyChainError(
+                "approving a purchase order requires an authorized role "
+                f"({'/'.join(sorted(_APPROVAL_ROLES))}); got '{caller_role}'"
+            )
     purchase_order.status = target
     purchase_order.updated_at = datetime.now(UTC)
     if received:
         purchase_order.received_at = datetime.now(UTC)
+    if target == "approved":
+        purchase_order.approved_at = datetime.now(UTC)
+        purchase_order.approved_by = approved_by
+        purchase_order.approval_note = approval_note
     await session.flush()
+    payload: dict[str, Any] = {"po_number": purchase_order.po_number, "status": target}
+    if target == "approved":
+        payload["approved_by"] = approved_by
     await event_service.create_event(
         session,
         workspace_id=workspace_id,
         event_type=event_type,
         entity_type="purchase_order",
         entity_id=str(purchase_order.id),
-        payload={"po_number": purchase_order.po_number, "status": target},
+        payload=payload,
         trace_id=trace_id,
     )
     logger.info("purchase order %s -> %s trace=%s", purchase_order.id, target, trace_id)
@@ -574,9 +615,22 @@ async def _transition_purchase_order(
 
 
 async def approve_purchase_order(
-    session: AsyncSession, *, workspace_id: UUID, po_id: UUID, trace_id: str | None = None
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    po_id: UUID,
+    approved_by: str | None = None,
+    approval_note: str | None = None,
+    caller_role: str | None = None,
+    trace_id: str | None = None,
 ) -> PurchaseOrder:
-    """draft -> approved."""
+    """draft -> approved.
+
+    Requires an attributable operator identity (``approved_by``) AND an
+    authorized role (``caller_role`` in admin/operator). The API endpoint passes
+    the authenticated user's role; direct service callers must do the same. This
+    keeps "who may approve" enforced where it cannot be bypassed.
+    """
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -584,6 +638,9 @@ async def approve_purchase_order(
         target="approved",
         event_type="supply.purchase_order_approved",
         trace_id=trace_id,
+        approved_by=approved_by,
+        approval_note=approval_note,
+        caller_role=caller_role,
     )
 
 
@@ -598,6 +655,72 @@ async def order_purchase_order(
         target="ordered",
         event_type="supply.purchase_order_ordered",
         trace_id=trace_id,
+    )
+
+
+# Non-approval status changes routed through the canonical machine (M4.2.0-R1).
+# The legacy fulfilment endpoint delegates here so there is exactly ONE PO state
+# machine. `approved` is intentionally absent: it must go through the dedicated,
+# RBAC-protected approve_purchase_order so no parallel path can authorize a PO.
+
+
+async def transition_purchase_order_status(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    po_id: UUID,
+    target: str,
+    operator_id: str,
+    caller_role: str,
+    trace_id: str | None = None,
+) -> PurchaseOrder:
+    """Route a non-approval PO status change through the canonical state machine.
+
+    Governance (M4.2.0-R1): this is the single delegate for the legacy fulfilment
+    status endpoint. It validates the transition against PO_TRANSITIONS, emits an
+    auditable event carrying the operator identity and trace_id, and refuses
+    `approved` outright (409 at the API layer) so the approval invariant — only
+    the dedicated approve path can authorize a PO — cannot be bypassed. Requires
+    an operator/admin caller_role.
+    """
+    if target == "approved":
+        raise SupplyChainError(
+            "approved cannot be set here; use the dedicated approval endpoint "
+            "(POST /purchase-orders/{po_id}/approve) which records the approver "
+            "identity, role and time"
+        )
+    if caller_role not in _APPROVAL_ROLES:
+        raise SupplyChainError(
+            "updating a purchase order requires an authorized role "
+            f"({'/'.join(sorted(_APPROVAL_ROLES))}); got '{caller_role}'"
+        )
+    if target == "ordered":
+        return await order_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "cancelled":
+        return await cancel_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "partial_received":
+        return await partial_receive_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "received":
+        return await receive_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    # Fulfilment-tail states (shipped/delivered/completed) use the shared
+    # transition with a fulfilment event type; the operator is recorded.
+    return await _transition_purchase_order(
+        session,
+        workspace_id=workspace_id,
+        po_id=po_id,
+        target=target,
+        event_type=f"supply.purchase_order_{target}",
+        trace_id=trace_id,
+        approved_by=None,
+        caller_role=caller_role,
     )
 
 

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductScore
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.services import event_service
 
 logger = logging.getLogger(__name__)
 
@@ -227,16 +228,30 @@ async def create_purchase_order(
     """
     params = params or {}
 
+    # id 列是 UUID 类型：调用方（execution_router）常以字符串传入，需显式转换，
+    # 否则 SQLAlchemy 绑定字符串到 UUID 列会抛 'str' object has no attribute 'hex'。
+    def _to_uuid(value: Any) -> UUID | None:
+        if value is None or isinstance(value, UUID):
+            return value
+        try:
+            return UUID(str(value))
+        except (ValueError, AttributeError, TypeError):
+            return None
+
+    product_uuid = _to_uuid(product_id)
+    if product_uuid is None:
+        return {"success": False, "error": f"产品 {product_id} 不存在"}
+
     # 查询产品信息
     product_result = await session.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).where(Product.id == product_uuid)
     )
     product = product_result.scalar_one_or_none()
     if not product:
         return {"success": False, "error": f"产品 {product_id} 不存在"}
 
-    workspace_id = params.get("workspace_id") or str(product.workspace_id)
-    supplier_id = params.get("supplier_id")
+    workspace_uuid = _to_uuid(params.get("workspace_id")) or product.workspace_id
+    supplier_uuid = _to_uuid(params.get("supplier_id"))
     unit_cost = float(params.get("unit_cost", 0))
     sku = params.get("sku") or product.sku or "UNKNOWN"
     product_name = product.name or "Unknown Product"
@@ -250,12 +265,15 @@ async def create_purchase_order(
     total = subtotal + shipping_cost
 
     # 创建采购单
-    po_id = str(uuid.uuid4())
+    # M4.2.0 T0.2 governance: Agent 创建的采购单一律进入 draft，绝不直接 approved。
+    # approved 只能由受权限保护的显式审批操作（supply_chain.approve_purchase_order）
+    # 产生；AI Agent 不得作为自行批准的授权主体。
+    po_id = uuid.uuid4()
     po = PurchaseOrder(
         id=po_id,
         po_number=po_number,
-        supplier_id=supplier_id,
-        status="approved",
+        supplier_id=supplier_uuid,
+        status="draft",
         currency=params.get("currency", "USD"),
         subtotal=subtotal,
         shipping_cost=shipping_cost,
@@ -263,32 +281,52 @@ async def create_purchase_order(
         expected_delivery_at=datetime.now(timezone.utc) + timedelta(days=15),
         notes=params.get("notes", f"Agent 自动创建: {product_name} 补货 {quantity} 件"),
         trace_id=params.get("trace_id"),
-        workspace_id=workspace_id,
+        workspace_id=workspace_uuid,
     )
     session.add(po)
 
     # 创建采购单明细
     item = PurchaseOrderItem(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         purchase_order_id=po_id,
-        product_id=product_id,
+        product_id=product_uuid,
         sku=sku,
         name=product_name,
         quantity=quantity,
         unit_cost=unit_cost,
         line_total=subtotal,
-        workspace_id=workspace_id,
+        workspace_id=workspace_uuid,
     )
     session.add(item)
 
     await session.flush()
+
+    # 审计事件：Agent 自动创建采购单必须落 event_service（trace_id 关联），
+    # 且明确标注状态为 draft，供采购治理审计追溯（不得静默写入）。
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_uuid,
+        event_type="supply.purchase_order_created",
+        entity_type="purchase_order",
+        entity_id=str(po_id),
+        payload={
+            "po_number": po_number,
+            "status": "draft",
+            "product_id": str(product_uuid),
+            "quantity": quantity,
+            "total": str(total),
+            "origin": "agent_auto",
+        },
+        trace_id=params.get("trace_id"),
+        commit=False,
+    )
 
     logger.info("Agent 自动创建采购单: %s product=%s qty=%d total=%.2f", po_number, product_name, quantity, total)
 
     return {
         "success": True,
         "po_number": po_number,
-        "purchase_order_id": po_id,
+        "purchase_order_id": str(po_id),
         "product_id": product_id,
         "product_name": product_name,
         "sku": sku,
@@ -296,7 +334,7 @@ async def create_purchase_order(
         "unit_cost": str(unit_cost),
         "subtotal": str(subtotal),
         "total": str(total),
-        "status": "approved",
-        "supplier_id": supplier_id,
+        "status": "draft",
+        "supplier_id": str(supplier_uuid) if supplier_uuid else None,
         "expected_delivery_at": (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
     }

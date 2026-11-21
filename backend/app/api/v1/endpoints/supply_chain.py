@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_user, require_role
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
@@ -360,11 +360,23 @@ async def approve_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    approver: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO from draft to approved."""
+    """Move the PO from draft to approved.
+
+    RBAC: operator+. The approving operator identity AND role are recorded on
+    the PO and in the audit event, so an AI Agent can never be the authorizing
+    subject. The role is passed to the service-layer choke point so approval
+    authorization holds even for callers that bypass this endpoint.
+    """
     try:
         purchase_order = await supply_chain.approve_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            approved_by=getattr(approver, "email", None) or str(getattr(approver, "id", "")),
+            caller_role=getattr(approver, "role", None),
+            trace_id=get_trace_id(),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -748,8 +760,8 @@ async def get_purchase_order_stats(
     workspace_id: WorkspaceId,
 ) -> dict:
     """Return purchase order statistics grouped by supplier."""
-    from sqlalchemy import select, func
-    
+    from sqlalchemy import select
+
     # 查询所有供应商
     suppliers = (await db.execute(
         select(Supplier).where(Supplier.workspace_id == workspace_id)
@@ -797,61 +809,75 @@ async def get_purchase_order_stats(
 
 @router.patch(
     "/purchase-orders/{po_id}/status",
-    summary="Update purchase order status",
+    summary="Update purchase order status (canonical state machine only)",
 )
 async def update_purchase_order_status(
     po_id: str,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
     body: dict = Body(...),
 ) -> dict:
-    """Update purchase order status (pending -> ordered -> shipped -> received)."""
-    from sqlalchemy import text
-    
-    valid_statuses = ["pending", "ordered", "shipped", "received", "completed", "cancelled"]
+    """Update a purchase order status via the canonical M4.1 state machine.
+
+    Governance (M4.2.0 T0.2): this endpoint no longer performs raw SQL writes.
+    Every transition is routed through ``app.services.supply_chain`` so that the
+    PO state machine is validated, an audit event is emitted, and the operator
+    identity is recorded. ``approved`` is intentionally NOT settable here — it
+    must go through the explicit, RBAC-protected approve endpoint so an AI Agent
+    can never authorize its own purchase order.
+    """
+    operator_id = getattr(operator, "email", None) or str(getattr(operator, "id", ""))
     new_status = body.get("status")
-    
-    if not new_status or new_status not in valid_statuses:
+
+    # approved is gated behind the dedicated approve endpoint (explicit approval).
+    if new_status == "approved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "状态 'approved' 不能通过此端点设置。请调用 "
+                "POST /purchase-orders/{po_id}/approve 走显式审批（记录操作者与审计）。"
+            ),
+        )
+
+    # Map requested target to the canonical transition functions.
+    transitions = {
+        "cancelled": supply_chain.cancel_purchase_order,
+        "ordered": supply_chain.order_purchase_order,
+        "partial_received": supply_chain.partial_receive_purchase_order,
+        "received": supply_chain.receive_purchase_order,
+    }
+
+    if not new_status or new_status not in transitions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无效的状态: {new_status}，有效状态: {', '.join(valid_statuses)}",
+            detail=(
+                f"无效的状态: {new_status}。此端点仅支持 {', '.join(transitions)}；"
+                f"'approved' 须走 approve 端点。规范状态机见 supply_chain.PO_TRANSITIONS。"
+            ),
         )
-    
+
+    transition_fn = transitions[new_status]
     try:
-        # 更新状态
-        update_fields = "status = :status, updated_at = NOW()"
-        params = {"status": new_status, "id": po_id, "workspace_id": str(workspace_id)}
-        
-        # 如果状态变为received，设置received_at
-        if new_status == "received":
-            update_fields += ", received_at = NOW()"
-        
-        result = await db.execute(text(f"""
-            UPDATE purchase_orders 
-            SET {update_fields}
-            WHERE id = :id AND workspace_id = :workspace_id
-            RETURNING po_number, status
-        """), params)
-        await db.commit()
-        
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="采购订单不存在",
-            )
-        
-        return {
-            "success": True,
-            "po_number": row[0],
-            "status": row[1],
-            "message": f"状态已更新为: {new_status}",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"更新状态失败: {str(e)}",
+        purchase_order = await transition_fn(
+            db,
+            workspace_id=workspace_id,
+            po_id=UUID(po_id),
+            trace_id=get_trace_id(),
         )
+    except supply_chain.SupplyChainError as exc:
+        # fail-closed: any illegal jump is rejected, never silently applied.
+        raise _http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "success": True,
+        "po_number": purchase_order.po_number,
+        "status": purchase_order.status,
+        "updated_by": operator_id,
+        "message": f"状态已更新为: {purchase_order.status}",
+    }
