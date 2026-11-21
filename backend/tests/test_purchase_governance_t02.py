@@ -402,3 +402,111 @@ async def test_agent_creation_emits_traceable_event(db_session) -> None:
     assert row is not None, "Agent auto-create must emit an auditable event"
     assert row.trace_id == trace, "event must carry the originating trace_id"
     assert row.payload.get("status") == "draft"
+
+
+# --------------------------------------------------------------------------- #
+# 8. R3.3 — create/update PO APIs require authentication + authorization
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_create_purchase_order_requires_authentication(db_session, api_client) -> None:
+    """Creating a PO with NO authenticated user is rejected (401).
+
+    M4.2.0-R3.3: a PO must never be creatable on the strength of a workspace
+    header alone — authentication (bearer credential) is mandatory.
+    """
+    api_client.app.dependency_overrides.pop(get_current_user, None)
+    try:
+        response = api_client.post(
+            "/api/v1/purchase-orders",
+            json={
+                "po_number": "R33-NOAUTH",
+                "items": [{"sku": "TENT-1", "name": "Tent 1P", "quantity": 1, "unit_cost": "10.00"}],
+            },
+            headers=_headers(),
+        )
+        assert response.status_code == 401, response.text
+    finally:
+        api_client.app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_create_purchase_order_requires_operator_role(db_session, api_client) -> None:
+    """A read-only role cannot create a PO (403)."""
+    _override_role(api_client, "read_only")
+    try:
+        response = api_client.post(
+            "/api/v1/purchase-orders",
+            json={
+                "po_number": "R33-READONLY",
+                "items": [{"sku": "TENT-1", "name": "Tent 1P", "quantity": 1, "unit_cost": "10.00"}],
+            },
+            headers=_headers(),
+        )
+        assert response.status_code == 403, response.text
+    finally:
+        api_client.app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_update_purchase_order_requires_operator_role(db_session, api_client) -> None:
+    """A read-only role cannot modify a PO (403)."""
+    po_id = await _make_draft_po(db_session, api_client, "R33-UPD")
+    _override_role(api_client, "read_only")
+    try:
+        response = api_client.put(
+            f"/api/v1/purchase-orders/{po_id}",
+            json={"notes": "tamper"},
+            headers=_headers(),
+        )
+        assert response.status_code == 403, response.text
+        stored = (
+            await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+        ).scalar_one()
+        assert stored.notes != "tamper", "read-only must not be able to modify a PO"
+    finally:
+        api_client.app.dependency_overrides.pop(get_current_user, None)
+
+
+# --------------------------------------------------------------------------- #
+# 9. R3.4 — Service-layer identity closure (direct calls cannot bypass authz)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_service_procurement_actions_require_identity(db_session) -> None:
+    """Calling order/cancel/receive/partial_receive directly with no identity fails.
+
+    M4.2.0-R3.4: the HTTP RBAC layer is not the only guard — each procurement
+    service action independently verifies the actor is a real operator/admin, so
+    a direct service call (bypassing the API) with no ``caller_user_id`` is
+    structurally denied.
+    """
+    po = PurchaseOrder(
+        workspace_id=WORKSPACE,
+        po_number="R34-NOCALLER",
+        status="approved",
+        currency="USD",
+        subtotal=Decimal("10.00"),
+        shipping_cost=Decimal("0"),
+        total=Decimal("10.00"),
+        cost_confirmed=True,
+    )
+    db_session.add(po)
+    await db_session.commit()
+
+    for action in (
+        supply_chain.order_purchase_order,
+        supply_chain.cancel_purchase_order,
+        supply_chain.receive_purchase_order,
+        supply_chain.partial_receive_purchase_order,
+    ):
+        with pytest.raises(supply_chain.SupplyChainError, match="operator user id"):
+            await action(
+                db_session,
+                workspace_id=WORKSPACE,
+                po_id=po.id,
+                caller_user_id=None,
+            )
+        await db_session.rollback()

@@ -13,6 +13,7 @@ from app.api.v1.endpoints.auth import get_current_user, require_role
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
+from app.models.supplier import Supplier
 from app.schemas.supply_chain import (
     InventoryCreate,
     InventoryOut,
@@ -30,14 +31,13 @@ from app.schemas.supply_chain import (
     SupplierCreate,
     SupplierOut,
     SupplierProfileCreate,
-    SupplierUpdate,
     SupplierProfileOut,
     SupplierProfileUpdate,
+    SupplierUpdate,
     SupplyChainKnowledgeCreate,
     SupplyChainKnowledgeOut,
 )
 from app.schemas.user import UserResponse
-from app.models.supplier import Supplier
 from app.services import supply_chain
 
 router = APIRouter(tags=["supply-chain"])
@@ -57,7 +57,6 @@ def _http_error(exc: supply_chain.SupplyChainError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
 
-
 # --------------------------------------------------------------------------- #
 # Suppliers (master data)
 # --------------------------------------------------------------------------- #
@@ -75,9 +74,7 @@ async def create_supplier(
     workspace_id: WorkspaceId,
 ) -> SupplierOut:
     try:
-        supplier = await supply_chain.create_supplier(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
-        )
+        supplier = await supply_chain.create_supplier(db, workspace_id=workspace_id, data=body, trace_id=get_trace_id())
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
     return SupplierOut.model_validate(supplier)
@@ -266,11 +263,22 @@ async def create_purchase_order(
     body: PurchaseOrderCreate,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Create a PO in draft state; totals computed from line items."""
+    """Create a PO in draft state; totals computed from line items.
+
+    RBAC (M4.2.0-R3.3): creating a PO is a procurement-authority action, so it
+    requires an authenticated operator/admin. Authentication is derived from the
+    bearer credential (get_current_user), never from the workspace header alone.
+    The acting operator id is recorded on the creation audit event.
+    """
     try:
         purchase_order = await supply_chain.create_purchase_order(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            data=body,
+            trace_id=get_trace_id(),
+            actor_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -317,9 +325,7 @@ async def get_purchase_order(
     """Return a PO plus its items."""
     result = await supply_chain.get_purchase_order(db, workspace_id=workspace_id, po_id=po_id)
     if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="purchase order not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="purchase order not found")
     purchase_order, items = result
     detail = PurchaseOrderDetailOut.model_validate(purchase_order)
     detail.items = [PurchaseOrderItemOut.model_validate(item) for item in items]
@@ -336,8 +342,13 @@ async def update_purchase_order(
     body: PurchaseOrderUpdate,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Update notes/shipping of a draft PO."""
+    """Update notes/shipping of a draft PO.
+
+    RBAC (M4.2.0-R3.3): modifying a PO requires an authenticated operator/admin;
+    the acting operator id is recorded on the update audit event.
+    """
     try:
         purchase_order = await supply_chain.update_purchase_order(
             db,
@@ -345,6 +356,7 @@ async def update_purchase_order(
             po_id=po_id,
             data=body,
             trace_id=get_trace_id(),
+            actor_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -608,9 +620,7 @@ async def create_shipment(
 ) -> ShipmentOut:
     """Record a shipment with carrier/tracking."""
     try:
-        shipment = await supply_chain.create_shipment(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
-        )
+        shipment = await supply_chain.create_shipment(db, workspace_id=workspace_id, data=body, trace_id=get_trace_id())
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
     return ShipmentOut.model_validate(shipment)
@@ -700,9 +710,7 @@ async def list_logistics_events(
     limit: int = 100,
 ) -> list[LogisticsEventOut]:
     """Return tracking events, newest first."""
-    rows = await supply_chain.list_logistics_events(
-        db, workspace_id=workspace_id, shipment_id=shipment_id, limit=limit
-    )
+    rows = await supply_chain.list_logistics_events(db, workspace_id=workspace_id, shipment_id=shipment_id, limit=limit)
     return [LogisticsEventOut.model_validate(row) for row in rows]
 
 
@@ -780,7 +788,6 @@ async def list_knowledge_entries(
     return [SupplyChainKnowledgeOut.model_validate(row) for row in rows]
 
 
-
 # --------------------------------------------------------------------------- #
 # Purchase order statistics
 # --------------------------------------------------------------------------- #
@@ -799,13 +806,12 @@ async def get_purchase_order_stats(
     from sqlalchemy import select
 
     # 查询所有供应商
-    suppliers = (await db.execute(
-        select(Supplier).where(Supplier.workspace_id == workspace_id)
-    )).scalars().all()
-    
-    # 查询采购订单统计（使用原生SQL）
-    result = await db.execute("""
-        SELECT 
+    suppliers = (await db.execute(select(Supplier).where(Supplier.workspace_id == workspace_id))).scalars().all()
+
+    # 查询采购订单统计(使用原生SQL)
+    result = await db.execute(
+        """
+        SELECT
             s.id as supplier_id,
             s.code as supplier_code,
             s.name as supplier_name,
@@ -819,29 +825,34 @@ async def get_purchase_order_stats(
         WHERE s.workspace_id = :workspace_id
         GROUP BY s.id, s.code, s.name
         ORDER BY total_amount DESC
-    """, {"workspace_id": str(workspace_id)})
-    
+    """,
+        {"workspace_id": str(workspace_id)},
+    )
+
     rows = result.fetchall()
-    
+
     stats = []
     for row in rows:
-        stats.append({
-            "supplier_id": str(row[0]),
-            "supplier_code": row[1],
-            "supplier_name": row[2],
-            "order_count": row[3],
-            "total_amount": float(row[4]) if row[4] else 0,
-            "received_count": row[5],
-            "shipped_count": row[6],
-            "ordered_count": row[7],
-        })
-    
+        stats.append(
+            {
+                "supplier_id": str(row[0]),
+                "supplier_code": row[1],
+                "supplier_name": row[2],
+                "order_count": row[3],
+                "total_amount": float(row[4]) if row[4] else 0,
+                "received_count": row[5],
+                "shipped_count": row[6],
+                "ordered_count": row[7],
+            }
+        )
+
     return {
         "total_suppliers": len(suppliers),
         "total_orders": sum(s["order_count"] for s in stats),
         "total_amount": sum(s["total_amount"] for s in stats),
         "by_supplier": stats,
     }
+
 
 @router.patch(
     "/purchase-orders/{po_id}/status",
@@ -872,7 +883,7 @@ async def update_purchase_order_status(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 "状态 'approved' 不能通过此端点设置。请调用 "
-                "POST /purchase-orders/{po_id}/approve 走显式审批（记录操作者与审计）。"
+                "POST /purchase-orders/{po_id}/approve 走显式审批(记录操作者与审计)。"
             ),
         )
 
@@ -888,7 +899,7 @@ async def update_purchase_order_status(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"无效的状态: {new_status}。此端点仅支持 {', '.join(transitions)}；"
+                f"无效的状态: {new_status}。此端点仅支持 {', '.join(transitions)};"
                 f"'approved' 须走 approve 端点。规范状态机见 supply_chain.PO_TRANSITIONS。"
             ),
         )
@@ -900,6 +911,7 @@ async def update_purchase_order_status(
             workspace_id=workspace_id,
             po_id=UUID(po_id),
             trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         # fail-closed: any illegal jump is rejected, never silently applied.

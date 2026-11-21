@@ -278,9 +278,11 @@ async def test_cost_confirmation_transitions_to_draft(db_session, sample_order_w
         item.sku = product.sku
     await db_session.flush()
 
-    # Now confirm cost
+    # Now confirm cost (requires an authenticated operator/admin — R3.2)
+    admin = await _seed_admin(db_session)
     po = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     assert po.status == "draft"
     assert po.cost_confirmed is True
@@ -309,6 +311,7 @@ async def test_confirmed_po_can_be_approved(db_session, sample_order_with_items,
 
     po = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str((await _seed_admin(db_session)).id),
     )
     assert po.status == "draft"
 
@@ -344,12 +347,15 @@ async def test_duplicate_cost_confirmation_idempotent(db_session, sample_order_w
     await db_session.flush()
 
     # First confirmation
+    admin = await _seed_admin(db_session)
     po1 = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     # Second confirmation (idempotent)
     po2 = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     assert po1.id == po2.id
     assert po1.status == po2.status == "draft"
@@ -377,10 +383,14 @@ async def test_cost_confirmation_fails_without_real_cost(db_session, sample_orde
     )
     assert po.status == "pending_cost_confirmation"
 
-    # Try to confirm without adding real cost -> should fail
-    with pytest.raises(ValueError, match="still missing real ProductCost"):
+    # Try to confirm without adding real cost -> should fail (R3.1 fail-closed).
+    # The confirmer must first be an authenticated operator/admin (R3.2), then
+    # the missing-cost guard rejects the whole confirmation.
+    admin = await _seed_admin(db_session)
+    with pytest.raises(supply_chain.SupplyChainError, match="still missing real ProductCost"):
         await fulfillment_service.confirm_purchase_order_cost(
             db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+            confirmer_user_id=str(admin.id),
         )
 
     # PO should still be in pending_cost_confirmation

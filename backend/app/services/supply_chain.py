@@ -17,9 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import Product
+from app.models.product import Product, ProductCost
 from app.models.supplier import Supplier
-from app.models.user import User
 from app.models.supply_chain import (
     InventorySnapshot,
     LogisticsEvent,
@@ -29,6 +28,7 @@ from app.models.supply_chain import (
     SupplierProfile,
     SupplyChainKnowledgeEntry,
 )
+from app.models.user import User
 from app.schemas.supply_chain import (
     InventoryCreate,
     InventoryUpdate,
@@ -55,9 +55,7 @@ ZERO = Decimal("0")
 _APPROVAL_ROLES: set[str] = {"admin", "operator"}
 
 
-async def _validate_approver(
-    session: AsyncSession, *, caller_user_id: str | None, caller_role: str | None
-) -> str:
+async def _validate_approver(session: AsyncSession, *, caller_user_id: str | None, caller_role: str | None) -> str:
     """Validate the approver is a real, active, role-authorized human user.
 
     M4.2.0-R2 (R2.2): a bare ``caller_role`` string or a caller-supplied
@@ -71,27 +69,18 @@ async def _validate_approver(
     can never be the authorizing subject of an approval.
     """
     if not caller_user_id:
-        raise SupplyChainError(
-            "approving a purchase order requires an authenticated operator user id"
-        )
+        raise SupplyChainError("approving a purchase order requires an authenticated operator user id")
     try:
         user_uuid = UUID(caller_user_id)
     except (ValueError, TypeError) as exc:
-        raise SupplyChainError(
-            "approving a purchase order requires a valid operator user id"
-        ) from exc
-    user = (
-        await session.execute(select(User).where(User.id == user_uuid))
-    ).scalar_one_or_none()
+        raise SupplyChainError("approving a purchase order requires a valid operator user id") from exc
+    user = (await session.execute(select(User).where(User.id == user_uuid))).scalar_one_or_none()
     if user is None:
         raise SupplyChainError(
-            "approving a purchase order requires a known operator user; "
-            f"user '{caller_user_id}' not found"
+            f"approving a purchase order requires a known operator user; user '{caller_user_id}' not found"
         )
     if not user.is_active:
-        raise SupplyChainError(
-            f"approving user '{user.username}' is inactive; approval denied"
-        )
+        raise SupplyChainError(f"approving user '{user.username}' is inactive; approval denied")
     if user.role not in _APPROVAL_ROLES:
         raise SupplyChainError(
             "approving a purchase order requires an authorized role "
@@ -101,10 +90,24 @@ async def _validate_approver(
     # caller_role, if supplied, must agree with the DB record (defense in depth).
     if caller_role is not None and caller_role != user.role:
         raise SupplyChainError(
-            f"caller_role '{caller_role}' does not match the authenticated user's "
-            f"role '{user.role}'; approval denied"
+            f"caller_role '{caller_role}' does not match the authenticated user's role '{user.role}'; approval denied"
         )
     return str(user.id)
+
+
+async def _validate_procurement_actor(session: AsyncSession, *, caller_user_id: str | None) -> str:
+    """Verify a procurement-action actor is a real, active, authorized user.
+
+    M4.2.0-R3.4: every procurement service action (order / cancel / receive /
+    partial_receive) — not just approval — must be attributable to an
+    authenticated human operator. Direct service calls previously bypassed the
+    HTTP RBAC layer entirely; this closes that gap by applying the SAME six-step
+    verification as approval (real user id, exists, active, admin/operator role)
+    and returning the stable user.id for the audit event. AI Agents and
+    automation have no User record and are structurally denied.
+    """
+    return await _validate_approver(session, caller_user_id=caller_user_id, caller_role=None)
+
 
 # Allowed PO state transitions (draft/approved can be cancelled).
 # ordered -> partial_received -> received supports split deliveries.
@@ -131,9 +134,7 @@ class SupplyChainError(Exception):
     """Raised when a supply chain operation cannot complete."""
 
 
-async def _load_supplier(
-    session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID
-) -> Supplier | None:
+async def _load_supplier(session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID) -> Supplier | None:
     return (
         await session.execute(
             select(Supplier).where(
@@ -144,9 +145,7 @@ async def _load_supplier(
     ).scalar_one_or_none()
 
 
-async def _ensure_supplier(
-    session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID | None
-) -> None:
+async def _ensure_supplier(session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID | None) -> None:
     if supplier_id is None:
         return
     supplier = await _load_supplier(session, workspace_id=workspace_id, supplier_id=supplier_id)
@@ -154,9 +153,7 @@ async def _ensure_supplier(
         raise SupplyChainError("supplier not found")
 
 
-async def _ensure_product(
-    session: AsyncSession, *, workspace_id: UUID, product_id: UUID | None
-) -> None:
+async def _ensure_product(session: AsyncSession, *, workspace_id: UUID, product_id: UUID | None) -> None:
     if product_id is None:
         return
     exists = (
@@ -213,9 +210,7 @@ async def create_supplier(
     return supplier
 
 
-async def get_supplier(
-    session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID
-) -> Supplier:
+async def get_supplier(session: AsyncSession, *, workspace_id: UUID, supplier_id: UUID) -> Supplier:
     """Load one supplier or raise 404."""
     supplier = await _load_supplier(session, workspace_id=workspace_id, supplier_id=supplier_id)
     if supplier is None:
@@ -288,10 +283,10 @@ async def delete_supplier(
     supplier = await get_supplier(session, workspace_id=workspace_id, supplier_id=supplier_id)
     # Check for purchase order references
     po_count = (
-        await session.execute(
-            select(PurchaseOrder.id).where(PurchaseOrder.supplier_id == supplier_id)
-        )
-    ).scalars().all()
+        (await session.execute(select(PurchaseOrder.id).where(PurchaseOrder.supplier_id == supplier_id)))
+        .scalars()
+        .all()
+    )
     if po_count:
         # Soft delete: mark inactive
         supplier.status = "inactive"
@@ -386,9 +381,7 @@ async def update_supplier_profile(
     trace_id: str | None = None,
 ) -> SupplierProfile:
     """Partially update a supplier profile."""
-    profile = await _load_supplier_profile(
-        session, workspace_id=workspace_id, profile_id=profile_id
-    )
+    profile = await _load_supplier_profile(session, workspace_id=workspace_id, profile_id=profile_id)
     if profile is None:
         raise SupplyChainError("supplier profile not found")
     for key, value in data.model_dump(exclude_unset=True).items():
@@ -434,9 +427,7 @@ async def delete_supplier_profile(
     trace_id: str | None = None,
 ) -> None:
     """Delete a supplier profile (audited via event)."""
-    profile = await _load_supplier_profile(
-        session, workspace_id=workspace_id, profile_id=profile_id
-    )
+    profile = await _load_supplier_profile(session, workspace_id=workspace_id, profile_id=profile_id)
     if profile is None:
         raise SupplyChainError("supplier profile not found")
     await event_service.create_event(
@@ -463,6 +454,7 @@ async def create_purchase_order(
     workspace_id: UUID,
     data: PurchaseOrderCreate,
     trace_id: str | None = None,
+    actor_user_id: str | None = None,
 ) -> PurchaseOrder:
     """Create a PO in draft state; totals are computed from items."""
     await _ensure_supplier(session, workspace_id=workspace_id, supplier_id=data.supplier_id)
@@ -515,11 +507,169 @@ async def create_purchase_order(
             "status": "draft",
             "item_count": len(data.items),
             "total": str(total),
+            "actor_user_id": actor_user_id,
         },
         trace_id=trace_id,
     )
     logger.info("purchase order %s created (draft) trace=%s", purchase_order.id, trace_id)
     return purchase_order
+
+
+async def _resolve_real_item_cost(
+    session: AsyncSession, *, workspace_id: UUID, item: PurchaseOrderItem
+) -> Decimal | None:
+    """Resolve the REAL ProductCost for a PO line item, or None if none exists.
+
+    M4.2.0-R3.1: cost confirmation must be grounded in the authoritative
+    ``product_cost`` row (never a fallback ratio). Resolution order:
+    by product_id, else by SKU -> Product -> its cost. Returns None when the
+    product has no cost row or its purchase_cost is non-positive, which the
+    caller treats as a hard failure (whole-PO rollback).
+    """
+    if item.product_id:
+        cost = (
+            await session.execute(
+                select(ProductCost).where(
+                    ProductCost.product_id == item.product_id,
+                    ProductCost.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if cost and cost.purchase_cost > 0:
+            return cost.purchase_cost
+    if item.sku:
+        product = (
+            await session.execute(
+                select(Product).where(
+                    Product.sku == item.sku,
+                    Product.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if product and product.cost and product.cost.purchase_cost > 0:
+            return product.cost.purchase_cost
+    return None
+
+
+async def confirm_purchase_order_cost(
+    session: AsyncSession,
+    po_id: UUID,
+    confirmed_by: str,
+    workspace_id: UUID,
+    trace_id: str | None = None,
+    confirmer_user_id: str | None = None,
+) -> PurchaseOrder:
+    """Atomically confirm a PO's real cost: pending_cost_confirmation -> draft.
+
+    M4.2.0-R3.1 (cost-truth closure). For EVERY line item this resolves the
+    authoritative ``product_cost`` row, writes the real cost back into
+    ``unit_cost``, recomputes ``line_total``/``subtotal``/``total``, and captures
+    a cost snapshot. If ANY item lacks a real ProductCost the WHOLE confirmation
+    rolls back (fail-closed) — a PO can never be marked cost_confirmed while any
+    line still carries a fallback/estimate residue.
+
+    M4.2.0-R3.2 (permission + state machine). The confirmer must be an
+    authenticated operator/admin (``confirmer_user_id`` is verified against the
+    users table — an AI Agent / automation, which has no user record, is
+    structurally denied). The status change goes through the single canonical
+    state machine (pending_cost_confirmation -> draft, never directly to
+    approved/ordered), emits an auditable ``purchase_order_cost_confirmed``
+    event carrying the confirmer identity, cost source and cost snapshot, and is
+    idempotent — a repeat confirmation returns the PO as-is without emitting a
+    duplicate event.
+
+    ``confirmed_by`` is the display label recorded on the PO (cost_confirmed_by);
+    ``confirmer_user_id`` is the verified principal used for authorization.
+    """
+    # R3.2: the confirmer must be a real, active, authorized operator/admin.
+    verified_confirmer = await _validate_approver(session, caller_user_id=confirmer_user_id, caller_role=None)
+
+    po = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id, for_update=True)
+    if po is None:
+        raise SupplyChainError(f"purchase order not found: {po_id}")
+
+    # Idempotent: already confirmed -> return as-is, emit nothing.
+    if po.cost_confirmed and po.status == "draft":
+        return po
+
+    # Only pending_cost_confirmation can be cost-confirmed (state machine).
+    if po.status != "pending_cost_confirmation":
+        raise SupplyChainError(
+            f"cannot confirm cost for PO {po.po_number}: status is '{po.status}', expected 'pending_cost_confirmation'"
+        )
+
+    items = await _load_po_items(session, workspace_id=workspace_id, po_id=po.id)
+
+    # --- R3.1 atomic cost write-back: resolve ALL items first (fail-closed). ---
+    resolved: list[tuple[PurchaseOrderItem, Decimal]] = []
+    missing: list[str] = []
+    for item in items:
+        real_cost = await _resolve_real_item_cost(session, workspace_id=workspace_id, item=item)
+        if real_cost is None:
+            missing.append(item.sku)
+        else:
+            resolved.append((item, real_cost))
+    if missing:
+        raise SupplyChainError(
+            f"cannot confirm cost for PO {po.po_number}: still missing real "
+            f"ProductCost for items: {', '.join(missing[:5])}"
+        )
+
+    # Write real cost back into each line and recompute line_total.
+    cost_snapshot: list[dict[str, Any]] = []
+    new_subtotal = ZERO
+    for item, real_cost in resolved:
+        item.unit_cost = real_cost
+        item.line_total = real_cost * item.quantity
+        new_subtotal += item.line_total
+        cost_snapshot.append({"sku": item.sku, "quantity": item.quantity, "unit_cost": str(real_cost)})
+
+    # Recompute PO-level totals from the verified line items.
+    po.subtotal = new_subtotal
+    po.total = po.subtotal + (po.shipping_cost or ZERO)
+    po.cost_confirmed = True
+    po.cost_source = "product_cost"
+    po.cost_confidence = Decimal("0.95")
+    po.cost_confirmed_at = datetime.now(UTC)
+    po.cost_confirmed_by = confirmed_by
+    po.cost_block_reason = None
+
+    # R3.2: the status change goes through the SINGLE canonical state machine
+    # (pending_cost_confirmation -> draft). Never a bare status write, and never
+    # a jump to approved/ordered — approval stays behind the dedicated endpoint.
+    from_status = _apply_status_transition(po, target="draft")
+    await session.flush()
+
+    # Single dedicated audit event: the status change AND the cost snapshot
+    # together, so one event tells the whole cost-confirmation story.
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="supply.purchase_order_cost_confirmed",
+        entity_type="purchase_order",
+        entity_id=str(po.id),
+        payload={
+            "po_number": po.po_number,
+            "action": "cost_confirmed",
+            "from_status": from_status,
+            "to_status": "draft",
+            "actor_user_id": verified_confirmer,
+            "confirmed_by": confirmed_by,
+            "cost_source": "product_cost",
+            "cost_snapshot": cost_snapshot,
+            "subtotal": str(po.subtotal),
+            "total": str(po.total),
+        },
+        trace_id=trace_id,
+    )
+    logger.info(
+        "PO cost confirmed: po=%s, by=%s, actor=%s, trace=%s",
+        po.po_number,
+        confirmed_by,
+        verified_confirmer,
+        trace_id,
+    )
+    return po
 
 
 async def _load_purchase_order(
@@ -546,9 +696,7 @@ async def _load_purchase_order(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def _load_po_items(
-    session: AsyncSession, *, workspace_id: UUID, po_id: UUID
-) -> list[PurchaseOrderItem]:
+async def _load_po_items(session: AsyncSession, *, workspace_id: UUID, po_id: UUID) -> list[PurchaseOrderItem]:
     rows = (
         (
             await session.execute(
@@ -564,6 +712,24 @@ async def _load_po_items(
         .all()
     )
     return list(rows)
+
+
+def _apply_status_transition(purchase_order: PurchaseOrder, *, target: str) -> str:
+    """Validate a PO status change against the canonical machine and apply it.
+
+    M4.2.0-R3.2: single source of truth for "is this status change legal, and
+    apply it". Returns the from_status captured BEFORE mutation so audit events
+    record a correct from->to. Raises SupplyChainError if the transition is not
+    in PO_TRANSITIONS. Used by both the generic transition path and the
+    dedicated cost-confirmation path (pending_cost_confirmation -> draft).
+    """
+    from_status = purchase_order.status
+    allowed = PO_TRANSITIONS.get(from_status, set())
+    if target not in allowed:
+        raise SupplyChainError(f"cannot transition purchase order from '{from_status}' to '{target}'")
+    purchase_order.status = target
+    purchase_order.updated_at = datetime.now(UTC)
+    return from_status
 
 
 async def get_purchase_order(
@@ -587,6 +753,7 @@ async def update_purchase_order(
     po_id: UUID,
     data: PurchaseOrderUpdate,
     trace_id: str | None = None,
+    actor_user_id: str | None = None,
 ) -> PurchaseOrder:
     """Update a PO (draft only)."""
     purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
@@ -605,7 +772,10 @@ async def update_purchase_order(
         event_type="supply.purchase_order_updated",
         entity_type="purchase_order",
         entity_id=str(purchase_order.id),
-        payload={"status": purchase_order.status},
+        payload={
+            "status": purchase_order.status,
+            "actor_user_id": actor_user_id,
+        },
         trace_id=trace_id,
     )
     return purchase_order
@@ -639,22 +809,16 @@ async def _transition_purchase_order(
     Cost gate (R2.3): a PO whose real cost is not yet confirmed
     (``cost_confirmed`` false) cannot be approved.
     """
-    purchase_order = await _load_purchase_order(
-        session, workspace_id=workspace_id, po_id=po_id, for_update=True
-    )
+    purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id, for_update=True)
     if purchase_order is None:
         raise SupplyChainError("purchase order not found")
     from_status = purchase_order.status
     allowed = PO_TRANSITIONS.get(purchase_order.status, set())
     if target not in allowed:
-        raise SupplyChainError(
-            f"cannot transition purchase order from '{purchase_order.status}' to '{target}'"
-        )
+        raise SupplyChainError(f"cannot transition purchase order from '{purchase_order.status}' to '{target}'")
     verified_approver: str | None = None
     if target == "approved":
-        verified_approver = await _validate_approver(
-            session, caller_user_id=caller_user_id, caller_role=caller_role
-        )
+        verified_approver = await _validate_approver(session, caller_user_id=caller_user_id, caller_role=caller_role)
         if not purchase_order.cost_confirmed:
             raise SupplyChainError(
                 "cannot approve a purchase order whose real cost is not confirmed "
@@ -738,6 +902,7 @@ async def order_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """approved -> ordered (PO sent to supplier)."""
+    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -745,7 +910,7 @@ async def order_purchase_order(
         target="ordered",
         event_type="supply.purchase_order_ordered",
         trace_id=trace_id,
-        caller_user_id=caller_user_id,
+        caller_user_id=verified_actor,
     )
 
 
@@ -783,9 +948,7 @@ async def transition_purchase_order_status(
             "identity, role and time"
         )
     # R2.2: verify the operator is a real, active, role-authorized user.
-    verified_actor = await _validate_approver(
-        session, caller_user_id=caller_user_id, caller_role=caller_role
-    )
+    verified_actor = await _validate_approver(session, caller_user_id=caller_user_id, caller_role=caller_role)
     if target == "ordered":
         return await order_purchase_order(
             session,
@@ -841,6 +1004,7 @@ async def partial_receive_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """ordered -> partial_received (first delivery batch arrived)."""
+    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -848,7 +1012,7 @@ async def partial_receive_purchase_order(
         target="partial_received",
         event_type="supply.purchase_order_partial_received",
         trace_id=trace_id,
-        caller_user_id=caller_user_id,
+        caller_user_id=verified_actor,
     )
 
 
@@ -861,6 +1025,7 @@ async def receive_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """ordered -> received (goods arrived)."""
+    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -869,7 +1034,7 @@ async def receive_purchase_order(
         event_type="supply.purchase_order_received",
         trace_id=trace_id,
         received=True,
-        caller_user_id=caller_user_id,
+        caller_user_id=verified_actor,
     )
 
 
@@ -882,6 +1047,7 @@ async def cancel_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """draft/approved -> cancelled."""
+    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -889,7 +1055,7 @@ async def cancel_purchase_order(
         target="cancelled",
         event_type="supply.purchase_order_cancelled",
         trace_id=trace_id,
-        caller_user_id=caller_user_id,
+        caller_user_id=verified_actor,
     )
 
 
@@ -950,9 +1116,7 @@ async def create_inventory(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise SupplyChainError(
-            f"inventory for product/location '{data.location}' already exists"
-        ) from exc
+        raise SupplyChainError(f"inventory for product/location '{data.location}' already exists") from exc
     await event_service.create_event(
         session,
         workspace_id=workspace_id,
@@ -967,15 +1131,11 @@ async def create_inventory(
         },
         trace_id=trace_id,
     )
-    logger.info(
-        "inventory snapshot %s created at %s trace=%s", snapshot.id, data.location, trace_id
-    )
+    logger.info("inventory snapshot %s created at %s trace=%s", snapshot.id, data.location, trace_id)
     return snapshot
 
 
-async def _load_inventory(
-    session: AsyncSession, *, workspace_id: UUID, inventory_id: UUID
-) -> InventorySnapshot | None:
+async def _load_inventory(session: AsyncSession, *, workspace_id: UUID, inventory_id: UUID) -> InventorySnapshot | None:
     return (
         await session.execute(
             select(InventorySnapshot).where(
@@ -1002,9 +1162,7 @@ async def update_inventory(
     provided_available = updates.pop("available", None)
     for key, value in updates.items():
         setattr(snapshot, key, value)
-    snapshot.available = _compute_available(
-        snapshot.quantity, snapshot.reserved, provided_available
-    )
+    snapshot.available = _compute_available(snapshot.quantity, snapshot.reserved, provided_available)
     snapshot.updated_at = datetime.now(UTC)
     await session.flush()
     await event_service.create_event(
@@ -1084,9 +1242,7 @@ async def create_shipment(
 ) -> ShipmentRecord:
     """Create a shipment record."""
     if data.purchase_order_id is not None:
-        purchase_order = await _load_purchase_order(
-            session, workspace_id=workspace_id, po_id=data.purchase_order_id
-        )
+        purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=data.purchase_order_id)
         if purchase_order is None:
             raise SupplyChainError("purchase order not found")
     shipment = ShipmentRecord(
@@ -1121,9 +1277,7 @@ async def create_shipment(
     return shipment
 
 
-async def _load_shipment(
-    session: AsyncSession, *, workspace_id: UUID, shipment_id: UUID
-) -> ShipmentRecord | None:
+async def _load_shipment(session: AsyncSession, *, workspace_id: UUID, shipment_id: UUID) -> ShipmentRecord | None:
     return (
         await session.execute(
             select(ShipmentRecord).where(
@@ -1339,9 +1493,7 @@ async def list_knowledge_entries(
     limit: int = 100,
 ) -> list[SupplyChainKnowledgeEntry]:
     """Query supply chain knowledge entries, newest first."""
-    stmt = select(SupplyChainKnowledgeEntry).where(
-        SupplyChainKnowledgeEntry.workspace_id == workspace_id
-    )
+    stmt = select(SupplyChainKnowledgeEntry).where(SupplyChainKnowledgeEntry.workspace_id == workspace_id)
     if category:
         stmt = stmt.where(SupplyChainKnowledgeEntry.category == category)
     if entry_type:
