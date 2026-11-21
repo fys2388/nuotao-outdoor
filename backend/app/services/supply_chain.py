@@ -545,8 +545,16 @@ async def _transition_purchase_order(
     event_type: str,
     trace_id: str | None,
     received: bool = False,
+    approved_by: str | None = None,
+    approval_note: str | None = None,
 ) -> PurchaseOrder:
-    """Shared PO lifecycle transition with state-machine validation."""
+    """Shared PO lifecycle transition with state-machine validation.
+
+    When ``target == "approved"`` the caller MUST pass ``approved_by`` (the
+    human operator identity). This is the single choke point that guarantees no
+    purchase order reaches ``approved`` without an attributable approver, so an
+    AI Agent can never be the authorizing subject of its own approval.
+    """
     purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
     if purchase_order is None:
         raise SupplyChainError("purchase order not found")
@@ -555,18 +563,29 @@ async def _transition_purchase_order(
         raise SupplyChainError(
             f"cannot transition purchase order from '{purchase_order.status}' to '{target}'"
         )
+    if target == "approved" and not approved_by:
+        raise SupplyChainError(
+            "approving a purchase order requires an explicit operator identity (approved_by)"
+        )
     purchase_order.status = target
     purchase_order.updated_at = datetime.now(UTC)
     if received:
         purchase_order.received_at = datetime.now(UTC)
+    if target == "approved":
+        purchase_order.approved_at = datetime.now(UTC)
+        purchase_order.approved_by = approved_by
+        purchase_order.approval_note = approval_note
     await session.flush()
+    payload: dict[str, Any] = {"po_number": purchase_order.po_number, "status": target}
+    if target == "approved":
+        payload["approved_by"] = approved_by
     await event_service.create_event(
         session,
         workspace_id=workspace_id,
         event_type=event_type,
         entity_type="purchase_order",
         entity_id=str(purchase_order.id),
-        payload={"po_number": purchase_order.po_number, "status": target},
+        payload=payload,
         trace_id=trace_id,
     )
     logger.info("purchase order %s -> %s trace=%s", purchase_order.id, target, trace_id)
@@ -574,9 +593,15 @@ async def _transition_purchase_order(
 
 
 async def approve_purchase_order(
-    session: AsyncSession, *, workspace_id: UUID, po_id: UUID, trace_id: str | None = None
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    po_id: UUID,
+    approved_by: str | None = None,
+    approval_note: str | None = None,
+    trace_id: str | None = None,
 ) -> PurchaseOrder:
-    """draft -> approved."""
+    """draft -> approved. Requires an explicit operator identity (approved_by)."""
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -584,6 +609,8 @@ async def approve_purchase_order(
         target="approved",
         event_type="supply.purchase_order_approved",
         trace_id=trace_id,
+        approved_by=approved_by,
+        approval_note=approval_note,
     )
 
 
