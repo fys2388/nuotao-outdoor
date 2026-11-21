@@ -61,9 +61,15 @@ PO_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"approved", "cancelled", "pending_cost_confirmation"},
     "pending_cost_confirmation": {"draft", "cancelled"},
     "approved": {"ordered", "cancelled"},
-    "ordered": {"partial_received", "received"},
+    "ordered": {"partial_received", "received", "shipped"},
     "partial_received": {"received"},
-    "received": set(),
+    "received": {"shipped"},
+    # Fulfilment tail states (M4.2.0-R1): folded into the canonical machine so
+    # the legacy fulfilment flow no longer needs its own parallel state machine.
+    # These are post-receipt logistics states, never grant procurement authority.
+    "shipped": {"delivered", "completed"},
+    "delivered": {"completed"},
+    "completed": set(),
     "cancelled": set(),
 }
 
@@ -649,6 +655,72 @@ async def order_purchase_order(
         target="ordered",
         event_type="supply.purchase_order_ordered",
         trace_id=trace_id,
+    )
+
+
+# Non-approval status changes routed through the canonical machine (M4.2.0-R1).
+# The legacy fulfilment endpoint delegates here so there is exactly ONE PO state
+# machine. `approved` is intentionally absent: it must go through the dedicated,
+# RBAC-protected approve_purchase_order so no parallel path can authorize a PO.
+
+
+async def transition_purchase_order_status(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    po_id: UUID,
+    target: str,
+    operator_id: str,
+    caller_role: str,
+    trace_id: str | None = None,
+) -> PurchaseOrder:
+    """Route a non-approval PO status change through the canonical state machine.
+
+    Governance (M4.2.0-R1): this is the single delegate for the legacy fulfilment
+    status endpoint. It validates the transition against PO_TRANSITIONS, emits an
+    auditable event carrying the operator identity and trace_id, and refuses
+    `approved` outright (409 at the API layer) so the approval invariant — only
+    the dedicated approve path can authorize a PO — cannot be bypassed. Requires
+    an operator/admin caller_role.
+    """
+    if target == "approved":
+        raise SupplyChainError(
+            "approved cannot be set here; use the dedicated approval endpoint "
+            "(POST /purchase-orders/{po_id}/approve) which records the approver "
+            "identity, role and time"
+        )
+    if caller_role not in _APPROVAL_ROLES:
+        raise SupplyChainError(
+            "updating a purchase order requires an authorized role "
+            f"({'/'.join(sorted(_APPROVAL_ROLES))}); got '{caller_role}'"
+        )
+    if target == "ordered":
+        return await order_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "cancelled":
+        return await cancel_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "partial_received":
+        return await partial_receive_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    if target == "received":
+        return await receive_purchase_order(
+            session, workspace_id=workspace_id, po_id=po_id, trace_id=trace_id
+        )
+    # Fulfilment-tail states (shipped/delivered/completed) use the shared
+    # transition with a fulfilment event type; the operator is recorded.
+    return await _transition_purchase_order(
+        session,
+        workspace_id=workspace_id,
+        po_id=po_id,
+        target=target,
+        event_type=f"supply.purchase_order_{target}",
+        trace_id=trace_id,
+        approved_by=None,
+        caller_role=caller_role,
     )
 
 
