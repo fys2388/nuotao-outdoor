@@ -523,16 +523,27 @@ async def create_purchase_order(
 
 
 async def _load_purchase_order(
-    session: AsyncSession, *, workspace_id: UUID, po_id: UUID
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    po_id: UUID,
+    for_update: bool = False,
 ) -> PurchaseOrder | None:
-    return (
-        await session.execute(
-            select(PurchaseOrder).where(
-                PurchaseOrder.workspace_id == workspace_id,
-                PurchaseOrder.id == po_id,
-            )
-        )
-    ).scalar_one_or_none()
+    """Load a PO; when for_update=True take a row-level lock (SELECT..FOR UPDATE).
+
+    The approval path passes for_update=True so that on PostgreSQL two
+    concurrent approvals serialize on the row lock: the second writer blocks
+    until the first commits, then re-reads a status that is no longer `draft`
+    and fails closed. On SQLite the lock hint is a no-op, so the degraded
+    concurrency test still exercises the application-level invariant.
+    """
+    stmt = select(PurchaseOrder).where(
+        PurchaseOrder.workspace_id == workspace_id,
+        PurchaseOrder.id == po_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def _load_po_items(
@@ -628,7 +639,9 @@ async def _transition_purchase_order(
     Cost gate (R2.3): a PO whose real cost is not yet confirmed
     (``cost_confirmed`` false) cannot be approved.
     """
-    purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
+    purchase_order = await _load_purchase_order(
+        session, workspace_id=workspace_id, po_id=po_id, for_update=True
+    )
     if purchase_order is None:
         raise SupplyChainError("purchase order not found")
     from_status = purchase_order.status
