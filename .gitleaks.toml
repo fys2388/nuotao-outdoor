@@ -8,7 +8,22 @@
 useDefault = true
 
 [allowlist]
-description = "Legitimate 1688 product detail URLs and public sample identifiers (not credentials)"
+description = "Legitimate 1688 product detail URLs, public sample identifiers, and known fictional CI test values (not real credentials)"
 regexes = [
+    # 1688 product detail URLs are public page links, not credentials.
     '''detail\.1688\.com''',
+
+    # --- Fictional CI test values (Issue #22 migration from stale .gitleaksignore) ---
+    # Each is anchored (\A...\z) to the exact throwaway value used only in
+    # backend/tests and acceptance docs. They are precise single-value matches,
+    # so no file, directory, or detection rule is exempted - any OTHER secret,
+    # real or unknown, is still blocked. Never widen these.
+    # CI test HMAC key (not a real secret)
+    '''\Aci-test-hmac-key-0001\z''',
+    # CI test AES-256 key (base64 of 32 zero bytes, not a real key)
+    '''\AAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\z''',
+    # CI throwaway JWT / app secrets (never used in production)
+    '''\Aci-test-jwt-secret-0000000000000000000000000000\z''',
+    '''\Aci-test-app-secret-00000000000000000000000000\z''',
+    '''\Aci-test-only-not-for-production\z''',
 ]

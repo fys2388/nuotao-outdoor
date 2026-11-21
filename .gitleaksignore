@@ -1,13 +1,15 @@
-# Gitleaks ignore rules — CI test keys and known safe values
-# Format: each line is a regex pattern matched against the secret value
-
-# CI test HMAC key (not a real secret)
-ci-test-hmac-key-0001
-
-# CI test AES encryption key (base64 encoded 32 zero-bytes, not a real key)
-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
-
-# CI JWT/App secrets (throwaway values, never used in production)
-ci-test-jwt-secret-0000000000000000000000000000
-ci-test-app-secret-00000000000000000000000000
-ci-test-only-not-for-production
+# Gitleaks ignore rules.
+#
+# gitleaks 8.30.1 requires each entry here to be a full finding FINGERPRINT
+# (format: rule-id:file:line:hash), NOT a bare secret value. The bare-value
+# entries that used to live here (CI test keys such as ci-test-hmac-key-0001)
+# stopped matching after the gitleaks upgrade and produced
+# "Invalid .gitleaksignore entry" warnings on every scan (Issue #22).
+#
+# Those CI test values are now handled as precise, individually-anchored
+# regexes in .gitleaks.toml [allowlist] instead - that is the format this
+# gitleaks version supports and it keeps each exemption explicit and auditable.
+#
+# To ignore a NEW finding here, add its full fingerprint as printed by gitleaks,
+# or prefer a narrowly-scoped regex in .gitleaks.toml [allowlist]. Never add a
+# whole-file, whole-directory, or rule-wide exemption.
