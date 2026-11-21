@@ -22,12 +22,20 @@ repos:
   - repo: local
     hooks:
       # ------------------------------------------------------------------
-      # Gitleaks: the same detection engine GitGuardian uses. Blocks any
-      # WooCommerce / Stripe / GitHub / SMTP / private-key material in a commit.
+      # Gitleaks: scans ONLY the staged diff, aligned with CI
+      # (secret-scanning.yml uses gitleaks-action target: diff).
+      #
+      # Issue #22: the previous entry `gitleaks detect --source . --no-git`
+      # scanned the ENTIRE worktree every commit and, once gitleaks 8.30.1
+      # stopped honouring the old .gitleaksignore value format, blocked every
+      # commit on ~605 pre-existing historical findings regardless of content.
+      # Delegating to scripts/security/run_gitleaks_staged.py keeps the real
+      # security value (block NEW secrets) while ignoring historical noise,
+      # exactly like CI treats them. See scripts/security/run_gitleaks_staged.py.
       # ------------------------------------------------------------------
       - id: gitleaks
-        name: gitleaks (secret scanning)
-        entry: gitleaks detect --redact --source . --no-git --no-banner --exit-code 1
+        name: gitleaks (staged diff secret scanning)
+        entry: python scripts/security/run_gitleaks_staged.py
         language: system
         pass_filenames: false
         stages: [commit]
