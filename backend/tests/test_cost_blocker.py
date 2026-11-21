@@ -209,6 +209,7 @@ async def test_real_cost_po_can_be_approved(db_session, order_with_real_cost_ite
 
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
+        approved_by="buyer@nuotao.com",
     )
     assert po.status == "approved"
 
@@ -294,6 +295,7 @@ async def test_confirmed_po_can_be_approved(db_session, sample_order_with_items,
 
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
+        approved_by="buyer@nuotao.com",
     )
     assert po.status == "approved"
 
