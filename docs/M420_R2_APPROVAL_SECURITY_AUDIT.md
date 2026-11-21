@@ -180,7 +180,7 @@ R2 的授权不是单点，而是**两层必须同时通过**：
 
 - **设计意图**：`tests/test_concurrency_approval_postgres.py` 的模块文档与提交说明 `60a7fd9`（R2.6）均声明，审批 choke point 通过 `SELECT .. FOR UPDATE` 行级锁串行化并发写者，使 Postgres 环境下双连接竞态"恰一成功"。
 - **CI 现实**：CI 默认使用内存 SQLite（`TEST_DATABASE_URL` 非 Postgres）。SQLite 单连接无法承载两个并发写者，因此该套件在 CI 中自动 `pytest.skip`（即"1 skipped"），改为运行 `test_concurrent_approve_sqlite_application_invariant`，只验证**应用层不变量**：首次审批提交后，状态机因源状态不再是 `draft` 而拒绝第二次审批。套件通过 `test_concurrency_mode_is_declared` 显式声明当前运行的是 `postgres_dual_connection` 还是 `sqlite_application_invariant` 模式，杜绝夸大覆盖。
-- **需 Owner 知悉的核实点**：截至本报告，`_load_purchase_order`（审批路径加载 PO 的唯一函数，`supply_chain.py`）**当前代码中未见 `with_for_update()`**；`with_for_update()` 存在于其它 service（如 `b2b_*`、`customer_*`、`listing_publish`），但未出现在 `supply_chain.py` 的 PO 加载路径。这意味着 Postgres 下的**物理串行化目前主要依赖应用层状态机不变量**（第二次审批读到已提交的非 `draft` 状态而失败），而非显式的 `FOR UPDATE` 行级锁。因此：**Postgres 真实双连接竞态测试（`test_concurrent_approve_postgres_single_winner`）只有在接入真实 Postgres（`TEST_DATABASE_URL`）时才会运行并验证物理竞态**。建议在接入 Postgres 的环境中显式运行该用例，或在 `_load_purchase_order`（仅审批路径）补上 `with_for_update()` 以落实文档所述的行级锁。此为当前实现与文档描述之间的差距，如实记录，不掩饰。
+- **行级锁已落实（M4.2.0-R2 收尾，commit `1fc9645`）**：`_load_purchase_order` 现已支持 `for_update` 参数，当 `for_update=True` 时追加 `.with_for_update()`（真实 `SELECT .. FOR UPDATE` 行级锁）。审批 choke point `_transition_purchase_order` 以 `for_update=True` 调用它，因此 Postgres 下的物理串行化**已由显式行级锁保证**（两个并发审批在行锁上排队，第二个事务在第一个提交后重读到非 `draft` 状态而失败），不再仅依赖应用层不变量。SQLite 下该锁是 no-op，故 SQLite 套件仍只验证应用层不变量。**Postgres 真实双连接竞态测试（`test_concurrent_approve_postgres_single_winner`）只有在接入真实 Postgres（`TEST_DATABASE_URL`）时才会运行并验证物理竞态**。M4.2.0-R3 已在 CI 新增独立的 `postgres-concurrency` job（见 `docs/M420_R3_POSTGRES_CI_EVIDENCE.md`）真跑该用例。
 
 ### 6.2 `approved_by` 记录 `user.id` 而非 email
 
@@ -208,9 +208,9 @@ R2 通过"**不信任调用方、Service 层独立查库验证真实主体**"这
 - 全部负向场景有自动化测试证明，且被拒后 PO 保持 `draft`。
 
 **遗留行动项**（不阻塞 R2 验收，但建议跟踪）：
-1. 在真实 Postgres 环境运行 `test_concurrent_approve_postgres_single_winner`，验证物理竞态；或为审批路径的 PO 加载补 `with_for_update()` 以落实文档所述行级锁（见 §6.1）。
+1. **（已完成）** 为审批路径的 PO 加载补 `with_for_update()` 已在 commit `1fc9645` 落实（见 §6.1）；在真实 Postgres 环境运行该用例现已由 M4.2.0-R3 的 CI `postgres-concurrency` job 承担。
 2. 定期在 Postgres 环境回归并发套件，确保 CI skip 不掩盖物理竞态覆盖缺口。
 
 ---
 
-*本报告基于提交 `60a7fd9` 的实际代码与测试编写，所有机制描述与测试断言均可在仓库中核对。*
+*本报告基于提交 `60a7fd9` 的实际代码与测试编写，所有机制描述与测试断言均可在仓库中核对。M4.2.0-R3 复核时校正了 §6.1 与 §7 中关于行级锁的描述，使其与 commit `1fc9645` 之后的最终源码一致（审批路径已落实 `SELECT .. FOR UPDATE` 真锁）。*
