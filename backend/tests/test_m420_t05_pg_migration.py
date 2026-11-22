@@ -181,16 +181,16 @@ async def _assert_new_columns_null(url: str, checks, ids: dict) -> None:
         async with engine.begin() as conn:
             for table, column in checks:
                 row_id = ids[table]
-                row = (
+                rec = (
                     await conn.execute(
                         text(f"SELECT {column} FROM {table} WHERE id = :rid"),
                         {"rid": row_id},
                     )
                 ).first()
-                assert row is not None, f"{table} id={row_id}: seeded row missing during migration"
-                assert row[0] is None, (
+                assert rec is not None, f"{table} id={row_id}: seeded row missing during migration"
+                assert rec[0] is None, (
                     f"{table}.{column}: migration fabricated non-NULL value "
-                    f"on pre-existing row id={row_id}: {row[0]!r}"
+                    f"on pre-existing row id={row_id}: {rec[0]!r}"
                 )
             # Baseline business fields must survive the migration untouched.
             baseline = await conn.execute(
