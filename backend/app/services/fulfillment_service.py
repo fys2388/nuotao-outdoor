@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
-from app.services import supply_chain
+from app.services import event_service, supply_chain
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +358,38 @@ async def create_purchase_order_from_order(
             purchase_order.notes += f"; external_skus={','.join(external_skus)}"
 
     await session.flush()
+
+    # M4.2.0 T0.3: 建单路径补独立审计事件.
+    # 此前本函数只把 trace_id 透传到 PO 行, 自身不直接发事件 (成本确认事件靠
+    # 委托 supply_chain.confirm_purchase_order_cost 间接发出), 导致「订单->采购单」
+    # 这一关键业务事实在事件流里缺失独立留痕.这里对齐 procurement_service /
+    # supply_chain 的 ``supply.purchase_order_created`` 命名, 并用 payload["source"]
+    # 区分来源 (fulfillment vs agent_auto / manual), 使审计既能按事件类型统一查询,
+    # 又能区分建单入口.
+    # 幂等安全: 本段仅在「新建成功」分支执行 (existing PO 命中时上方已提前 return),
+    # 重复建单走 existing 分支不会再次触发, 因此不会刷屏.
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="supply.purchase_order_created",
+        entity_type="purchase_order",
+        entity_id=str(purchase_order.id),
+        payload={
+            "source": "fulfillment",
+            "po_number": purchase_order.po_number,
+            "order_id": str(order.external_order_id),
+            "product_id": str(item_costs[0][0].product_id)
+            if item_costs and getattr(item_costs[0][0], "product_id", None)
+            else None,
+            "item_count": len(item_costs),
+            "quantity": sum(order_item.quantity for order_item, _u, _d in item_costs),
+            "total": str(total),
+            "status": po_status,
+            "cost_source": cost_source,
+        },
+        trace_id=trace_id,
+        commit=False,
+    )
 
     logger.info(
         "Purchase order created: po=%s, order=%s, total=%s, items=%d, trace=%s",

@@ -90,6 +90,11 @@ class SupplierProfile(Base, TimestampMixin, WorkspaceMixin):
     defect_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     certifications: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     risk_level: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
+    # M4.2.0 T0.5 / M4.2.1 供应商风险评分卡:数值化风险分(0-100,越高越危险),
+    # 与定性 risk_level 并存.None 表示尚未量化校准,不得伪造.
+    risk_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    risk_score_model_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    risk_score_calibrated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
@@ -124,16 +129,14 @@ class PurchaseOrder(Base, TimestampMixin, WorkspaceMixin):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     shipping_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    expected_delivery_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    expected_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # --- Approval audit (M4.2.0 T0.2 governance closure) ---
-    # approved 状态只能由受权限保护的显式审批产生；这里留操作者身份与时间，
-    # 使任何 approved 采购单都可追溯「谁在何时批准」。AI Agent 不得作为授权主体。
+    # approved 状态只能由受权限保护的显式审批产生;这里留操作者身份与时间,
+    # 使任何 approved 采购单都可追溯「谁在何时批准」.AI Agent 不得作为授权主体.
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     approval_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -201,6 +204,8 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
     reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     in_transit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # M4.2.0 T0.5 / M4.2.4 再订货点:触发补货的库存阈值.None 表示尚未计算.
+    reorder_point: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snapshot_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -249,6 +254,11 @@ class ShipmentRecord(Base, TimestampMixin, WorkspaceMixin):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="created")
     ship_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivery_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # M4.2.0 T0.5 / M4.2.4 承诺交期 vs 实际对账:承诺交期日期 + 实际发生成本
+    # (运费/关税).供 M4.2.4 对账 landed cost 与交期准确率.None 表示未知.
+    promised_delivery: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    actual_cost_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     delay_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -276,9 +286,7 @@ class LogisticsEvent(Base, CreatedAtMixin, WorkspaceMixin):
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        Index("ix_logistics_events_workspace_shipment", "workspace_id", "shipment_id"),
-    )
+    __table_args__ = (Index("ix_logistics_events_workspace_shipment", "workspace_id", "shipment_id"),)
 
 
 class SupplyChainKnowledgeEntry(Base, TimestampMixin, WorkspaceMixin):

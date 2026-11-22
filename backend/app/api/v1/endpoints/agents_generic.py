@@ -6,6 +6,7 @@ Uses the generic_agent framework with domain-specific prompts from the registry.
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -204,13 +205,27 @@ async def analyze_marketing(
     "/supply-chain-manager/analyze",
     response_model=GenericAgentResponse,
     summary="Run the Supply Chain Manager Agent (supplier + cost + inventory)",
+    deprecated=True,  # M4.2.0 T0.1: supply_chain_manager generic path deprecated; new capability goes to supply_chain_analyst
 )
 async def analyze_supply_chain(
     body: GenericAgentRequest,
     db: DbSession,
     workspace_id: WorkspaceId,
 ) -> GenericAgentResponse:
-    """Analyze supply chain context and generate supplier/cost/inventory suggestions."""
+    """Analyze supply chain context and generate supplier/cost/inventory suggestions.
+
+    M4.2.0 T0.1: this generic supply_chain_manager path is deprecated. New
+    supply-chain capabilities should target ``supply_chain_analyst`` instead.
+    The route is kept fully functional for backward compatibility — it is only
+    flagged (OpenAPI ``deprecated: true`` + DeprecationWarning header below) so
+    existing clients are not broken.
+    """
+    warnings.warn(
+        "POST /agents/supply-chain-manager/analyze is deprecated since M4.2.0 "
+        "T0.1; migrate to the supply_chain_analyst capability.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return await _run_agent("supply-chain-manager", body, db, workspace_id)
 
 

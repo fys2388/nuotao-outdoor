@@ -52,10 +52,10 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    # 1688 来源的唯一标识：从链接中提取并规范化后的数字 offer id。
-    # NULL 表示该行不是 1688 来源（手工录入、CSV 导入、WooCommerce 反向同步等）。
-    # 见 ``uq_products_workspace_source_offer``：同一 workspace 内同一个 1688
-    # 链接只允许存在一条活行，这是「同一链接被重复选品」的根本防线。
+    # 1688 来源的唯一标识:从链接中提取并规范化后的数字 offer id.
+    # NULL 表示该行不是 1688 来源(手工录入,CSV 导入,WooCommerce 反向同步等).
+    # 见 ``uq_products_workspace_source_offer``:同一 workspace 内同一个 1688
+    # 链接只允许存在一条活行,这是「同一链接被重复选品」的根本防线.
     source_offer_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
     attributes: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
@@ -67,9 +67,7 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     # Product Master creation timestamp (Phase 3A).
     # NULL while the product is a candidate; set when the product is
     # approved and promoted to Product Master. Never fabricated.
-    mastered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    mastered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     # Who approved the Product Master promotion (Phase 3A).
     mastered_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Trace ID for the approval that created the Product Master (Phase 3A).
@@ -82,26 +80,20 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     # so rows created before this migration are not falsely marked incomplete.
     data_integrity_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     data_integrity_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
-    data_integrity_missing: Mapped[list[Any]] = mapped_column(
-        AI_JSON, nullable=False, default=list
-    )
-    data_integrity_checked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    data_integrity_missing: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
+    data_integrity_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     data_integrity_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_integrity_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
-    # D8-F 来源追溯（P0-2）。区别于 `source`（来源类别 manual/1688/woocommerce）：
-    # data_source 记录采集方式/Provider，provenance 记录字段级来源与证据状态。
-    # 详见 D8F_ARCHITECTURE.md §3.2/§5 与审计 D8F_P0_DATA_TRUST_AUDIT.md（R4/R5/R7/N3）。
+    # D8-F 来源追溯(P0-2).区别于 `source`(来源类别 manual/1688/woocommerce):
+    # data_source 记录采集方式/Provider,provenance 记录字段级来源与证据状态.
+    # 详见 D8F_ARCHITECTURE.md §3.2/§5 与审计 D8F_P0_DATA_TRUST_AUDIT.md(R4/R5/R7/N3).
     data_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     evidence_grade: Mapped[str | None] = mapped_column(String(4), nullable=True)
     provenance: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True)
     # Soft delete: NULL means the product is live; a timestamp hides it from all
     # business reads while keeping the row for audit and later re-creation.
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     # Public B2B showcase (no-price) controls. Only explicitly approved products
     # appear in the public catalogue; slug is the stable public URL handle and is
     # deliberately separate from the internal SKU.
@@ -121,10 +113,10 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),
         ),
-        # 同一 workspace 内同一个 1688 offer 只允许一条活行。
-        # 应用层「先 SELECT 再 INSERT」的查重会被并发绕过（两个请求都查不到、
-        # 都插入），数据库约束不会；这是「同一链接被重复选品」的根本防线。
-        # 条件里的 IS NOT NULL 让非 1688 来源（手工/CSV/WC 反向同步）不受约束。
+        # 同一 workspace 内同一个 1688 offer 只允许一条活行.
+        # 应用层「先 SELECT 再 INSERT」的查重会被并发绕过(两个请求都查不到,
+        # 都插入),数据库约束不会;这是「同一链接被重复选品」的根本防线.
+        # 条件里的 IS NOT NULL 让非 1688 来源(手工/CSV/WC 反向同步)不受约束.
         Index(
             "uq_products_workspace_source_offer",
             "workspace_id",
@@ -138,11 +130,11 @@ class Product(Base, TimestampMixin, WorkspaceMixin):
     cost: Mapped["ProductCost | None"] = relationship(
         back_populates="product",
         uselist=False,
-        # 不带 delete-orphan：产品删除不得销毁成本数据。
-        # ProductCost 是 PROFIT-001 落地成本主数据，属于业务资产
-        # （AGENTS.md 1.2 第 4 条「数据是资产」），产品下线、替换、清理都
-        # 不该连带抹掉它的采购价与成本明细 —— 下一版产品或复盘分析还要用它。
-        # 外键已改为 ondelete="SET NULL"，product_id 保留以便溯源。
+        # 不带 delete-orphan:产品删除不得销毁成本数据.
+        # ProductCost 是 PROFIT-001 落地成本主数据,属于业务资产
+        # (AGENTS.md 1.2 第 4 条「数据是资产」),产品下线,替换,清理都
+        # 不该连带抹掉它的采购价与成本明细 —— 下一版产品或复盘分析还要用它.
+        # 外键已改为 ondelete="SET NULL",product_id 保留以便溯源.
         cascade="save-update, merge",
     )
 
@@ -168,21 +160,22 @@ class ProductCost(Base, WorkspaceMixin):
     first_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     last_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     # M2.1.5 landed cost model (authoritative breakdown).
-    international_shipping: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    international_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     packaging: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     tax_estimate: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     handling: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_landed_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     payment_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    marketing_amortization: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    marketing_amortization: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     after_sales_loss: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     # Legacy sum of the original components; kept for backward compatibility.
     total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    # M4.2.0 T0.5 / M4.2.2 成本来源与置信度:source 标注成本来源类别,
+    # confidence 为 0-1 置信度.未验证来源(如 1688 抓取)confidence 低,
+    # 供 M4.2.2 成本核算门控(UNKNOWN 降级).None 表示未标注.
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     valid_from: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
