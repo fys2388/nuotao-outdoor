@@ -539,15 +539,15 @@ async def _resolve_real_item_cost(
         {product_id, sku, product_cost_id, purchase_cost, currency,
          version, valid_from}
 
-    ``purchase_cost`` must be > 0 to count as real. Resolution order:
-    by ``product_id`` first; else by ``sku`` -> Product -> its cost.
-    When the item carries BOTH a product_id and a sku, they must resolve to the
-    same Product — a mismatch is rejected (returns None) so we never attribute
-    another product's cost via the SKU fallback (R3-F1 consistency guard).
+    ``purchase_cost`` must be > 0 to count as real. Resolution precedence:
+    when ``product_id`` is present it is AUTHORITATIVE — we must resolve the cost
+    through that exact Product and reject otherwise (never fall back to the SKU,
+    which could pull a different product's cost). The SKU path is used ONLY when
+    no product_id is present. When both identifiers are present they must agree.
     """
-    product_by_id: Product | None = None
     if item.product_id:
-        product_by_id = (
+        # product_id is authoritative: resolve through it, or fail closed.
+        product = (
             await session.execute(
                 select(Product).where(
                     Product.id == item.product_id,
@@ -555,42 +555,44 @@ async def _resolve_real_item_cost(
                 )
             )
         ).scalar_one_or_none()
-
-    # R3-F1 consistency guard: if the item declares both identifiers, they must
-    # point at the same product; otherwise the SKU fallback could silently pull
-    # a different product's cost.
-    if item.product_id and item.sku and product_by_id is not None and product_by_id.sku != item.sku:
-        logger.warning(
-            "cost resolution rejected: product_id=%s sku=%s mismatch (product.sku=%s)",
-            item.product_id,
-            item.sku,
-            product_by_id.sku,
-        )
-        return None
-
-    # Primary: by product_id -> its cost row.
-    if product_by_id is not None:
+        if product is None:
+            logger.warning(
+                "cost resolution rejected: product_id=%s not found (sku=%s); "
+                "not falling back to SKU to avoid attributing another product's cost",
+                item.product_id,
+                item.sku,
+            )
+            return None
+        # Consistency guard: a present sku must agree with the product_id.
+        if item.sku and product.sku != item.sku:
+            logger.warning(
+                "cost resolution rejected: product_id=%s sku=%s mismatch (product.sku=%s)",
+                item.product_id,
+                item.sku,
+                product.sku,
+            )
+            return None
         cost = (
             await session.execute(
                 select(ProductCost).where(
-                    ProductCost.product_id == product_by_id.id,
+                    ProductCost.product_id == product.id,
                     ProductCost.workspace_id == workspace_id,
                 )
             )
         ).scalar_one_or_none()
         if cost and cost.purchase_cost > 0:
             return {
-                "product_id": str(product_by_id.id),
-                "sku": product_by_id.sku,
+                "product_id": str(product.id),
+                "sku": product.sku,
                 "product_cost_id": str(cost.id),
                 "purchase_cost": cost.purchase_cost,
                 "currency": cost.currency,
                 "version": cost.version,
                 "valid_from": cost.valid_from.isoformat() if cost.valid_from else None,
             }
+        return None
 
-    # Fallback: by sku -> Product -> its cost (only when no product_id, or the
-    # identifiers were absent rather than conflicting).
+    # No product_id: fall back to SKU -> Product -> its cost.
     if item.sku:
         product = (
             await session.execute(

@@ -371,3 +371,106 @@ async def test_create_update_events_carry_actor_role(db_session):
     updated = (await _events(db_session, "supply.purchase_order_updated", str(po.id)))[0]
     assert updated.payload.get("actor_user_id") == str(operator.id)
     assert updated.payload.get("actor_role") == "operator"
+
+
+@pytest.mark.asyncio
+async def test_nonzero_shipping_and_full_audit_snapshot(db_session):
+    """Non-zero shipping -> subtotal/shipping/total all correct AND the
+    cost-confirmed event payload carries the full PO-level audit fields plus a
+    per-SKU cost_snapshot with provenance (R3-F1)."""
+    seeded = await _seed_products(db_session, [("SKU-SHIP", "6.00", "USD")])
+    pid = str(seeded[0][0].id)
+    data = PurchaseOrderCreate(
+        po_number=f"R3F3-SHIP-{uuid4().hex[:6]}",
+        currency="USD",
+        shipping_cost=Decimal("5.00"),
+        items=[
+            PurchaseOrderItemCreate(product_id=pid, sku="SKU-SHIP", name="x", quantity=3, unit_cost=Decimal("1.00"))
+        ],
+    )
+    admin = await _seed_admin(db_session)
+    po = await supply_chain.create_purchase_order(db_session, workspace_id=WS, data=data, actor_user_id=str(admin.id))
+    po.status = "pending_cost_confirmation"
+    await db_session.flush()
+
+    po = await supply_chain.confirm_purchase_order_cost(
+        db_session,
+        po.id,
+        confirmed_by="tester",
+        workspace_id=WS,
+        confirmer_user_id=str(admin.id),
+        trace_id="tr-ship-1",
+    )
+    await db_session.refresh(po)
+    # subtotal = 6.00 * 3 = 18.00; total = 18.00 + shipping 5.00 = 23.00
+    assert po.subtotal == Decimal("18.00")
+    assert po.shipping_cost == Decimal("5.00")
+    assert po.total == Decimal("23.00")
+
+    ev = (await _events(db_session, "supply.purchase_order_cost_confirmed", str(po.id)))[0]
+    p = ev.payload
+    # PO-level fields present
+    assert p.get("subtotal") == "18.00"
+    assert p.get("shipping_cost") == "5.00"
+    assert p.get("total") == "23.00"
+    assert p.get("cost_source") == "product_cost"
+    assert ev.trace_id == "tr-ship-1"
+    # per-SKU snapshot carries full provenance
+    snap = p.get("cost_snapshot")
+    assert snap and len(snap) == 1
+    s = snap[0]
+    for key in (
+        "product_id",
+        "sku",
+        "product_cost_id",
+        "product_cost_version",
+        "currency",
+        "quantity",
+        "unit_cost",
+        "line_total",
+    ):
+        assert key in s, f"cost_snapshot missing {key}"
+    assert s["sku"] == "SKU-SHIP"
+    assert s["quantity"] == 3
+    assert s["unit_cost"] == "6.00"
+    assert s["line_total"] == "18.00"
+    assert s["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_confirmation_carries_actor_role(db_session):
+    """Confirm cost then cancel (draft -> cancelled): the cancelled event records
+    the cancelling operator's DB-verified actor_role."""
+    operator = await _seed_operator(db_session)
+    seeded = await _seed_products(db_session, [("SKU-CXL", "3.00", "USD")])
+    pid = str(seeded[0][0].id)
+    data = PurchaseOrderCreate(
+        po_number=f"R3F3-CXL-{uuid4().hex[:6]}",
+        currency="USD",
+        shipping_cost=Decimal("0"),
+        items=[PurchaseOrderItemCreate(product_id=pid, sku="SKU-CXL", name="x", quantity=1, unit_cost=Decimal("1.00"))],
+    )
+    admin = await _seed_admin(db_session)
+    po = await supply_chain.create_purchase_order(
+        db_session, workspace_id=WS, data=data, actor_user_id=str(operator.id)
+    )
+    po.status = "pending_cost_confirmation"
+    await db_session.flush()
+    po = await supply_chain.confirm_purchase_order_cost(
+        db_session,
+        po.id,
+        confirmed_by="tester",
+        workspace_id=WS,
+        confirmer_user_id=str(admin.id),
+    )
+    assert po.status == "draft"
+    po = await supply_chain.cancel_purchase_order(
+        db_session,
+        workspace_id=WS,
+        po_id=po.id,
+        caller_user_id=str(operator.id),
+    )
+    assert po.status == "cancelled"
+    ev = (await _events(db_session, "supply.purchase_order_cancelled", str(po.id)))[0]
+    assert ev.payload.get("actor_user_id") == str(operator.id)
+    assert ev.payload.get("actor_role") == "operator"
