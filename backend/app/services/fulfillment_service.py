@@ -26,7 +26,7 @@ from app.services import supply_chain
 
 logger = logging.getLogger(__name__)
 
-# 榛樿工作空间 ID
+# 默认工作空间 ID
 DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
@@ -65,7 +65,7 @@ async def _get_product_cost(
     """
     获取订单商品的采购成本和国内运费.
 
-    浼樺厛绾э細
+    优先级:
     1. 通过 order_item.product_id 关联 ProductCost 行(权威来源)
     2. 通过 SKU 查找 Product 再关联 ProductCost
     3. 兜底: 使用配置的默认成本比例 x 售价
@@ -473,7 +473,7 @@ async def get_purchase_orders(
     result = await session.execute(query)
     pos = result.scalars().all()
 
-    # 缁熻总数
+    # 统计总数
     count_query = select(PurchaseOrder).where(PurchaseOrder.workspace_id == workspace_id)
     if status:
         count_query = count_query.where(PurchaseOrder.status == status)

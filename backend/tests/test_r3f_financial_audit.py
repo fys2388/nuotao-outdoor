@@ -383,7 +383,7 @@ async def test_nonzero_shipping_and_full_audit_snapshot(db_session):
     data = PurchaseOrderCreate(
         po_number=f"R3F3-SHIP-{uuid4().hex[:6]}",
         currency="USD",
-        shipping_cost=Decimal("5.00"),
+        shipping_cost=Decimal("12.34"),
         items=[
             PurchaseOrderItemCreate(product_id=pid, sku="SKU-SHIP", name="x", quantity=3, unit_cost=Decimal("1.00"))
         ],
@@ -402,18 +402,22 @@ async def test_nonzero_shipping_and_full_audit_snapshot(db_session):
         trace_id="tr-ship-1",
     )
     await db_session.refresh(po)
-    # subtotal = 6.00 * 3 = 18.00; total = 18.00 + shipping 5.00 = 23.00
+    # subtotal = 6.00 * 3 = 18.00; total = 18.00 + shipping 12.34 = 30.34
     assert po.subtotal == Decimal("18.00")
-    assert po.shipping_cost == Decimal("5.00")
-    assert po.total == Decimal("23.00")
+    assert po.shipping_cost == Decimal("12.34")
+    assert po.total == Decimal("30.34")
 
     ev = (await _events(db_session, "supply.purchase_order_cost_confirmed", str(po.id)))[0]
     p = ev.payload
     # PO-level fields present
     assert p.get("subtotal") == "18.00"
-    assert p.get("shipping_cost") == "5.00"
-    assert p.get("total") == "23.00"
+    assert p.get("shipping_cost") == "12.34"
+    assert p.get("total") == "30.34"
     assert p.get("cost_source") == "product_cost"
+    assert p.get("from_status") == "pending_cost_confirmation"
+    assert p.get("to_status") == "draft"
+    assert p.get("actor_user_id") == str(admin.id)
+    assert p.get("actor_role") == "admin"
     assert ev.trace_id == "tr-ship-1"
     # per-SKU snapshot carries full provenance
     snap = p.get("cost_snapshot")
@@ -424,6 +428,7 @@ async def test_nonzero_shipping_and_full_audit_snapshot(db_session):
         "sku",
         "product_cost_id",
         "product_cost_version",
+        "product_cost_valid_from",
         "currency",
         "quantity",
         "unit_cost",
@@ -474,3 +479,37 @@ async def test_cancel_after_confirmation_carries_actor_role(db_session):
     ev = (await _events(db_session, "supply.purchase_order_cancelled", str(po.id)))[0]
     assert ev.payload.get("actor_user_id") == str(operator.id)
     assert ev.payload.get("actor_role") == "operator"
+
+
+@pytest.mark.asyncio
+async def test_product_id_without_product_rejects_no_sku_fallback(db_session):
+    """A product_id resolving to NO Product must fail closed - the resolver must
+    NOT fall back to the SKU and silently pull another product's cost (R3-F1
+    SKU-fallback hole fixed in ee38dad).
+
+    create_purchase_order validates product existence up front (_ensure_product),
+    so we build a valid PO then point the item's product_id at a ghost id to
+    exercise the resolver's fail-closed path directly."""
+    seeded = await _seed_products(db_session, [("SKU-REAL", "8.00", "USD")])
+    real_pid = str(seeded[0][0].id)
+    po, admin = await _mk_pending_po(
+        db_session,
+        po_number=f"R3F3-GHOST-{uuid4().hex[:6]}",
+        items=[("SKU-REAL", real_pid, 1)],
+    )
+    # Force the item's product_id to a ghost id (no Product row), keeping sku.
+    items = await _po_items(db_session, po.id)
+    items[0].product_id = uuid4()
+    await db_session.flush()
+
+    with pytest.raises(supply_chain.SupplyChainError):
+        await supply_chain.confirm_purchase_order_cost(
+            db_session,
+            po.id,
+            confirmed_by="tester",
+            workspace_id=WS,
+            confirmer_user_id=str(admin.id),
+        )
+    await db_session.refresh(po)
+    assert po.cost_confirmed is False
+    assert po.status == "pending_cost_confirmation"

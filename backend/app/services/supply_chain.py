@@ -55,7 +55,9 @@ ZERO = Decimal("0")
 _APPROVAL_ROLES: set[str] = {"admin", "operator"}
 
 
-async def _validate_approver(session: AsyncSession, *, caller_user_id: str | None, caller_role: str | None) -> str:
+async def _validate_approver(
+    session: AsyncSession, *, caller_user_id: str | None, caller_role: str | None
+) -> tuple[str, str]:
     """Validate the approver is a real, active, role-authorized human user.
 
     M4.2.0-R2 (R2.2): a bare ``caller_role`` string or a caller-supplied
@@ -1104,6 +1106,7 @@ async def transition_purchase_order_status(
         event_type=f"supply.purchase_order_{target}",
         trace_id=trace_id,
         approved_by=None,
+        caller_role=caller_role,
         caller_user_id=verified_actor,
     )
 
