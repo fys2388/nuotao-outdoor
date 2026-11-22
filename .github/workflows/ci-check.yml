@@ -92,6 +92,12 @@ jobs:
           done
       - name: Dual-connection concurrent approval tests (real row locks)
         run: pytest tests/test_concurrency_approval_postgres.py -q --no-header -p no:warnings
+      # M4.2.0 P0-2: the SQLite job cannot validate real migrations either. Run the
+      # full Alembic upgrade/downgrade round-trip for 0090/0091 against this same
+      # real PostgreSQL service. The test skips unless TEST_DATABASE_URL points at
+      # Postgres, so (like the concurrency test above) it only truly runs here.
+      - name: Alembic migration upgrade/downgrade round-trip (real PostgreSQL)
+        run: pytest tests/test_m420_t05_pg_migration.py -q --no-header -p no:warnings
 
   frontend:
     name: Frontend · build

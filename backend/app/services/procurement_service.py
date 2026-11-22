@@ -42,8 +42,8 @@ class ProcurementSuggestion:
     priority: str  # high | medium | low
     reason: str
     suggested_quantity: int
-    unit_cost: Decimal
-    total_cost: Decimal
+    unit_cost: Decimal | None
+    total_cost: Decimal | None
     profit_margin: Decimal | None
     selection_score: Decimal | None
     current_stock: int
@@ -105,10 +105,12 @@ async def generate_procurement_suggestions(
 
         # Calculate metrics
         # Distinguish a real zero cost from a MISSING cost record: when no
-        # ProductCost row exists, landed cost is unknown — not zero.
+        # ProductCost row exists, landed cost is unknown — not zero. Keep
+        # unit_cost/total_cost None so an unknown cost never serializes as a
+        # real 0 (AGENTS.md §1.2: preserve unknown as unknown).
         has_cost_record = cost is not None
-        unit_cost = cost.total_landed_cost if cost else Decimal("0")
-        total_cost = unit_cost * Decimal("10")  # Default suggest 10 units
+        unit_cost: Decimal | None = cost.total_landed_cost if has_cost_record else None
+        total_cost: Decimal | None = unit_cost * Decimal("10") if has_cost_record else None  # Default suggest 10 units
         selection_score = score.total if score else None
         meta = product.meta if isinstance(product.meta, dict) else {}
         current_stock = meta.get("stock", 0)
@@ -170,7 +172,9 @@ async def generate_procurement_suggestions(
             suggested_quantity = max(suggested_quantity, 30)
 
         # Calculate total cost
-        total_cost = unit_cost * Decimal(str(suggested_quantity))
+        # Unknown cost stays unknown: never fabricate a total from a missing
+        # unit cost.
+        total_cost = unit_cost * Decimal(str(suggested_quantity)) if unit_cost is not None else None
 
         suggestions.append(
             ProcurementSuggestion(
@@ -204,7 +208,12 @@ async def generate_procurement_suggestions(
     medium_priority = sum(1 for s in suggestions if s.priority == "medium")
     low_priority = sum(1 for s in suggestions if s.priority == "low")
     total_units = sum(s.suggested_quantity for s in suggestions)
-    total_estimated_cost = sum(s.total_cost for s in suggestions)
+    # Unknown-cost suggestions (total_cost None) contribute nothing to the
+    # estimate rather than silently reading as 0 cost.
+    total_estimated_cost = sum(
+        (s.total_cost for s in suggestions if s.total_cost is not None),
+        Decimal("0"),
+    )
 
     return {
         "suggestions": [
@@ -217,8 +226,8 @@ async def generate_procurement_suggestions(
                 "priority": s.priority,
                 "reason": s.reason,
                 "suggested_quantity": s.suggested_quantity,
-                "unit_cost": str(s.unit_cost),
-                "total_cost": str(s.total_cost),
+                "unit_cost": str(s.unit_cost) if s.unit_cost is not None else None,
+                "total_cost": str(s.total_cost) if s.total_cost is not None else None,
                 "profit_margin": str(s.profit_margin) if s.profit_margin else None,
                 "selection_score": str(s.selection_score) if s.selection_score else None,
                 "current_stock": s.current_stock,

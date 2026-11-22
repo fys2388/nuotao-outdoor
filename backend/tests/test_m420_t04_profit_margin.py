@@ -149,8 +149,10 @@ async def test_missing_cost_record_degrades_margin_to_none_and_stays_low(db_sess
 
     suggestion = await _suggestions_for(db_session, product_id)
 
-    # unit_cost still reported as 0 for sizing, but no margin is fabricated.
-    assert Decimal(suggestion["unit_cost"]) == Decimal("0")
+    # Unknown cost stays unknown: no unit_cost/total_cost fabricated as 0, and
+    # no margin is derived from a missing cost record.
+    assert suggestion["unit_cost"] is None
+    assert suggestion["total_cost"] is None
     assert suggestion["profit_margin"] is None
     assert suggestion["priority"] == "low"
     assert "profit margin" not in suggestion["reason"].lower()
