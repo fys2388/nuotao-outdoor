@@ -165,6 +165,7 @@ async def _seed_baseline_rows(url: str) -> dict:
                 await conn.execute(stmt, {f"p{i}": v for i, v in enumerate(values)})
     finally:
         await engine.dispose()
+    return ids
 
 
 async def _assert_new_columns_null(url: str, checks, ids: dict) -> None:
