@@ -38,7 +38,13 @@ M4.2.0「基座收口」为 M4.2.1 供应商智能分析建立干净地基（路
 ## 验证
 
 - **回归**：M4.2.0 全量回归 60 passed（含 T0.4 修复 7 测试 + T0.5 迁移往返 5 测试 + PG 真实迁移往返 + T0.1/T0.2/R3 系列）。
-- **PG 迁移往返**：`test_m420_t05_pg_migration.py` 对真实 PostgreSQL 执行 `upgrade 0089→0090→0091→downgrade 0089` 全链路，断言每步 revision、新列存在、既有行新列 NULL、downgrade 移除列。本地无 Postgres 时 skip，CI `postgres-concurrency` job 对真实 postgres:16 真跑。
+- **PG 迁移往返（真实 PostgreSQL）**：`test_m420_t05_pg_migration.py` 在独立 CI 临时库（`nuotao_mig`）对真实 postgres:16 执行 `upgrade 0089→0090→0091→downgrade 0090→0089` 全链路，每步断言：
+  - 当前 `alembic_version` revision 正确；
+  - 各阶段新增字段真实存在（0090 的 risk_score/risk_score_model_version/risk_score_calibrated_at/source/confidence；0091 的 reorder_point/promised_delivery/actual_cost/actual_cost_currency）；
+  - **历史记录保留**（按种子记录 ID 严格断言）：既有业务行在整个 upgrade/downgrade 往返中始终存在、原始业务字段值不变、新增字段全部保持 NULL（不被回填伪造值）；
+  - downgrade 后对应字段被正确移除。
+  - 本地无 Postgres 时 skip，CI `postgres-concurrency` job 真实执行（步骤 "Alembic migration upgrade/downgrade round-trip (real PostgreSQL)"）。
+- **真实环境暴露并修复的缺陷**（仅真实 PG 可测出，本地 skip 测不到）：独立 `nuotao_mig` 库隔离（避免与并发测试撞表）、JSON 列 asyncpg 编码、按迁移阶段检查列、种子行 ID 正确返回、AI_JSON 列回读类型。这些修复强化了迁移证据的可信度。
 - **ruff / py_compile**：全绿。
 - **CI**：Backend·PostgreSQL dual-connection concurrency（真并发 + 迁移往返）+ smoke + Frontend build + Dependency Review + gitleaks 全 pass。
 
