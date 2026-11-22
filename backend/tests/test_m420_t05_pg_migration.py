@@ -165,13 +165,13 @@ async def _seed_baseline_rows(url: str) -> None:
         await engine.dispose()
 
 
-async def _assert_new_columns_null(url: str) -> None:
+async def _assert_new_columns_null(url: str, checks) -> None:
     """Every pre-existing business row must keep the new columns NULL.
 
     Guards against a migration backfilling fabricated risk scores / cost
-    sources / reorder points onto historical data.
+    sources / reorder points onto historical data. ``checks`` is passed per
+    stage because 0091's columns don't exist until that migration runs.
     """
-    checks = _M420_SUPPLIER_RISK_COLUMNS + _M420_INVENTORY_REORDER_COLUMNS
     engine = create_async_engine(url, poolclass=NullPool)
     try:
         async with engine.connect() as conn:
@@ -252,7 +252,7 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     assert {"risk_score", "risk_score_model_version", "risk_score_calibrated_at"} <= cols
     pc_cols = asyncio.run(_get_columns(url, "product_cost"))
     assert {"source", "confidence"} <= pc_cols
-    asyncio.run(_assert_new_columns_null(url))
+    asyncio.run(_assert_new_columns_null(url, _M420_SUPPLIER_RISK_COLUMNS))
 
     # --- upgrade 0091: reorder point + shipment reconciliation ---
     command.upgrade(cfg, REV_INVENTORY_REORDER)
@@ -261,7 +261,7 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     assert "reorder_point" in inv_cols
     ship_cols = asyncio.run(_get_columns(url, "shipment_records"))
     assert {"promised_delivery", "actual_cost", "actual_cost_currency"} <= ship_cols
-    asyncio.run(_assert_new_columns_null(url))
+    asyncio.run(_assert_new_columns_null(url, _M420_SUPPLIER_RISK_COLUMNS + _M420_INVENTORY_REORDER_COLUMNS))
 
     # --- downgrade 0090: the 0091 columns must be removed ---
     command.downgrade(cfg, REV_SUPPLIER_RISK)
