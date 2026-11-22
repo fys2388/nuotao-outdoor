@@ -104,6 +104,9 @@ async def generate_procurement_suggestions(
         score = score_result.scalars().first()
 
         # Calculate metrics
+        # Distinguish a real zero cost from a MISSING cost record: when no
+        # ProductCost row exists, landed cost is unknown — not zero.
+        has_cost_record = cost is not None
         unit_cost = cost.total_landed_cost if cost else Decimal("0")
         total_cost = unit_cost * Decimal("10")  # Default suggest 10 units
         selection_score = score.total if score else None
@@ -114,17 +117,20 @@ async def generate_procurement_suggestions(
         # so the high/medium-margin priority branches below were dead code. The
         # authoritative selling price lives in product.meta ("price", falling back
         # to "sale_price") — Product has no dedicated price column. Compute the
-        # real gross margin = (price - landed_cost) / price. When there is no
-        # valid positive selling price (or no cost), degrade honestly to None
-        # rather than fabricating a margin (AGENTS.md §1.2: no fabricated data).
+        # real gross margin = (price - landed_cost) / price.
+        # Guard: only compute when there is a valid positive selling price AND a
+        # real cost record. A missing ProductCost row means landed cost is
+        # unknown — NOT zero — so margin degrades honestly to None instead of
+        # fabricating a 100% margin (AGENTS.md §1.2: no fabricated data; missing
+        # cost must not be a high-priority procurement signal).
         profit_margin: Decimal | None = None
         raw_price = meta.get("price") or meta.get("sale_price")
-        if raw_price is not None:
+        if raw_price is not None and has_cost_record:
             try:
                 selling_price = Decimal(str(raw_price))
             except (ArithmeticError, ValueError):
                 selling_price = Decimal("0")
-            if selling_price > 0 and unit_cost >= 0:
+            if selling_price > 0:
                 profit_margin = (selling_price - unit_cost) / selling_price
 
         # Determine priority and reason

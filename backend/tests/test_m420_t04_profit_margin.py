@@ -130,20 +130,14 @@ async def test_missing_price_degrades_to_none_and_stays_low(db_session):
 
 
 @pytest.mark.asyncio
-async def test_missing_cost_yields_unit_cost_zero_and_full_margin(db_session):
-    """No ProductCost -> unit_cost=0; with a price the margin computes to 1.0 -> 'high'.
+async def test_missing_cost_record_degrades_margin_to_none_and_stays_low(db_session):
+    """No ProductCost record -> landed cost is UNKNOWN, not zero.
 
-    CURRENT BEHAVIOR NOTE (pinned, not endorsed as ideal): when cost is absent
-    the function keeps ``unit_cost = 0`` and still computes
-    margin = (price - 0) / price = 1.0, because the guard is only
-    ``selling_price > 0 and unit_cost >= 0``. A missing cost therefore reads as
-    a *full* margin and drives priority to 'high'.
-
-    This is arguably optimistic — a product with unknown landed cost should not
-    be treated as a guaranteed 100% margin. But per the task contract the test
-    must match the real post-fix implementation, so we assert the current
-    behavior here and flag the semantic caveat for a future owner decision
-    (e.g. treat missing cost as profit_margin=None rather than full margin).
+    A missing cost must NOT be read as a 100% margin. profit_margin degrades
+    honestly to None, so the product never reaches 'high' priority on the back
+    of a fabricated margin (AGENTS.md §1.2: no fabricated data; an unknown
+    margin must not be a high-priority procurement signal). With ample stock it
+    stays 'low'.
     """
     product_id = await _seed_product(
         db_session,
@@ -155,11 +149,43 @@ async def test_missing_cost_yields_unit_cost_zero_and_full_margin(db_session):
 
     suggestion = await _suggestions_for(db_session, product_id)
 
+    # unit_cost still reported as 0 for sizing, but no margin is fabricated.
     assert Decimal(suggestion["unit_cost"]) == Decimal("0")
-    assert suggestion["profit_margin"] is not None
-    assert Decimal(suggestion["profit_margin"]) == Decimal("1.0")
-    assert suggestion["priority"] == "high"
-    assert "profit margin" in suggestion["reason"].lower()
+    assert suggestion["profit_margin"] is None
+    assert suggestion["priority"] == "low"
+    assert "profit margin" not in suggestion["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_real_zero_cost_record_is_distinguished_from_missing(db_session):
+    """A real ProductCost with total_landed_cost=0 is NOT the same as a missing
+    record: zero cost with a positive price legitimately yields a 100% margin
+    (and thus 'high'), whereas a missing record yields profit_margin=None."""
+    # Real zero-cost record -> margin computes to 1.0 -> high.
+    real_zero_id = await _seed_product(
+        db_session,
+        sku="PM-ZEROCOST-001",
+        meta={"price": "100", "stock": 100},
+        landed_cost="0",
+    )
+    await db_session.commit()
+    real_zero = await _suggestions_for(db_session, real_zero_id)
+    assert real_zero["profit_margin"] is not None
+    assert Decimal(real_zero["profit_margin"]) == Decimal("1.0")
+    assert real_zero["priority"] == "high"
+
+    # Missing record -> margin None -> low (already covered above, asserted here
+    # side-by-side to make the distinction explicit).
+    missing_id = await _seed_product(
+        db_session,
+        sku="PM-NOCOST-002",
+        meta={"price": "100", "stock": 100},
+        landed_cost=None,
+    )
+    await db_session.commit()
+    missing = await _suggestions_for(db_session, missing_id)
+    assert missing["profit_margin"] is None
+    assert missing["priority"] == "low"
 
 
 @pytest.mark.asyncio
