@@ -131,6 +131,13 @@ class PurchaseOrder(Base, TimestampMixin, WorkspaceMixin):
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # --- Approval audit (M4.2.0 T0.2 governance closure) ---
+    # approved 状态只能由受权限保护的显式审批产生；这里留操作者身份与时间，
+    # 使任何 approved 采购单都可追溯「谁在何时批准」。AI Agent 不得作为授权主体。
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    approval_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # --- Cost confirmation (M0-M4.1 production blocker) ---
     # cost_confirmed=True means real ProductCost exists and total_landed_cost is confirmed.
     # cost_source: product_cost (real) / manual (user entered) / estimate (fallback ratio, NOT for execution)

@@ -18,10 +18,27 @@ import pytest_asyncio
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.models.user import User
 from app.services import fulfillment_service, supply_chain
 
 
 DEFAULT_WORKSPACE = __import__("uuid").UUID("00000000-0000-0000-0000-000000000001")
+
+
+async def _seed_admin(db_session) -> User:
+    """Seed a real active admin so the R2.2 approver validation can verify it."""
+    admin = User(
+        id=uuid4(),
+        username=f"admin-{uuid4().hex[:8]}",
+        email=f"admin-{uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    return admin
 
 
 # --------------------------------------------------------------------------- #
@@ -207,8 +224,11 @@ async def test_real_cost_po_can_be_approved(db_session, order_with_real_cost_ite
     )
     assert po.status == "draft"
 
+    admin = await _seed_admin(db_session)
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
+        approved_by="buyer@nuotao.com", caller_role="admin",
+        caller_user_id=str(admin.id),
     )
     assert po.status == "approved"
 
@@ -258,9 +278,11 @@ async def test_cost_confirmation_transitions_to_draft(db_session, sample_order_w
         item.sku = product.sku
     await db_session.flush()
 
-    # Now confirm cost
+    # Now confirm cost (requires an authenticated operator/admin — R3.2)
+    admin = await _seed_admin(db_session)
     po = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     assert po.status == "draft"
     assert po.cost_confirmed is True
@@ -289,11 +311,15 @@ async def test_confirmed_po_can_be_approved(db_session, sample_order_with_items,
 
     po = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str((await _seed_admin(db_session)).id),
     )
     assert po.status == "draft"
 
+    admin = await _seed_admin(db_session)
     po = await supply_chain.approve_purchase_order(
         db_session, workspace_id=DEFAULT_WORKSPACE, po_id=po.id,
+        approved_by="buyer@nuotao.com", caller_role="admin",
+        caller_user_id=str(admin.id),
     )
     assert po.status == "approved"
 
@@ -321,12 +347,15 @@ async def test_duplicate_cost_confirmation_idempotent(db_session, sample_order_w
     await db_session.flush()
 
     # First confirmation
+    admin = await _seed_admin(db_session)
     po1 = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     # Second confirmation (idempotent)
     po2 = await fulfillment_service.confirm_purchase_order_cost(
         db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+        confirmer_user_id=str(admin.id),
     )
     assert po1.id == po2.id
     assert po1.status == po2.status == "draft"
@@ -354,10 +383,14 @@ async def test_cost_confirmation_fails_without_real_cost(db_session, sample_orde
     )
     assert po.status == "pending_cost_confirmation"
 
-    # Try to confirm without adding real cost -> should fail
-    with pytest.raises(ValueError, match="still missing real ProductCost"):
+    # Try to confirm without adding real cost -> should fail (R3.1 fail-closed).
+    # The confirmer must first be an authenticated operator/admin (R3.2), then
+    # the missing-cost guard rejects the whole confirmation.
+    admin = await _seed_admin(db_session)
+    with pytest.raises(supply_chain.SupplyChainError, match="still missing real ProductCost"):
         await fulfillment_service.confirm_purchase_order_cost(
             db_session, po.id, confirmed_by="tester", workspace_id=DEFAULT_WORKSPACE,
+            confirmer_user_id=str(admin.id),
         )
 
     # PO should still be in pending_cost_confirmation

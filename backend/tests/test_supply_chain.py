@@ -7,6 +7,7 @@ shipment logistics events, supply chain knowledge retrieval and event audit
 (every write emits an event with trace_id).
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.core.workspace import DEFAULT_WORKSPACE_ID
 from app.models.event import EventLog
 from app.models.product import Product
 from app.models.supplier import Supplier
+from app.models.supply_chain import PurchaseOrder
 
 WORKSPACE = DEFAULT_WORKSPACE_ID
 OTHER_WORKSPACE = UUID("00000000-0000-0000-0000-000000000099")
@@ -29,6 +31,19 @@ def _headers(workspace: UUID | None = None) -> dict:
 async def _event_types(db_session) -> set[str]:
     rows = (await db_session.execute(select(EventLog.event_type))).scalars().all()
     return set(rows)
+
+
+async def _confirm_cost(db_session, po_id) -> None:
+    """Mark a PO's real cost confirmed so it can pass the R2.3 approval gate."""
+    po = (
+        await db_session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_id))
+    ).scalar_one()
+    po.cost_confirmed = True
+    po.cost_source = "verified"
+    po.cost_confidence = Decimal("0.95")
+    po.cost_confirmed_at = datetime.now(UTC)
+    po.cost_confirmed_by = "buyer@nuotao.com"
+    await db_session.commit()
 
 
 async def _seed_supplier(db_session, workspace: UUID = WORKSPACE, code: str = "1688-demo") -> UUID:
@@ -137,6 +152,7 @@ async def test_purchase_order_full_lifecycle(db_session, api_client) -> None:
     assert detail.status_code == 200, detail.text
     assert len(detail.json()["items"]) == 2
 
+    await _confirm_cost(db_session, UUID(po_id))
     approved = api_client.post(f"/api/v1/purchase-orders/{po_id}/approve")
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
@@ -186,6 +202,7 @@ async def test_purchase_order_invalid_transitions(db_session, api_client) -> Non
 async def test_purchase_order_partial_received_guardrails(db_session, api_client) -> None:
     """From partial_received only receive is allowed (no cancel, no repeat)."""
     po_id = await _make_po(db_session, api_client, "PO-2026-004")
+    await _confirm_cost(db_session, po_id)
     api_client.post(f"/api/v1/purchase-orders/{po_id}/approve")
     api_client.post(f"/api/v1/purchase-orders/{po_id}/order")
     partial = api_client.post(f"/api/v1/purchase-orders/{po_id}/partial-receive")

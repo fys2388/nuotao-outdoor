@@ -9,10 +9,11 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_user, require_role
 from app.core.database import get_db
 from app.core.tracing import get_trace_id
 from app.core.workspace import get_workspace_id
+from app.models.supplier import Supplier
 from app.schemas.supply_chain import (
     InventoryCreate,
     InventoryOut,
@@ -30,14 +31,13 @@ from app.schemas.supply_chain import (
     SupplierCreate,
     SupplierOut,
     SupplierProfileCreate,
-    SupplierUpdate,
     SupplierProfileOut,
     SupplierProfileUpdate,
+    SupplierUpdate,
     SupplyChainKnowledgeCreate,
     SupplyChainKnowledgeOut,
 )
 from app.schemas.user import UserResponse
-from app.models.supplier import Supplier
 from app.services import supply_chain
 
 router = APIRouter(tags=["supply-chain"])
@@ -57,7 +57,6 @@ def _http_error(exc: supply_chain.SupplyChainError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
 
 
-
 # --------------------------------------------------------------------------- #
 # Suppliers (master data)
 # --------------------------------------------------------------------------- #
@@ -75,9 +74,7 @@ async def create_supplier(
     workspace_id: WorkspaceId,
 ) -> SupplierOut:
     try:
-        supplier = await supply_chain.create_supplier(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
-        )
+        supplier = await supply_chain.create_supplier(db, workspace_id=workspace_id, data=body, trace_id=get_trace_id())
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
     return SupplierOut.model_validate(supplier)
@@ -266,11 +263,22 @@ async def create_purchase_order(
     body: PurchaseOrderCreate,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Create a PO in draft state; totals computed from line items."""
+    """Create a PO in draft state; totals computed from line items.
+
+    RBAC (M4.2.0-R3.3): creating a PO is a procurement-authority action, so it
+    requires an authenticated operator/admin. Authentication is derived from the
+    bearer credential (get_current_user), never from the workspace header alone.
+    The acting operator id is recorded on the creation audit event.
+    """
     try:
         purchase_order = await supply_chain.create_purchase_order(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            data=body,
+            trace_id=get_trace_id(),
+            actor_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -317,9 +325,7 @@ async def get_purchase_order(
     """Return a PO plus its items."""
     result = await supply_chain.get_purchase_order(db, workspace_id=workspace_id, po_id=po_id)
     if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="purchase order not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="purchase order not found")
     purchase_order, items = result
     detail = PurchaseOrderDetailOut.model_validate(purchase_order)
     detail.items = [PurchaseOrderItemOut.model_validate(item) for item in items]
@@ -336,8 +342,13 @@ async def update_purchase_order(
     body: PurchaseOrderUpdate,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Update notes/shipping of a draft PO."""
+    """Update notes/shipping of a draft PO.
+
+    RBAC (M4.2.0-R3.3): modifying a PO requires an authenticated operator/admin;
+    the acting operator id is recorded on the update audit event.
+    """
     try:
         purchase_order = await supply_chain.update_purchase_order(
             db,
@@ -345,6 +356,7 @@ async def update_purchase_order(
             po_id=po_id,
             data=body,
             trace_id=get_trace_id(),
+            actor_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -360,11 +372,24 @@ async def approve_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    approver: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO from draft to approved."""
+    """Move the PO from draft to approved.
+
+    RBAC: operator+. The approving operator's real identity is verified by the
+    service layer against the users table (active + admin/operator role), and
+    the verified user.id is recorded on the PO and in the audit event, so an AI
+    Agent can never be the authorizing subject (M4.2.0-R2).
+    """
     try:
         purchase_order = await supply_chain.approve_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            approved_by=getattr(approver, "email", None) or str(getattr(approver, "id", "")),
+            caller_role=getattr(approver, "role", None),
+            caller_user_id=str(getattr(approver, "id", "")),
+            trace_id=get_trace_id(),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -380,11 +405,21 @@ async def order_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO from approved to ordered (sent to supplier)."""
+    """Move the PO from approved to ordered (sent to supplier).
+
+    RBAC: operator+ (M4.2.0-R2). Ordering a PO is a procurement-authority action
+    that commits spend with a supplier, so it requires an authenticated
+    operator/admin and records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.order_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -400,11 +435,19 @@ async def partial_receive_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Move the PO to partial_received (first delivery batch arrived)."""
+    """Move the PO to partial_received (first delivery batch arrived).
+
+    RBAC: operator+ (M4.2.0-R2); records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.partial_receive_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -420,11 +463,19 @@ async def receive_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Mark the PO as received with a received_at timestamp."""
+    """Mark the PO as received with a received_at timestamp.
+
+    RBAC: operator+ (M4.2.0-R2); records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.receive_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -440,11 +491,20 @@ async def cancel_purchase_order(
     po_id: UUID,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
 ) -> PurchaseOrderOut:
-    """Cancel the PO from draft or approved."""
+    """Cancel the PO from draft or approved.
+
+    RBAC: operator+ (M4.2.0-R2); cancelling a PO is a procurement action and
+    records the acting user in the audit event.
+    """
     try:
         purchase_order = await supply_chain.cancel_purchase_order(
-            db, workspace_id=workspace_id, po_id=po_id, trace_id=get_trace_id()
+            db,
+            workspace_id=workspace_id,
+            po_id=po_id,
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
@@ -560,9 +620,7 @@ async def create_shipment(
 ) -> ShipmentOut:
     """Record a shipment with carrier/tracking."""
     try:
-        shipment = await supply_chain.create_shipment(
-            db, workspace_id=workspace_id, data=body, trace_id=get_trace_id()
-        )
+        shipment = await supply_chain.create_shipment(db, workspace_id=workspace_id, data=body, trace_id=get_trace_id())
     except supply_chain.SupplyChainError as exc:
         raise _http_error(exc) from exc
     return ShipmentOut.model_validate(shipment)
@@ -652,9 +710,7 @@ async def list_logistics_events(
     limit: int = 100,
 ) -> list[LogisticsEventOut]:
     """Return tracking events, newest first."""
-    rows = await supply_chain.list_logistics_events(
-        db, workspace_id=workspace_id, shipment_id=shipment_id, limit=limit
-    )
+    rows = await supply_chain.list_logistics_events(db, workspace_id=workspace_id, shipment_id=shipment_id, limit=limit)
     return [LogisticsEventOut.model_validate(row) for row in rows]
 
 
@@ -732,7 +788,6 @@ async def list_knowledge_entries(
     return [SupplyChainKnowledgeOut.model_validate(row) for row in rows]
 
 
-
 # --------------------------------------------------------------------------- #
 # Purchase order statistics
 # --------------------------------------------------------------------------- #
@@ -748,16 +803,15 @@ async def get_purchase_order_stats(
     workspace_id: WorkspaceId,
 ) -> dict:
     """Return purchase order statistics grouped by supplier."""
-    from sqlalchemy import select, func
-    
+    from sqlalchemy import select
+
     # 查询所有供应商
-    suppliers = (await db.execute(
-        select(Supplier).where(Supplier.workspace_id == workspace_id)
-    )).scalars().all()
-    
-    # 查询采购订单统计（使用原生SQL）
-    result = await db.execute("""
-        SELECT 
+    suppliers = (await db.execute(select(Supplier).where(Supplier.workspace_id == workspace_id))).scalars().all()
+
+    # 查询采购订单统计(使用原生SQL)
+    result = await db.execute(
+        """
+        SELECT
             s.id as supplier_id,
             s.code as supplier_code,
             s.name as supplier_name,
@@ -771,23 +825,27 @@ async def get_purchase_order_stats(
         WHERE s.workspace_id = :workspace_id
         GROUP BY s.id, s.code, s.name
         ORDER BY total_amount DESC
-    """, {"workspace_id": str(workspace_id)})
-    
+    """,
+        {"workspace_id": str(workspace_id)},
+    )
+
     rows = result.fetchall()
-    
+
     stats = []
     for row in rows:
-        stats.append({
-            "supplier_id": str(row[0]),
-            "supplier_code": row[1],
-            "supplier_name": row[2],
-            "order_count": row[3],
-            "total_amount": float(row[4]) if row[4] else 0,
-            "received_count": row[5],
-            "shipped_count": row[6],
-            "ordered_count": row[7],
-        })
-    
+        stats.append(
+            {
+                "supplier_id": str(row[0]),
+                "supplier_code": row[1],
+                "supplier_name": row[2],
+                "order_count": row[3],
+                "total_amount": float(row[4]) if row[4] else 0,
+                "received_count": row[5],
+                "shipped_count": row[6],
+                "ordered_count": row[7],
+            }
+        )
+
     return {
         "total_suppliers": len(suppliers),
         "total_orders": sum(s["order_count"] for s in stats),
@@ -795,63 +853,79 @@ async def get_purchase_order_stats(
         "by_supplier": stats,
     }
 
+
 @router.patch(
     "/purchase-orders/{po_id}/status",
-    summary="Update purchase order status",
+    summary="Update purchase order status (canonical state machine only)",
 )
 async def update_purchase_order_status(
     po_id: str,
     db: DbSession,
     workspace_id: WorkspaceId,
+    operator: Annotated[UserResponse, Depends(require_role("operator"))],
     body: dict = Body(...),
 ) -> dict:
-    """Update purchase order status (pending -> ordered -> shipped -> received)."""
-    from sqlalchemy import text
-    
-    valid_statuses = ["pending", "ordered", "shipped", "received", "completed", "cancelled"]
+    """Update a purchase order status via the canonical M4.1 state machine.
+
+    Governance (M4.2.0 T0.2): this endpoint no longer performs raw SQL writes.
+    Every transition is routed through ``app.services.supply_chain`` so that the
+    PO state machine is validated, an audit event is emitted, and the operator
+    identity is recorded. ``approved`` is intentionally NOT settable here — it
+    must go through the explicit, RBAC-protected approve endpoint so an AI Agent
+    can never authorize its own purchase order.
+    """
+    operator_id = getattr(operator, "email", None) or str(getattr(operator, "id", ""))
     new_status = body.get("status")
-    
-    if not new_status or new_status not in valid_statuses:
+
+    # approved is gated behind the dedicated approve endpoint (explicit approval).
+    if new_status == "approved":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "状态 'approved' 不能通过此端点设置。请调用 "
+                "POST /purchase-orders/{po_id}/approve 走显式审批(记录操作者与审计)。"
+            ),
+        )
+
+    # Map requested target to the canonical transition functions.
+    transitions = {
+        "cancelled": supply_chain.cancel_purchase_order,
+        "ordered": supply_chain.order_purchase_order,
+        "partial_received": supply_chain.partial_receive_purchase_order,
+        "received": supply_chain.receive_purchase_order,
+    }
+
+    if not new_status or new_status not in transitions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无效的状态: {new_status}，有效状态: {', '.join(valid_statuses)}",
+            detail=(
+                f"无效的状态: {new_status}。此端点仅支持 {', '.join(transitions)};"
+                f"'approved' 须走 approve 端点。规范状态机见 supply_chain.PO_TRANSITIONS。"
+            ),
         )
-    
+
+    transition_fn = transitions[new_status]
     try:
-        # 更新状态
-        update_fields = "status = :status, updated_at = NOW()"
-        params = {"status": new_status, "id": po_id, "workspace_id": str(workspace_id)}
-        
-        # 如果状态变为received，设置received_at
-        if new_status == "received":
-            update_fields += ", received_at = NOW()"
-        
-        result = await db.execute(text(f"""
-            UPDATE purchase_orders 
-            SET {update_fields}
-            WHERE id = :id AND workspace_id = :workspace_id
-            RETURNING po_number, status
-        """), params)
-        await db.commit()
-        
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="采购订单不存在",
-            )
-        
-        return {
-            "success": True,
-            "po_number": row[0],
-            "status": row[1],
-            "message": f"状态已更新为: {new_status}",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"更新状态失败: {str(e)}",
+        purchase_order = await transition_fn(
+            db,
+            workspace_id=workspace_id,
+            po_id=UUID(po_id),
+            trace_id=get_trace_id(),
+            caller_user_id=str(getattr(operator, "id", "")),
         )
+    except supply_chain.SupplyChainError as exc:
+        # fail-closed: any illegal jump is rejected, never silently applied.
+        raise _http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "success": True,
+        "po_number": purchase_order.po_number,
+        "status": purchase_order.status,
+        "updated_by": operator_id,
+        "message": f"状态已更新为: {purchase_order.status}",
+    }

@@ -1,44 +1,46 @@
 """
 采购/发货服务
-订单支付成功后自动生成采购单，支持物流号回填和发货状态管理
+订单支付成功后自动生成采购单, 支持物流号回填和发货状态管理
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCost
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
-from app.core.config import get_settings
+from app.services import supply_chain
 
 logger = logging.getLogger(__name__)
 
 # 默认工作空间 ID
 DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
+
+def _canonical_next_statuses(status: str) -> set[str]:
+    """Return allowed next statuses from the SINGLE canonical PO state machine.
+
+    M4.2.0-R2 (R2.1): the fulfilment service no longer owns a parallel state
+    machine. All next-status derivation delegates to supply_chain.PO_TRANSITIONS
+    so there is exactly one source of truth for purchase-order transitions.
+    """
+    return set(supply_chain.PO_TRANSITIONS.get(status, set()))
+
+
 # 采购单状态流转
-PO_STATUS_FLOW = {
-    "draft": ["approved", "cancelled"],
-    "approved": ["ordered", "cancelled"],
-    "ordered": ["partial_received", "received", "shipped"],
-    "partial_received": ["received"],
-    "received": ["shipped"],
-    "shipped": ["delivered", "completed"],
-    "delivered": ["completed"],
-    "completed": [],
-    "cancelled": [],
-}
-
-
 def _safe_decimal(value: Any, default: float = 0.0) -> Decimal:
     """安全转换为 Decimal"""
     try:
@@ -57,16 +59,16 @@ def generate_po_number(order_id: str) -> str:
 
 async def _get_product_cost(
     session: AsyncSession,
-    order_item: "OrderItem",
+    order_item: OrderItem,
     workspace_id: UUID,
 ) -> tuple[Decimal, Decimal]:
     """
-    获取订单商品的采购成本和国内运费。
+    获取订单商品的采购成本和国内运费.
 
-    优先级：
-    1. 通过 order_item.product_id 关联 ProductCost 表（权威来源）
+    优先级:
+    1. 通过 order_item.product_id 关联 ProductCost 行(权威来源)
     2. 通过 SKU 查找 Product 再关联 ProductCost
-    3. 兜底：使用配置的默认成本比例 × 售价
+    3. 兜底: 使用配置的默认成本比例 x 售价
 
     Returns:
         (unit_purchase_cost, domestic_shipping_per_unit)
@@ -110,22 +112,26 @@ async def _get_product_cost(
             logger.info("Product cost via SKU lookup: sku=%s, cost=%s", sku, purchase_cost)
             return purchase_cost, domestic
 
-    # 3. 兜底：配置的默认成本比例
+    # 3. 兜底: 配置的默认成本比例
     fallback_cost = unit_price * fallback_ratio
     logger.warning(
         "No ProductCost found for order_item=%s (product_id=%s, sku=%s), using fallback ratio=%s, cost=%s",
-        getattr(order_item, "id", "unknown"), product_id, sku, fallback_ratio, fallback_cost,
+        getattr(order_item, "id", "unknown"),
+        product_id,
+        sku,
+        fallback_ratio,
+        fallback_cost,
     )
     return fallback_cost, default_domestic_shipping
 
 
 async def _get_product_cost_detailed(
     session: AsyncSession,
-    order_item: "OrderItem",
+    order_item: OrderItem,
     workspace_id: UUID,
 ) -> dict[str, Any]:
     """
-    获取订单商品的采购成本，附带来源和置信度。
+    获取订单商品的采购成本, 附带来源和置信度.
 
     Returns:
         dict with keys:
@@ -184,11 +190,15 @@ async def _get_product_cost_detailed(
                 "has_real_cost": True,
             }
 
-    # 3. 兜底：配置的默认成本比例 (estimate ONLY, not for execution)
+    # 3. 兜底: 配置的默认成本比例 (estimate ONLY, not for execution)
     fallback_cost = unit_price * fallback_ratio
     logger.warning(
         "No ProductCost found for order_item=%s (product_id=%s, sku=%s), using FALLBACK ratio=%s, cost=%s (ESTIMATE ONLY)",
-        getattr(order_item, "id", "unknown"), product_id, sku, fallback_ratio, fallback_cost,
+        getattr(order_item, "id", "unknown"),
+        product_id,
+        sku,
+        fallback_ratio,
+        fallback_cost,
     )
     return {
         "purchase_cost": fallback_cost,
@@ -212,7 +222,7 @@ async def create_purchase_order_from_order(
     Args:
         session: 数据库会话
         order: 本地订单
-        wc_order_data: WooCommerce 订单数据（包含商品详情）
+        wc_order_data: WooCommerce 订单数据(包含商品详情)
         workspace_id: 工作空间 ID
         trace_id: 追踪 ID
 
@@ -223,9 +233,7 @@ async def create_purchase_order_from_order(
         workspace_id = DEFAULT_WORKSPACE_ID
 
     # Reload order with items using selectinload to avoid lazy-load in async context
-    order_result = await session.execute(
-        select(Order).options(selectinload(Order.items)).where(Order.id == order.id)
-    )
+    order_result = await session.execute(select(Order).options(selectinload(Order.items)).where(Order.id == order.id))
     order = order_result.scalar_one()
 
     # 检查是否已存在采购单
@@ -243,12 +251,12 @@ async def create_purchase_order_from_order(
     # 生成采购单号
     po_number = generate_po_number(order.external_order_id)
 
-    # 计算采购成本：优先从 ProductCost 表获取每个商品的实际成本
+    # 计算采购成本:从 ProductCost 表获取每个商品的实际成本
     # 汇总所有商品的采购成本 + 国内运费
-    # M0-M4.1: 成本缺失时采购单进入 pending_cost_confirmation，不得执行
+    # M0-M4.1: 成本缺失时采购单进入 pending_cost_confirmation, 不得执行
     subtotal = Decimal("0")
     total_domestic_shipping = Decimal("0")
-    item_costs: list[tuple["OrderItem", Decimal, Decimal]] = []
+    item_costs: list[tuple[OrderItem, Decimal, Decimal]] = []
     all_items_have_real_cost = True
     cost_sources: list[str] = []
     min_confidence = Decimal("1.0")
@@ -271,7 +279,7 @@ async def create_purchase_order_from_order(
             all_items_have_real_cost = False
             missing_cost_items.append(getattr(order_item, "sku", str(getattr(order_item, "id", "unknown"))))
 
-    # 如果订单没有商品项（异常情况），使用兜底比例 (estimate ONLY)
+    # 如果订单没有商品项(异常情况), 使用兜底比例 (estimate ONLY)
     if not order.items:
         settings = get_settings()
         subtotal = order.total * settings.procurement_fallback_cost_ratio
@@ -280,7 +288,9 @@ async def create_purchase_order_from_order(
         min_confidence = Decimal("0.30")
         cost_sources = ["fallback"]
         missing_cost_items = ["NO_ITEMS"]
-        logger.warning("Order %s has no items, using FALLBACK cost calculation (ESTIMATE ONLY)", order.external_order_id)
+        logger.warning(
+            "Order %s has no items, using FALLBACK cost calculation (ESTIMATE ONLY)", order.external_order_id
+        )
 
     shipping_cost = total_domestic_shipping
     total = subtotal + shipping_cost
@@ -299,7 +309,8 @@ async def create_purchase_order_from_order(
         cost_block_reason = f"Missing real ProductCost for items: {', '.join(missing_cost_items[:5])}. Fallback ratio is ESTIMATE ONLY, not for execution."
         logger.warning(
             "PO for order %s entering pending_cost_confirmation: missing cost for %d items",
-            order.external_order_id, len(missing_cost_items),
+            order.external_order_id,
+            len(missing_cost_items),
         )
 
     # 创建采购单
@@ -323,7 +334,7 @@ async def create_purchase_order_from_order(
     session.add(purchase_order)
     await session.flush()
 
-    # 创建采购单商品项（统一使用从 ProductCost 表获取的实际成本）
+    # 创建采购单商品项(统一使用从 ProductCost 表获取的实际成本)
     for order_item, unit_cost, _domestic_shipping in item_costs:
         quantity = order_item.quantity
         line_total = unit_cost * quantity
@@ -340,11 +351,9 @@ async def create_purchase_order_from_order(
         )
         session.add(po_item)
 
-    # 如果 wc_order_data 提供了额外的商品信息（如外部 SKU 映射），记录到 notes
+    # 如果 wc_order_data 提供了额外的商品信息(如外部 SKU 映射), 记录到 notes
     if wc_order_data and wc_order_data.get("line_items"):
-        external_skus = [
-            item.get("sku", "") for item in wc_order_data["line_items"] if item.get("sku")
-        ]
+        external_skus = [item.get("sku", "") for item in wc_order_data["line_items"] if item.get("sku")]
         if external_skus:
             purchase_order.notes += f"; external_skus={','.join(external_skus)}"
 
@@ -362,69 +371,6 @@ async def create_purchase_order_from_order(
     return purchase_order, True
 
 
-async def update_purchase_order_status(
-    session: AsyncSession,
-    po_id: UUID,
-    new_status: str,
-    workspace_id: UUID | None = None,
-    trace_id: str | None = None,
-) -> PurchaseOrder:
-    """
-    更新采购单状态
-
-    Args:
-        session: 数据库会话
-        po_id: 采购单 ID
-        new_status: 新状态
-        workspace_id: 工作空间 ID
-        trace_id: 追踪 ID
-
-    Returns:
-        更新后的采购单
-    """
-    if workspace_id is None:
-        workspace_id = DEFAULT_WORKSPACE_ID
-
-    # 获取采购单
-    result = await session.execute(
-        select(PurchaseOrder).where(
-            PurchaseOrder.id == po_id,
-            PurchaseOrder.workspace_id == workspace_id,
-        )
-    )
-    po = result.scalar_one_or_none()
-    if not po:
-        raise ValueError(f"Purchase order not found: {po_id}")
-
-    # 验证状态流转
-    allowed_statuses = PO_STATUS_FLOW.get(po.status, [])
-    if new_status not in allowed_statuses:
-        raise ValueError(
-            f"Invalid status transition: {po.status} -> {new_status}. "
-            f"Allowed: {allowed_statuses}"
-        )
-
-    old_status = po.status
-    po.status = new_status
-    po.trace_id = trace_id
-
-    # 如果状态为 received，记录收货时间
-    if new_status == "received" and not po.received_at:
-        po.received_at = datetime.utcnow()
-
-    await session.flush()
-
-    logger.info(
-        "Purchase order status updated: po=%s, %s -> %s, trace=%s",
-        po.po_number,
-        old_status,
-        new_status,
-        trace_id,
-    )
-
-    return po
-
-
 async def add_tracking_to_order(
     session: AsyncSession,
     order_id: UUID,
@@ -435,7 +381,7 @@ async def add_tracking_to_order(
     trace_id: str | None = None,
 ) -> Order:
     """
-    为订单添加物流追踪信息
+    为订单添加物流跟踪信息
 
     Args:
         session: 数据库会话
@@ -466,8 +412,8 @@ async def add_tracking_to_order(
     # 更新订单履约状态
     order.fulfillment_status = "shipped"
 
-    # 将物流信息保存到 profit_snapshot（简化处理）
-    # 实际项目中应该有专门的物流追踪表
+    # 将物流信息保存到 profit_snapshot(简化处理)
+    # 实际项目中应该有专门的物流跟踪表
     tracking_info = {
         "tracking_number": tracking_number,
         "carrier": carrier,
@@ -563,7 +509,7 @@ async def get_purchase_order_detail(
     workspace_id: UUID | None = None,
 ) -> dict[str, Any]:
     """
-    获取采购单详情（包含商品项）
+    获取采购单详情(包含商品项)
 
     Args:
         session: 数据库会话
@@ -587,9 +533,7 @@ async def get_purchase_order_detail(
         raise ValueError(f"Purchase order not found: {po_id}")
 
     # 获取商品项
-    items_result = await session.execute(
-        select(PurchaseOrderItem).where(PurchaseOrderItem.purchase_order_id == po.id)
-    )
+    items_result = await session.execute(select(PurchaseOrderItem).where(PurchaseOrderItem.purchase_order_id == po.id))
     items = items_result.scalars().all()
 
     return {
@@ -618,9 +562,8 @@ async def get_purchase_order_detail(
             }
             for item in items
         ],
-        "allowed_next_statuses": PO_STATUS_FLOW.get(po.status, []),
+        "allowed_next_statuses": sorted(_canonical_next_statuses(po.status)),
     }
-
 
 
 async def confirm_purchase_order_cost(
@@ -629,99 +572,37 @@ async def confirm_purchase_order_cost(
     confirmed_by: str,
     workspace_id: UUID | None = None,
     trace_id: str | None = None,
+    confirmer_user_id: str | None = None,
 ) -> PurchaseOrder:
+    """确认采购单成本: pending_cost_confirmation -> draft (M4.2.0-R3 收口).
+
+    Thin delegation to the single canonical implementation in
+    ``supply_chain.confirm_purchase_order_cost``, which enforces:
+
+    R3.1 cost-truth closure — every line item's unit_cost is written back from
+    the authoritative ``product_cost`` row, line_total/subtotal/total are
+    recomputed, a cost snapshot is captured, and ANY item lacking a real
+    ProductCost rolls back the WHOLE confirmation (a PO can never be marked
+    cost_confirmed while any line still carries a fallback/estimate residue).
+
+    R3.2 permission + state machine — the confirmer must be an authenticated
+    operator/admin (``confirmer_user_id`` verified against the users table; an
+    AI Agent / automation has no user record and is structurally denied). The
+    status change goes through the single canonical state machine
+    (pending_cost_confirmation -> draft, never directly to approved/ordered),
+    emits one auditable ``purchase_order_cost_confirmed`` event carrying the
+    confirmer identity + cost source + cost snapshot + trace_id, and is
+    idempotent (a repeat confirmation returns the PO as-is, emitting nothing).
+
+    ``confirmed_by`` is the display label recorded on the PO (cost_confirmed_by);
+    ``confirmer_user_id`` is the verified principal used for authorization.
     """
-    确认采购单成本，将 pending_cost_confirmation 转为 draft。
-
-    M0-M4.1: 成本缺失时采购单进入 pending_cost_confirmation，
-    只有在真实 ProductCost 补齐后才能确认成本并进入审批流程。
-
-    Rules:
-    - 只能从 pending_cost_confirmation 转为 draft
-    - 确认后 cost_confirmed=True, cost_source="product_cost"
-    - 重复确认不会产生重复采购单（幂等）
-    - confirmed_by 来自认证上下文，不得由客户端传入绕过
-    """
-    if workspace_id is None:
-        workspace_id = DEFAULT_WORKSPACE_ID
-
-    result = await session.execute(
-        select(PurchaseOrder).where(
-            PurchaseOrder.id == po_id,
-            PurchaseOrder.workspace_id == workspace_id,
-        )
+    resolved_workspace = workspace_id if workspace_id is not None else DEFAULT_WORKSPACE_ID
+    return await supply_chain.confirm_purchase_order_cost(
+        session,
+        po_id,
+        confirmed_by,
+        workspace_id=resolved_workspace,
+        trace_id=trace_id,
+        confirmer_user_id=confirmer_user_id,
     )
-    po = result.scalar_one_or_none()
-    if po is None:
-        raise ValueError(f"Purchase order not found: {po_id}")
-
-    # Idempotent: if already confirmed, return as-is
-    if po.cost_confirmed and po.status == "draft":
-        logger.info("PO %s already cost-confirmed, idempotent return", po.po_number)
-        return po
-
-    # Only pending_cost_confirmation can be confirmed
-    if po.status != "pending_cost_confirmation":
-        raise ValueError(
-            f"Cannot confirm cost for PO {po.po_number}: status is '{po.status}', "
-            f"expected 'pending_cost_confirmation'"
-        )
-
-    # Verify all items now have real ProductCost
-    items_result = await session.execute(
-        select(PurchaseOrderItem).where(PurchaseOrderItem.purchase_order_id == po.id)
-    )
-    items = items_result.scalars().all()
-
-    missing_cost_items = []
-    for item in items:
-        if item.product_id:
-            cost_result = await session.execute(
-                select(ProductCost).where(
-                    ProductCost.product_id == item.product_id,
-                    ProductCost.workspace_id == workspace_id,
-                )
-            )
-            cost = cost_result.scalar_one_or_none()
-            if not cost or cost.purchase_cost <= 0:
-                missing_cost_items.append(item.sku)
-        elif item.sku:
-            product_result = await session.execute(
-                select(Product).where(
-                    Product.sku == item.sku,
-                    Product.workspace_id == workspace_id,
-                )
-            )
-            product = product_result.scalar_one_or_none()
-            if not product or not product.cost or product.cost.purchase_cost <= 0:
-                missing_cost_items.append(item.sku)
-        else:
-            missing_cost_items.append(f"item-{item.id}")
-
-    if missing_cost_items:
-        raise ValueError(
-            f"Cannot confirm cost for PO {po.po_number}: still missing real ProductCost "
-            f"for items: {', '.join(missing_cost_items[:5])}"
-        )
-
-    # Confirm cost and transition to draft
-    po.status = "draft"
-    po.cost_confirmed = True
-    po.cost_source = "product_cost"
-    po.cost_confidence = Decimal("0.95")
-    po.cost_confirmed_at = datetime.utcnow()
-    po.cost_confirmed_by = confirmed_by
-    po.cost_block_reason = None
-
-    if po.notes:
-        po.notes += f"\n[cost_confirmed] by={confirmed_by} at={po.cost_confirmed_at.isoformat()}"
-    else:
-        po.notes = f"[cost_confirmed] by={confirmed_by} at={po.cost_confirmed_at.isoformat()}"
-
-    await session.flush()
-
-    logger.info(
-        "PO cost confirmed: po=%s, by=%s, trace=%s",
-        po.po_number, confirmed_by, trace_id,
-    )
-    return po

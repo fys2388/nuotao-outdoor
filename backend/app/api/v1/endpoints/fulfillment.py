@@ -12,12 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.endpoints.auth import require_role
 from app.core.database import get_db
+from app.core.tracing import get_trace_id
+from app.core.workspace import get_workspace_id
+from app.schemas.user import UserResponse
+from app.services import supply_chain
 from app.services.fulfillment_service import (
     add_tracking_to_order,
     get_purchase_order_detail,
     get_purchase_orders,
-    update_purchase_order_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fulfillment", tags=["fulfillment"])
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+WorkspaceId = Annotated[UUID, Depends(get_workspace_id)]
+# M4.2.0-R1: PO status changes are a procurement-authority action. Require an
+# authenticated operator/admin so the legacy fulfilment endpoint can no longer be
+# hit unauthenticated (it previously allowed setting `approved` with no identity).
+FulfilmentOperator = Annotated[UserResponse, Depends(require_role("operator"))]
 
 
 # ============================================
@@ -111,29 +120,44 @@ async def get_purchase_order(
 
 @router.patch(
     "/purchase-orders/{po_id}/status",
-    summary="更新采购单状态",
+    summary="更新采购单状态（统一状态机代理）",
 )
 async def update_po_status(
     po_id: str,
     request: UpdatePOStatusRequest,
     db: DbSession,
+    workspace_id: WorkspaceId,
+    operator: FulfilmentOperator,
 ) -> dict[str, Any]:
     """
-    更新采购单状态
+    更新采购单状态（M4.2.0-R1 收口）。
 
-    状态流转：
-    - draft -> approved / cancelled
+    此端点此前用独立状态机（PO_STATUS_FLOW）直改状态、可设 approved 且无鉴权，
+    是绕过统一审批的通道。现改为代理到 supply_chain 唯一规范状态机
+    （PO_TRANSITIONS），记录操作者身份与 trace_id，并显式拒绝 approved —— 审批
+    只能走 POST /purchase-orders/{po_id}/approve（记录审批人身份/角色/时间）。
+
+    RBAC：operator+。普通用户/未登录一律 401/403。
+
+    状态流转（统一后）：
+    - draft -> approved(仅审批端点) / cancelled / pending_cost_confirmation
     - approved -> ordered / cancelled
     - ordered -> partial_received / received / shipped
-    - received -> shipped
-    - shipped -> delivered / completed
+    - received -> shipped；shipped -> delivered / completed
     """
+    operator_id = getattr(operator, "email", None) or str(getattr(operator, "id", ""))
+    operator_role = getattr(operator, "role", None)
     try:
         po_uuid = UUID(po_id)
-        po = await update_purchase_order_status(
+        po = await supply_chain.transition_purchase_order_status(
             session=db,
+            workspace_id=workspace_id,
             po_id=po_uuid,
-            new_status=request.status,
+            target=request.status,
+            operator_id=operator_id,
+            caller_role=operator_role,
+            caller_user_id=str(getattr(operator, "id", "")),
+            trace_id=get_trace_id(),
         )
         await db.commit()
         return {
@@ -141,8 +165,14 @@ async def update_po_status(
             "po_id": str(po.id),
             "po_number": po.po_number,
             "status": po.status,
+            "updated_by": operator_id,
             "message": f"Purchase order status updated to {request.status}",
         }
+    except supply_chain.SupplyChainError as e:
+        await db.rollback()
+        # approved 走专用审批端点；其余非法跳转 fail-closed。
+        code = status.HTTP_409_CONFLICT if "approved" in str(e) else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=str(e))
     except ValueError as e:
         await db.rollback()
         raise HTTPException(

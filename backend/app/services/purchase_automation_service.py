@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
+from app.services import event_service
 
 logger = logging.getLogger(__name__)
 
@@ -292,13 +293,14 @@ async def auto_generate_purchase_order(
     total_amount = unit_cost * Decimal(str(quantity))
     requires_approval = total_amount > rules["require_approval_above"]
 
-    # 确定采购单状态
+    # M4.2.0 T0.2 governance closure:
+    # 自动生成的采购单一律不得直接进入 approved。无论金额高低，approved 只能由
+    # 受权限保护的显式审批操作（supply_chain.approve_purchase_order）产生。
+    # 高价值单据标记 pending_approval 进入审批队列；低价值单据进 draft，仍需人工确认后才可审批。
+    # 这样封堵了「低值自动批准」这一绕过审批的路径（AI/自动化不得自行授权采购）。
     if requires_approval:
         po_status = "pending_approval"
         auto_approved = False
-    elif rules["auto_approve_low_value"]:
-        po_status = "approved"
-        auto_approved = True
     else:
         po_status = "draft"
         auto_approved = False
@@ -335,6 +337,25 @@ async def auto_generate_purchase_order(
     )
     session.add(po_item)
     await session.flush()
+
+    # 审计事件：自动化创建采购单必须落 event_service（trace_id 关联），供治理审计追溯。
+    await event_service.create_event(
+        session,
+        workspace_id=workspace_id,
+        event_type="supply.purchase_order_auto_generated",
+        entity_type="purchase_order",
+        entity_id=str(purchase_order.id),
+        payload={
+            "po_number": po_number,
+            "status": po_status,
+            "total_amount": str(total_amount),
+            "requires_approval": requires_approval,
+            "anomaly_count": len(anomalies),
+            "note": "auto-generated; approved state requires explicit operator approval",
+        },
+        trace_id=trace_id,
+        commit=False,
+    )
 
     logger.info(
         "Purchase order auto-generated: id=%s, po_number=%s, product=%s, quantity=%d, amount=%.2f, status=%s, auto_approved=%s, anomalies=%d",
