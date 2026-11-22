@@ -133,7 +133,9 @@ async def _seed_baseline_rows(url: str) -> None:
         (
             "supplier_profiles",
             _SUPPLIER_BASELINE_COLS,
-            (ids["supplier"], WORKSPACE, [], "low"),
+            # certifications is an AI_JSON column: asyncpg cannot encode a raw
+            # Python list, so pass the serialized JSON array text.
+            (ids["supplier"], WORKSPACE, "[]", "low"),
         ),
         (
             "product_cost",
