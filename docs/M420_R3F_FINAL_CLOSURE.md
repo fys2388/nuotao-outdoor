@@ -52,9 +52,10 @@ R3-Final 是复审提出的补充收尾（3 个缺口 + 1 项文档修复）。�
 
 ## 验证
 
-- `tests/test_r3f_financial_audit.py`：6 passed。
-- 回归 `test_cost_blocker + governance_t02 + supply_chain + r1_fulfilment`：50 passed（R3-F1/F2 改动未破坏现有功能）。
-- ruff 阻塞门禁（F821/F811/E9/F）全绿；`py_compile` 通过。
+- `tests/test_r3f_financial_audit.py`：**9 passed**（经 R3-Final.1/.2 追加，见下）。
+- 回归 `test_cost_blocker + governance_t02 + supply_chain + r1_fulfilment`：共 59 passed（R3-F1/F2 改动未破坏现有功能）。
+- ruff 阻塞门禁（F821/F811/E9/F + RUF002/RUF059）全绿；`py_compile` 通过。
+- CI（commit 0780aa6）全部 pass，含 PostgreSQL 双连接并发 job（真并发 3 passed）。
 
 ## 明确禁止（遵守）
 
@@ -63,4 +64,70 @@ R3-Final 是复审提出的补充收尾（3 个缺口 + 1 项文档修复）。�
 ## 关联
 
 - PR #26（保持 Open）
-- 前序：commit b886c64（R3 六项）
+- 前序：commit b886c64（R3 六项）、350992e（R2 审计文档校正）
+
+---
+
+# R3-Final.1 / R3-Final.2 — 复审窄范围补修
+
+Owner（ChatGPT）对 R3-Final 首轮提交 `4004239` 独立复审后，点名 4 个缺口并授权窄范围
+补修（不扩大采购治理范围）。分两个独立 commit 落地，全部保留历史、不合并 PR #26。
+
+## commit ee38dad — R3-F1 SKU 兜底漏洞（P0）
+
+`_resolve_real_item_cost` 存在身份绕过：当 `product_id` 有值但解析不到对应 Product 时
+（`product_by_id=None`），旧实现会跳过一致性护栏、继续走 SKU 兜底，从而取到**另一个产品
+的成本**。
+
+修复（P0，成本身份权威化）：
+- 只要 `item.product_id` 非空，就必须由它解析出当前 workspace 中真实存在的 Product 且其
+  ProductCost 有效；否则 **fail-closed 返回 None**，绝不回落到 SKU。
+- SKU 兜底路径**仅在完全没有 product_id 时**启用。
+- `product_id` 与 `sku` 同时存在时要求 `product.sku == item.sku`，不一致也拒绝。
+
+## commit 0780aa6 — R3-Final.2 四项收尾
+
+### 缺口 2 — R3-F2 履约尾状态 actor_role 透传（P1）
+`transition_purchase_order_status` 的 shipped/delivered/completed 分支调
+`_transition_purchase_order` 时漏传 `caller_role`，导致这些事件 `actor_role` 为 None。
+已补 `caller_role=caller_role`（该函数顶部已 `caller_role = verified_actor_role` 即 DB
+验证角色）。同步把 `_validate_approver` 返回类型注解由 `-> str` 更正为 `-> tuple[str, str]`。
+
+### 缺口 3 — R3-F3 非零运费 + 完整成本快照断言（P1）
+`test_nonzero_shipping_and_full_audit_snapshot` 加强：
+- 运费用 **12.34**，断言 `subtotal=18.00 / shipping=12.34 / total=30.34` 精确；
+- cost-confirmed 事件断言 PO 级 `from_status` / `to_status` / `actor_user_id` / `actor_role` / `trace_id`；
+- `cost_snapshot` 逐 SKU 断言全字段，**含 `product_cost_valid_from`**。
+
+### 缺口 1 回归测试 — 幽灵 product_id + 有效 SKU（P0）
+新增 `test_product_id_without_product_rejects_no_sku_fallback`：建有效 PO 后把 item 的
+`product_id` 改成不存在的幽灵 id（保留有效 sku），断言成本确认失败、`cost_confirmed`
+仍为 False、状态停在 `pending_cost_confirmation`——证明 ee38dad 的 SKU 兜底修复生效。
+
+### 缺口 4 — R3-F4 mojibake 全文清零（P1）
+清理 `fulfillment_service.py` 剩余 3 处乱码（`榛樿工作空间`→`默认工作空间`、
+`浼樺厛绾э細`→`优先级:`、`缁熻总数`→`统计总数`），全文乱码扫描归零，通过 RUF002 检查。
+
+## R3-F3 测试清单（最终 9 个，读 DB + event_log，不只断言返回值）
+
+1. 多 SKU 精确金额（逐 SKU 从 ProductCost 重算）
+2. 币种不一致 → fail-closed，金额/状态不变、零事件
+3. product_id/SKU 不一致 → 整单回滚
+4. 幂等单事件（重复确认恰一条成本确认事件）
+5. 全链路 actor_role 非空且匹配 DB 角色（cost-confirm/ordered/partial_received/received/created）
+6. create/update 事件 actor_role 非空
+7. **非零运费 12.34 + 完整成本快照断言**（PO 级 + 逐 SKU 含 valid_from）
+8. **取消操作 actor_role**（cancelled 事件 = operator）
+9. **幽灵 product_id fail-closed**（不触发 SKU 兜底，成本确认失败）
+
+## R3-Final.1/.2 验证
+
+- `tests/test_r3f_financial_audit.py`：9 passed。
+- 采购治理回归共 59 passed。
+- ruff 阻塞门禁全绿；`py_compile` 通过。
+- CI（commit 0780aa6）全部 pass，含 PostgreSQL 双连接并发（真并发 3 passed）。
+
+## 明确禁止（持续遵守）
+
+未自动采购/审批/下单、未接真实支付、未部署生产、未改全局硬规则、未引入自动汇率、
+未扩展 M4.2.1、未合并 PR #26。
