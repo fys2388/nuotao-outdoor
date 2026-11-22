@@ -90,13 +90,23 @@ jobs:
             if pg_isready -h localhost -p 5432 -U nuotao; then echo "postgres ready"; break; fi
             sleep 2
           done
+      - name: Provision isolated migration database
+        # The migration round-trip must NOT share a database with the concurrency
+        # tests above: both create the full schema from alembic base, so sharing
+        # one DB makes the second run hit DuplicateTableError. Give the migration
+        # test its own throwaway database.
+        run: |
+          PGPASSWORD=nuotao psql -h localhost -p 5432 -U nuotao -d nuotao_test \
+            -c "CREATE DATABASE nuotao_mig OWNER nuotao;"
       - name: Dual-connection concurrent approval tests (real row locks)
         run: pytest tests/test_concurrency_approval_postgres.py -q --no-header -p no:warnings
       # M4.2.0 P0-2: the SQLite job cannot validate real migrations either. Run the
-      # full Alembic upgrade/downgrade round-trip for 0090/0091 against this same
-      # real PostgreSQL service. The test skips unless TEST_DATABASE_URL points at
-      # Postgres, so (like the concurrency test above) it only truly runs here.
+      # full Alembic upgrade/downgrade round-trip for 0090/0091 against a dedicated
+      # migration database (nuotao_mig) so it never collides with the concurrency
+      # tests sharing the service. Skips unless TEST_DATABASE_URL points at Postgres.
       - name: Alembic migration upgrade/downgrade round-trip (real PostgreSQL)
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://nuotao:nuotao@localhost:5432/nuotao_mig
         run: pytest tests/test_m420_t05_pg_migration.py -q --no-header -p no:warnings
 
   frontend:
