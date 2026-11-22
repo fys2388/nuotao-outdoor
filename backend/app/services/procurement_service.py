@@ -6,23 +6,26 @@ Generates procurement suggestions based on product metrics:
 - Selection score
 - Listing status
 """
+
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product, ProductCost
 from app.models.product_intelligence import ProductScore
 from app.models.supply_chain import PurchaseOrder, PurchaseOrderItem
 from app.services import event_service
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProcurementSuggestion:
     """A single procurement suggestion."""
+
     product_id: str
     sku: str
     name: str
@@ -38,8 +42,8 @@ class ProcurementSuggestion:
     priority: str  # high | medium | low
     reason: str
     suggested_quantity: int
-    unit_cost: Decimal
-    total_cost: Decimal
+    unit_cost: Decimal | None
+    total_cost: Decimal | None
     profit_margin: Decimal | None
     selection_score: Decimal | None
     current_stock: int
@@ -100,11 +104,36 @@ async def generate_procurement_suggestions(
         score = score_result.scalars().first()
 
         # Calculate metrics
-        unit_cost = cost.total_landed_cost if cost else Decimal("0")
-        total_cost = unit_cost * Decimal("10")  # Default suggest 10 units
-        profit_margin = None
+        # Distinguish a real zero cost from a MISSING cost record: when no
+        # ProductCost row exists, landed cost is unknown — not zero. Keep
+        # unit_cost/total_cost None so an unknown cost never serializes as a
+        # real 0 (AGENTS.md §1.2: preserve unknown as unknown).
+        has_cost_record = cost is not None
+        unit_cost: Decimal | None = cost.total_landed_cost if has_cost_record else None
+        total_cost: Decimal | None = unit_cost * Decimal("10") if has_cost_record else None  # Default suggest 10 units
         selection_score = score.total if score else None
-        current_stock = product.meta.get("stock", 0) if isinstance(product.meta, dict) else 0
+        meta = product.meta if isinstance(product.meta, dict) else {}
+        current_stock = meta.get("stock", 0)
+
+        # T0.4 fix: profit_margin was previously assigned None and never computed,
+        # so the high/medium-margin priority branches below were dead code. The
+        # authoritative selling price lives in product.meta ("price", falling back
+        # to "sale_price") — Product has no dedicated price column. Compute the
+        # real gross margin = (price - landed_cost) / price.
+        # Guard: only compute when there is a valid positive selling price AND a
+        # real cost record. A missing ProductCost row means landed cost is
+        # unknown — NOT zero — so margin degrades honestly to None instead of
+        # fabricating a 100% margin (AGENTS.md §1.2: no fabricated data; missing
+        # cost must not be a high-priority procurement signal).
+        profit_margin: Decimal | None = None
+        raw_price = meta.get("price") or meta.get("sale_price")
+        if raw_price is not None and has_cost_record:
+            try:
+                selling_price = Decimal(str(raw_price))
+            except (ArithmeticError, ValueError):
+                selling_price = Decimal("0")
+            if selling_price > 0:
+                profit_margin = (selling_price - unit_cost) / selling_price
 
         # Determine priority and reason
         priority = "low"
@@ -143,25 +172,29 @@ async def generate_procurement_suggestions(
             suggested_quantity = max(suggested_quantity, 30)
 
         # Calculate total cost
-        total_cost = unit_cost * Decimal(str(suggested_quantity))
+        # Unknown cost stays unknown: never fabricate a total from a missing
+        # unit cost.
+        total_cost = unit_cost * Decimal(str(suggested_quantity)) if unit_cost is not None else None
 
-        suggestions.append(ProcurementSuggestion(
-            product_id=str(product.id),
-            sku=product.sku,
-            name=product.name,
-            category=product.category,
-            source_url=product.source_url,
-            priority=priority,
-            reason=reason,
-            suggested_quantity=suggested_quantity,
-            unit_cost=unit_cost,
-            total_cost=total_cost,
-            profit_margin=profit_margin,
-            selection_score=selection_score,
-            current_stock=current_stock,
-            status=product.status,
-            candidate_status=product.candidate_status,
-        ))
+        suggestions.append(
+            ProcurementSuggestion(
+                product_id=str(product.id),
+                sku=product.sku,
+                name=product.name,
+                category=product.category,
+                source_url=product.source_url,
+                priority=priority,
+                reason=reason,
+                suggested_quantity=suggested_quantity,
+                unit_cost=unit_cost,
+                total_cost=total_cost,
+                profit_margin=profit_margin,
+                selection_score=selection_score,
+                current_stock=current_stock,
+                status=product.status,
+                candidate_status=product.candidate_status,
+            )
+        )
 
     # Sort by priority (high > medium > low)
     priority_order = {"high": 0, "medium": 1, "low": 2}
@@ -175,7 +208,12 @@ async def generate_procurement_suggestions(
     medium_priority = sum(1 for s in suggestions if s.priority == "medium")
     low_priority = sum(1 for s in suggestions if s.priority == "low")
     total_units = sum(s.suggested_quantity for s in suggestions)
-    total_estimated_cost = sum(s.total_cost for s in suggestions)
+    # Unknown-cost suggestions (total_cost None) contribute nothing to the
+    # estimate rather than silently reading as 0 cost.
+    total_estimated_cost = sum(
+        (s.total_cost for s in suggestions if s.total_cost is not None),
+        Decimal("0"),
+    )
 
     return {
         "suggestions": [
@@ -188,8 +226,8 @@ async def generate_procurement_suggestions(
                 "priority": s.priority,
                 "reason": s.reason,
                 "suggested_quantity": s.suggested_quantity,
-                "unit_cost": str(s.unit_cost),
-                "total_cost": str(s.total_cost),
+                "unit_cost": str(s.unit_cost) if s.unit_cost is not None else None,
+                "total_cost": str(s.total_cost) if s.total_cost is not None else None,
                 "profit_margin": str(s.profit_margin) if s.profit_margin else None,
                 "selection_score": str(s.selection_score) if s.selection_score else None,
                 "current_stock": s.current_stock,
@@ -215,21 +253,21 @@ async def create_purchase_order(
     quantity: int,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """创建采购单（真实写入 purchase_orders + purchase_order_items 表）。
+    """创建采购单(真实写入 purchase_orders + purchase_order_items 表).
 
     Args:
         session: 数据库会话
         product_id: 产品 ID
         quantity: 采购数量
-        params: 额外参数（supplier_id, unit_cost, workspace_id 等）
+        params: 额外参数(supplier_id, unit_cost, workspace_id 等)
 
     Returns:
         采购单信息字典
     """
     params = params or {}
 
-    # id 列是 UUID 类型：调用方（execution_router）常以字符串传入，需显式转换，
-    # 否则 SQLAlchemy 绑定字符串到 UUID 列会抛 'str' object has no attribute 'hex'。
+    # id 列是 UUID 类型:调用方(execution_router)常以字符串传入,需显式转换,
+    # 否则 SQLAlchemy 绑定字符串到 UUID 列会抛 'str' object has no attribute 'hex'.
     def _to_uuid(value: Any) -> UUID | None:
         if value is None or isinstance(value, UUID):
             return value
@@ -243,9 +281,7 @@ async def create_purchase_order(
         return {"success": False, "error": f"产品 {product_id} 不存在"}
 
     # 查询产品信息
-    product_result = await session.execute(
-        select(Product).where(Product.id == product_uuid)
-    )
+    product_result = await session.execute(select(Product).where(Product.id == product_uuid))
     product = product_result.scalar_one_or_none()
     if not product:
         return {"success": False, "error": f"产品 {product_id} 不存在"}
@@ -265,9 +301,9 @@ async def create_purchase_order(
     total = subtotal + shipping_cost
 
     # 创建采购单
-    # M4.2.0 T0.2 governance: Agent 创建的采购单一律进入 draft，绝不直接 approved。
-    # approved 只能由受权限保护的显式审批操作（supply_chain.approve_purchase_order）
-    # 产生；AI Agent 不得作为自行批准的授权主体。
+    # M4.2.0 T0.2 governance: Agent 创建的采购单一律进入 draft,绝不直接 approved.
+    # approved 只能由受权限保护的显式审批操作(supply_chain.approve_purchase_order)
+    # 产生;AI Agent 不得作为自行批准的授权主体.
     po_id = uuid.uuid4()
     po = PurchaseOrder(
         id=po_id,
@@ -301,8 +337,8 @@ async def create_purchase_order(
 
     await session.flush()
 
-    # 审计事件：Agent 自动创建采购单必须落 event_service（trace_id 关联），
-    # 且明确标注状态为 draft，供采购治理审计追溯（不得静默写入）。
+    # 审计事件:Agent 自动创建采购单必须落 event_service(trace_id 关联),
+    # 且明确标注状态为 draft,供采购治理审计追溯(不得静默写入).
     await event_service.create_event(
         session,
         workspace_id=workspace_uuid,
