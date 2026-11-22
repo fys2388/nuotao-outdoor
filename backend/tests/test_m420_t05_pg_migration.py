@@ -200,7 +200,9 @@ async def _assert_new_columns_null(url: str, checks, ids: dict) -> None:
             )
             sup = baseline.first()
             assert sup is not None, "supplier_profiles seeded row missing"
-            assert sup[0] == "[]" and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
+            # certifications is an AI_JSON column, so it round-trips back to a
+            # Python list (not the "[]" text we inserted).
+            assert sup[0] == [] and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
     finally:
         await engine.dispose()
 
@@ -218,7 +220,7 @@ async def _assert_rows_exist(url: str, ids: dict) -> None:
                 )
             ).first()
             assert sup is not None, "supplier_profiles row lost after downgrade"
-            assert sup[0] == "[]" and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
+            assert sup[0] == [] and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
 
             for table, col in (
                 ("product_cost", "currency"),
