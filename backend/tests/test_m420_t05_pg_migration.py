@@ -117,17 +117,19 @@ def _make_alembic_config() -> Config:
     return cfg
 
 
-async def _seed_baseline_rows(url: str) -> None:
+async def _seed_baseline_rows(url: str) -> dict:
     """Insert one genuine pre-migration business row into each affected table.
 
     Only 0089-era columns are set; the workspace_id is present so the rows are
-    real workspace-scoped records, not schema-only stubs.
+    real workspace-scoped records, not schema-only stubs. Returns a mapping of
+    table name -> inserted row id so each migration stage can assert the exact
+    seeded rows survive (exist + baseline fields unchanged + new columns NULL).
     """
     ids = {
-        "supplier": uuid4(),
+        "supplier_profiles": uuid4(),
         "product_cost": uuid4(),
-        "inventory": uuid4(),
-        "shipment": uuid4(),
+        "inventory_snapshots": uuid4(),
+        "shipment_records": uuid4(),
     }
     seeds = (
         (
@@ -135,7 +137,7 @@ async def _seed_baseline_rows(url: str) -> None:
             _SUPPLIER_BASELINE_COLS,
             # certifications is an AI_JSON column: asyncpg cannot encode a raw
             # Python list, so pass the serialized JSON array text.
-            (ids["supplier"], WORKSPACE, "[]", "low"),
+            (ids["supplier_profiles"], WORKSPACE, "[]", "low"),
         ),
         (
             "product_cost",
@@ -145,12 +147,12 @@ async def _seed_baseline_rows(url: str) -> None:
         (
             "inventory_snapshots",
             _INVENTORY_BASELINE_COLS,
-            (ids["inventory"], WORKSPACE, "cn"),
+            (ids["inventory_snapshots"], WORKSPACE, "cn"),
         ),
         (
             "shipment_records",
             _SHIPMENT_BASELINE_COLS,
-            (ids["shipment"], WORKSPACE, "SF"),
+            (ids["shipment_records"], WORKSPACE, "SF"),
         ),
     )
     engine = create_async_engine(url, poolclass=NullPool)
@@ -165,22 +167,70 @@ async def _seed_baseline_rows(url: str) -> None:
         await engine.dispose()
 
 
-async def _assert_new_columns_null(url: str, checks) -> None:
-    """Every pre-existing business row must keep the new columns NULL.
+async def _assert_new_columns_null(url: str, checks, ids: dict) -> None:
+    """For the seeded rows, assert (a) each row still exists, (b) its baseline
+    business fields are unchanged, and (c) every new column is still NULL.
 
-    Guards against a migration backfilling fabricated risk scores / cost
-    sources / reorder points onto historical data. ``checks`` is passed per
-    stage because 0091's columns don't exist until that migration runs.
+    Binding to the seeded row IDs (rather than querying the whole table) makes
+    the "pre-existing rows keep new columns NULL" guarantee tamper-evident: if a
+    seeded row were lost, the per-ID SELECT would return nothing and the test
+    would fail instead of silently passing on an empty result.
     """
     engine = create_async_engine(url, poolclass=NullPool)
     try:
-        async with engine.connect() as conn:
+        async with engine.begin() as conn:
             for table, column in checks:
-                rows = await conn.execute(text(f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"))
-                leaked = rows.scalars().all()
-                assert not leaked, (
-                    f"{table}.{column}: migration fabricated non-NULL values on " f"pre-existing rows: {leaked}"
+                row_id = ids[table]
+                row = (
+                    await conn.execute(
+                        text(f"SELECT {column} FROM {table} WHERE id = :rid"),
+                        {"rid": row_id},
+                    )
+                ).first()
+                assert row is not None, f"{table} id={row_id}: seeded row missing during migration"
+                assert row[0] is None, (
+                    f"{table}.{column}: migration fabricated non-NULL value "
+                    f"on pre-existing row id={row_id}: {row[0]!r}"
                 )
+            # Baseline business fields must survive the migration untouched.
+            baseline = await conn.execute(
+                text("SELECT certifications, risk_level FROM supplier_profiles " "WHERE id = :rid"),
+                {"rid": ids["supplier_profiles"]},
+            )
+            sup = baseline.first()
+            assert sup is not None, "supplier_profiles seeded row missing"
+            assert sup[0] == "[]" and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
+    finally:
+        await engine.dispose()
+
+
+async def _assert_rows_exist(url: str, ids: dict) -> None:
+    """After downgrade, the seeded business rows must still be present with
+    their baseline fields intact (migrations must not lose pre-existing data)."""
+    engine = create_async_engine(url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            sup = (
+                await conn.execute(
+                    text("SELECT certifications, risk_level FROM supplier_profiles " "WHERE id = :rid"),
+                    {"rid": ids["supplier_profiles"]},
+                )
+            ).first()
+            assert sup is not None, "supplier_profiles row lost after downgrade"
+            assert sup[0] == "[]" and sup[1] == "low", f"supplier baseline mutated: {sup!r}"
+
+            for table, col in (
+                ("product_cost", "currency"),
+                ("inventory_snapshots", "location"),
+                ("shipment_records", "carrier"),
+            ):
+                row = (
+                    await conn.execute(
+                        text(f"SELECT {col} FROM {table} WHERE id = :rid"),
+                        {"rid": ids[table]},
+                    )
+                ).first()
+                assert row is not None, f"{table} row id={ids[table]} lost after downgrade"
     finally:
         await engine.dispose()
 
@@ -243,7 +293,7 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     # --- upgrade to the 0089 baseline and seed genuine pre-migration rows ---
     command.upgrade(cfg, BASELINE)
     assert asyncio.run(_current_revision(url)) == BASELINE
-    asyncio.run(_seed_baseline_rows(url))
+    seeded_ids = asyncio.run(_seed_baseline_rows(url))
 
     # --- upgrade 0090: supplier risk score + product-cost provenance ---
     command.upgrade(cfg, REV_SUPPLIER_RISK)
@@ -252,7 +302,7 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     assert {"risk_score", "risk_score_model_version", "risk_score_calibrated_at"} <= cols
     pc_cols = asyncio.run(_get_columns(url, "product_cost"))
     assert {"source", "confidence"} <= pc_cols
-    asyncio.run(_assert_new_columns_null(url, _M420_SUPPLIER_RISK_COLUMNS))
+    asyncio.run(_assert_new_columns_null(url, _M420_SUPPLIER_RISK_COLUMNS, seeded_ids))
 
     # --- upgrade 0091: reorder point + shipment reconciliation ---
     command.upgrade(cfg, REV_INVENTORY_REORDER)
@@ -261,7 +311,13 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     assert "reorder_point" in inv_cols
     ship_cols = asyncio.run(_get_columns(url, "shipment_records"))
     assert {"promised_delivery", "actual_cost", "actual_cost_currency"} <= ship_cols
-    asyncio.run(_assert_new_columns_null(url, _M420_SUPPLIER_RISK_COLUMNS + _M420_INVENTORY_REORDER_COLUMNS))
+    asyncio.run(
+        _assert_new_columns_null(
+            url,
+            _M420_SUPPLIER_RISK_COLUMNS + _M420_INVENTORY_REORDER_COLUMNS,
+            seeded_ids,
+        )
+    )
 
     # --- downgrade 0090: the 0091 columns must be removed ---
     command.downgrade(cfg, REV_SUPPLIER_RISK)
@@ -281,5 +337,9 @@ def test_m420_t05_pg_migration_roundtrip(pg_migration_cfg):
     pc_cols = asyncio.run(_get_columns(url, "product_cost"))
     assert "source" not in pc_cols
     assert "confidence" not in pc_cols
+
+    # Downgrade must not lose the pre-existing business data: the seeded rows
+    # must still exist with their baseline field values intact.
+    asyncio.run(_assert_rows_exist(url, seeded_ids))
 
     asyncio.run(_cleanup_tables(url))
