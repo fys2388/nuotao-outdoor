@@ -163,3 +163,9 @@ R3 之后，`cost_confirmed=true` 的**可信含义**是一个四要素复合事
 3. **`cost_confidence = 0.95` 是约定常量**：确认成功后写入的置信度是代码约定的固定值，非统计推导。
 4. **SQLite 上无物理行锁竞态**：confirm 使用 `for_update=True`，在 Postgres 上是 `SELECT..FOR UPDATE`，在 SQLite 上是 no-op。并发安全由 Postgres 行锁保证，其证据依赖 `postgres-concurrency` CI job 实跑。
 5. **本报告未覆盖并发 CI 基础设施**：Postgres 并发 job 的设计属于另一份 `M420_R3_POSTGRES_CI_EVIDENCE.md`，本报告不重复。
+
+## 补充收尾（R3-Final）
+
+复审通过后另有补充整改，见 `M420_R3F_FINAL_CLOSURE.md`：成本来源升级为可审计结构
+（含 product_cost_id/version/valid_from/currency）、币种一致性 fail-closed（不引入自动汇率）、
+product_id/SKU 一致性护栏、cost_snapshot 补全来源字段。本报告描述 R3.1 主整改。

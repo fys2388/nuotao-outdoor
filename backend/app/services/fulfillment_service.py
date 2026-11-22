@@ -1,6 +1,6 @@
 """
-閲囪喘/鍙戣揣鏈嶅姟
-璁㈠崟鏀粯鎴愬姛鍚庤嚜鍔ㄧ敓鎴愰噰璐崟锛屾敮鎸佺墿娴佸彿鍥炲~鍜屽彂璐х姸鎬佺鐞?
+采购/发货服务
+订单支付成功后自动生成采购单, 支持物流号回填和发货状态管理
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from app.services import supply_chain
 
 logger = logging.getLogger(__name__)
 
-# 榛樿宸ヤ綔绌洪棿 ID
+# 榛樿工作空间 ID
 DEFAULT_WORKSPACE_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
@@ -40,9 +40,9 @@ def _canonical_next_statuses(status: str) -> set[str]:
     return set(supply_chain.PO_TRANSITIONS.get(status, set()))
 
 
-# 閲囪喘鍗曠姸鎬佹祦杞?
+# 采购单状态流转
 def _safe_decimal(value: Any, default: float = 0.0) -> Decimal:
-    """瀹夊叏杞崲涓?Decimal"""
+    """安全转换为 Decimal"""
     try:
         if value is None or value == "":
             return Decimal(str(default))
@@ -52,7 +52,7 @@ def _safe_decimal(value: Any, default: float = 0.0) -> Decimal:
 
 
 def generate_po_number(order_id: str) -> str:
-    """鐢熸垚閲囪喘鍗曞彿"""
+    """生成采购单号"""
     timestamp = int(time.time())
     return f"PO-{order_id}-{timestamp}"
 
@@ -63,12 +63,12 @@ async def _get_product_cost(
     workspace_id: UUID,
 ) -> tuple[Decimal, Decimal]:
     """
-    鑾峰彇璁㈠崟鍟嗗搧鐨勯噰璐垚鏈拰鍥藉唴杩愯垂銆?
+    获取订单商品的采购成本和国内运费.
 
     浼樺厛绾э細
-    1. 閫氳繃 order_item.product_id 鍏宠仈 ProductCost 琛紙鏉冨▉鏉ユ簮锛?
-    2. 閫氳繃 SKU 鏌ユ壘 Product 鍐嶅叧鑱?ProductCost
-    3. 鍏滃簳锛氫娇鐢ㄩ厤缃殑榛樿鎴愭湰姣斾緥 脳 鍞环
+    1. 通过 order_item.product_id 关联 ProductCost 行(权威来源)
+    2. 通过 SKU 查找 Product 再关联 ProductCost
+    3. 兜底: 使用配置的默认成本比例 x 售价
 
     Returns:
         (unit_purchase_cost, domestic_shipping_per_unit)
@@ -81,7 +81,7 @@ async def _get_product_cost(
     product_id = getattr(order_item, "product_id", None)
     sku = getattr(order_item, "sku", None)
 
-    # 1. 閫氳繃 product_id 鐩存帴鏌ユ壘
+    # 1. 通过 product_id 直接查找
     if product_id:
         result = await session.execute(
             select(ProductCost).where(
@@ -96,7 +96,7 @@ async def _get_product_cost(
             logger.info("Product cost from ProductCost table: product_id=%s, cost=%s", product_id, purchase_cost)
             return purchase_cost, domestic
 
-    # 2. 閫氳繃 SKU 鏌ユ壘 Product 鍐嶅叧鑱旀垚鏈?
+    # 2. 通过 SKU 查找 Product 再关联成本
     if sku:
         result = await session.execute(
             select(Product).where(
@@ -112,7 +112,7 @@ async def _get_product_cost(
             logger.info("Product cost via SKU lookup: sku=%s, cost=%s", sku, purchase_cost)
             return purchase_cost, domestic
 
-    # 3. 鍏滃簳锛氶厤缃殑榛樿鎴愭湰姣斾緥
+    # 3. 兜底: 配置的默认成本比例
     fallback_cost = unit_price * fallback_ratio
     logger.warning(
         "No ProductCost found for order_item=%s (product_id=%s, sku=%s), using fallback ratio=%s, cost=%s",
@@ -131,7 +131,7 @@ async def _get_product_cost_detailed(
     workspace_id: UUID,
 ) -> dict[str, Any]:
     """
-    鑾峰彇璁㈠崟鍟嗗搧鐨勯噰璐垚鏈紝闄勫甫鏉ユ簮鍜岀疆淇″害銆?
+    获取订单商品的采购成本, 附带来源和置信度.
 
     Returns:
         dict with keys:
@@ -149,7 +149,7 @@ async def _get_product_cost_detailed(
     product_id = getattr(order_item, "product_id", None)
     sku = getattr(order_item, "sku", None)
 
-    # 1. 閫氳繃 product_id 鐩存帴鏌ユ壘
+    # 1. 通过 product_id 直接查找
     if product_id:
         result = await session.execute(
             select(ProductCost).where(
@@ -169,7 +169,7 @@ async def _get_product_cost_detailed(
                 "has_real_cost": True,
             }
 
-    # 2. 閫氳繃 SKU 鏌ユ壘 Product 鍐嶅叧鑱旀垚鏈?
+    # 2. 通过 SKU 查找 Product 再关联成本
     if sku:
         result = await session.execute(
             select(Product).where(
@@ -190,7 +190,7 @@ async def _get_product_cost_detailed(
                 "has_real_cost": True,
             }
 
-    # 3. 鍏滃簳锛氶厤缃殑榛樿鎴愭湰姣斾緥 (estimate ONLY, not for execution)
+    # 3. 兜底: 配置的默认成本比例 (estimate ONLY, not for execution)
     fallback_cost = unit_price * fallback_ratio
     logger.warning(
         "No ProductCost found for order_item=%s (product_id=%s, sku=%s), using FALLBACK ratio=%s, cost=%s (ESTIMATE ONLY)",
@@ -217,17 +217,17 @@ async def create_purchase_order_from_order(
     trace_id: str | None = None,
 ) -> tuple[PurchaseOrder, bool]:
     """
-    浠庤鍗曞垱寤洪噰璐崟
+    从订单创建采购单
 
     Args:
-        session: 鏁版嵁搴撲細璇?
-        order: 鏈湴璁㈠崟
-        wc_order_data: WooCommerce 璁㈠崟鏁版嵁锛堝寘鍚晢鍝佽鎯咃級
-        workspace_id: 宸ヤ綔绌洪棿 ID
-        trace_id: 杩借釜 ID
+        session: 数据库会话
+        order: 本地订单
+        wc_order_data: WooCommerce 订单数据(包含商品详情)
+        workspace_id: 工作空间 ID
+        trace_id: 追踪 ID
 
     Returns:
-        (閲囪喘鍗曞璞? 鏄惁鏂板缓)
+        (采购单对象, 是否新建)
     """
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
@@ -236,7 +236,7 @@ async def create_purchase_order_from_order(
     order_result = await session.execute(select(Order).options(selectinload(Order.items)).where(Order.id == order.id))
     order = order_result.scalar_one()
 
-    # 妫€鏌ユ槸鍚﹀凡瀛樺湪閲囪喘鍗?
+    # 检查是否已存在采购单
     existing_po = await session.execute(
         select(PurchaseOrder).where(
             PurchaseOrder.workspace_id == workspace_id,
@@ -248,12 +248,12 @@ async def create_purchase_order_from_order(
         logger.info("Purchase order already exists for order %s: po=%s", order.external_order_id, existing.po_number)
         return existing, False
 
-    # 鐢熸垚閲囪喘鍗曞彿
+    # 生成采购单号
     po_number = generate_po_number(order.external_order_id)
 
-    # 璁$畻閲囪喘鎴愭湰:浠? ProductCost 琛ㄨ幏鍙栨瘡涓晢鍝佺殑瀹為檯鎴愭湰
-    # 姹囨€绘墍鏈夊晢鍝佺殑閲囪喘鎴愭湰 + 鍥藉唴杩愯垂
-    # M0-M4.1: 鎴愭湰缂哄け鏃堕噰璐崟杩涘叆 pending_cost_confirmation锛屼笉寰楁墽琛?
+    # 计算采购成本:从 ProductCost 表获取每个商品的实际成本
+    # 汇总所有商品的采购成本 + 国内运费
+    # M0-M4.1: 成本缺失时采购单进入 pending_cost_confirmation, 不得执行
     subtotal = Decimal("0")
     total_domestic_shipping = Decimal("0")
     item_costs: list[tuple[OrderItem, Decimal, Decimal]] = []
@@ -279,7 +279,7 @@ async def create_purchase_order_from_order(
             all_items_have_real_cost = False
             missing_cost_items.append(getattr(order_item, "sku", str(getattr(order_item, "id", "unknown"))))
 
-    # 濡傛灉璁㈠崟娌℃湁鍟嗗搧椤癸紙寮傚父鎯呭喌锛夛紝浣跨敤鍏滃簳姣斾緥 (estimate ONLY)
+    # 如果订单没有商品项(异常情况), 使用兜底比例 (estimate ONLY)
     if not order.items:
         settings = get_settings()
         subtotal = order.total * settings.procurement_fallback_cost_ratio
@@ -313,11 +313,11 @@ async def create_purchase_order_from_order(
             len(missing_cost_items),
         )
 
-    # 鍒涘缓閲囪喘鍗?
+    # 创建采购单
     purchase_order = PurchaseOrder(
         workspace_id=workspace_id,
         po_number=po_number,
-        supplier_id=None,  # 寰呭垎閰嶄緵搴斿晢
+        supplier_id=None,  # 待分配供应商
         status=po_status,
         currency=order.currency,
         subtotal=subtotal,
@@ -334,7 +334,7 @@ async def create_purchase_order_from_order(
     session.add(purchase_order)
     await session.flush()
 
-    # 鍒涘缓閲囪喘鍗曞晢鍝侀」锛堢粺涓€浣跨敤浠?ProductCost 琛ㄨ幏鍙栫殑瀹為檯鎴愭湰锛?
+    # 创建采购单商品项(统一使用从 ProductCost 表获取的实际成本)
     for order_item, unit_cost, _domestic_shipping in item_costs:
         quantity = order_item.quantity
         line_total = unit_cost * quantity
@@ -351,7 +351,7 @@ async def create_purchase_order_from_order(
         )
         session.add(po_item)
 
-    # 濡傛灉 wc_order_data 鎻愪緵浜嗛澶栫殑鍟嗗搧淇℃伅锛堝澶栭儴 SKU 鏄犲皠锛夛紝璁板綍鍒?notes
+    # 如果 wc_order_data 提供了额外的商品信息(如外部 SKU 映射), 记录到 notes
     if wc_order_data and wc_order_data.get("line_items"):
         external_skus = [item.get("sku", "") for item in wc_order_data["line_items"] if item.get("sku")]
         if external_skus:
@@ -381,24 +381,24 @@ async def add_tracking_to_order(
     trace_id: str | None = None,
 ) -> Order:
     """
-    涓鸿鍗曟坊鍔犵墿娴佽拷韪俊鎭?
+    为订单添加物流跟踪信息
 
     Args:
-        session: 鏁版嵁搴撲細璇?
-        order_id: 璁㈠崟 ID
-        tracking_number: 鐗╂祦鍗曞彿
-        carrier: 鐗╂祦鍏徃
-        tracking_url: 鐗╂祦杩借釜閾炬帴
-        workspace_id: 宸ヤ綔绌洪棿 ID
-        trace_id: 杩借釜 ID
+        session: 数据库会话
+        order_id: 订单 ID
+        tracking_number: 物流单号
+        carrier: 物流公司
+        tracking_url: 物流追踪链接
+        workspace_id: 工作空间 ID
+        trace_id: 追踪 ID
 
     Returns:
-        鏇存柊鍚庣殑璁㈠崟
+        更新后的订单
     """
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
 
-    # 鑾峰彇璁㈠崟
+    # 获取订单
     result = await session.execute(
         select(Order).where(
             Order.id == order_id,
@@ -409,11 +409,11 @@ async def add_tracking_to_order(
     if not order:
         raise ValueError(f"Order not found: {order_id}")
 
-    # 鏇存柊璁㈠崟灞ョ害鐘舵€?
+    # 更新订单履约状态
     order.fulfillment_status = "shipped"
 
-    # 灏嗙墿娴佷俊鎭繚瀛樺埌 profit_snapshot锛堢畝鍖栧鐞嗭級
-    # 瀹為檯椤圭洰涓簲璇ユ湁涓撻棬鐨勭墿娴佽拷韪〃
+    # 将物流信息保存到 profit_snapshot(简化处理)
+    # 实际项目中应该有专门的物流跟踪表
     tracking_info = {
         "tracking_number": tracking_number,
         "carrier": carrier,
@@ -422,7 +422,7 @@ async def add_tracking_to_order(
         "trace_id": trace_id,
     }
 
-    # 鏇存柊 profit_snapshot 涓殑鐗╂祦淇℃伅
+    # 更新 profit_snapshot 中的物流信息
     snapshot = order.profit_snapshot or {}
     snapshot["tracking"] = tracking_info
     order.profit_snapshot = snapshot
@@ -448,17 +448,17 @@ async def get_purchase_orders(
     offset: int = 0,
 ) -> dict[str, Any]:
     """
-    鑾峰彇閲囪喘鍗曞垪琛?
+    获取采购单列表
 
     Args:
-        session: 鏁版嵁搴撲細璇?
-        status: 鎸夌姸鎬佺瓫閫?
-        workspace_id: 宸ヤ綔绌洪棿 ID
-        limit: 姣忛〉鏁伴噺
-        offset: 鍋忕Щ閲?
+        session: 数据库会话
+        status: 按状态筛选
+        workspace_id: 工作空间 ID
+        limit: 每页数量
+        offset: 偏移量
 
     Returns:
-        閲囪喘鍗曞垪琛ㄥ拰鍒嗛〉淇℃伅
+        采购单列表和分页信息
     """
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
@@ -473,7 +473,7 @@ async def get_purchase_orders(
     result = await session.execute(query)
     pos = result.scalars().all()
 
-    # 缁熻鎬绘暟
+    # 缁熻总数
     count_query = select(PurchaseOrder).where(PurchaseOrder.workspace_id == workspace_id)
     if status:
         count_query = count_query.where(PurchaseOrder.status == status)
@@ -509,15 +509,15 @@ async def get_purchase_order_detail(
     workspace_id: UUID | None = None,
 ) -> dict[str, Any]:
     """
-    鑾峰彇閲囪喘鍗曡鎯咃紙鍖呭惈鍟嗗搧椤癸級
+    获取采购单详情(包含商品项)
 
     Args:
-        session: 鏁版嵁搴撲細璇?
-        po_id: 閲囪喘鍗?ID
-        workspace_id: 宸ヤ綔绌洪棿 ID
+        session: 数据库会话
+        po_id: 采购单 ID
+        workspace_id: 工作空间 ID
 
     Returns:
-        閲囪喘鍗曡鎯?
+        采购单详情
     """
     if workspace_id is None:
         workspace_id = DEFAULT_WORKSPACE_ID
@@ -532,7 +532,7 @@ async def get_purchase_order_detail(
     if not po:
         raise ValueError(f"Purchase order not found: {po_id}")
 
-    # 鑾峰彇鍟嗗搧椤?
+    # 获取商品项
     items_result = await session.execute(select(PurchaseOrderItem).where(PurchaseOrderItem.purchase_order_id == po.id))
     items = items_result.scalars().all()
 
@@ -574,7 +574,7 @@ async def confirm_purchase_order_cost(
     trace_id: str | None = None,
     confirmer_user_id: str | None = None,
 ) -> PurchaseOrder:
-    """确认采购单成本: pending_cost_confirmation -> draft (M4.2.0-R3 收口)。
+    """确认采购单成本: pending_cost_confirmation -> draft (M4.2.0-R3 收口).
 
     Thin delegation to the single canonical implementation in
     ``supply_chain.confirm_purchase_order_cost``, which enforces:

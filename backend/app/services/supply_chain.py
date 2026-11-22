@@ -92,10 +92,13 @@ async def _validate_approver(session: AsyncSession, *, caller_user_id: str | Non
         raise SupplyChainError(
             f"caller_role '{caller_role}' does not match the authenticated user's role '{user.role}'; approval denied"
         )
-    return str(user.id)
+    # M4.2.0-R3-F2: return the DB-verified role alongside the stable user.id so
+    # the audit event records an authoritative actor_role (never a caller-supplied
+    # or defaulted-None value).
+    return str(user.id), user.role
 
 
-async def _validate_procurement_actor(session: AsyncSession, *, caller_user_id: str | None) -> str:
+async def _validate_procurement_actor(session: AsyncSession, *, caller_user_id: str | None) -> tuple[str, str]:
     """Verify a procurement-action actor is a real, active, authorized user.
 
     M4.2.0-R3.4: every procurement service action (order / cancel / receive /
@@ -105,6 +108,10 @@ async def _validate_procurement_actor(session: AsyncSession, *, caller_user_id: 
     verification as approval (real user id, exists, active, admin/operator role)
     and returning the stable user.id for the audit event. AI Agents and
     automation have no User record and are structurally denied.
+
+    M4.2.0-R3-F2: also returns the DB-verified role so the caller can stamp it
+    into the audit event (``actor_role``), closing the "identity verified but
+    role left as None" audit gap.
     """
     return await _validate_approver(session, caller_user_id=caller_user_id, caller_role=None)
 
@@ -457,6 +464,9 @@ async def create_purchase_order(
     actor_user_id: str | None = None,
 ) -> PurchaseOrder:
     """Create a PO in draft state; totals are computed from items."""
+    # M4.2.0-R3-F2: verify the creating actor against the DB and record the
+    # authoritative role in the audit event (not a caller-supplied label).
+    actor_user_id, actor_role = await _validate_procurement_actor(session, caller_user_id=actor_user_id)
     await _ensure_supplier(session, workspace_id=workspace_id, supplier_id=data.supplier_id)
     for item in data.items:
         await _ensure_product(session, workspace_id=workspace_id, product_id=item.product_id)
@@ -508,6 +518,7 @@ async def create_purchase_order(
             "item_count": len(data.items),
             "total": str(total),
             "actor_user_id": actor_user_id,
+            "actor_role": actor_role,
         },
         trace_id=trace_id,
     )
@@ -517,26 +528,69 @@ async def create_purchase_order(
 
 async def _resolve_real_item_cost(
     session: AsyncSession, *, workspace_id: UUID, item: PurchaseOrderItem
-) -> Decimal | None:
-    """Resolve the REAL ProductCost for a PO line item, or None if none exists.
+) -> dict[str, Any] | None:
+    """Resolve the authoritative ProductCost for a PO line item (M4.2.0-R3-F1).
 
-    M4.2.0-R3.1: cost confirmation must be grounded in the authoritative
-    ``product_cost`` row (never a fallback ratio). Resolution order:
-    by product_id, else by SKU -> Product -> its cost. Returns None when the
-    product has no cost row or its purchase_cost is non-positive, which the
-    caller treats as a hard failure (whole-PO rollback).
+    Returns ``None`` when no real cost exists (caller rolls back the whole PO),
+    otherwise a structured, auditable record carrying the ProductCost identity
+    and provenance — NOT just a bare Decimal — so the confirmation event can
+    trace exactly which cost row/version produced the confirmed amount:
+
+        {product_id, sku, product_cost_id, purchase_cost, currency,
+         version, valid_from}
+
+    ``purchase_cost`` must be > 0 to count as real. Resolution order:
+    by ``product_id`` first; else by ``sku`` -> Product -> its cost.
+    When the item carries BOTH a product_id and a sku, they must resolve to the
+    same Product — a mismatch is rejected (returns None) so we never attribute
+    another product's cost via the SKU fallback (R3-F1 consistency guard).
     """
+    product_by_id: Product | None = None
     if item.product_id:
+        product_by_id = (
+            await session.execute(
+                select(Product).where(
+                    Product.id == item.product_id,
+                    Product.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+    # R3-F1 consistency guard: if the item declares both identifiers, they must
+    # point at the same product; otherwise the SKU fallback could silently pull
+    # a different product's cost.
+    if item.product_id and item.sku and product_by_id is not None and product_by_id.sku != item.sku:
+        logger.warning(
+            "cost resolution rejected: product_id=%s sku=%s mismatch (product.sku=%s)",
+            item.product_id,
+            item.sku,
+            product_by_id.sku,
+        )
+        return None
+
+    # Primary: by product_id -> its cost row.
+    if product_by_id is not None:
         cost = (
             await session.execute(
                 select(ProductCost).where(
-                    ProductCost.product_id == item.product_id,
+                    ProductCost.product_id == product_by_id.id,
                     ProductCost.workspace_id == workspace_id,
                 )
             )
         ).scalar_one_or_none()
         if cost and cost.purchase_cost > 0:
-            return cost.purchase_cost
+            return {
+                "product_id": str(product_by_id.id),
+                "sku": product_by_id.sku,
+                "product_cost_id": str(cost.id),
+                "purchase_cost": cost.purchase_cost,
+                "currency": cost.currency,
+                "version": cost.version,
+                "valid_from": cost.valid_from.isoformat() if cost.valid_from else None,
+            }
+
+    # Fallback: by sku -> Product -> its cost (only when no product_id, or the
+    # identifiers were absent rather than conflicting).
     if item.sku:
         product = (
             await session.execute(
@@ -546,8 +600,27 @@ async def _resolve_real_item_cost(
                 )
             )
         ).scalar_one_or_none()
-        if product and product.cost and product.cost.purchase_cost > 0:
-            return product.cost.purchase_cost
+        if product is not None:
+            # Query ProductCost directly (NOT via the product.cost relationship)
+            # to avoid a lazy-load outside the greenlet context (R3-F1).
+            cost = (
+                await session.execute(
+                    select(ProductCost).where(
+                        ProductCost.product_id == product.id,
+                        ProductCost.workspace_id == workspace_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if cost and cost.purchase_cost > 0:
+                return {
+                    "product_id": str(product.id),
+                    "sku": product.sku,
+                    "product_cost_id": str(cost.id),
+                    "purchase_cost": cost.purchase_cost,
+                    "currency": cost.currency,
+                    "version": cost.version,
+                    "valid_from": cost.valid_from.isoformat() if cost.valid_from else None,
+                }
     return None
 
 
@@ -582,7 +655,9 @@ async def confirm_purchase_order_cost(
     ``confirmer_user_id`` is the verified principal used for authorization.
     """
     # R3.2: the confirmer must be a real, active, authorized operator/admin.
-    verified_confirmer = await _validate_approver(session, caller_user_id=confirmer_user_id, caller_role=None)
+    verified_confirmer, verified_confirmer_role = await _validate_approver(
+        session, caller_user_id=confirmer_user_id, caller_role=None
+    )
 
     po = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id, for_update=True)
     if po is None:
@@ -600,29 +675,53 @@ async def confirm_purchase_order_cost(
 
     items = await _load_po_items(session, workspace_id=workspace_id, po_id=po.id)
 
-    # --- R3.1 atomic cost write-back: resolve ALL items first (fail-closed). ---
-    resolved: list[tuple[PurchaseOrderItem, Decimal]] = []
+    # --- R3-F1 atomic cost write-back: resolve ALL items first (fail-closed). ---
+    # Each resolved record is a structured, auditable ProductCost reference.
+    resolved: list[tuple[PurchaseOrderItem, dict[str, Any]]] = []
     missing: list[str] = []
     for item in items:
-        real_cost = await _resolve_real_item_cost(session, workspace_id=workspace_id, item=item)
-        if real_cost is None:
+        cost_record = await _resolve_real_item_cost(session, workspace_id=workspace_id, item=item)
+        if cost_record is None:
             missing.append(item.sku)
-        else:
-            resolved.append((item, real_cost))
+            continue
+        # R3-F1 currency guard (fail-closed, no auto FX conversion): the cost
+        # row currency must match the PO currency, otherwise writing that number
+        # into the PO would not be a real same-currency amount.
+        if cost_record["currency"] != po.currency:
+            raise SupplyChainError(
+                f"cannot confirm cost for PO {po.po_number}: currency mismatch for item "
+                f"{item.sku} — ProductCost currency={cost_record['currency']} but PO "
+                f"currency={po.currency}; refusing to mark cost_confirmed (no auto FX)"
+            )
+        resolved.append((item, cost_record))
     if missing:
         raise SupplyChainError(
             f"cannot confirm cost for PO {po.po_number}: still missing real "
             f"ProductCost for items: {', '.join(missing[:5])}"
         )
 
-    # Write real cost back into each line and recompute line_total.
+    # Write real cost back into each line, recompute line_total, and capture a
+    # full provenance snapshot (R3-F1: cost row identity + version + currency).
     cost_snapshot: list[dict[str, Any]] = []
     new_subtotal = ZERO
-    for item, real_cost in resolved:
+    for item, cost_record in resolved:
+        real_cost = cost_record["purchase_cost"]
         item.unit_cost = real_cost
         item.line_total = real_cost * item.quantity
         new_subtotal += item.line_total
-        cost_snapshot.append({"sku": item.sku, "quantity": item.quantity, "unit_cost": str(real_cost)})
+        cost_snapshot.append(
+            {
+                "product_id": cost_record["product_id"],
+                "sku": item.sku,
+                "product_cost_id": cost_record["product_cost_id"],
+                "product_cost_version": cost_record["version"],
+                "product_cost_valid_from": cost_record["valid_from"],
+                "currency": cost_record["currency"],
+                "quantity": item.quantity,
+                "unit_cost": str(real_cost),
+                "line_total": str(item.line_total),
+            }
+        )
 
     # Recompute PO-level totals from the verified line items.
     po.subtotal = new_subtotal
@@ -654,10 +753,12 @@ async def confirm_purchase_order_cost(
             "from_status": from_status,
             "to_status": "draft",
             "actor_user_id": verified_confirmer,
+            "actor_role": verified_confirmer_role,
             "confirmed_by": confirmed_by,
             "cost_source": "product_cost",
             "cost_snapshot": cost_snapshot,
             "subtotal": str(po.subtotal),
+            "shipping_cost": str(po.shipping_cost or ZERO),
             "total": str(po.total),
         },
         trace_id=trace_id,
@@ -756,6 +857,9 @@ async def update_purchase_order(
     actor_user_id: str | None = None,
 ) -> PurchaseOrder:
     """Update a PO (draft only)."""
+    # M4.2.0-R3-F2: verify the updating actor against the DB and record the
+    # authoritative role in the audit event.
+    actor_user_id, actor_role = await _validate_procurement_actor(session, caller_user_id=actor_user_id)
     purchase_order = await _load_purchase_order(session, workspace_id=workspace_id, po_id=po_id)
     if purchase_order is None:
         raise SupplyChainError("purchase order not found")
@@ -775,6 +879,7 @@ async def update_purchase_order(
         payload={
             "status": purchase_order.status,
             "actor_user_id": actor_user_id,
+            "actor_role": actor_role,
         },
         trace_id=trace_id,
     )
@@ -818,7 +923,9 @@ async def _transition_purchase_order(
         raise SupplyChainError(f"cannot transition purchase order from '{purchase_order.status}' to '{target}'")
     verified_approver: str | None = None
     if target == "approved":
-        verified_approver = await _validate_approver(session, caller_user_id=caller_user_id, caller_role=caller_role)
+        verified_approver, _verified_approver_role = await _validate_approver(
+            session, caller_user_id=caller_user_id, caller_role=caller_role
+        )
         if not purchase_order.cost_confirmed:
             raise SupplyChainError(
                 "cannot approve a purchase order whose real cost is not confirmed "
@@ -902,7 +1009,7 @@ async def order_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """approved -> ordered (PO sent to supplier)."""
-    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
+    verified_actor, verified_actor_role = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -910,6 +1017,7 @@ async def order_purchase_order(
         target="ordered",
         event_type="supply.purchase_order_ordered",
         trace_id=trace_id,
+        caller_role=verified_actor_role,
         caller_user_id=verified_actor,
     )
 
@@ -948,7 +1056,10 @@ async def transition_purchase_order_status(
             "identity, role and time"
         )
     # R2.2: verify the operator is a real, active, role-authorized user.
-    verified_actor = await _validate_approver(session, caller_user_id=caller_user_id, caller_role=caller_role)
+    verified_actor, verified_actor_role = await _validate_approver(
+        session, caller_user_id=caller_user_id, caller_role=caller_role
+    )
+    caller_role = verified_actor_role
     if target == "ordered":
         return await order_purchase_order(
             session,
@@ -1004,7 +1115,7 @@ async def partial_receive_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """ordered -> partial_received (first delivery batch arrived)."""
-    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
+    verified_actor, verified_actor_role = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -1012,6 +1123,7 @@ async def partial_receive_purchase_order(
         target="partial_received",
         event_type="supply.purchase_order_partial_received",
         trace_id=trace_id,
+        caller_role=verified_actor_role,
         caller_user_id=verified_actor,
     )
 
@@ -1025,7 +1137,7 @@ async def receive_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """ordered -> received (goods arrived)."""
-    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
+    verified_actor, verified_actor_role = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -1034,6 +1146,7 @@ async def receive_purchase_order(
         event_type="supply.purchase_order_received",
         trace_id=trace_id,
         received=True,
+        caller_role=verified_actor_role,
         caller_user_id=verified_actor,
     )
 
@@ -1047,7 +1160,7 @@ async def cancel_purchase_order(
     caller_user_id: str | None = None,
 ) -> PurchaseOrder:
     """draft/approved -> cancelled."""
-    verified_actor = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
+    verified_actor, verified_actor_role = await _validate_procurement_actor(session, caller_user_id=caller_user_id)
     return await _transition_purchase_order(
         session,
         workspace_id=workspace_id,
@@ -1055,6 +1168,7 @@ async def cancel_purchase_order(
         target="cancelled",
         event_type="supply.purchase_order_cancelled",
         trace_id=trace_id,
+        caller_role=verified_actor_role,
         caller_user_id=verified_actor,
     )
 
