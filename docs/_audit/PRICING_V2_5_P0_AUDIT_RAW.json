@@ -1,0 +1,353 @@
+{
+  "audit_time": "2026-11-23T14:58:48.835647+08:00",
+  "variations": [
+    {
+      "product_id": 2763,
+      "variation_id": 2772,
+      "raw": {
+        "id": 2772,
+        "type": "variation",
+        "date_created": "2026-11-01T06:02:28",
+        "date_created_gmt": "2026-11-01T06:02:28",
+        "date_modified": "2026-11-23T06:15:23",
+        "date_modified_gmt": "2026-11-23T06:15:23",
+        "description": "",
+        "permalink": "https://nuotaooutdoor.com/product/traction-ice-crampons-snow-grips/?attribute_tooth-count=10&attribute_color=Black",
+        "sku": "NT-746435358585-10-B-M",
+        "global_unique_id": "",
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "date_on_sale_from": null,
+        "date_on_sale_from_gmt": null,
+        "date_on_sale_to": null,
+        "date_on_sale_to_gmt": null,
+        "on_sale": false,
+        "status": "publish",
+        "purchasable": true,
+        "virtual": false,
+        "downloadable": false,
+        "downloads": [],
+        "download_limit": -1,
+        "download_expiry": -1,
+        "tax_status": "taxable",
+        "tax_class": "",
+        "manage_stock": true,
+        "stock_quantity": 100,
+        "stock_status": "instock",
+        "backorders": "no",
+        "backorders_allowed": false,
+        "backordered": false,
+        "low_stock_amount": null,
+        "weight": "0.285",
+        "dimensions": {
+          "length": "20",
+          "width": "10",
+          "height": "5"
+        },
+        "shipping_class": "",
+        "shipping_class_id": 0,
+        "image": {
+          "id": 2764,
+          "date_created": "2026-11-01T05:57:14",
+          "date_created_gmt": "2026-11-01T05:57:14",
+          "date_modified": "2026-11-01T05:59:13",
+          "date_modified_gmt": "2026-11-01T05:59:13",
+          "src": "https://nuotaooutdoor.com/wp-content/uploads/2026/11/01-main-image.png",
+          "name": "01-main-image",
+          "alt": "Traction ice crampons for boots - stainless steel snow grips"
+        },
+        "gallery_image_ids": [],
+        "attributes": [
+          {
+            "id": 0,
+            "name": "Tooth Count",
+            "slug": "tooth-count",
+            "option": "10"
+          },
+          {
+            "id": 0,
+            "name": "Color",
+            "slug": "color",
+            "option": "Black"
+          }
+        ],
+        "menu_order": 0,
+        "meta_data": [],
+        "name": "10, Black",
+        "parent_id": 2763,
+        "customs_commodity_code": null,
+        "customs_country_of_origin": null,
+        "customs_description": null,
+        "_links": {
+          "self": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763/variations/2772",
+              "targetHints": {
+                "allow": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              }
+            }
+          ],
+          "collection": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763/variations"
+            }
+          ],
+          "up": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763"
+            }
+          ]
+        }
+      },
+      "key_fields": {
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "sku": "NT-746435358585-10-B-M",
+        "stock_quantity": 100,
+        "stock_status": "instock",
+        "name": "10, Black",
+        "status": "publish",
+        "manage_stock": true,
+        "date_modified": "2026-11-23T06:15:23"
+      }
+    },
+    {
+      "product_id": 2763,
+      "variation_id": 2771,
+      "raw": {
+        "id": 2771,
+        "type": "variation",
+        "date_created": "2026-11-01T06:02:25",
+        "date_created_gmt": "2026-11-01T06:02:25",
+        "date_modified": "2026-11-23T06:21:40",
+        "date_modified_gmt": "2026-11-23T06:21:40",
+        "description": "",
+        "permalink": "https://nuotaooutdoor.com/product/traction-ice-crampons-snow-grips/?attribute_tooth-count=10&attribute_color=Orange",
+        "sku": "NT-746435358585-10-O-M",
+        "global_unique_id": "",
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "date_on_sale_from": null,
+        "date_on_sale_from_gmt": null,
+        "date_on_sale_to": null,
+        "date_on_sale_to_gmt": null,
+        "on_sale": false,
+        "status": "publish",
+        "purchasable": true,
+        "virtual": false,
+        "downloadable": false,
+        "downloads": [],
+        "download_limit": -1,
+        "download_expiry": -1,
+        "tax_status": "taxable",
+        "tax_class": "",
+        "manage_stock": true,
+        "stock_quantity": 100,
+        "stock_status": "instock",
+        "backorders": "no",
+        "backorders_allowed": false,
+        "backordered": false,
+        "low_stock_amount": null,
+        "weight": "0.285",
+        "dimensions": {
+          "length": "20",
+          "width": "10",
+          "height": "5"
+        },
+        "shipping_class": "",
+        "shipping_class_id": 0,
+        "image": {
+          "id": 2764,
+          "date_created": "2026-11-01T05:57:14",
+          "date_created_gmt": "2026-11-01T05:57:14",
+          "date_modified": "2026-11-01T05:59:13",
+          "date_modified_gmt": "2026-11-01T05:59:13",
+          "src": "https://nuotaooutdoor.com/wp-content/uploads/2026/11/01-main-image.png",
+          "name": "01-main-image",
+          "alt": "Traction ice crampons for boots - stainless steel snow grips"
+        },
+        "gallery_image_ids": [],
+        "attributes": [
+          {
+            "id": 0,
+            "name": "Tooth Count",
+            "slug": "tooth-count",
+            "option": "10"
+          },
+          {
+            "id": 0,
+            "name": "Color",
+            "slug": "color",
+            "option": "Orange"
+          }
+        ],
+        "menu_order": 0,
+        "meta_data": [],
+        "name": "10, Orange",
+        "parent_id": 2763,
+        "customs_commodity_code": null,
+        "customs_country_of_origin": null,
+        "customs_description": null,
+        "_links": {
+          "self": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763/variations/2771",
+              "targetHints": {
+                "allow": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              }
+            }
+          ],
+          "collection": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763/variations"
+            }
+          ],
+          "up": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2763"
+            }
+          ]
+        }
+      },
+      "key_fields": {
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "sku": "NT-746435358585-10-O-M",
+        "stock_quantity": 100,
+        "stock_status": "instock",
+        "name": "10, Orange",
+        "status": "publish",
+        "manage_stock": true,
+        "date_modified": "2026-11-23T06:21:40"
+      }
+    },
+    {
+      "product_id": 2785,
+      "variation_id": 2792,
+      "raw": {
+        "id": 2792,
+        "type": "variation",
+        "date_created": "2026-11-02T03:56:07",
+        "date_created_gmt": "2026-11-02T03:56:07",
+        "date_modified": "2026-11-23T06:21:53",
+        "date_modified_gmt": "2026-11-23T06:21:53",
+        "description": "",
+        "permalink": "https://nuotaooutdoor.com/product/storage-bag-tent-poles-organizer/?attribute_size=100x20x20cm",
+        "sku": "NT-818076845448-100x20x20",
+        "global_unique_id": "",
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "date_on_sale_from": null,
+        "date_on_sale_from_gmt": null,
+        "date_on_sale_to": null,
+        "date_on_sale_to_gmt": null,
+        "on_sale": false,
+        "status": "publish",
+        "purchasable": true,
+        "virtual": false,
+        "downloadable": false,
+        "downloads": [],
+        "download_limit": -1,
+        "download_expiry": -1,
+        "tax_status": "taxable",
+        "tax_class": "",
+        "manage_stock": true,
+        "stock_quantity": 5253,
+        "stock_status": "instock",
+        "backorders": "no",
+        "backorders_allowed": false,
+        "backordered": false,
+        "low_stock_amount": null,
+        "weight": "0.4",
+        "dimensions": {
+          "length": "100",
+          "width": "20",
+          "height": "20"
+        },
+        "shipping_class": "",
+        "shipping_class_id": 0,
+        "image": {
+          "id": 2804,
+          "date_created": "2026-11-02T05:48:06",
+          "date_created_gmt": "2026-11-02T05:48:06",
+          "date_modified": "2026-11-02T10:26:34",
+          "date_modified_gmt": "2026-11-02T10:26:34",
+          "src": "https://nuotaooutdoor.com/wp-content/uploads/2026/11/01-main-image-1.png",
+          "name": "01-main-image",
+          "alt": "600D Oxford storage bag for tent poles equipment organizer - 10 sizes"
+        },
+        "gallery_image_ids": [],
+        "attributes": [
+          {
+            "id": 0,
+            "name": "Size",
+            "slug": "size",
+            "option": "100x20x20cm"
+          }
+        ],
+        "menu_order": 0,
+        "meta_data": [],
+        "name": "100x20x20cm",
+        "parent_id": 2785,
+        "customs_commodity_code": null,
+        "customs_country_of_origin": null,
+        "customs_description": null,
+        "_links": {
+          "self": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2785/variations/2792",
+              "targetHints": {
+                "allow": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              }
+            }
+          ],
+          "collection": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2785/variations"
+            }
+          ],
+          "up": [
+            {
+              "href": "https://nuotaooutdoor.com/wp-json/wc/v3/products/2785"
+            }
+          ]
+        }
+      },
+      "key_fields": {
+        "price": "11.99",
+        "regular_price": "11.99",
+        "sale_price": "",
+        "sku": "NT-818076845448-100x20x20",
+        "stock_quantity": 5253,
+        "stock_status": "instock",
+        "name": "100x20x20cm",
+        "status": "publish",
+        "manage_stock": true,
+        "date_modified": "2026-11-23T06:21:53"
+      }
+    }
+  ]
+}
