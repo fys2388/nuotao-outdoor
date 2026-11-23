@@ -3,16 +3,24 @@
 Implements IP-based rate limiting to prevent brute force attacks and abuse.
 """
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-
 # Fix Windows GBK encoding issue when reading .env file
 import starlette.config
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
 _original_read_file = starlette.config.Config._read_file
-def _fixed_read_file(self, env_file):
-    with open(env_file, 'r', encoding='utf-8', errors='replace') as f:
-        return f.readlines()
+
+
+def _fixed_read_file(self, *args, **kwargs):
+    # starlette>=1.0 调用 _read_file(env_file, encoding)，旧版只传 env_file。
+    # 用 *args/**kwargs 兼容两种签名;核心修复:未提供 encoding 时补 utf-8,
+    # 委托回原始 _read_file(保持其 dict 返回契约),避免 Windows GBK 报错。
+    if len(args) < 2 and "encoding" not in kwargs:
+        kwargs["encoding"] = "utf-8"
+    return _original_read_file(self, *args, **kwargs)
+
+
 starlette.config.Config._read_file = _fixed_read_file
 
 # Rate limits:
