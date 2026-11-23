@@ -41,9 +41,7 @@ class Order(Base, TimestampMixin, WorkspaceMixin):
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="woocommerce")
     business_model: Mapped[str] = mapped_column(String(8), nullable=False, default="B2C")
     # Non-PII link to customer_profiles.customer_reference_id (M3.4).
-    customer_reference_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, index=True
-    )
+    customer_reference_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     customer_account_id: Mapped[Uuid | None] = mapped_column(
         Uuid,
         ForeignKey("customer_accounts.id", ondelete="SET NULL"),
@@ -109,5 +107,14 @@ class OrderItem(Base, TimestampMixin, WorkspaceMixin):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     line_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+
+    # --- M4 V2.6 变体身份维度 ---
+    # WooCommerce 变体 ID.非空 ⇒ VARIATION;为空不自动推断为 PRODUCT(需证据).
+    # 新订单优先记录确定身份;历史无法确定 ⇒ UNKNOWN_LEGACY.
+    wc_variation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 变体 SKU(辅助识别,非身份主键).
+    variation_sku: Mapped[str | None] = mapped_column(String(191), nullable=True)
+    # 身份状态:PRODUCT / VARIATION / UNKNOWN_LEGACY.
+    identity_state: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN_LEGACY")
 
     order: Mapped[Order] = relationship(back_populates="items")

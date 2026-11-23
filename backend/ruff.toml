@@ -35,6 +35,8 @@ ignore = [
     "TC001",  # typing-only first-party import (false positives)
     "UP017",  # datetime.timezone.utc (keep for compatibility)
     "F541",  # f-string missing placeholders (false positives)
+    "RUF002",  # ambiguous unicode (full-width parens in Chinese docstrings are valid)
+    "RUF003",  # ambiguous unicode comment (Chinese comments use full-width punctuation)
 ]
 
 # 排除的目录

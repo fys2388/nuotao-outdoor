@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Uuid,
@@ -154,6 +155,11 @@ class ProductCost(Base, WorkspaceMixin):
         nullable=True,
         index=True,
     )
+    # --- M4 V2.6 变体身份维度 ---
+    # WooCommerce 变体 ID.非空 ⇒ 成本对应变体级;为空 ⇒ 商品级.
+    variation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 变体 SKU(辅助识别,非身份主键).
+    variation_sku: Mapped[str | None] = mapped_column(String(191), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
     purchase_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     domestic_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)

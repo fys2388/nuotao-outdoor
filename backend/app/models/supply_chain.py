@@ -24,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -183,11 +184,16 @@ class PurchaseOrderItem(Base, WorkspaceMixin):
 
 
 class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
-    """Current inventory state per product/location (M4.1).
+    """Current inventory state per product/variation/location (M4.1, M4 V2.6).
 
-    ``available`` is quantity minus reserved unless explicitly provided. One
-    row per (workspace, product, location) - create returns 409 on duplicates,
-    use update to adjust stock. Locations cover CN and overseas warehouses.
+    ``available`` is quantity minus reserved unless explicitly provided. Rows are
+    uniquely identified at the (workspace, product, variation, location) level:
+    a product-level row has ``variation_id IS NULL``; a variation-level row has
+    a concrete ``variation_id``. Locations cover CN and overseas warehouses.
+
+    M4 V2.6 库存以确定的 Variation 身份为主要依据。禁止仅凭父 SKU 更新整个变体集合:
+    guard 逻辑在 ``identity_model_v26.update_inventory_variation``(无 wc_variation_id
+    且商品有变体 ⇒ 跳过/UNKNOWN,不批量覆盖)。
     """
 
     __tablename__ = "inventory_snapshots"
@@ -213,12 +219,35 @@ class InventorySnapshot(Base, TimestampMixin, WorkspaceMixin):
     )
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # --- M4 V2.6 变体身份维度 ---
+    # WooCommerce 变体 ID.非空 ⇒ 变体级库存行;为空 ⇒ 商品级库存行.
+    variation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 变体 SKU(辅助识别,非身份主键).
+    variation_sku: Mapped[str | None] = mapped_column(String(191), nullable=True)
+    # 库存来源时间戳(外部系统上报时间,区别于本地 snapshot_time).
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
-        UniqueConstraint(
+        # 变体级唯一:每个 (商品, 变体, 位置) 仅一行(部分唯一索引,避免 PG NULL 语义).
+        Index(
+            "ux_inventory_snapshot_variation",
+            "workspace_id",
+            "product_id",
+            "variation_id",
+            "location",
+            unique=True,
+            postgresql_where=text("variation_id IS NOT NULL"),
+            sqlite_where=text("variation_id IS NOT NULL"),
+        ),
+        # 商品级唯一:每个 (商品, 位置) 仅一行商品级库存(部分唯一索引).
+        Index(
+            "ux_inventory_snapshot_product",
             "workspace_id",
             "product_id",
             "location",
-            name="uq_inventory_workspace_product_location",
+            unique=True,
+            postgresql_where=text("variation_id IS NULL"),
+            sqlite_where=text("variation_id IS NULL"),
         ),
         CheckConstraint("location IN ('cn', 'us', 'eu')", name="ck_inventory_location"),
         Index("ix_inventory_workspace_location", "workspace_id", "location"),

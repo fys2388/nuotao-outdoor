@@ -48,13 +48,13 @@ APPROVAL_STATES: tuple[str, ...] = ("pending", "approved", "rejected")
 # V3.0 selection funnel (docs/nuotao_product_score_v3.0.md §4). Independent of
 # candidate_status; advanced by the V3 selection pipeline.
 FUNNEL_STAGES: tuple[str, ...] = (
-    "recalled",        # 100: recalled/sourced candidates (e.g. Newton search)
-    "screened",        # 60: passed deterministic compliance/commercial veto
+    "recalled",  # 100: recalled/sourced candidates (e.g. Newton search)
+    "screened",  # 60: passed deterministic compliance/commercial veto
     "deep_candidate",  # 20: operational score reached the deep-candidate bar
     "test_candidate",  # 8: Nuotao Score + brand-fit veto passed
-    "testing",         # 3: small-batch live test in progress
-    "hero",            # 1-2: Hero review approved
-    "rejected",        # vetoed / failed at any stage
+    "testing",  # 3: small-batch live test in progress
+    "hero",  # 1-2: Hero review approved
+    "rejected",  # vetoed / failed at any stage
 )
 
 # V3.0 Nuotao Score grades (docs/nuotao_product_score_v3.0.md §2.3).
@@ -108,23 +108,25 @@ class ProductCostSnapshot(Base, CreatedAtMixin, WorkspaceMixin):
         nullable=False,
         index=True,
     )
+    # --- M4 V2.6 变体身份维度 ---
+    # WooCommerce 变体 ID.非空 ⇒ 快照对应变体级;为空 ⇒ 商品级.
+    # 快照是 append-only,历史成本快照永不覆盖(供应商报价变化不覆盖已形成快照).
+    variation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 变体 SKU(辅助识别,非身份主键).
+    variation_sku: Mapped[str | None] = mapped_column(String(191), nullable=True)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
     purchase_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     domestic_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     first_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     last_leg_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    international_shipping: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    international_shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     packaging: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     tax_estimate: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     handling: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_landed_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     payment_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    marketing_amortization: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), nullable=False, default=0
-    )
+    marketing_amortization: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     after_sales_loss: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
@@ -190,20 +192,14 @@ class ProductNuotaoScore(Base, CreatedAtMixin, WorkspaceMixin):
     )
     value_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
     utility_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
-    weight_packability_score: Mapped[Decimal] = mapped_column(
-        Numeric(4, 1), nullable=False, default=0
-    )
+    weight_packability_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
     durability_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
     brand_fit_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
-    differentiation_score: Mapped[Decimal] = mapped_column(
-        Numeric(4, 1), nullable=False, default=0
-    )
+    differentiation_score: Mapped[Decimal] = mapped_column(Numeric(4, 1), nullable=False, default=0)
     total: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
     grade: Mapped[str | None] = mapped_column(String(16), nullable=True)
     reject_reasons: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)
-    dimension_evidence: Mapped[dict[str, Any]] = mapped_column(
-        AI_JSON, nullable=False, default=dict
-    )
+    dimension_evidence: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     model_version: Mapped[str] = mapped_column(String(32), nullable=False)
     rule_version: Mapped[str] = mapped_column(String(32), nullable=False)
     scored_at: Mapped[datetime] = mapped_column(
@@ -213,9 +209,7 @@ class ProductNuotaoScore(Base, CreatedAtMixin, WorkspaceMixin):
     )
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        Index("ix_nuotao_scores_workspace_product", "workspace_id", "product_id"),
-    )
+    __table_args__ = (Index("ix_nuotao_scores_workspace_product", "workspace_id", "product_id"),)
 
 
 class ProductAnalysisRun(Base, CreatedAtMixin, WorkspaceMixin):
@@ -422,19 +416,13 @@ class ProductExperiment(Base, TimestampMixin, WorkspaceMixin):
     experiment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="market_test")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
     hypothesis: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    expected_metrics: Mapped[dict[str, Any] | None] = mapped_column(
-        AI_JSON, nullable=True, default=dict
-    )
+    expected_metrics: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True, default=dict)
     baseline: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True, default=dict)
-    target_metrics: Mapped[dict[str, Any] | None] = mapped_column(
-        AI_JSON, nullable=True, default=dict
-    )
+    target_metrics: Mapped[dict[str, Any] | None] = mapped_column(AI_JSON, nullable=True, default=dict)
     prediction: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     experiment: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     actual_result: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
-    result_history: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        AI_JSON, nullable=True, default=list
-    )
+    result_history: Mapped[list[dict[str, Any]] | None] = mapped_column(AI_JSON, nullable=True, default=list)
     calibration: Mapped[dict[str, Any]] = mapped_column(AI_JSON, nullable=False, default=dict)
     version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
     source_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -489,11 +477,7 @@ class ConfidenceCalibration(Base, CreatedAtMixin, WorkspaceMixin):
     )
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint(
-            "workspace_id", "bucket", name="uq_confidence_calibration_workspace_bucket"
-        ),
-    )
+    __table_args__ = (UniqueConstraint("workspace_id", "bucket", name="uq_confidence_calibration_workspace_bucket"),)
 
 
 class ProductScoreCalibrationRun(Base, TimestampMixin, WorkspaceMixin):
@@ -540,9 +524,7 @@ class ProductKnowledgeEntry(Base, TimestampMixin, WorkspaceMixin):
         index=True,
     )
     category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    entry_type: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="category_insight", index=True
-    )
+    entry_type: Mapped[str] = mapped_column(String(32), nullable=False, default="category_insight", index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(String(4000), nullable=False)
     tags: Mapped[list[Any]] = mapped_column(AI_JSON, nullable=False, default=list)

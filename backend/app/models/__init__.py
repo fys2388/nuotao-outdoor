@@ -34,8 +34,6 @@ from app.models.b2b_agreements import (
     B2BRebateAccrual,
     B2BRebateTier,
 )
-from app.models.b2b_finance import B2BInvoice, B2BReceipt, B2BReceivableEntry
-from app.models.b2b_fulfillment import B2BFulfillment, B2BFulfillmentItem
 from app.models.b2b_credit import (
     B2BCreditInsuranceClaim,
     B2BCreditInsurancePolicy,
@@ -43,13 +41,14 @@ from app.models.b2b_credit import (
     B2BCreditRiskAssessment,
     B2BCreditStatusEvent,
 )
-from app.models.b2b_sales import B2BRFQ, B2BContract, B2BQuote, B2BQuoteItem, B2BRFQItem
+from app.models.b2b_finance import B2BInvoice, B2BReceipt, B2BReceivableEntry
+from app.models.b2b_fulfillment import B2BFulfillment, B2BFulfillmentItem
 from app.models.b2b_leads import B2BLead
+from app.models.b2b_sales import B2BRFQ, B2BContract, B2BQuote, B2BQuoteItem, B2BRFQItem
 from app.models.business_alert import BusinessAlert
 from app.models.connector import BusinessRecommendation, ConnectorRun
 from app.models.consolidation import Brand, CommerceAttribution, LegalEntity
 from app.models.content_marketing import ContentItem, EDMCampaign, SEORecord
-from app.models.currency import ExchangeRate
 from app.models.creative import (
     CreativeApprovalRequest,
     CreativeBrief,
@@ -61,6 +60,7 @@ from app.models.creative import (
     CreativeReview,
     CreativeStudioAsset,
 )
+from app.models.currency import ExchangeRate
 from app.models.customer import (
     CustomerAccount,
     CustomerInteraction,
@@ -122,6 +122,7 @@ from app.models.rule import Rule, RuleExecutionLog
 from app.models.settlement import Settlement
 from app.models.strategy_version import StrategyVersion
 from app.models.supplier import Supplier
+from app.models.supplier_offer_mapping import SupplierOfferMapping
 from app.models.supply_chain import (
     InventorySnapshot,
     LogisticsEvent,
@@ -138,12 +139,13 @@ from app.models.supply_chain_learning import (
     SupplierPatternRun,
     SupplyChainCalibrationRun,
 )
+from app.models.user import User
 from app.models.wc_clickback import WcClickbackEvent
 from app.models.workflow import WorkflowException, WorkflowRun
 from app.models.workspace import Workspace
-from app.models.user import User
 
 __all__ = [
+    "B2BRFQ",
     "ActivityPlan",
     "AgentAlert",
     "AgentApproval",
@@ -164,8 +166,6 @@ __all__ = [
     "AiAgentRun",
     "B2BAgent",
     "B2BAgentAgreement",
-    "B2BOrder",
-    "B2BOrderItem",
     "B2BContract",
     "B2BCreditInsuranceClaim",
     "B2BCreditInsurancePolicy",
@@ -176,29 +176,30 @@ __all__ = [
     "B2BFulfillmentItem",
     "B2BInvoice",
     "B2BLead",
+    "B2BOrder",
+    "B2BOrderItem",
     "B2BPriceBook",
     "B2BPriceTier",
     "B2BPriceVersion",
     "B2BProductPrice",
     "B2BQuote",
     "B2BQuoteItem",
-    "B2BReceivableEntry",
+    "B2BRFQItem",
     "B2BRebateAccrual",
     "B2BRebateTier",
     "B2BReceipt",
-    "B2BRFQ",
-    "B2BRFQItem",
-    "BusinessRecommendation",
+    "B2BReceivableEntry",
     "Brand",
+    "BusinessRecommendation",
     "Campaign",
     "CampaignAiEvaluation",
+    "CommerceAttribution",
     "ConfidenceCalibration",
     "ConnectorRun",
-    "CommerceAttribution",
     "ContentItem",
     "CreativeAnalysisRun",
-    "CreativeAsset",
     "CreativeApprovalRequest",
+    "CreativeAsset",
     "CreativeBrief",
     "CreativeCalibrationRun",
     "CreativeCostEvent",
@@ -207,9 +208,9 @@ __all__ = [
     "CreativePromptTemplate",
     "CreativeReview",
     "CreativeStudioAsset",
-    "CustomerAiEvaluation",
     "CustomerAccount",
     "CustomerAccountMerge",
+    "CustomerAiEvaluation",
     "CustomerCalibrationRun",
     "CustomerConsentEvent",
     "CustomerFeedback",
@@ -226,11 +227,11 @@ __all__ = [
     "ImageGenerationTask",
     "Influencer",
     "InfluencerCollaboration",
-    "LegalEntity",
     "InventorySnapshot",
+    "LegalEntity",
+    "ListingJob",
     "LogisticsAiEvaluation",
     "LogisticsEvent",
-    "ListingJob",
     "LogisticsPatternRun",
     "MarketingCalibrationRun",
     "MarketingExperiment",
@@ -262,15 +263,16 @@ __all__ = [
     "SourcingCandidate",
     "Supplier",
     "SupplierAiEvaluation",
+    "SupplierOfferMapping",
     "SupplierPatternRun",
     "SupplierProfile",
     "SupplyChainCalibrationRun",
     "SupplyChainKnowledgeEntry",
     "User",
-    "WorkflowException",
-    "WorkflowRun",
     "WcClickbackEvent",
     "WooCommerceDraft",
+    "WorkflowException",
+    "WorkflowRun",
     "Workspace",
     "WorkspaceIdentityLink",
 ]
