@@ -1,0 +1,5 @@
+line_pk,order_pk,external_item_id,product_id,sku,name,quantity,unit_price,line_total,wc_variation_id,variation_sku,identity_state,cost_snapshot_id,cost_snapshot_version,pricing_rule_version,pricing_engine_version,evidence_grade
+l-001,o-001,,P-01,SKU-1,Camping Lantern,1,90.00,90.00,,,UNKNOWN_LEGACY,,,,,
+l-002,o-002,,P-02,SKU-3,Trekking Poles,1,50.00,50.00,,,UNKNOWN_LEGACY,,,,,
+l-003,o-003,,P-03,SKU-4,Folding Chair,2,60.00,120.00,101,SKU-4-GRAY,VARIATION,s-003,v2,,,
+l-004,o-003,,P-03,SKU-5,Water Bottle,1,30.00,30.00,,,UNKNOWN_LEGACY,,,,,

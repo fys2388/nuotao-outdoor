@@ -1,0 +1,2 @@
+shipment_pk,carrier,origin,destination,tracking_number,status,ship_date,delivery_time_days,actual_cost,actual_cost_currency,created_at
+sh-001,YTO,Guangzhou,US-CA,TRK-778899,in_transit,2026-08-16,7,22.50,USD,2026-08-16T04:00:00Z

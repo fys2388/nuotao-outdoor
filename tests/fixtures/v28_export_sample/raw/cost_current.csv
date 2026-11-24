@@ -1,0 +1,4 @@
+order_pk,product_id,sku,quantity,unit_price,line_total,received_at
+o-001,P-01,SKU-1,1,90.00,90.00,2026-08-15T09:00:00Z
+o-002,P-02,SKU-3,1,50.00,50.00,2026-08-20T10:30:00Z
+o-003,P-03,SKU-4,2,60.00,120.00,2026-09-01T08:15:00Z

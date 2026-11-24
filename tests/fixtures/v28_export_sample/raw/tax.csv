@@ -1,0 +1,4 @@
+order_pk,external_order_id,currency,subtotal,shipping_total,discount_total,tax_total,total,missing_reason,value_is_zero
+o-001,WC-1001,USD,90.00,5.00,0.00,8.00,103.00,,
+o-002,WC-1002,USD,50.00,0.00,5.00,4.50,49.50,,
+o-003,WC-1003,USD,120.00,12.00,0.00,0.00,132.00,,

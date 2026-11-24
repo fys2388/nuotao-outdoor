@@ -189,3 +189,9 @@ woo_images/
 
 # M420-06 credential audit: backend check_*.py one-off scripts stay out of git
 /backend/check_*.py
+
+# V2.8 historical export pipeline artifacts (plan §3.3): never commit raw
+# exports, desensitized data, the owner salt, or local test outputs.
+# (data/raw_export/ and data/desensitized/ already covered by data/)
+tests/fixtures/v28_export_sample/out/
+tests/fixtures/v28_export_sample/test-salt.txt

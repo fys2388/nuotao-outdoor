@@ -1,0 +1,3 @@
+campaign_pk,platform,campaign_id,name,product_id,currency,spend,impressions,clicks,conversion,revenue,roas,started_at,ended_at
+c-001,meta,meta-cmp-8842,August US DTC campaign,P-01,USD,350.00,12000,610,42,860.00,2.46,2026-08-01T00:00:00Z,2026-08-31T23:59:59Z
+c-002,google,goog-cmp-119,Headlamp search,P-03,USD,120.00,4500,230,15,380.00,3.17,2026-09-01T00:00:00Z,

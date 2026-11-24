@@ -1,0 +1,4 @@
+order_pk,payment_method,payment_status,currency,total,payment_fee,refunded_amount,received_at
+o-001,stripe,paid,USD,103.00,3.78,0.00,2026-08-15T09:00:00Z
+o-002,stripe,paid,USD,49.50,2.07,25.00,2026-08-20T10:30:00Z
+o-003,paypal,paid,USD,132.00,4.43,0.00,2026-09-01T08:15:00Z

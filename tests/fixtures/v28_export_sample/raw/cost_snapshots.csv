@@ -1,0 +1,5 @@
+snapshot_pk,product_id,variation_id,variation_sku,currency,purchase_cost,domestic_shipping,first_leg_shipping,last_leg_shipping,international_shipping,packaging,tax_estimate,handling,total_landed_cost,version,payment_fee,marketing_amortization,after_sales_loss,total_cost,weight_kg,source,valid_from,created_at,trace_id
+s-001,P-01,,,USD,15.00,0.70,6.30,10.00,0.00,1.20,0.00,0.50,33.70,v1,,,,28.80,0.80,cost_prefill,2026-08-01T00:00:00Z,2026-08-01T00:00:00Z,tr-s1
+s-002,P-02,,,USD,20.00,,,,,,,,38.70,v1,,,,33.80,1.00,cost_prefill,2026-08-01T00:00:00Z,2026-08-01T00:00:00Z,tr-s2
+s-003,P-03,101,SKU-4-GRAY,USD,10.00,,,,,,,,28.70,v2,,,,24.70,0.90,supplier_quote,2026-08-25T00:00:00Z,2026-08-25T00:00:00Z,tr-s3
+s-004,P-01,,,USD,14.00,,,,,,,,32.70,v2,,,,27.80,0.80,cost_prefill,2026-09-05T00:00:00Z,2026-09-05T00:00:00Z,tr-s4
