@@ -47,6 +47,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+# G3 cross-platform ACL guard (read/verify only, never modifies permissions).
+# Reached via an absolute import so the script also works as a plain
+# ``python scripts/v28_export_desensitize.py`` invocation.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.v28_export_acl_guard import (  # noqa: E402
+    verify_restricted_dir_acl,
+)
+
 # ---------------------------------------------------------------------------
 # PII / credential patterns (regex backstop, plan §3.2 V3)
 # ---------------------------------------------------------------------------
@@ -154,6 +162,11 @@ MISSING_REASON_PAYLOAD_EXCLUDED = "payload_excluded"
 # that restricted location is absent, invalid, or unsafe (fail-closed).
 ID_MAP_FILENAME = "_id_map_pseudo.json"
 ID_MAP_SCHEMA_VERSION = "v28-id-map-v1"
+# Intended modes for the Owner-controlled directory and its mapping file.
+# These are DOCUMENTATION of the required protection; the script requests
+# 0600 only at file creation (``os.open`` mode) and never chmod/chown/
+# setfacl/icacls the Owner-provisioned directory. The real DACL/mode is read
+# and verified by ``verify_restricted_dir_acl`` (``--verify-id-map-acl``).
 ID_MAP_DIR_MODE = 0o700
 ID_MAP_FILE_MODE = 0o600
 
@@ -452,6 +465,7 @@ def _id_map_payload(
     pseudo_map: dict[str, dict[str, str]],
     workspace_id: str,
     retention_days: int,
+    acl_verified: bool = False,
 ) -> dict[str, Any]:
     entries: dict[str, dict[str, str]] = {}
     for kind, mapping in pseudo_map.items():
@@ -470,8 +484,14 @@ def _id_map_payload(
             "storage_class": "restricted_owner_controlled",
             "git_tracked": False,
             "delivered_with_desensitized_package": False,
+            # Intended POSIX modes (documentation). On Windows these do not
+            # reflect the effective NTFS protection; the real DACL is verified
+            # by ``verify_restricted_dir_acl`` when ``--verify-id-map-acl`` is
+            # used and recorded as ``acl_verified`` (never inferred from a
+            # successful ``os.chmod``).
             "file_mode_octal": "0600",
             "directory_mode_octal": "0700",
+            "acl_verified": bool(acl_verified),
             "retention_days": retention_days,
             "destruction_owner_decision_required": True,
             "destruction_note": (
@@ -488,23 +508,29 @@ def write_restricted_id_map(
     pseudo_map: dict[str, dict[str, str]],
     workspace_id: str,
     retention_days: int,
+    acl_verified: bool = False,
 ) -> int:
-    """Write ``_id_map_pseudo.json`` with 0600 mode under ``secure_dir``.
+    """Write ``_id_map_pseudo.json`` with 0600 creation mode under ``secure_dir``.
 
     Returns the entry count. Uses O_EXCL so an existing mapping is never
     overwritten (a rerun must deliberately choose a fresh restricted slot).
+
+    The 0600 mode is requested at file creation only (``os.open`` mode). This
+    function never chmod/chown/setfacl/icacls the Owner-provisioned directory
+    or its ACL — real protection is read and verified by
+    ``verify_restricted_dir_acl`` and recorded via ``acl_verified``.
     """
     target = secure_dir / ID_MAP_FILENAME
-    payload = _id_map_payload(pseudo_map, workspace_id, retention_days)
+    payload = _id_map_payload(
+        pseudo_map, workspace_id, retention_days, acl_verified=acl_verified
+    )
     fd: int | None = None
     try:
-        os.chmod(secure_dir, ID_MAP_DIR_MODE)
         fd = os.open(
             str(target),
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             ID_MAP_FILE_MODE,
         )
-        os.chmod(target, ID_MAP_FILE_MODE)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fd = None
             json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
@@ -932,6 +958,7 @@ def run(
     workspace_id: str,
     id_map_dir: Path | None,
     id_map_retention_days: int | None,
+    verify_id_map_acl: bool = False,
 ) -> int:
     # G3: validate the restricted id-map location BEFORE any read/write.
     try:
@@ -939,6 +966,20 @@ def run(
     except RestrictedIdMapError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    # G3: real ACL verification (fail-closed) before the restricted directory
+    # is trusted. The guard never modifies permissions; it reads the actual
+    # NTFS DACL (Windows) / mode+ACL (Linux) and refuses when the real
+    # protection cannot be confirmed (Owner rule 7).
+    dir_acl = None
+    if verify_id_map_acl:
+        dir_acl = verify_restricted_dir_acl(secure_dir, kind="dir")
+        if not dir_acl.allowed:
+            print(
+                "id-map directory ACL verification failed (fail-closed): "
+                f"{dir_acl.reason}",
+                file=sys.stderr,
+            )
+            return 2
     if id_map_retention_days is None or id_map_retention_days <= 0:
         print("id-map retention must be a positive number of days", file=sys.stderr)
         return 2
@@ -1045,11 +1086,27 @@ def run(
                 pseudo_map,
                 workspace_id,
                 id_map_retention_days,
+                acl_verified=bool(dir_acl is not None and dir_acl.allowed),
             )
             id_map_written = True
         except RestrictedIdMapError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+
+    # G3: after the write, verify the file's own real ACL (evidence). The
+    # directory gate above is the authoritative fail-closed check; a file that
+    # somehow fails after creation is reported and fails the run.
+    file_acl = None
+    acl_failure = False
+    if verify_id_map_acl and id_map_written:
+        file_acl = verify_restricted_dir_acl(secure_dir / ID_MAP_FILENAME, kind="file")
+        if not file_acl.allowed:
+            acl_failure = True
+            print(
+                "id-map file ACL verification failed (fail-closed): "
+                f"{file_acl.reason}",
+                file=sys.stderr,
+            )
 
     report_path = out_dir / "desensitization_report.json"
     report_path.write_text(
@@ -1065,6 +1122,9 @@ def run(
                     "delivered_with_package": False,
                     "git_tracked": False,
                     "retention_days": id_map_retention_days,
+                    "acl_verified": bool(dir_acl is not None and dir_acl.allowed),
+                    "acl_dir": dir_acl.to_json() if dir_acl is not None else None,
+                    "acl_file": file_acl.to_json() if file_acl is not None else None,
                 },
             },
             ensure_ascii=False,
@@ -1073,6 +1133,8 @@ def run(
         encoding="utf-8",
     )
     print(json.dumps(rep.to_json(), indent=2))
+    if acl_failure:
+        return 2
     return 0 if rep.passed else 1
 
 
@@ -1112,6 +1174,15 @@ def main(argv: list[str] | None = None) -> int:
         type=_positive_int,
         help="Minimum retention (days) before Owner-authorized destruction.",
     )
+    parser.add_argument(
+        "--verify-id-map-acl",
+        action="store_true",
+        help=(
+            "Verify the REAL ACL of the restricted id-map directory before "
+            "writing (fail-closed, exit 2) and of the written file after "
+            "writing. Reads only; never modifies permissions."
+        ),
+    )
     args = parser.parse_args(argv)
     return run(
         args.raw_dir,
@@ -1120,6 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
         args.workspace_id,
         args.id_map_dir,
         args.id_map_retention_days,
+        verify_id_map_acl=args.verify_id_map_acl,
     )
 
 
