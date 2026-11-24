@@ -346,6 +346,218 @@ def test_missing_required_association_field_marked():
 
 
 # ---------------------------------------------------------------------------
+# G4 supplement: full-manifest workspace consistency + cross-workspace
+# ---------------------------------------------------------------------------
+
+#: Non-order-linked export files that the G4 supplement must also cover.
+EXTRA_WS_FILES = (
+    "cost_snapshots.csv",
+    "cost_current.csv",
+    "price_history.csv",
+    "shipments.csv",
+    "logistics_events.csv",
+    "campaigns.csv",
+)
+
+
+@pytest.mark.parametrize(
+    ("fname", "row", "pk"),
+    [
+        ("cost_snapshots.csv", {"snapshot_pk": "s-001"}, "snapshot_pk"),
+        ("cost_current.csv", {"order_pk": "o-001"}, "order_pk"),
+        ("price_history.csv", {"product_pk": "P-01"}, "product_pk"),
+        ("shipments.csv", {"shipment_pk": "sh-001"}, "shipment_pk"),
+        (
+            "logistics_events.csv",
+            {"event_pk": "e-001", "shipment_id": "sh-001"},
+            "event_pk",
+        ),
+        ("campaigns.csv", {"campaign_pk": "c-001"}, "campaign_pk"),
+    ],
+)
+def test_extra_entity_workspace_mismatch_detected(fname: str, row: dict, pk: str):
+    """G4 supplement: EVERY export entity (not just order-linked) must match the
+    CLI workspace. A non-matching row in cost_snapshots / price_history /
+    shipments / logistics_events / campaigns / cost_current FAILS."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        "shipments.csv": [{"shipment_pk": "sh-001", "workspace_id": "ws-test-1"}],
+        fname: [{"workspace_id": "ws-other", **row}],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"], f"{fname} workspace mismatch was not detected"
+    assert any(
+        m["file"] == fname and m["reason"] == "workspace_mismatch"
+        for m in ws["detail"]["mismatch_rows"]
+    ), f"{fname} not in mismatch rows"
+    assert ws["detail"]["manifest"][fname]["status"] == "workspace_mismatch_fail"
+
+
+@pytest.mark.parametrize(
+    ("fname", "row", "pk"),
+    [
+        ("cost_snapshots.csv", {"snapshot_pk": "s-001"}, "snapshot_pk"),
+        ("cost_current.csv", {"order_pk": "o-001"}, "order_pk"),
+        ("price_history.csv", {"product_pk": "P-01"}, "product_pk"),
+        ("shipments.csv", {"shipment_pk": "sh-001"}, "shipment_pk"),
+        (
+            "logistics_events.csv",
+            {"event_pk": "e-001", "shipment_id": "sh-001"},
+            "event_pk",
+        ),
+        ("campaigns.csv", {"campaign_pk": "c-001"}, "campaign_pk"),
+    ],
+)
+def test_extra_entity_empty_workspace_detected(fname: str, row: dict, pk: str):
+    """G4 supplement: a blank workspace_id in ANY export entity FAILS."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        "shipments.csv": [{"shipment_pk": "sh-001", "workspace_id": "ws-test-1"}],
+        fname: [{"workspace_id": "", **row}],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"], f"{fname} empty workspace was not detected"
+    assert any(
+        m["file"] == fname and m["reason"] == "missing"
+        for m in ws["detail"]["mismatch_rows"]
+    ), f"{fname} empty workspace not in mismatch rows"
+
+
+def test_missing_workspace_column_fails_for_any_entity():
+    """G4 supplement: a schema-workspace-scoped file exported WITHOUT
+    workspace_id is a FAIL (schema-requires-but-export-missing), regardless of
+    whether it is order-linked. It is never downgraded to a structural limit."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        # shipments.csv source table IS workspace-scoped but the export omits it.
+        "shipments.csv": [{"shipment_pk": "sh-001"}],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert "shipments.csv" in ws["detail"]["missing_workspace_columns"]
+    assert (
+        ws["detail"]["missing_workspace_reasons"]["shipments.csv"]
+        == "schema_requires_workspace_but_export_missing"
+    )
+    assert ws["detail"]["manifest"]["shipments.csv"]["status"] == (
+        "missing_workspace_column_fail"
+    )
+
+
+def test_cross_workspace_same_order_pk_never_matched():
+    """G4 supplement: the same order_pk under a DIFFERENT workspace must never
+    satisfy a foreign reference. order_pk-only matching would conflate ws-B's
+    o-001 with ws-A's o-001; the (workspace_id, order_pk) resolution must
+    report it as isolated AND as a workspace mismatch."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        "tax.csv": [{"order_pk": "o-001", "workspace_id": "ws-other"}],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    v2 = rep.checks["V2_referential"]
+    assert not v2["ok"], "cross-workspace order_pk must be isolated"
+    assert "o-001" in v2["detail"]["order_pk_orphans"]["tax.csv"]
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert any(
+        m["file"] == "tax.csv" and m["reason"] == "workspace_mismatch"
+        for m in ws["detail"]["mismatch_rows"]
+    )
+    # The cross-workspace collision is reported by key, not silently merged.
+    assert ws["detail"]["cross_workspace_keys"].get("o-001") == [
+        "ws-other",
+        "ws-test-1",
+    ]
+
+
+def test_cross_workspace_same_order_pk_in_orders_detected():
+    """G4 supplement: orders.csv holding the same order_pk under two workspaces
+    FAILS both PK uniqueness and workspace consistency, and the cross-workspace
+    key is reported."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [
+            {"order_pk": "o-001", "workspace_id": "ws-test-1"},
+            {"order_pk": "o-001", "workspace_id": "ws-other"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    pk = rep.checks["V2_primary_key_integrity"]
+    assert not pk["ok"], "duplicate order_pk across workspaces must fail PK check"
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert ws["detail"]["cross_workspace_keys"].get("o-001") == [
+        "ws-other",
+        "ws-test-1",
+    ]
+
+
+def test_logistics_event_parent_workspace_mismatch():
+    """G4 supplement: logistics_events.shipment_id -> shipments.shipment_pk is
+    resolved by (workspace_id, shipment_id). An event whose workspace differs
+    from its shipment's workspace FAILS parent_workspace_mismatch."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        "shipments.csv": [
+            {"shipment_pk": "sh-001", "workspace_id": "ws-test-1"},
+        ],
+        "logistics_events.csv": [
+            {"event_pk": "e-001", "shipment_id": "sh-001", "workspace_id": "ws-other"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert any(
+        m["file"] == "logistics_events.csv"
+        and m["reason"] == "parent_workspace_mismatch"
+        for m in ws["detail"]["mismatch_rows"]
+    )
+
+
+def test_workspace_manifest_complete_and_ok():
+    """G4 supplement: the full-pipeline manifest covers every actual output
+    file, all carry workspace_id, and all rows are consistent (status ok)."""
+    report = _run_script()
+    ws = report["regression"]["checks"]["V2_workspace_consistency"]
+    assert ws["ok"]
+    detail = ws["detail"]
+    manifest = detail["manifest"]
+    # Every CSV written by the pipeline is in the manifest.
+    for csv_name in sorted(p.name for p in OUT.iterdir() if p.name.endswith(".csv")):
+        assert csv_name in manifest, f"{csv_name} missing from workspace manifest"
+    assert detail["checked_files"] == len(manifest)
+    for name, entry in manifest.items():
+        assert entry["has_workspace_id"], f"{name} lost workspace_id"
+        assert entry["schema_requires_workspace_id"], f"{name} schema contract unclear"
+        assert entry["status"] == "ok", f"{name} workspace status: {entry['status']}"
+        assert entry["empty_workspace_rows"] == 0
+        assert entry["workspace_mismatch_rows"] == 0
+    assert not detail["missing_workspace_columns"]
+    assert not detail["cross_workspace_keys"]
+
+
+# ---------------------------------------------------------------------------
 # G3: restricted id-map storage
 # ---------------------------------------------------------------------------
 

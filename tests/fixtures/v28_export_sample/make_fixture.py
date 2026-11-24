@@ -14,14 +14,22 @@ RAW = BASE / "raw"
 RAW.mkdir(parents=True, exist_ok=True)
 
 # G4: every workspace-scoped table in the schema carries workspace_id. The
-# synthetic exports expose it so the workspace-consistency check can run.
+# synthetic exports expose it on EVERY entity (all 12 export files map to a
+# workspace-scoped source table), so the workspace-consistency check can run
+# across the whole manifest.
 WORKSPACE_ID = "ws-test-1"
 WORKSPACE_FILES = {
     "orders.csv",
     "orders_lines.csv",
     "tax.csv",
+    "cost_snapshots.csv",
+    "cost_current.csv",
+    "price_history.csv",
     "payments.csv",
     "refunds.csv",
+    "shipments.csv",
+    "logistics_events.csv",
+    "campaigns.csv",
     "order_marketing.csv",
 }
 

@@ -82,14 +82,16 @@
 - `run()` 现在：**先**校验受限目录（读 salt 前、任何输出前）；仅当 `rep.passed` 才写映射；报告新增 `id_map` 元数据（`written/entry_count/storage_class/delivered_with_package/git_tracked/retention_days`，**不含路径与原始 ID**）；任何受限存储错误 → `return 2`（无 traceback、无原始 ID）。
 - `main()` 新增**必填** `--id-map-dir` 与 `--id-map-retention-days`（`_positive_int`）。
 
-**原差异 2（V2 只校验 refunds）→ G4 已修复**：
+**原差异 2（V2 只校验 refunds）→ G4 已修复（本工作项扩展至全部 12 个实际输出文件）**：
 
 - 新增 `ORDER_FK_FILES = {"orders_lines.csv": "line_pk", "tax.csv": None, "payments.csv": None, "order_marketing.csv": None, "refunds.csv": "refund_pk"}`。
-- V2 重构为 `V2_referential`（五文件 `order_pk ∈ orders`；缺失列记 `missing_required_association_fields`；孤立行按文件记 `order_pk_orphans`；`refunds` 采样继续用 `refund_pk`，保持既有 `samples == ["r-404"]` 行为）、`V2_primary_key_integrity`（`PRIMARY_KEY_FIELDS` 八文件：缺失列 → `missing_primary_key_field`，空/重复计数）、`V2_workspace_consistency`（orders 与五关联文件须有 `workspace_id`、与 CLI 及父订单一致；缺失列 → `missing_workspace_columns`）。
+- V2 重构为 `V2_referential`（五文件 `order_pk ∈ orders`，**按 `(workspace_id, order_pk)` 解析，绝不只用 `order_pk` 跨 workspace 匹配**；缺失列记 `missing_required_association_fields`；孤立行按文件记 `order_pk_orphans`；`refunds` 采样继续用 `refund_pk`，保持既有 `samples == ["r-404"]` 行为）、`V2_primary_key_integrity`（`PRIMARY_KEY_FIELDS` 八文件：缺失列 → `missing_primary_key_field`，空/重复计数）、`V2_workspace_consistency`（**全部 12 个实际输出文件**均须有 `workspace_id`、每行非空且等于 CLI `--workspace-id`；父子记录（orders↔五关联文件、shipments↔logistics_events）以 `(workspace_id, 关联键)` 校验一致；跨 workspace 同 `order_pk` 记 `cross_workspace_keys` 并 FAIL；缺失 `workspace_id` 列的文件按 `SCHEMA_WORKSPACE_FILES` 区分：schema 明确有该字段 → FAIL（`missing_workspace_reasons=...schema_requires_workspace_but_export_missing`），schema 明确无 → `STRUCTURAL_ASSOCIATION_LIMITS`；每文件 manifest 记录 `rows/has_workspace_id/schema_requires_workspace_id/empty_workspace_rows/workspace_mismatch_rows/status`）。
+- 新增 `SCHEMA_WORKSPACE_FILES`（**全部 12 → True**，经 `backend/app/models/` 确认 `WorkspaceMixin.workspace_id` 非空 / `ProductMapping.workspace_id` 显式）、`WORKSPACE_PARENT`（orders=None；orders_lines/tax/payments/order_marketing/refunds→orders 经 `order_pk`；logistics_events→shipments 经 `shipment_id/shipment_pk`；其余 None）、`ORDER_LINKED_FILES`。
 - 新增 `STRUCTURAL_ASSOCIATION_LIMITS`：`shipments/logistics_events/campaigns → orders` 无 FK、`tax/payments/order_marketing` 无代理主键、`order_items.cost_snapshot_id` schema 无——**如实记 `structural_limitations`，绝不伪造 FK/关联键**。
-- fixture/计划 SQL 同步暴露 `workspace_id`（合成 fixture 的 orders/orders_lines/tax/payments/order_marketing/refunds 均带 `workspace_id`；计划 §2 A/B/E/G SQL 增加 `workspace_id`/`order_item_workspace_id` 列）。
+- fixture/计划 SQL 同步暴露 `workspace_id`：合成 fixture **全部 12 个 raw CSV** 均带 `workspace_id`（首列，`ws-test-1`）；计划 §2 全部组 SQL 投影 `workspace_id`（本轮补齐 C/D/F/G 组，F 组拆分为 F-1 shipments/F-2 logistics_events 两查询）。
+- **G4 新增 17 项用例**：六个非订单链实体（cost_snapshots/cost_current/price_history/shipments/logistics_events/campaigns）workspace 不匹配、空 workspace、任意实体缺 `workspace_id` 列 FAIL、跨 workspace 同 `order_pk` 永不匹配（子文件）、跨 workspace 同 `order_pk` 在 orders 检出、logistics_events 父 workspace 不匹配、workspace manifest 覆盖全 12 文件且全 ok。
 
-> 本工作项**保留全部既有 13 测试**（未删除/未放宽），新增 G3/G4 用例后合计 29 项（见 §3.1）。
+> 本工作项**保留全部既有 13 测试**（未删除/未放宽），G4 补充后 `test_v28_export_desensitize.py` 23→40 项 + `test_v28_recalc_quantification.py` 6 项 = **46 项**（见 §3.1）。
 
 ### 2.6 其他观察（非阻塞）
 
@@ -104,14 +106,15 @@
 
 - 命令：`python -m pytest tests/test_v28_export_desensitize.py tests/test_v28_recalc_quantification.py -q`
 - 环境：Python 3.12.10 / pytest 9.1.1（`E:\AI\nuotao-ai-os\.venv`）
-- 结果：**29 passed in 4.86s**（`test_v28_export_desensitize.py` 23 项 + `test_v28_recalc_quantification.py` 6 项，全部 PASSED）。
+- 结果：**46 passed in 3.03s**（`test_v28_export_desensitize.py` 40 项 + `test_v28_recalc_quantification.py` 6 项，全部 PASSED）。
 - **既有 13 项全部保留**（未删除/未放宽，全部仍 PASSED）：salt 缺失 fail-closed、V1–V7 自校验、PII 无残留、PII 键剔除 + 伪 ID 稳定、NULL 不填 0（legit 0 保留）、孤立退款检出（V2，`samples == ["r-404"]`）、行数不一致检出（V1）、重算三态 + 缺失原因、R1 虚增金额/比例、R2 口径差方向、R7 版本缺口、全量分析端点。
-- **新增 16 项 G3/G4 用例**：五关联文件孤立 `order_pk`（orders_lines/tax/payments/order_marketing/refunds 各一）、workspace 不匹配、缺 `workspace_id` 列明确标记、重复主键、空主键、必需关联字段缺失标记（不伪造 FK）、映射写入受限目录（0600/0700/保留期/无 salt/不入交付包）、映射不在 Git 且工作树内路径 fail-closed、缺 `--id-map-dir` fail-closed、受限路径与 out 重叠 fail-closed、日志/报告不泄漏原始 ID、两次运行字节一致（CSV + 映射 + 报告）。
-- 结论：**29/29 全绿**（仅合成 fixture，无生产数据、无 DB、无网络），满足「原 13 项全绿」门禁并新增 G3/G4 覆盖。
+- **新增 G4 补充 17 项用例**：六个非订单链实体（cost_snapshots/cost_current/price_history/shipments/logistics_events/campaigns）× workspace 不匹配 + 空 workspace（各 6）、任意实体缺 `workspace_id` 列 FAIL、跨 workspace 同 `order_pk` 永不匹配（子文件）、跨 workspace 同 `order_pk` 在 orders 检出、logistics_events 父 workspace 不匹配、workspace manifest 覆盖全 12 文件且全 ok。
+- **既有 G3/G4 首轮 16 项仍全绿**：五关联文件孤立 `order_pk`、workspace 不匹配、缺 `workspace_id` 列明确标记、重复主键、空主键、必需关联字段缺失标记（不伪造 FK）、映射写入受限目录（0600/0700/保留期/无 salt/不入交付包）、映射不在 Git 且工作树内路径 fail-closed、缺 `--id-map-dir` fail-closed、受限路径与 out 重叠 fail-closed、日志/报告不泄漏原始 ID、两次运行字节一致（CSV + 映射 + 报告）。
+- 结论：**46/46 全绿**（仅合成 fixture，无生产数据、无 DB、无网络），满足「原 13 项全绿」门禁并新增 G4 全实体 workspace 覆盖。
 
 ### 3.2 ruff 观察
 
-- 本轮变更文件（`scripts/v28_export_desensitize.py`、`tests/test_v28_export_desensitize.py`、`tests/test_v28_recalc_quantification.py`、`tests/fixtures/v28_export_sample/make_fixture.py`）经 pre-commit `ruff`（v0.8.4，`--fix`）**Passed**，`ruff-format` 已格式化（2 文件重排，复跑 29 测试仍全绿）；**变更代码无 ruff 报错**。
+- 本轮变更文件（`scripts/v28_export_desensitize.py`、`tests/test_v28_export_desensitize.py`、`tests/fixtures/v28_export_sample/make_fixture.py`、`tests/v28_export_g3_env_precheck.py`）经 pre-commit `ruff`（v0.8.4，`--fix`）**Passed**，`ruff-format` 已格式化（复跑 46 测试仍全绿）；**变更代码无 ruff 报错**。
 - 既有 `scripts/v28_recalc_quantify.py` 等未触碰文件仍有 HEAD `60e89fa` 遗留的 14 项风格提示（UP012、FURB157、PLC0206、SIM102、PIE800、SIM118、RUF100、PLW1510），**非本变更引入**，仍列入「真实数据执行前」低优先级清理项（G5）。
 
 ---
@@ -223,8 +226,8 @@
 |---|---|---|---|---|
 | G1 | **无生产脱敏副本**（生产 DB 未只读导出，未脱敏） | 30 天样本验证**无法执行**；真实数据数字（R1/R2/R7）无法产出 | 生产 DBA（有权限人员） | 只读执行计划 §2 SQL 30 天窗口 → 产物交 DSH |
 | G2 | **salt 未由 Owner 提供** | 脱敏脚本无法运行（fail-closed） | Owner/有权限人员 | 安全渠道提供 `--salt-file` |
-| G3 | ~~`_id_map_pseudo.json` 未实现~~（已修复） | ~~无法显式拿到原始↔伪映射表~~ | 本工作项（已关闭） | 已实现受限目录落盘 + `.gitignore` 兜底 + 29 测试通过（§3.1） |
-| G4 | ~~V2 仅校验 refunds~~（已修复） | ~~tax/payments/order_marketing/orders_lines 孤立行可能静默漏检~~ | 本工作项（已关闭） | V2 已扩展五文件 + 主键 + workspace 校验，29 测试通过（§3.1） |
+| G3 | ~~`_id_map_pseudo.json` 未实现~~（已修复；真实置备待 Owner） | ~~无法显式拿到原始↔伪映射表~~ | 本工作项（代码已关闭）/ Owner（真实置备） | 受限目录落盘 + `.gitignore` 兜底 + 46 测试通过（§3.1）；**合成环境预检见 `docs/V2_8_EXPORT_G3_ENV_PRECHECK.md`**（Windows 宿主 POSIX 0600/0700 不生效 → 真实置备须在目标宿主复验 `stat`/`icacls`/`getfacl`） |
+| G4 | ~~V2 仅校验 refunds~~（已修复） | ~~tax/payments/order_marketing/orders_lines 孤立行可能静默漏检~~ | 本工作项（已关闭） | V2 已扩展**全部 12 文件** workspace/主键/关联（`(workspace_id, order_pk)` 解析、跨 workspace 检出、schema 违约区分），46 测试通过（§3.1） |
 | G5 | **ruff 14 项风格提示**（HEAD 既有，非本变更） | 不影响功能；低优先级 | 本工作项（后续，可选） | 统一 ruff 配置（backend/ruff.toml 或根配置）后清理 |
 | G6 | **无 `price_publication_records`、无订单行级税、无退款手续费返还、无营销历史分摊**（R6/R12 等 schema 缺口） | 相应维度标 `LEGACY_NO_PUBLICATION_RECORD`/`not_collected`，不伪造 | 设计层（已记录 R 系列） | 长期；本次如实标注即可 |
 
@@ -232,11 +235,13 @@
 
 ## 8. 结论与下一步
 
-- **只读 SQL**：通过（纯 SELECT、参数化、无生产连接、无凭据）。
-- **匿名化脚本**：通过（PII 删除 + 稳定伪 ID + salt fail-closed + NULL 不填 0 + **G3 受限映射目录 + G4 五文件/主键/workspace 完整性自校验**）；原 §2.5 两处差异已在本工作项修复。
-- **既有 + 新增测试**：**29/29 全绿**（原 13 项全部保留未删除/未放宽 + 新增 16 项 G3/G4 用例，本轮实跑确认）。
+- **只读 SQL**：通过（纯 SELECT、参数化、无生产连接、无凭据；计划 §2 全部组 SQL 投影 `workspace_id`）。
+- **匿名化脚本**：通过（PII 删除 + 稳定伪 ID + salt fail-closed + NULL 不填 0 + **G3 受限映射目录 + G4 全 12 文件 workspace/主键/关联自校验**）；原 §2.5 两处差异已在本工作项修复。
+- **既有 + 新增测试**：**46/46 全绿**（原 13 项全部保留未删除/未放宽 + G3/G4 首轮 16 项 + G4 补充 17 项，本轮实跑确认）。
+- **G3 合成环境预检**：见 `docs/V2_8_EXPORT_G3_ENV_PRECHECK.md` —— 合成环境 11 项中 9 项通过，**2 项为 Windows 宿主 POSIX 模式不生效/ACL 未收紧（真实置备须在目标宿主复验）**；真实 id_map_dir 由 Owner 置备（本工作项未创建真实映射文件、未接收生产 Salt）。
+- **G1/G2 准备**：见 `docs/V2_8_EXPORT_G1_G2_PREP_BLOCKERS.md` —— 字段映射/查询执行计划/输出文件清单/生产脱敏接收核验 SOP/salt 注入说明均已准备，**未执行**；G1（无生产脱敏副本）、G2（salt 未提供）仍阻塞。
 - **0076**：冻结未触碰（blob 与 HEAD 一致）。
-- **下一步（Owner 门禁）**：Owner 提供 salt（G2）→ 生产 DBA 只读导出 30 天（G1）→ DSH 脱敏（V1–V7 + G3/G4）→ 本文件 §4/§5 验证 → Owner 决定 30→90 天扩展与受限映射销毁时点。
+- **下一步（Owner 门禁）**：Owner 提供 salt（G2）+ 置备真实受限目录（G3 复验）→ 生产 DBA 只读导出 30 天（G1，按 G1/G2 文档 §4 SOP 接收核验）→ DSH 脱敏（V1–V7 + G3/G4）→ 本文件 §4/§5 验证 → Owner 决定 30→90 天扩展与受限映射销毁时点。
 - **不宣称 V2.8 通过**；V2.8 相关结论待 Owner 依据真实数据验证结果单独宣布。
 
 ---

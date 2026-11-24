@@ -1,3 +1,3 @@
-product_pk,sku,price_current,regular_price_current,sale_price_current,wc_product_id,wc_total_sales,created_at,price_modified_at,price_lineage,wc_variation_id
-P-01,SKU-1,29.99,29.99,,1001,23,2026-07-01T00:00:00Z,2026-08-01T00:00:00Z,LEGACY_NO_PUBLICATION_RECORD,
-P-03,SKU-4,59.99,59.99,49.99,1003,7,2026-07-20T00:00:00Z,2026-09-10T00:00:00Z,LEGACY_NO_PUBLICATION_RECORD,
+workspace_id,product_pk,sku,price_current,regular_price_current,sale_price_current,wc_product_id,wc_total_sales,created_at,price_modified_at,price_lineage,wc_variation_id
+ws-test-1,P-01,SKU-1,29.99,29.99,,1001,23,2026-07-01T00:00:00Z,2026-08-01T00:00:00Z,LEGACY_NO_PUBLICATION_RECORD,
+ws-test-1,P-03,SKU-4,59.99,59.99,49.99,1003,7,2026-07-20T00:00:00Z,2026-09-10T00:00:00Z,LEGACY_NO_PUBLICATION_RECORD,

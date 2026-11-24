@@ -176,6 +176,7 @@ LIMIT :batch_size;
 -- C-1 快照多版本（append-only，含历史全部版本）
 SELECT
   s.id                AS snapshot_pk,
+  s.workspace_id      AS workspace_id,
   s.product_id,
   s.variation_id, s.variation_sku,
   s.currency,
@@ -197,6 +198,7 @@ LIMIT :batch_size;
 -- C-2 当前成本行（订单摄取实际使用的表，R5/R7 对照）
 SELECT
   c.id                AS cost_pk,
+  c.workspace_id      AS workspace_id,
   c.product_id,
   c.variation_id, c.variation_sku,
   c.currency,
@@ -228,6 +230,7 @@ C-2 用子查询限定"时间窗内订单引用过的 product_id"，避免全表
 ```sql
 SELECT
   p.id                AS product_pk,
+  p.workspace_id      AS workspace_id,
   p.sku,
   p.meta ->> 'price'          AS price_current,
   p.meta ->> 'regular_price'  AS regular_price_current,
@@ -297,30 +300,47 @@ LIMIT :batch_size;
 ### 2.6 F 组 — 物流（起点/终点/运输费，R3）
 
 ```sql
+-- F-1 物流主记录（shipments.csv）
 SELECT
   s.id                AS shipment_pk,
+  s.workspace_id      AS workspace_id,
   s.purchase_order_id,
   s.b2b_order_id,
   s.carrier, s.origin, s.destination,
   s.tracking_number, s.status, s.ship_date, s.delivery_time_days,
   s.promised_delivery, s.actual_cost, s.actual_cost_currency,
-  s.delay_reason, s.created_at,
-  e.id                AS event_pk,
-  e.event_type, e.location, e.description, e.occurred_at
+  s.delay_reason, s.created_at
 FROM shipment_records s
-LEFT JOIN logistics_events e
-       ON e.shipment_id = s.id AND e.workspace_id = s.workspace_id
 WHERE s.workspace_id = :workspace_id
   AND s.created_at >= :start_date AND s.created_at < :end_date
 ORDER BY s.created_at, s.id
 LIMIT :batch_size;
+
+-- F-2 物流事件（logistics_events.csv，子记录）
+SELECT
+  e.id                AS event_pk,
+  e.workspace_id      AS workspace_id,
+  e.shipment_id,
+  e.event_type, e.location, e.description, e.occurred_at
+FROM logistics_events e
+WHERE e.workspace_id = :workspace_id
+  AND e.shipment_id IN (
+    SELECT s.id FROM shipment_records s
+    WHERE s.workspace_id = :workspace_id
+      AND s.created_at >= :start_date AND s.created_at < :end_date
+  )
+ORDER BY e.occurred_at, e.id
+LIMIT :batch_size;
 ```
+
+> G4 workspace：F-1/F-2 均显式投影 `workspace_id`（源表 `shipment_records`/`logistics_events` 均 workspace-scoped）；`logistics_events.shipment_id → shipments.shipment_pk` 的父子一致性由脱敏脚本以 `(workspace_id, shipment_id)` 解析，不用 `shipment_id` 跨 workspace 匹配。
 
 ### 2.7 G 组 — 营销归因 + 分摊（CP 重算分量）
 
 ```sql
 SELECT
   c.id                AS campaign_pk,
+  c.workspace_id      AS workspace_id,
   c.platform, c.campaign_id, c.name,
   c.product_id, c.status, c.currency,
   c.budget, c.spend, c.impressions, c.clicks,
@@ -366,7 +386,7 @@ G 组"订单归因及分摊记录"= `orders.advertising_cost`（订单侧分摊�
   3. 构建稳定伪 ID 映射（§1.3），对 6 类标识逐一替换；
   4. PII 剥除：枚举键删除（`billing_*`/`shipping_*` 地址块、`display_name`、`name/first_name/last_name` 键）+ JSON 键递归 + 正则兜底（邮箱/电话/卡号/CVV/`token`/`api_key`/`cookie`/`secret`）；命中正则的字段置 `REDACTED:<reason>` 并在报告列出命中计数；
   5. 缺失处理：NULL/空保留；按 §1.4 枚举写 `missing_reason`；**0 值保留 0 并标 `value_is_zero=true`**（供"是否被填 0"校验区分）；
-  6. 对齐（G4）：以 A 组 `order_pk` 为主键，校验 `orders_lines/tax/payments/order_marketing/refunds` 五个文件 `order_pk` ⊆ A；C 组按 `product_id+variation_id` 索引；F/G 独立；关联/主键/workspace 校验见 §3.2 V2；
+  6. 对齐（G4）：以 A 组 `order_pk` 为主键，校验 `orders_lines/tax/payments/order_marketing/refunds` 五个文件 `order_pk` ⊆ A（按 `(workspace_id, order_pk)` 解析，**不跨 workspace 匹配**）；C 组按 `product_id+variation_id` 索引；F/G 独立；关联/主键/workspace 校验见 §3.2 V2（workspace 检查覆盖**全部 12 个输出文件**，含 `cost_snapshots/cost_current/price_history/shipments/logistics_events/campaigns`）；
   7. **仅当 V1–V7 全通过**才把 `pseudo_map`（剔除 `_salt`/`_workspace` 元键）写入受限目录 `_id_map_pseudo.json`（O_EXCL、0600/0700、fsync）。
 - **输出**：`data/desensitized/{orders,orders_lines,tax,cost_snapshots,cost_current,price_history,payments,refunds,shipments,logistics_events,campaigns,order_marketing}.csv` + `desensitization_report.json`（命中统计、缺失清单、行数、sha256 文件指纹、`id_map` 元数据：写入与否/条数/存储类别/保留期，**不含路径与原始 ID**）；映射工件仅在 `--id-map-dir/_id_map_pseudo.json`。
 
@@ -375,7 +395,7 @@ G 组"订单归因及分摊记录"= `orders.advertising_cost`（订单侧分摊�
 | # | 校验 | 通过标准 |
 |---|---|---|
 | V1 | 行数一致 | 脱敏输出行数 == 原始输入行数（逐文件比对，报告输出） |
-| V2 | 关联/主键/workspace 完整性 | **G4**：① 引用完整性——`orders_lines/tax/payments/order_marketing/refunds` 五文件的 `order_pk` 必须在 `orders.csv` A 组集合中（孤立行按行集记入 detail 并 FAIL，`refunds` 用 `refund_pk` 采样保留既有行为）；② 主键完整性——`orders/orders_lines/refunds/cost_snapshots/price_history/shipments/logistics_events/campaigns` 的代理主键列必须存在、非空、不重复；③ workspace 一致性——`orders` 与五个关联文件均须有 `workspace_id`，与 CLI `--workspace-id` 及父订单一致；缺失关联列/缺 `workspace_id` 列 → 记 `missing_required_association_fields`/`missing_workspace_columns` + `structural_limitations`（**明确标记，绝不静默跳过，绝不伪造 FK**）；schema 无 FK（shipments/logistics_events/campaigns→orders）或无可信关联字段（tax/payments/order_marketing 无代理主键）→ 如实记录为结构限制 |
+| V2 | 关联/主键/workspace 完整性 | **G4**：① 引用完整性——`orders_lines/tax/payments/order_marketing/refunds` 五文件的 `order_pk` 必须在 `orders.csv` A 组集合中，按 `(workspace_id, order_pk)` 解析（**绝不只用 `order_pk` 跨 workspace 匹配**）；孤立行按行集记入 detail 并 FAIL，`refunds` 用 `refund_pk` 采样保留既有行为；② 主键完整性——`orders/orders_lines/refunds/cost_snapshots/price_history/shipments/logistics_events/campaigns` 的代理主键列必须存在、非空、不重复；③ workspace 一致性——**全部 12 个实际输出文件**均须有 `workspace_id` 且每行非空、等于 CLI `--workspace-id`；父子记录（orders↔五关联文件、shipments↔logistics_events）以 `(workspace_id, 关联键)` 校验一致；同一 `order_pk` 出现于多个 workspace（跨 workspace 同键）→ 记 `cross_workspace_keys` 并 FAIL；缺 `workspace_id` 列的文件：源 schema 有该字段 → FAIL（`missing_workspace_columns`，schema-contract 违约），源 schema 明确无该字段 → `STRUCTURAL_ASSOCIATION_LIMITS`（如实记录，不伪造）；缺关联列/主键列 → 记 `missing_required_association_fields` + `structural_limitations`（**明确标记，绝不静默跳过，绝不伪造 FK**）；schema 无 FK（shipments/logistics_events/campaigns→orders）或无可信关联字段（tax/payments/order_marketing 无代理主键）→ 如实记录为结构限制 |
 | V3 | 无 PII 残留 | 正则扫全量输出：邮箱 ≥1 次、电话模式、Luhn 卡号、`token/api_key/cookie/cvv/secret` 键值 → 命中即 **FAIL**（exit 1） |
 | V4 | 缺失未填 0 | 原始 NULL 字段在输出中必须为 NULL/空且带 `missing_reason`；原始 0 字段保留 0；反向：输出中出现 `missing_reason != null` 但值=0 的行 → FAIL |
 | V5 | 伪 ID 稳定 | 同一原始 ID 两次独立调用映射出同一伪 ID（脚本内自测，用固定测试 salt 演示，不写真实 salt） |

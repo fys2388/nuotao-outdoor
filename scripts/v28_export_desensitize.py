@@ -193,6 +193,60 @@ PRIMARY_KEY_FIELDS: dict[str, str] = {
     "campaigns.csv": "campaign_pk",
 }
 
+# ---------------------------------------------------------------------------
+# G4 supplement: workspace contract for every export entity.
+# ---------------------------------------------------------------------------
+# Every export entity maps to a source table that is workspace-scoped
+# (``WorkspaceMixin`` or an explicit ``workspace_id`` column). The source
+# schema therefore REQUIRES ``workspace_id`` on every export file; a file that
+# is exported without it violates the schema contract and must FAIL — it is
+# never treated as a silent structural limitation.
+SCHEMA_WORKSPACE_FILES: dict[str, bool] = {
+    "orders.csv": True,
+    "orders_lines.csv": True,
+    "tax.csv": True,
+    "cost_snapshots.csv": True,
+    "cost_current.csv": True,
+    "price_history.csv": True,
+    "payments.csv": True,
+    "refunds.csv": True,
+    "shipments.csv": True,
+    "logistics_events.csv": True,
+    "campaigns.csv": True,
+    "order_marketing.csv": True,
+}
+
+#: Parent association used for cross-entity workspace consistency.
+#: value = (parent_file, parent_key_col, child_key_col); None = no parent in
+#: the export set (the entity is top-level for workspace purposes).
+WORKSPACE_PARENT: dict[str, tuple[str, str, str] | None] = {
+    "orders.csv": None,
+    "orders_lines.csv": ("orders.csv", "order_pk", "order_pk"),
+    "tax.csv": ("orders.csv", "order_pk", "order_pk"),
+    "payments.csv": ("orders.csv", "order_pk", "order_pk"),
+    "order_marketing.csv": ("orders.csv", "order_pk", "order_pk"),
+    "refunds.csv": ("orders.csv", "order_pk", "order_pk"),
+    "cost_snapshots.csv": None,
+    "cost_current.csv": None,
+    "price_history.csv": None,
+    "shipments.csv": None,
+    "logistics_events.csv": ("shipments.csv", "shipment_pk", "shipment_id"),
+    "campaigns.csv": None,
+}
+
+#: Association keys that index into ``orders.csv``; used to detect a single
+#: ``order_pk`` that appears under more than one workspace (cross-workspace
+#: same-order_pk, which order_pk-only matching must never conflate).
+ORDER_LINKED_FILES = (
+    "orders.csv",
+    "orders_lines.csv",
+    "tax.csv",
+    "payments.csv",
+    "order_marketing.csv",
+    "refunds.csv",
+    "cost_current.csv",
+)
+
 #: Associations the source schema does NOT model. The script must never
 #: synthesize a fake FK for these; it only records the structural limitation.
 STRUCTURAL_ASSOCIATION_LIMITS: list[dict[str, str]] = [
@@ -514,15 +568,26 @@ def verify(
     rep.record("V1_row_counts", not row_mismatch, {"mismatch": row_mismatch})
 
     # V2 referential alignment: every order-linked row must resolve to an
-    # orders.csv row via order_pk. Missing association fields are recorded
-    # explicitly (never silently skipped); structural limits never fabricate
-    # a fake FK.
-    order_pks = {
-        r["order_pk"]
-        for r in des_files.get("orders.csv", [])
-        if not _is_blank(r.get("order_pk"))
-    }
+    # orders.csv row. G4 supplement: the resolution key is (workspace_id,
+    # order_pk) whenever BOTH the parent orders and the child row carry
+    # workspace_id, so an order_pk that exists in a different workspace can
+    # never satisfy a foreign reference. When neither side carries
+    # workspace_id (legacy exports) we fall back to order_pk-only matching.
+    # Missing association fields are recorded explicitly (never silently
+    # skipped); structural limits never fabricate a fake FK.
+    order_rows = des_files.get("orders.csv", [])
+    order_pks = {r["order_pk"] for r in order_rows if not _is_blank(r.get("order_pk"))}
+    parent_ws_present = any(not _is_blank(r.get("workspace_id")) for r in order_rows)
+    if parent_ws_present:
+        order_ws_keys = {
+            (r.get("workspace_id"), r["order_pk"])
+            for r in order_rows
+            if not _is_blank(r.get("order_pk"))
+        }
+    else:
+        order_ws_keys = None
     isolated_by_file: dict[str, list[str]] = {}
+    isolated_ws_by_file: dict[str, list[dict[str, str]]] = {}
     missing_assoc_fields: dict[str, list[str]] = {}
     missing_assoc_rows: list[dict[str, str]] = []
     for filename, row_pk_field in ORDER_FK_FILES.items():
@@ -533,6 +598,7 @@ def verify(
             missing_assoc_fields[filename] = ["order_pk"]
             continue
         isolated: list[str] = []
+        isolated_ws: list[dict[str, str]] = []
         for r in rows:
             fk = r.get("order_pk")
             if _is_blank(fk):
@@ -543,10 +609,25 @@ def verify(
                     }
                 )
                 continue
-            if fk not in order_pks:
-                isolated.append(str(r.get(row_pk_field) or fk))
+            if order_ws_keys is not None:
+                # Workspace-aware resolution: a child reference is only valid
+                # when (workspace_id, order_pk) resolves to a parent. A blank
+                # child workspace cannot prove isolation, so it is isolated.
+                child_ws = r.get("workspace_id")
+                if _is_blank(child_ws) or (child_ws, fk) not in order_ws_keys:
+                    isolated.append(str(r.get(row_pk_field) or fk))
+                    isolated_ws.append(
+                        {
+                            "row": str(r.get(row_pk_field) or fk),
+                            "workspace": "" if _is_blank(child_ws) else child_ws,
+                        }
+                    )
+            else:
+                if fk not in order_pks:
+                    isolated.append(str(r.get(row_pk_field) or fk))
         if isolated:
             isolated_by_file[filename] = isolated
+            isolated_ws_by_file[filename] = isolated_ws
     samples: list[str] = []
     for ids in isolated_by_file.values():
         samples.extend(ids)
@@ -557,10 +638,14 @@ def verify(
         {
             "isolated_refund_rows": len(isolated_by_file.get("refunds.csv", [])),
             "order_pk_orphans": isolated_by_file,
+            "order_pk_orphans_workspace": isolated_ws_by_file,
             "orphan_count": sum(len(v) for v in isolated_by_file.values()),
             "missing_required_association_fields": missing_assoc_fields,
             "missing_order_pk_rows": missing_assoc_rows,
             "samples": samples[:10],
+            "resolution": "workspace+order_pk"
+            if order_ws_keys is not None
+            else "order_pk",
             "structural_limitations": STRUCTURAL_ASSOCIATION_LIMITS,
         },
     )
@@ -603,31 +688,78 @@ def verify(
         {"files": pk_detail, "violations": pk_violations},
     )
 
-    # G4: workspace consistency across orders and every order-linked file.
+    # G4 supplement: workspace consistency for EVERY actual output file.
+    # Every export entity is workspace-scoped in the source schema, so each
+    # file must carry workspace_id and every row must be non-empty and equal
+    # to the CLI workspace. Parent/child workspace consistency is resolved by
+    # (workspace_id, association_key) — never by association_key alone, which
+    # would silently conflate the same key across workspaces.
     ws_detail: dict[str, Any] = {
         "mismatch_rows": [],
         "missing_workspace_columns": [],
+        "missing_workspace_reasons": {},
+        "cross_workspace_keys": {},
         "structural_limitations": [],
+        "manifest": {},
     }
     ws_by_order: dict[str, str] = {}
-    for filename in ("orders.csv", *ORDER_FK_FILES.keys()):
-        rows = des_files.get(filename, [])
+    ws_by_shipment: dict[str, str] = {}
+    # order_pk -> set(workspace_id) across every order-linked file; any key
+    # seen under 2+ workspaces is a cross-workspace same-order_pk collision.
+    order_ws_seen: dict[str, set[str]] = {}
+    for filename, rows in des_files.items():
+        schema_has_ws = SCHEMA_WORKSPACE_FILES.get(filename, False)
+        manifest_entry: dict[str, Any] = {
+            "rows": len(rows),
+            "has_workspace_id": bool(rows) and any("workspace_id" in r for r in rows),
+            "schema_requires_workspace_id": schema_has_ws,
+            "empty_workspace_rows": 0,
+            "workspace_mismatch_rows": 0,
+            "status": "ok",
+        }
         if not rows:
+            ws_detail["manifest"][filename] = manifest_entry
             continue
         if not any("workspace_id" in r for r in rows):
-            ws_detail["missing_workspace_columns"].append(filename)
-            ws_detail["structural_limitations"].append(
-                f"{filename}: workspace_id not exported; cannot validate workspace consistency"
-            )
+            if schema_has_ws:
+                # Schema contract violation: the source table HAS workspace_id
+                # but the export omits it. This is a FAIL, not a structural
+                # limit (Owner G4 rule: schema-should-have-but-export-missing).
+                manifest_entry["status"] = "missing_workspace_column_fail"
+                ws_detail["missing_workspace_columns"].append(filename)
+                ws_detail["missing_workspace_reasons"][filename] = (
+                    "schema_requires_workspace_but_export_missing"
+                )
+                ws_detail["structural_limitations"].append(
+                    f"{filename}: schema requires workspace_id but export omits it (FAIL)"
+                )
+            else:
+                manifest_entry["status"] = "structural_limit"
+                ws_detail["structural_limitations"].append(
+                    f"{filename}: workspace_id not in source schema; workspace "
+                    f"consistency not applicable (STRUCTURAL_ASSOCIATION_LIMITS)"
+                )
+            ws_detail["manifest"][filename] = manifest_entry
             continue
-        row_pk_field = ORDER_FK_FILES.get(filename)
+        parent = WORKSPACE_PARENT.get(filename)
         for r in rows:
             row_ws = r.get("workspace_id")
-            row_label = str(r.get(row_pk_field) or r.get("order_pk") or "")
+            label_field = None
+            if parent:
+                _, _parent_key, child_key = parent
+                label_field = child_key
+            elif filename == "orders.csv":
+                label_field = "order_pk"
+            else:
+                label_field = PRIMARY_KEY_FIELDS.get(filename)
+            row_label = str(r.get(label_field) or r.get("order_pk") or "")
             if _is_blank(row_ws):
                 ws_detail["mismatch_rows"].append(
                     {"file": filename, "row": row_label, "reason": "missing"}
                 )
+                manifest_entry["empty_workspace_rows"] += 1
+                if manifest_entry["status"] == "ok":
+                    manifest_entry["status"] = "empty_workspace_fail"
                 continue
             if workspace_id and row_ws != workspace_id:
                 ws_detail["mismatch_rows"].append(
@@ -639,11 +771,19 @@ def verify(
                         "expected_workspace": workspace_id,
                     }
                 )
-                continue
+                manifest_entry["workspace_mismatch_rows"] += 1
+                if manifest_entry["status"] == "ok":
+                    manifest_entry["status"] = "workspace_mismatch_fail"
+            # Parent/child workspace consistency resolved by
+            # (workspace_id, association_key).
             if filename == "orders.csv":
                 ws_by_order[str(r.get("order_pk") or "")] = row_ws
-            else:
-                parent_ws = ws_by_order.get(str(r.get("order_pk") or ""))
+            elif parent:
+                parent_file, _, child_key = parent
+                parent_ws_index = (
+                    ws_by_shipment if parent_file == "shipments.csv" else ws_by_order
+                )
+                parent_ws = parent_ws_index.get(str(r.get(child_key) or ""))
                 if parent_ws is not None and row_ws != parent_ws:
                     ws_detail["mismatch_rows"].append(
                         {
@@ -652,10 +792,25 @@ def verify(
                             "reason": "parent_workspace_mismatch",
                             "row_workspace": row_ws,
                             "parent_workspace": parent_ws,
+                            "parent_file": parent_file,
                         }
                     )
+                    if manifest_entry["status"] == "ok":
+                        manifest_entry["status"] = "parent_workspace_mismatch_fail"
+            if filename == "shipments.csv":
+                ws_by_shipment[str(r.get("shipment_pk") or "")] = row_ws
+            # Cross-workspace same-order_pk detection (order-linked files).
+            if filename in ORDER_LINKED_FILES:
+                opk = str(r.get("order_pk") or "")
+                if opk and not _is_blank(row_ws):
+                    order_ws_seen.setdefault(opk, set()).add(row_ws)
+        ws_detail["manifest"][filename] = manifest_entry
+    cross_ws = {opk: sorted(ws) for opk, ws in order_ws_seen.items() if len(ws) > 1}
+    ws_detail["cross_workspace_keys"] = cross_ws
     ws_ok = (
-        not ws_detail["mismatch_rows"] and not ws_detail["missing_workspace_columns"]
+        not ws_detail["mismatch_rows"]
+        and not ws_detail["missing_workspace_columns"]
+        and not cross_ws
     )
     rep.record(
         "V2_workspace_consistency",
@@ -664,7 +819,11 @@ def verify(
             "mismatch_count": len(ws_detail["mismatch_rows"]),
             "mismatch_rows": ws_detail["mismatch_rows"][:10],
             "missing_workspace_columns": ws_detail["missing_workspace_columns"],
+            "missing_workspace_reasons": ws_detail["missing_workspace_reasons"],
+            "cross_workspace_keys": cross_ws,
             "structural_limitations": ws_detail["structural_limitations"],
+            "manifest": ws_detail["manifest"],
+            "checked_files": len(ws_detail["manifest"]),
         },
     )
 
