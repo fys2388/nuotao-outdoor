@@ -13,8 +13,23 @@ BASE = Path(__file__).resolve().parent
 RAW = BASE / "raw"
 RAW.mkdir(parents=True, exist_ok=True)
 
+# G4: every workspace-scoped table in the schema carries workspace_id. The
+# synthetic exports expose it so the workspace-consistency check can run.
+WORKSPACE_ID = "ws-test-1"
+WORKSPACE_FILES = {
+    "orders.csv",
+    "orders_lines.csv",
+    "tax.csv",
+    "payments.csv",
+    "refunds.csv",
+    "order_marketing.csv",
+}
+
 
 def _dump(name: str, fieldnames: list[str], rows: list[dict]) -> None:
+    if name in WORKSPACE_FILES:
+        fieldnames = ["workspace_id", *fieldnames]
+        rows = [{"workspace_id": WORKSPACE_ID, **row} for row in rows]
     with (RAW / name).open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="")
         writer.writeheader()

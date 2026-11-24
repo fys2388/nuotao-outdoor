@@ -10,10 +10,15 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 RAW = REPO / "tests" / "fixtures" / "v28_export_sample" / "raw"
@@ -34,30 +39,57 @@ def _ensure_salt() -> None:
     SALT.write_text("v28-test-only-salt-do-not-use-in-prod", encoding="utf-8")
 
 
-def _run_script() -> dict:
+def _script_cmd(
+    out_dir: Path,
+    *,
+    id_map_dir: Path | None = None,
+    retention_days: int = 7,
+    salt_file: Path = SALT,
+) -> list[str]:
+    cmd = [
+        sys.executable,
+        str(REPO / "scripts" / "v28_export_desensitize.py"),
+        "--raw-dir",
+        str(RAW),
+        "--out-dir",
+        str(out_dir),
+        "--salt-file",
+        str(salt_file),
+        "--workspace-id",
+        "ws-test-1",
+    ]
+    if id_map_dir is not None:
+        cmd.extend(["--id-map-dir", str(id_map_dir)])
+        cmd.extend(["--id-map-retention-days", str(retention_days)])
+    return cmd
+
+
+def _run_script(
+    *,
+    id_map_dir: Path | None = None,
+    out_dir: Path | None = None,
+    retention_days: int = 7,
+) -> dict:
+    """Run the full pipeline into a fresh restricted dir/out dir when omitted."""
+    if id_map_dir is None:
+        with tempfile.TemporaryDirectory(prefix="v28-secure-id-map-") as tmp:
+            return _run_script(
+                id_map_dir=Path(tmp),
+                out_dir=out_dir,
+                retention_days=retention_days,
+            )
+    target_out = out_dir or OUT
     _ensure_salt()
-    OUT.mkdir(parents=True, exist_ok=True)
+    target_out.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO / "scripts" / "v28_export_desensitize.py"),
-            "--raw-dir",
-            str(RAW),
-            "--out-dir",
-            str(OUT),
-            "--salt-file",
-            str(SALT),
-            "--workspace-id",
-            "ws-test-1",
-        ],
+        _script_cmd(target_out, id_map_dir=id_map_dir, retention_days=retention_days),
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, f"script failed: {result.stdout}\n{result.stderr}"
-    report = json.loads(
-        (OUT / "desensitization_report.json").read_text(encoding="utf-8")
+    return json.loads(
+        (target_out / "desensitization_report.json").read_text(encoding="utf-8")
     )
-    return report
 
 
 def _read(name: str) -> list[dict[str, str]]:
@@ -65,25 +97,21 @@ def _read(name: str) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def test_salt_missing_fails_closed():
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO / "scripts" / "v28_export_desensitize.py"),
-            "--raw-dir",
-            str(RAW),
-            "--out-dir",
-            str(OUT),
-            "--salt-file",
-            str(REPO / "does-not-exist.txt"),
-            "--workspace-id",
-            "ws-test-1",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    # A missing salt file must never proceed.
-    assert result.returncode != 0, "missing salt must abort the run"
+def test_salt_missing_fails_closed(tmp_path: Path):
+    with tempfile.TemporaryDirectory(prefix="v28-secure-id-map-") as tmp:
+        id_map = Path(tmp)
+        result = subprocess.run(
+            _script_cmd(
+                tmp_path / "out",
+                id_map_dir=id_map,
+                salt_file=REPO / "does-not-exist.txt",
+            ),
+            capture_output=True,
+            text=True,
+        )
+        # A missing salt file must never proceed.
+        assert result.returncode != 0, "missing salt must abort the run"
+        assert not (tmp_path / "out" / "orders.csv").exists()
 
 
 def test_all_self_checks_pass():
@@ -171,3 +199,305 @@ def test_row_count_mismatch_detected(tmp_path: Path):
     rep = mod.verify(raw_files, des_files, pseudo_map={})
     assert not rep.checks["V1_row_counts"]["ok"]
     assert rep.checks["V1_row_counts"]["detail"]["mismatch"] == ["orders.csv"]
+
+
+# ---------------------------------------------------------------------------
+# G4: referential / PK / workspace integrity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("fname", "row", "label"),
+    [
+        (
+            "orders_lines.csv",
+            {"order_pk": "o-999", "line_pk": "l-404", "workspace_id": "ws-test-1"},
+            "l-404",
+        ),
+        (
+            "tax.csv",
+            {"order_pk": "o-999", "workspace_id": "ws-test-1"},
+            "o-999",
+        ),
+        (
+            "payments.csv",
+            {"order_pk": "o-999", "workspace_id": "ws-test-1"},
+            "o-999",
+        ),
+        (
+            "order_marketing.csv",
+            {"order_pk": "o-999", "workspace_id": "ws-test-1"},
+            "o-999",
+        ),
+        (
+            "refunds.csv",
+            {"order_pk": "o-999", "refund_pk": "r-404", "workspace_id": "ws-test-1"},
+            "r-404",
+        ),
+    ],
+)
+def test_isolated_order_pk_detected_per_file(
+    fname: str, row: dict[str, str], label: str
+):
+    """G4: an isolated order_pk in any of the five order-linked files FAILS."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001", "workspace_id": "ws-test-1"}],
+        fname: [row],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    v2 = rep.checks["V2_referential"]
+    assert not v2["ok"], f"{fname} orphan was not detected"
+    assert label in v2["detail"]["order_pk_orphans"][fname]
+
+
+def test_workspace_mismatch_detected():
+    """G4: a child row whose workspace differs from the exported workspace FAILS."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [
+            {"order_pk": "o-001", "workspace_id": "ws-test-1"},
+        ],
+        "tax.csv": [
+            {"order_pk": "o-001", "workspace_id": "ws-other"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert ws["detail"]["mismatch_count"] >= 1
+
+
+def test_missing_workspace_column_is_marked_not_skipped():
+    """G4: missing workspace_id is an explicit structural gap, never silent."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [{"order_pk": "o-001"}],
+        "refunds.csv": [{"order_pk": "o-001", "refund_pk": "r-001"}],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    ws = rep.checks["V2_workspace_consistency"]
+    assert not ws["ok"]
+    assert "orders.csv" in ws["detail"]["missing_workspace_columns"]
+    assert ws["detail"]["structural_limitations"]
+
+
+def test_duplicate_primary_key_detected():
+    """G4: duplicate order_pk in orders FAILS V2 primary-key integrity."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [
+            {"order_pk": "o-001", "workspace_id": "ws-test-1"},
+            {"order_pk": "o-001", "workspace_id": "ws-test-1"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    pk = rep.checks["V2_primary_key_integrity"]
+    assert not pk["ok"]
+    assert pk["detail"]["files"]["orders.csv"]["duplicate_samples"] == ["o-001"]
+
+
+def test_empty_primary_key_detected():
+    """G4: blank order_pk in orders FAILS V2 primary-key integrity."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [
+            {"order_pk": "", "workspace_id": "ws-test-1"},
+            {"order_pk": "o-002", "workspace_id": "ws-test-1"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    pk = rep.checks["V2_primary_key_integrity"]
+    assert not pk["ok"]
+    assert pk["detail"]["files"]["orders.csv"]["empty_count"] == 1
+
+
+def test_missing_required_association_field_marked():
+    """G4: a file with no order_pk column is flagged, not skipped, and no fake
+    FK is synthesized (structural limitation recorded)."""
+    import scripts.v28_export_desensitize as mod
+
+    raw_files = {
+        "orders.csv": [
+            {"order_pk": "o-001", "workspace_id": "ws-test-1"},
+        ],
+        "tax.csv": [
+            {"subtotal": "10.00", "workspace_id": "ws-test-1"},
+        ],
+    }
+    des_files = {k: [dict(r) for r in v] for k, v in raw_files.items()}
+    rep = mod.verify(raw_files, des_files, pseudo_map={}, workspace_id="ws-test-1")
+    v2 = rep.checks["V2_referential"]
+    assert not v2["ok"]
+    assert v2["detail"]["missing_required_association_fields"]["tax.csv"] == [
+        "order_pk"
+    ]
+    assert v2["detail"]["structural_limitations"]
+
+
+# ---------------------------------------------------------------------------
+# G3: restricted id-map storage
+# ---------------------------------------------------------------------------
+
+
+def test_id_map_written_to_restricted_dir(tmp_path: Path):
+    """G3: mapping lands in the restricted dir with 0600, retention metadata,
+    no salt, and never inside the ordinary delivery package."""
+    secure = tmp_path / "restricted"
+    secure.mkdir()
+    out = tmp_path / "out"
+    report = _run_script(id_map_dir=secure, out_dir=out)
+
+    map_path = secure / "_id_map_pseudo.json"
+    assert map_path.exists(), "id-map was not written to the restricted dir"
+    assert not (out / "_id_map_pseudo.json").exists(), "id-map leaked into out_dir"
+    assert report["id_map"]["written"] is True
+    assert report["id_map"]["entry_count"] > 0
+    assert report["id_map"]["delivered_with_package"] is False
+
+    mapping = json.loads(map_path.read_text(encoding="utf-8"))
+    assert mapping["schema_version"] == "v28-id-map-v1"
+    assert mapping["security"]["file_mode_octal"] == "0600"
+    assert mapping["security"]["directory_mode_octal"] == "0700"
+    assert mapping["security"]["git_tracked"] is False
+    assert mapping["security"]["salt_included"] is False
+    assert mapping["security"]["retention_days"] == 7
+    assert mapping["security"]["destruction_owner_decision_required"] is True
+    # No salt (neither as a key nor as a value) anywhere in the payload.
+    assert "v28-test-only-salt" not in json.dumps(mapping).lower()
+    assert "_salt" not in mapping
+    assert all("_salt" not in v for v in mapping["entries"].values())
+    # Mapping is actually usable for reversal when protected by Owner custody.
+    salt = SALT.read_text(encoding="utf-8").strip()
+    assert mapping["entries"]["external_order_id"]["WC-1001"] == pseudo_id(
+        "external_order_id", "ws-test-1", "WC-1001", salt
+    )
+    if os.name != "nt":
+        mode = stat.S_IMODE(map_path.stat().st_mode)
+        assert mode & 0o077 == 0, f"id-map is world/group accessible: {oct(mode)}"
+        assert mode == 0o600
+
+
+def test_id_map_not_in_git_and_rejected_inside_worktree(tmp_path: Path):
+    """G3: mapping is outside the Git worktree and the file is ignore-listed;
+    an id-map dir inside the worktree is refused fail-closed."""
+    secure = tmp_path / "restricted"
+    secure.mkdir()
+    out = tmp_path / "out"
+    _run_script(id_map_dir=secure, out_dir=out)
+
+    assert REPO not in secure.resolve().parents
+    git = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO),
+            "check-ignore",
+            "-q",
+            "--no-index",
+            "_id_map_pseudo.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert git.returncode == 0, "_id_map_pseudo.json is not Git-ignored"
+
+    bad = REPO / "tests" / "fixtures" / "v28_export_sample" / "restricted_bad"
+    bad.mkdir(parents=True, exist_ok=True)
+    out2 = tmp_path / "out2"
+    out2.mkdir()
+    _ensure_salt()
+    result = subprocess.run(
+        _script_cmd(out2, id_map_dir=bad),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert not (out2 / "orders.csv").exists()
+
+
+def test_missing_id_map_dir_fails_closed(tmp_path: Path):
+    """G3: no restricted path => the run aborts and produces no outputs."""
+    out = tmp_path / "out"
+    out.mkdir()
+    _ensure_salt()
+    result = subprocess.run(_script_cmd(out), capture_output=True, text=True)
+    assert result.returncode == 2
+    assert not (out / "orders.csv").exists()
+
+
+def test_secure_path_overlapping_out_fails_closed(tmp_path: Path):
+    """G3: an id-map dir that is the ordinary out_dir is refused."""
+    out = tmp_path / "out"
+    out.mkdir()
+    _ensure_salt()
+    result = subprocess.run(
+        _script_cmd(out, id_map_dir=out),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert not (out / "orders.csv").exists()
+
+
+def test_logs_and_errors_do_not_leak_original_ids(tmp_path: Path):
+    """G3/G4: stdout, stderr and the report never contain original IDs."""
+    _ensure_salt()
+    secure = tmp_path / "restricted"
+    secure.mkdir()
+    out = tmp_path / "out"
+    ok = subprocess.run(
+        _script_cmd(out, id_map_dir=secure),
+        capture_output=True,
+        text=True,
+    )
+    assert ok.returncode == 0, f"run failed: {ok.stdout}\n{ok.stderr}"
+    report_text = (out / "desensitization_report.json").read_text(encoding="utf-8")
+    for original in ("WC-1001", "ca-9001", "ref-7001", "v28-test-only-salt"):
+        assert original not in ok.stdout
+        assert original not in ok.stderr
+        assert original not in report_text
+
+    # Exception path (invalid secure dir) must also stay generic.
+    bad_out = tmp_path / "bad-out"
+    bad_out.mkdir()
+    bad = subprocess.run(
+        _script_cmd(bad_out, id_map_dir=bad_out),
+        capture_output=True,
+        text=True,
+    )
+    assert bad.returncode == 2
+    for original in ("WC-1001", "ca-9001", "ref-7001", "v28-test-only-salt"):
+        assert original not in bad.stdout
+        assert original not in bad.stderr
+
+
+def test_id_map_deterministic_across_runs(tmp_path: Path):
+    """G3: two independent runs produce byte-identical CSVs and mapping."""
+    secure1 = tmp_path / "r1" / "restricted"
+    secure2 = tmp_path / "r2" / "restricted"
+    out1 = tmp_path / "r1" / "out"
+    out2 = tmp_path / "r2" / "out"
+    secure1.mkdir(parents=True)
+    secure2.mkdir(parents=True)
+    _run_script(id_map_dir=secure1, out_dir=out1)
+    _run_script(id_map_dir=secure2, out_dir=out2)
+
+    for csv_name in sorted(p.name for p in out1.glob("*.csv")):
+        assert (out1 / csv_name).read_bytes() == (out2 / csv_name).read_bytes()
+    assert (secure1 / "_id_map_pseudo.json").read_bytes() == (
+        secure2 / "_id_map_pseudo.json"
+    ).read_bytes()
+    assert (out1 / "desensitization_report.json").read_bytes() == (
+        out2 / "desensitization_report.json"
+    ).read_bytes()

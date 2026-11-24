@@ -47,7 +47,7 @@
 
 ## 2. 匿名化/脱敏脚本审阅结论（`scripts/v28_export_desensitize.py`，计划 §3）
 
-### 2.1 结论：**通过（PII 删除、稳定匿名 ID、密钥管理三方面均符合计划），发现 2 处计划↔实现差异（见 §2.5）**
+### 2.1 结论：**通过（PII 删除、稳定匿名 ID、密钥管理三方面均符合计划；G3/G4 两项缺口已在本工作项修复，见 §2.5）**
 
 ### 2.2 PII 删除
 
@@ -68,19 +68,28 @@
 - **salt 来源**：仅 `--salt-file`（Owner 安全渠道交付）；脚本 `run()` 读 salt，空则 `print + return 2`（**fail-closed**，无默认 salt、无环境变量示例、无仓库内 salt）。
 - **salt 不入库**：`.gitignore` 第 193–197 行覆盖 `tests/fixtures/v28_export_sample/out/` 与 `test-salt.txt`（测试 salt 为 `v28-test-only-salt-do-not-use-in-prod`，仅测试用，已 gitignore）；生产 salt 由 Owner 保管，不进入仓库，也不交给 DSH 持久保存。
 - **salt 不进 SQL 引擎环境**：脱敏在 SELECT 之后本地做（§2 引言），salt 仅在脚本进程内读入。
-- **映射表保护**：计划 §1.3/§3.1 声明 `_id_map_pseudo.json`（含原始 ID）与脱敏数据同级保护、交付后由 Owner 决定销毁——**实现未写出该文件（见 §2.5 差异 1）**。
+- **映射表保护（G3 已修复）**：`_id_map_pseudo.json`（含原始 ID）只写入 **Owner 受控独立受限目录** `--id-map-dir`（必须已存在、非符号链接、不与 raw/out 嵌套或重叠、**不在任何 Git 工作树内**），0600 文件 / 0700 目录、O_EXCL 防覆盖、fsync；**不随脱敏包交付、不入 Git（`.gitignore` 兜底 `_id_map_pseudo.json`）、不进日志/异常输出**；保留期由 `--id-map-retention-days` 显式声明，**销毁时点由 Owner 决定**（30 天审阅 + Owner 签署后执行）。映射文件仅当 V1–V7 全通过才产出。
 - **红线遵守**：本轮未索取/接收任何生产密码/Cookie/API Token；测试仅用合成 fixture 内 test-only salt。
 
-### 2.5 计划↔实现差异（2 处，审阅发现，均未破坏既有 13 测试）
+### 2.5 G3/G4 修复实现（本工作项，原审阅发现的 2 处差异）
 
-1. **`_id_map_pseudo.json` 未实现**：计划 §3.1 输出清单（L362）与 §1.3（L58）明确要求脚本输出 `_id_map_pseudo.json`（含原始 ID 的映射表，供关联验证 + Owner 销毁决定），但 `scripts/v28_export_desensitize.py` 的 `run()` 只写出 12 个 CSV + `desensitization_report.json`，`pseudo_map` 仅在内存构建（L439–452）并传给 `verify()`（L490），**从未序列化落盘**。
-   - 影响：无法直接拿到「原始 ID → 伪 ID」映射表做反向/正向校验与 Owner 销毁清单；跨文件一致性仍可从输出 CSV 本身校验（如 `external_order_id` 在 orders.csv 与 tax.csv 应相同），但缺少计划约定的显式映射工件。
-   - 建议：在 `run()` 末尾把 `pseudo_map`（剔除 `_salt`/`_workspace` 元键）写为 `_id_map_pseudo.json`，并加入 `.gitignore`（计划 §3.3 已列）。**本轮不改动脚本**（改动需重跑 13 测试 + 超出「精确 add 报告+方案」范围），列为真实数据执行前必改项。
-2. **V2 关联对齐只校验 refunds**：计划 §3.1 对齐要求「以 A 组 `order_pk` 为主键，校验 B/E/G-2 行集 ⊆ A」，§3.2 V2「每个脱敏副本的 `order_pk` 在 A 组集合中」；但 `verify()` 的 V2 只对 `refunds.csv` 检查 `order_pk ∈ order_pks`（L296–308），**未校验 `tax.csv`/`payments.csv`/`order_marketing.csv`/`orders_lines.csv` 的 `order_pk` 归属**。
-   - 影响：若 tax/payments/order_marketing 出现孤立 `order_pk`（不在 A 组），V2 不会 FAIL，违背「对齐率 100%（允许报告孤立行，不允许静默）」。
-   - 建议：将 V2 扩展为对 4 个文件（tax/payments/order_marketing/orders_lines）统一做 `order_pk ∈ orders` 检查，孤立行写入报告 detail 而非静默。**本轮不改动脚本**，列为真实数据执行前必改项。
+**原差异 1（映射工件未落盘）→ G3 已修复**：
 
-> 说明：上述两处为「实现未达计划承诺」的**保守性缺口**（漏检/漏工件，不会误杀合法数据），非安全漏洞；在真实数据脱敏（§5 步④）前必须补齐，否则关联完整性验证（本文件 §4/§5）可能漏过孤立行。
+- 新增 `ID_MAP_FILENAME = "_id_map_pseudo.json"`、`ID_MAP_SCHEMA_VERSION = "v28-id-map-v1"`、`ID_MAP_DIR_MODE = 0o700`、`ID_MAP_FILE_MODE = 0o600`。
+- 新增 `RestrictedIdMapError`（**消息刻意不含路径/workspace/原始 ID/映射内容**，异常路径不泄漏）。
+- 新增受限目录解析 `resolve_restricted_id_map_dir(raw_dir, out_dir, id_map_dir)`（fail-closed）：要求目标目录**已存在**、非符号链接、不与 raw/out 嵌套或重叠、且**不在任何 Git 工作树内**（含 `.git` 文件/目录的任意祖先，兼容 worktree）。
+- 新增 `write_restricted_id_map(...)`：O_EXCL 防覆盖、`os.chmod(0o600/0o700)`、fsync、OSError 时删除半成品并抛 `RestrictedIdMapError`；payload 剔除 `_salt`/`_workspace` 元键，含 `schema_version`、`entries`、`workspace_id`、`security`（`file_mode_octal/directory_mode_octal/git_tracked/salt_included/retention_days/destruction_owner_decision_required`）。
+- `run()` 现在：**先**校验受限目录（读 salt 前、任何输出前）；仅当 `rep.passed` 才写映射；报告新增 `id_map` 元数据（`written/entry_count/storage_class/delivered_with_package/git_tracked/retention_days`，**不含路径与原始 ID**）；任何受限存储错误 → `return 2`（无 traceback、无原始 ID）。
+- `main()` 新增**必填** `--id-map-dir` 与 `--id-map-retention-days`（`_positive_int`）。
+
+**原差异 2（V2 只校验 refunds）→ G4 已修复**：
+
+- 新增 `ORDER_FK_FILES = {"orders_lines.csv": "line_pk", "tax.csv": None, "payments.csv": None, "order_marketing.csv": None, "refunds.csv": "refund_pk"}`。
+- V2 重构为 `V2_referential`（五文件 `order_pk ∈ orders`；缺失列记 `missing_required_association_fields`；孤立行按文件记 `order_pk_orphans`；`refunds` 采样继续用 `refund_pk`，保持既有 `samples == ["r-404"]` 行为）、`V2_primary_key_integrity`（`PRIMARY_KEY_FIELDS` 八文件：缺失列 → `missing_primary_key_field`，空/重复计数）、`V2_workspace_consistency`（orders 与五关联文件须有 `workspace_id`、与 CLI 及父订单一致；缺失列 → `missing_workspace_columns`）。
+- 新增 `STRUCTURAL_ASSOCIATION_LIMITS`：`shipments/logistics_events/campaigns → orders` 无 FK、`tax/payments/order_marketing` 无代理主键、`order_items.cost_snapshot_id` schema 无——**如实记 `structural_limitations`，绝不伪造 FK/关联键**。
+- fixture/计划 SQL 同步暴露 `workspace_id`（合成 fixture 的 orders/orders_lines/tax/payments/order_marketing/refunds 均带 `workspace_id`；计划 §2 A/B/E/G SQL 增加 `workspace_id`/`order_item_workspace_id` 列）。
+
+> 本工作项**保留全部既有 13 测试**（未删除/未放宽），新增 G3/G4 用例后合计 29 项（见 §3.1）。
 
 ### 2.6 其他观察（非阻塞）
 
@@ -93,17 +102,17 @@
 
 ### 3.1 测试结果（本轮实跑）
 
-- 命令：`python -m pytest tests/test_v28_export_desensitize.py tests/test_v28_recalc_quantification.py -v`
+- 命令：`python -m pytest tests/test_v28_export_desensitize.py tests/test_v28_recalc_quantification.py -q`
 - 环境：Python 3.12.10 / pytest 9.1.1（`E:\AI\nuotao-ai-os\.venv`）
-- 结果：**13 passed in 1.76s**（`test_v28_export_desensitize.py` 7 项 + `test_v28_recalc_quantification.py` 6 项，全部 PASSED）
-- 覆盖：salt 缺失 fail-closed、V1–V7 自校验、PII 无残留、PII 键剔除 + 伪 ID 稳定、NULL 不填 0（legit 0 保留）、孤立退款检出（V2）、行数不一致检出（V1）、重算三态 + 缺失原因、R1 虚增金额/比例、R2 口径差方向、R7 版本缺口、全量分析端点。
-- 结论：**13/13 全绿，符合计划 §5 步①门禁「13/13 单测全绿（仅合成 fixture，无生产数据）」**。
+- 结果：**29 passed in 4.86s**（`test_v28_export_desensitize.py` 23 项 + `test_v28_recalc_quantification.py` 6 项，全部 PASSED）。
+- **既有 13 项全部保留**（未删除/未放宽，全部仍 PASSED）：salt 缺失 fail-closed、V1–V7 自校验、PII 无残留、PII 键剔除 + 伪 ID 稳定、NULL 不填 0（legit 0 保留）、孤立退款检出（V2，`samples == ["r-404"]`）、行数不一致检出（V1）、重算三态 + 缺失原因、R1 虚增金额/比例、R2 口径差方向、R7 版本缺口、全量分析端点。
+- **新增 16 项 G3/G4 用例**：五关联文件孤立 `order_pk`（orders_lines/tax/payments/order_marketing/refunds 各一）、workspace 不匹配、缺 `workspace_id` 列明确标记、重复主键、空主键、必需关联字段缺失标记（不伪造 FK）、映射写入受限目录（0600/0700/保留期/无 salt/不入交付包）、映射不在 Git 且工作树内路径 fail-closed、缺 `--id-map-dir` fail-closed、受限路径与 out 重叠 fail-closed、日志/报告不泄漏原始 ID、两次运行字节一致（CSV + 映射 + 报告）。
+- 结论：**29/29 全绿**（仅合成 fixture，无生产数据、无 DB、无网络），满足「原 13 项全绿」门禁并新增 G3/G4 覆盖。
 
 ### 3.2 ruff 观察
 
-- 本轮**无新增脚本**（仅新增本报告 .md），「ruff（新增脚本若有）」门禁不触发。
-- 附带检查既有 V2.8 脚本（ruff 0.16.4 默认配置，因 `backend/ruff.toml` 仅作用于 backend/ 子树）：`scripts/v28_export_desensitize.py`、`scripts/v28_recalc_quantify.py`、`tests/test_v28_export_desensitize.py`、`tests/test_v28_recalc_quantification.py` 共报 **14 项**（UP012、FURB157、PLC0206、SIM102、PIE800、SIM118、RUF100、PLW1510），均为**风格/现代语法建议**，无正确性或安全类问题；且为 HEAD `60e89fa` **既有提交**，非本变更引入。
-- 处理：**不自动修复**（超出本工作项范围，避免改动已通过 13 测试的提交代码）；列入「真实数据执行前」低优先级清理项。若按项目基线用 `backend/ruff.toml` 规则（backend 子树）+ ruff v0.8.4 钩子，需在真实数据前统一确认（根目录无 ruff 配置，pre-commit ruff-pre-commit v0.8.4 对 scripts/ tests/ 用默认规则）。
+- 本轮变更文件（`scripts/v28_export_desensitize.py`、`tests/test_v28_export_desensitize.py`、`tests/test_v28_recalc_quantification.py`、`tests/fixtures/v28_export_sample/make_fixture.py`）经 pre-commit `ruff`（v0.8.4，`--fix`）**Passed**，`ruff-format` 已格式化（2 文件重排，复跑 29 测试仍全绿）；**变更代码无 ruff 报错**。
+- 既有 `scripts/v28_recalc_quantify.py` 等未触碰文件仍有 HEAD `60e89fa` 遗留的 14 项风格提示（UP012、FURB157、PLC0206、SIM102、PIE800、SIM118、RUF100、PLW1510），**非本变更引入**，仍列入「真实数据执行前」低优先级清理项（G5）。
 
 ---
 
@@ -119,7 +128,7 @@
 | P0 | 生产 DBA 只读执行计划 §2 SQL（30 天窗口） | 产物落 `data/raw_export/`，执行记录（时间/行数/sha256）回传 |
 | P1 | Owner 安全渠道提供 salt | 仅 `--salt-file`，不入库、不交 DSH 持久保存 |
 | P2 | DSH 本地跑 `v28_export_desensitize.py`（V1–V7 全绿才产出） | 产出 `data/desensitized/` + `desensitization_report.json` |
-| P3 | **先补齐 §2.5 两处差异** | `_id_map_pseudo.json` 落盘 + V2 扩展 B/E/G-2 行集校验；否则本方案 §5 无法完整执行 |
+| P3 | G3/G4 已修复（本工作项） | `_id_map_pseudo.json` 只写受限目录 + V2 五文件/主键/workspace 校验已实现并通过 29 测试（§3.1） |
 
 ### 4.1 维度一：字段完整性（每 CSV × 必需列 × 缺失分布）
 
@@ -202,7 +211,7 @@
 1. **salt 生成**：由有权限人员（Owner 或其指定）生成高熵随机 salt；生成后经安全渠道（加密文件 `--salt-file` 或受控 CLI 参数）交付给 DSH 脱敏进程，**不进入仓库、不写入文档、不放进环境变量示例、不交给 DSH 长期保存**。
 2. **读取**：脚本仅从 `--salt-file` 读入；文件缺失或内容为空 → `exit 2`（fail-closed），**不写默认 salt**、不降级运行。
 3. **伪 ID 性质**：`SHA256(entity_kind|workspace_id|original|salt)[:32]`——确定性（多次导出关联不断）、不可逆（单向，无盐表反查）、跨实体稳定（A/E/F/G 共享映射）。备选 uuid5（计划 §1.3）当前未实现（SHA256 为默认即足够，属「二选一」之合法选择）。
-4. **映射表保护**：计划约定 `_id_map_pseudo.json`（含原始 ID）与脱敏数据同级保护、交付后由 Owner 决定是否销毁——**实现缺口见 §2.5 差异 1**，真实数据执行前需补齐落盘并 gitignore。
+4. **映射表保护（G3 已修复）**：`_id_map_pseudo.json`（含原始 ID）只写入 Owner 受控独立受限目录 `--id-map-dir`（仓库外、0600/0700、O_EXCL、fsync），**不随脱敏包交付、不入 Git（`.gitignore` 兜底）、不进日志/异常输出**；保留期由 `--id-map-retention-days` 声明，**销毁时点由 Owner 决定**。
 5. **隔离**：salt 不进 SQL 引擎环境（脱敏在 SELECT 之后、本地进程内）；脱敏脚本无网络/无 DB（`v28_export_desensitize.py` docstring 明确 `no DB connection, no network`）。
 6. **测试 salt**：仅合成 fixture 用 `v28-test-only-salt-do-not-use-in-prod`（`test-salt.txt` 已 gitignore）；生产 salt 绝不写入测试。
 
@@ -214,8 +223,8 @@
 |---|---|---|---|---|
 | G1 | **无生产脱敏副本**（生产 DB 未只读导出，未脱敏） | 30 天样本验证**无法执行**；真实数据数字（R1/R2/R7）无法产出 | 生产 DBA（有权限人员） | 只读执行计划 §2 SQL 30 天窗口 → 产物交 DSH |
 | G2 | **salt 未由 Owner 提供** | 脱敏脚本无法运行（fail-closed） | Owner/有权限人员 | 安全渠道提供 `--salt-file` |
-| G3 | **`_id_map_pseudo.json` 未实现**（计划 §3.1 vs 脚本） | 无法显式拿到原始↔伪映射表；跨文件一致性需从 CSV 间接校验 | 本工作项（后续） | 补写映射表落盘 + gitignore，重跑 13 测试 |
-| G4 | **V2 仅校验 refunds**（计划 §3.1/§3.2 vs 脚本） | tax/payments/order_marketing/orders_lines 孤立行可能静默漏检 | 本工作项（后续） | 扩展 V2 到 4 文件，重跑 13 测试 |
+| G3 | ~~`_id_map_pseudo.json` 未实现~~（已修复） | ~~无法显式拿到原始↔伪映射表~~ | 本工作项（已关闭） | 已实现受限目录落盘 + `.gitignore` 兜底 + 29 测试通过（§3.1） |
+| G4 | ~~V2 仅校验 refunds~~（已修复） | ~~tax/payments/order_marketing/orders_lines 孤立行可能静默漏检~~ | 本工作项（已关闭） | V2 已扩展五文件 + 主键 + workspace 校验，29 测试通过（§3.1） |
 | G5 | **ruff 14 项风格提示**（HEAD 既有，非本变更） | 不影响功能；低优先级 | 本工作项（后续，可选） | 统一 ruff 配置（backend/ruff.toml 或根配置）后清理 |
 | G6 | **无 `price_publication_records`、无订单行级税、无退款手续费返还、无营销历史分摊**（R6/R12 等 schema 缺口） | 相应维度标 `LEGACY_NO_PUBLICATION_RECORD`/`not_collected`，不伪造 | 设计层（已记录 R 系列） | 长期；本次如实标注即可 |
 
@@ -224,10 +233,10 @@
 ## 8. 结论与下一步
 
 - **只读 SQL**：通过（纯 SELECT、参数化、无生产连接、无凭据）。
-- **匿名化脚本**：通过（PII 删除 + 稳定伪 ID + salt fail-closed + NULL 不填 0）；发现 2 处计划↔实现差异（§2.5 G3/G4），**真实数据执行前必补**。
-- **既有测试**：13/13 全绿（本轮实跑确认）。
+- **匿名化脚本**：通过（PII 删除 + 稳定伪 ID + salt fail-closed + NULL 不填 0 + **G3 受限映射目录 + G4 五文件/主键/workspace 完整性自校验**）；原 §2.5 两处差异已在本工作项修复。
+- **既有 + 新增测试**：**29/29 全绿**（原 13 项全部保留未删除/未放宽 + 新增 16 项 G3/G4 用例，本轮实跑确认）。
 - **0076**：冻结未触碰（blob 与 HEAD 一致）。
-- **下一步（Owner 门禁）**：补齐 G3/G4 → Owner 提供 salt（G2）→ 生产 DBA 只读导出 30 天（G1）→ DSH 脱敏（V1–V7）→ 本文件 §4/§5 验证 → Owner 决定 30→90 天扩展。
+- **下一步（Owner 门禁）**：Owner 提供 salt（G2）→ 生产 DBA 只读导出 30 天（G1）→ DSH 脱敏（V1–V7 + G3/G4）→ 本文件 §4/§5 验证 → Owner 决定 30→90 天扩展与受限映射销毁时点。
 - **不宣称 V2.8 通过**；V2.8 相关结论待 Owner 依据真实数据验证结果单独宣布。
 
 ---

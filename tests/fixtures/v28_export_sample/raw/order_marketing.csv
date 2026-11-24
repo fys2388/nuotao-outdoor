@@ -1,4 +1,4 @@
-order_pk,advertising_cost,missing_reason
-o-001,1.20,
-o-002,,
-o-003,3.50,
+workspace_id,order_pk,advertising_cost,missing_reason
+ws-test-1,o-001,1.20,
+ws-test-1,o-002,,
+ws-test-1,o-003,3.50,

@@ -8,7 +8,9 @@ the production numbers are produced at plan §5 step ⑤ after Owner approval.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,7 +20,6 @@ SALT = REPO / "tests" / "fixtures" / "v28_export_sample" / "test-salt.txt"
 OUT = REPO / "tests" / "fixtures" / "v28_export_sample" / "out"
 
 sys.path.insert(0, str(REPO))
-import subprocess  # noqa: E402
 
 import scripts.v28_recalc_quantify as rq  # noqa: E402
 from scripts.v28_export_desensitize import read_csv  # noqa: E402
@@ -27,22 +28,27 @@ from scripts.v28_export_desensitize import read_csv  # noqa: E402
 def _prepare_des() -> None:
     SALT.write_text("v28-test-only-salt-do-not-use-in-prod", encoding="utf-8")
     OUT.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO / "scripts" / "v28_export_desensitize.py"),
-            "--raw-dir",
-            str(RAW),
-            "--out-dir",
-            str(OUT),
-            "--salt-file",
-            str(SALT),
-            "--workspace-id",
-            "ws-test-1",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="v28-recalc-id-map-") as tmp:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "scripts" / "v28_export_desensitize.py"),
+                "--raw-dir",
+                str(RAW),
+                "--out-dir",
+                str(OUT),
+                "--salt-file",
+                str(SALT),
+                "--workspace-id",
+                "ws-test-1",
+                "--id-map-dir",
+                tmp,
+                "--id-map-retention-days",
+                "7",
+            ],
+            capture_output=True,
+            text=True,
+        )
     assert result.returncode == 0, result.stderr
 
 

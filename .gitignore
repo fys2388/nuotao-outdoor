@@ -195,3 +195,6 @@ woo_images/
 # (data/raw_export/ and data/desensitized/ already covered by data/)
 tests/fixtures/v28_export_sample/out/
 tests/fixtures/v28_export_sample/test-salt.txt
+# G3: the reversible id-map must never be trackable by Git even if a
+# restricted location is misconfigured inside the worktree.
+_id_map_pseudo.json

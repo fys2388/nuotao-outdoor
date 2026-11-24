@@ -8,12 +8,19 @@ Purely local, offline, no DB connection, no network. Implements §3 of
   regex backstop for email / phone / card / token-like values);
 * missing-value handling: NULL stays NULL (never backfilled with 0) and is
   annotated with a machine-checkable ``missing_reason``;
+* G3: the reversible original→pseudo mapping is written ONLY to an
+  Owner-controlled restricted directory (``--id-map-dir``), never inside the
+  Git worktree and never in the ordinary delivery package, with 0600 file
+  permissions and explicit retention/destruction policy;
+* G4: referential integrity (all five order-linked files), surrogate PK
+  uniqueness/non-emptiness, and workspace consistency are self-verified;
 * self-verification (plan §3.2, items V1–V7) run automatically after
   desensitizing.
 
-The script **refuses to run without a salt file** (fail-closed, exit code 2).
-The salt itself is never committed, never defaulted, and is read only from
-``--salt-file`` (Owner delivery, controlled channel).
+The script **refuses to run without a salt file and without a valid
+restricted id-map directory** (fail-closed, exit code 2). The salt itself is
+never committed, never defaulted, and is read only from ``--salt-file``
+(Owner delivery, controlled channel).
 
 Usage (after Owner approval, on raw exports in ``data/raw_export/``)::
 
@@ -21,7 +28,9 @@ Usage (after Owner approval, on raw exports in ``data/raw_export/``)::
         --raw-dir data/raw_export \
         --out-dir data/desensitized \
         --salt-file <owner-delivered salt file> \
-        --workspace-id <workspace uuid>
+        --workspace-id <workspace uuid> \
+        --id-map-dir <owner-restricted-storage> \
+        --id-map-retention-days 30
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -133,6 +143,85 @@ MISSING_REASON_NOT_COLLECTED = "not_collected"
 MISSING_REASON_FIELD_NOT_STORED = "field_not_stored"
 MISSING_REASON_LEGACY_NO_RECORD = "legacy_no_record"
 MISSING_REASON_PAYLOAD_EXCLUDED = "payload_excluded"
+
+# ---------------------------------------------------------------------------
+# G3: isolated pseudo-ID mapping store (reidentifiable by construction).
+# ---------------------------------------------------------------------------
+# The mapping from original IDs to pseudo-IDs is the only artifact that can
+# reverse the desensitization. It MUST be written to an Owner-controlled
+# restricted path, NEVER to the ordinary ``out_dir`` (which is a delivery
+# package) and NEVER inside the Git worktree. The script refuses to run when
+# that restricted location is absent, invalid, or unsafe (fail-closed).
+ID_MAP_FILENAME = "_id_map_pseudo.json"
+ID_MAP_SCHEMA_VERSION = "v28-id-map-v1"
+ID_MAP_DIR_MODE = 0o700
+ID_MAP_FILE_MODE = 0o600
+
+
+class RestrictedIdMapError(RuntimeError):
+    """Secure id-map storage unavailable.
+
+    Raised for any condition that makes the restricted mapping location
+    unusable. Messages are intentionally generic: they never carry a path,
+    a workspace id, an original id, or any mapping content.
+    """
+
+
+# ---------------------------------------------------------------------------
+# G4: referential / PK / workspace integrity for the V2.8 export.
+# ---------------------------------------------------------------------------
+#: Child files whose every row must resolve to an ``orders.csv`` row by
+#: ``order_pk``. The value is the per-row surrogate key used for reporting
+#: (``None`` when the file is an order-level projection keyed by ``order_pk``).
+ORDER_FK_FILES: dict[str, str | None] = {
+    "orders_lines.csv": "line_pk",
+    "tax.csv": None,
+    "payments.csv": None,
+    "order_marketing.csv": None,
+    "refunds.csv": "refund_pk",
+}
+
+#: Surrogate primary keys that MUST be present, non-empty, and unique.
+PRIMARY_KEY_FIELDS: dict[str, str] = {
+    "orders.csv": "order_pk",
+    "orders_lines.csv": "line_pk",
+    "refunds.csv": "refund_pk",
+    "cost_snapshots.csv": "snapshot_pk",
+    "price_history.csv": "product_pk",
+    "shipments.csv": "shipment_pk",
+    "logistics_events.csv": "event_pk",
+    "campaigns.csv": "campaign_pk",
+}
+
+#: Associations the source schema does NOT model. The script must never
+#: synthesize a fake FK for these; it only records the structural limitation.
+STRUCTURAL_ASSOCIATION_LIMITS: list[dict[str, str]] = [
+    {
+        "association": "shipments -> orders",
+        "status": "no_direct_fk_in_schema",
+        "note": "shipments.csv has no order_pk; shipment integrity is checked by shipment_pk only",
+    },
+    {
+        "association": "logistics_events -> orders",
+        "status": "no_direct_fk_in_schema",
+        "note": "logistics_events.csv links to shipments.csv, not orders; no FK is synthesized",
+    },
+    {
+        "association": "campaigns -> orders",
+        "status": "no_direct_fk_in_schema",
+        "note": "campaigns.csv is a product-level report; no order FK is synthesized",
+    },
+    {
+        "association": "tax / payments / order_marketing",
+        "status": "no_surrogate_pk",
+        "note": "these are order-level projections; order_pk is the association key, no fake row PK",
+    },
+    {
+        "association": "order_items -> cost_snapshots",
+        "status": "field_not_stored",
+        "note": "cost_snapshot_id/cost_snapshot_version/pricing_*_version are not in the source schema",
+    },
+]
 
 
 def _is_blank(value: Any) -> bool:
@@ -253,6 +342,138 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> 
 
 
 # ---------------------------------------------------------------------------
+# G3: restricted id-map storage (fail-closed, never in the delivery package)
+# ---------------------------------------------------------------------------
+
+
+def _is_within_git_repository(path: Path) -> bool:
+    """True when ``path`` (or an ancestor) is a Git worktree/repo."""
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return True
+    return False
+
+
+def _nested_or_same(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
+def resolve_restricted_id_map_dir(
+    raw_dir: Path, out_dir: Path, id_map_dir: Path | None
+) -> Path:
+    """Validate the restricted id-map location before any work happens.
+
+    Fail-closed: the location must already exist, must be a real directory
+    (not a symlink), must be disjoint from ``raw_dir``/``out_dir``, and must
+    not live inside a Git worktree.
+    """
+    if id_map_dir is None:
+        raise RestrictedIdMapError("restricted id-map storage is not configured")
+    try:
+        raw_res = raw_dir.resolve(strict=True)
+        out_res = out_dir.resolve(strict=False)
+        secure_res = id_map_dir.resolve(strict=True)
+    except OSError:
+        raise RestrictedIdMapError(
+            "restricted id-map storage is not accessible"
+        ) from None
+    if secure_res.is_symlink():
+        raise RestrictedIdMapError("restricted id-map storage must not be a symlink")
+    if not secure_res.is_dir():
+        raise RestrictedIdMapError("restricted id-map storage is not a directory")
+    if (
+        _nested_or_same(raw_res, secure_res)
+        or _nested_or_same(out_res, secure_res)
+        or _nested_or_same(raw_res, out_res)
+    ):
+        raise RestrictedIdMapError("restricted id-map storage must be independent")
+    if _is_within_git_repository(secure_res):
+        raise RestrictedIdMapError(
+            "restricted id-map storage must be outside any Git repository"
+        )
+    return secure_res
+
+
+def _id_map_payload(
+    pseudo_map: dict[str, dict[str, str]],
+    workspace_id: str,
+    retention_days: int,
+) -> dict[str, Any]:
+    entries: dict[str, dict[str, str]] = {}
+    for kind, mapping in pseudo_map.items():
+        entries[kind] = {
+            original: pseudo
+            for original, pseudo in mapping.items()
+            if not original.startswith("_")
+        }
+    return {
+        "schema_version": ID_MAP_SCHEMA_VERSION,
+        "workspace_id": workspace_id,
+        "entry_count": sum(len(v) for v in entries.values()),
+        "entries": entries,
+        "security": {
+            "classification": "L4_REIDENTIFIABLE",
+            "storage_class": "restricted_owner_controlled",
+            "git_tracked": False,
+            "delivered_with_desensitized_package": False,
+            "file_mode_octal": "0600",
+            "directory_mode_octal": "0700",
+            "retention_days": retention_days,
+            "destruction_owner_decision_required": True,
+            "destruction_note": (
+                "Owner decides the final destruction time; secure overwrite/delete "
+                "after the 30-day review and owner sign-off"
+            ),
+            "salt_included": False,
+        },
+    }
+
+
+def write_restricted_id_map(
+    secure_dir: Path,
+    pseudo_map: dict[str, dict[str, str]],
+    workspace_id: str,
+    retention_days: int,
+) -> int:
+    """Write ``_id_map_pseudo.json`` with 0600 mode under ``secure_dir``.
+
+    Returns the entry count. Uses O_EXCL so an existing mapping is never
+    overwritten (a rerun must deliberately choose a fresh restricted slot).
+    """
+    target = secure_dir / ID_MAP_FILENAME
+    payload = _id_map_payload(pseudo_map, workspace_id, retention_days)
+    fd: int | None = None
+    try:
+        os.chmod(secure_dir, ID_MAP_DIR_MODE)
+        fd = os.open(
+            str(target),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            ID_MAP_FILE_MODE,
+        )
+        os.chmod(target, ID_MAP_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fd = None
+            json.dump(payload, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RestrictedIdMapError(
+            "restricted id-map storage write failed (target not created)"
+        ) from None
+    return int(payload["entry_count"])
+
+
+# ---------------------------------------------------------------------------
 # Self-verification (plan §3.2 V1–V7)
 # ---------------------------------------------------------------------------
 
@@ -281,6 +502,7 @@ def verify(
     pseudo_map: dict[str, dict[str, str]],
     sample_rows: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
     fingerprints: dict[str, str] | None = None,
+    workspace_id: str | None = None,
 ) -> VerifyReport:
     rep = VerifyReport()
 
@@ -291,20 +513,159 @@ def verify(
             row_mismatch.append(name)
     rep.record("V1_row_counts", not row_mismatch, {"mismatch": row_mismatch})
 
-    # V2 referential alignment (refunds.orders in orders set; campaigns.product
-    # coverage is reported, not required)
+    # V2 referential alignment: every order-linked row must resolve to an
+    # orders.csv row via order_pk. Missing association fields are recorded
+    # explicitly (never silently skipped); structural limits never fabricate
+    # a fake FK.
     order_pks = {
-        r["order_pk"] for r in des_files.get("orders.csv", []) if r.get("order_pk")
+        r["order_pk"]
+        for r in des_files.get("orders.csv", [])
+        if not _is_blank(r.get("order_pk"))
     }
-    isolated = [
-        r.get("refund_pk")
-        for r in des_files.get("refunds.csv", [])
-        if r.get("order_pk") and r["order_pk"] not in order_pks
-    ]
+    isolated_by_file: dict[str, list[str]] = {}
+    missing_assoc_fields: dict[str, list[str]] = {}
+    missing_assoc_rows: list[dict[str, str]] = []
+    for filename, row_pk_field in ORDER_FK_FILES.items():
+        rows = des_files.get(filename, [])
+        if not rows:
+            continue
+        if not any("order_pk" in r for r in rows):
+            missing_assoc_fields[filename] = ["order_pk"]
+            continue
+        isolated: list[str] = []
+        for r in rows:
+            fk = r.get("order_pk")
+            if _is_blank(fk):
+                missing_assoc_rows.append(
+                    {
+                        "file": filename,
+                        "row": str(r.get(row_pk_field) or ""),
+                    }
+                )
+                continue
+            if fk not in order_pks:
+                isolated.append(str(r.get(row_pk_field) or fk))
+        if isolated:
+            isolated_by_file[filename] = isolated
+    samples: list[str] = []
+    for ids in isolated_by_file.values():
+        samples.extend(ids)
+    v2_ok = not isolated_by_file and not missing_assoc_fields and not missing_assoc_rows
     rep.record(
         "V2_referential",
-        not isolated,
-        {"isolated_refund_rows": len(isolated), "samples": isolated[:10]},
+        v2_ok,
+        {
+            "isolated_refund_rows": len(isolated_by_file.get("refunds.csv", [])),
+            "order_pk_orphans": isolated_by_file,
+            "orphan_count": sum(len(v) for v in isolated_by_file.values()),
+            "missing_required_association_fields": missing_assoc_fields,
+            "missing_order_pk_rows": missing_assoc_rows,
+            "samples": samples[:10],
+            "structural_limitations": STRUCTURAL_ASSOCIATION_LIMITS,
+        },
+    )
+
+    # G4: surrogate primary keys must exist, be non-empty, and be unique.
+    pk_detail: dict[str, Any] = {}
+    for filename, pk_field in PRIMARY_KEY_FIELDS.items():
+        rows = des_files.get(filename, [])
+        if not rows:
+            continue
+        if not any(pk_field in r for r in rows):
+            pk_detail[filename] = {
+                "status": "missing_primary_key_field",
+                "field": pk_field,
+            }
+            continue
+        values = [str(r.get(pk_field) or "") for r in rows]
+        empty_count = sum(1 for v in values if not v.strip())
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for v in values:
+            v = v.strip()
+            if not v:
+                continue
+            if v in seen:
+                duplicates.append(v)
+            else:
+                seen.add(v)
+        pk_detail[filename] = {
+            "status": "ok" if not empty_count and not duplicates else "violation",
+            "field": pk_field,
+            "empty_count": empty_count,
+            "duplicate_count": len(duplicates),
+            "duplicate_samples": duplicates[:10],
+        }
+    pk_violations = [f for f, d in pk_detail.items() if d["status"] != "ok"]
+    rep.record(
+        "V2_primary_key_integrity",
+        not pk_violations,
+        {"files": pk_detail, "violations": pk_violations},
+    )
+
+    # G4: workspace consistency across orders and every order-linked file.
+    ws_detail: dict[str, Any] = {
+        "mismatch_rows": [],
+        "missing_workspace_columns": [],
+        "structural_limitations": [],
+    }
+    ws_by_order: dict[str, str] = {}
+    for filename in ("orders.csv", *ORDER_FK_FILES.keys()):
+        rows = des_files.get(filename, [])
+        if not rows:
+            continue
+        if not any("workspace_id" in r for r in rows):
+            ws_detail["missing_workspace_columns"].append(filename)
+            ws_detail["structural_limitations"].append(
+                f"{filename}: workspace_id not exported; cannot validate workspace consistency"
+            )
+            continue
+        row_pk_field = ORDER_FK_FILES.get(filename)
+        for r in rows:
+            row_ws = r.get("workspace_id")
+            row_label = str(r.get(row_pk_field) or r.get("order_pk") or "")
+            if _is_blank(row_ws):
+                ws_detail["mismatch_rows"].append(
+                    {"file": filename, "row": row_label, "reason": "missing"}
+                )
+                continue
+            if workspace_id and row_ws != workspace_id:
+                ws_detail["mismatch_rows"].append(
+                    {
+                        "file": filename,
+                        "row": row_label,
+                        "reason": "workspace_mismatch",
+                        "row_workspace": row_ws,
+                        "expected_workspace": workspace_id,
+                    }
+                )
+                continue
+            if filename == "orders.csv":
+                ws_by_order[str(r.get("order_pk") or "")] = row_ws
+            else:
+                parent_ws = ws_by_order.get(str(r.get("order_pk") or ""))
+                if parent_ws is not None and row_ws != parent_ws:
+                    ws_detail["mismatch_rows"].append(
+                        {
+                            "file": filename,
+                            "row": row_label,
+                            "reason": "parent_workspace_mismatch",
+                            "row_workspace": row_ws,
+                            "parent_workspace": parent_ws,
+                        }
+                    )
+    ws_ok = (
+        not ws_detail["mismatch_rows"] and not ws_detail["missing_workspace_columns"]
+    )
+    rep.record(
+        "V2_workspace_consistency",
+        ws_ok,
+        {
+            "mismatch_count": len(ws_detail["mismatch_rows"]),
+            "mismatch_rows": ws_detail["mismatch_rows"][:10],
+            "missing_workspace_columns": ws_detail["missing_workspace_columns"],
+            "structural_limitations": ws_detail["structural_limitations"],
+        },
     )
 
     # V3 no PII residue (re-scan the desensitized text layer)
@@ -410,8 +771,27 @@ def run(
     out_dir: Path,
     salt_file: Path,
     workspace_id: str,
+    id_map_dir: Path | None,
+    id_map_retention_days: int | None,
 ) -> int:
-    salt = salt_file.read_text(encoding="utf-8").strip()
+    # G3: validate the restricted id-map location BEFORE any read/write.
+    try:
+        secure_dir = resolve_restricted_id_map_dir(raw_dir, out_dir, id_map_dir)
+    except RestrictedIdMapError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if id_map_retention_days is None or id_map_retention_days <= 0:
+        print("id-map retention must be a positive number of days", file=sys.stderr)
+        return 2
+
+    try:
+        salt = salt_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        print(
+            "salt file could not be read; refusing to run (fail-closed)",
+            file=sys.stderr,
+        )
+        return 2
     if not salt:
         print("salt file is empty; refusing to run (fail-closed)", file=sys.stderr)
         return 2
@@ -487,8 +867,31 @@ def run(
         for fname in des_files
     }
     rep = verify(
-        raw_files, des_files, pseudo_map, sample_rows, fingerprints=fingerprints
+        raw_files,
+        des_files,
+        pseudo_map,
+        sample_rows,
+        fingerprints=fingerprints,
+        workspace_id=workspace_id,
     )
+
+    # G3: the reidentifiable mapping is only produced when every self-check
+    # passes, and only into the restricted Owner-controlled location.
+    id_map_written = False
+    id_map_entries = 0
+    if rep.passed:
+        try:
+            id_map_entries = write_restricted_id_map(
+                secure_dir,
+                pseudo_map,
+                workspace_id,
+                id_map_retention_days,
+            )
+            id_map_written = True
+        except RestrictedIdMapError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
     report_path = out_dir / "desensitization_report.json"
     report_path.write_text(
         json.dumps(
@@ -496,6 +899,14 @@ def run(
                 "regression": rep.to_json(),
                 "pii_report": report,
                 "row_counts": {k: len(v) for k, v in des_files.items()},
+                "id_map": {
+                    "written": id_map_written,
+                    "entry_count": id_map_entries,
+                    "storage_class": "restricted_owner_controlled",
+                    "delivered_with_package": False,
+                    "git_tracked": False,
+                    "retention_days": id_map_retention_days,
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -504,6 +915,13 @@ def run(
     )
     print(json.dumps(rep.to_json(), indent=2))
     return 0 if rep.passed else 1
+
+
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -519,8 +937,31 @@ def main(argv: list[str] | None = None) -> int:
         help="Owner-delivered salt file. Never committed; missing/empty aborts (exit 2).",
     )
     parser.add_argument("--workspace-id", required=True)
+    parser.add_argument(
+        "--id-map-dir",
+        required=True,
+        type=Path,
+        help=(
+            "Owner-controlled restricted directory for _id_map_pseudo.json. "
+            "Must exist, must be outside the Git worktree and outside "
+            "raw/out dirs; the script refuses to run without it (fail-closed)."
+        ),
+    )
+    parser.add_argument(
+        "--id-map-retention-days",
+        required=True,
+        type=_positive_int,
+        help="Minimum retention (days) before Owner-authorized destruction.",
+    )
     args = parser.parse_args(argv)
-    return run(args.raw_dir, args.out_dir, args.salt_file, args.workspace_id)
+    return run(
+        args.raw_dir,
+        args.out_dir,
+        args.salt_file,
+        args.workspace_id,
+        args.id_map_dir,
+        args.id_map_retention_days,
+    )
 
 
 if __name__ == "__main__":

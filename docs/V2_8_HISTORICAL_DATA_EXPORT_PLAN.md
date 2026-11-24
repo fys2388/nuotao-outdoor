@@ -55,7 +55,7 @@ pseudo_id = HEX( SHA256( f"{entity_kind}|{workspace_id}|{original_id}|{salt}" ) 
 ```
 
 - **salt 由 Owner 通过安全渠道单独提供，不写进脚本/仓库/文档/环境变量示例**。脚本运行时从 `--salt-file`（Owner 交付的加密/受控文件）或受控 CLI 参数读入；缺 salt 则脚本拒绝运行（fail-closed）。
-- 性质：确定性（同一原始 ID + 同一 salt 永远映射同一伪 ID → 多次导出关联不断）；不可逆（HMAC/SHA256 单向，无盐表反查）；跨组一致（A/E/F/G 共享同一映射表，脚本在 `data/desensitized/_id_map_pseudo.json` 输出映射表用于关联验证——**该映射表本身含原始 ID，与脱敏数据同级保护，交付后由 Owner 决定是否销毁**）。
+- 性质：确定性（同一原始 ID + 同一 salt 永远映射同一伪 ID → 多次导出关联不断）；不可逆（HMAC/SHA256 单向，无盐表反查）；跨组一致（A/E/F/G 共享同一映射表）。**G3 加固**：映射表写入 **Owner 受控的独立受限目录**（`--id-map-dir`，与脱敏交付包、Git 工作树、raw/out 目录全部隔离，0600 文件 / 0700 目录，O_EXCL 防覆盖），**不随脱敏包交付、不入 Git、不进日志/异常输出**；保留期由 `--id-map-retention-days` 显式声明，**销毁时点由 Owner 决定**（30 天审阅 + Owner 签署后执行）。
 - SKU、`woocommerce_id`（商品维度业务标识，Owner 指定保留）不替换。
 
 ### 1.4 缺失字段处理（不填 0）
@@ -99,6 +99,7 @@ WHERE o.workspace_id = :workspace_id
 ```sql
 SELECT
   o.id                 AS order_pk,
+  o.workspace_id       AS workspace_id,
   o.external_order_id,
   o.status, o.payment_status, o.fulfillment_status,
   o.currency, o.country, o.payment_method, o.source, o.business_model,
@@ -109,6 +110,7 @@ SELECT
   o.profit_snapshot, o.rule_results,
   o.trace_id, o.received_at, o.created_at, o.updated_at,
   oi.id                AS line_pk,
+  oi.workspace_id      AS order_item_workspace_id,
   oi.external_item_id,
   oi.product_id,
   oi.sku, oi.name AS line_name,
@@ -134,6 +136,7 @@ LIMIT :batch_size;
 ```sql
 SELECT
   o.id                AS order_pk,
+  o.workspace_id      AS workspace_id,
   o.external_order_id,
   o.currency,
   o.subtotal,
@@ -146,6 +149,7 @@ SELECT
        ELSE NULL END  AS tax_rate_derived,   -- 推导税率；无法推导时 NULL，不填 0
   o.received_at,
   oi.id               AS line_pk,
+  oi.workspace_id     AS order_item_workspace_id,
   oi.sku, oi.quantity, oi.unit_price, oi.line_total,
   CASE
     WHEN o.subtotal - o.discount_total > 0
@@ -258,6 +262,7 @@ LIMIT :batch_size;
 -- E-1 订单级支付列
 SELECT
   o.id                AS order_pk,
+  o.workspace_id      AS workspace_id,
   o.external_order_id,
   o.payment_method, o.payment_status,
   o.currency, o.total, o.payment_fee, o.refunded_amount,
@@ -273,6 +278,7 @@ LIMIT :batch_size;
 -- E-2 退款生命周期（含退款手续费相关列）
 SELECT
   r.id                AS refund_pk,
+  r.workspace_id      AS workspace_id,
   r.order_id,
   r.status, r.refund_type,
   r.requested_amount, r.approved_amount, r.executed_amount,
@@ -330,6 +336,7 @@ LIMIT :batch_size;
 -- G-2 订单侧营销分量（广告费分摊 + 快照内营销摊销）
 SELECT
   o.id                AS order_pk,
+  o.workspace_id      AS workspace_id,
   o.advertising_cost,
   o.profit_snapshot ->> 'payment_fee'     AS snapshot_payment_fee,
   o.profit_snapshot ->> 'product_cost'    AS snapshot_product_cost,
@@ -354,19 +361,21 @@ G 组"订单归因及分摊记录"= `orders.advertising_cost`（订单侧分摊�
 
 - **输入**：7 组原始导出（CSV，UTF-8，含 §2 列；批次文件合并后进入）。目录 `data/raw_export/`。
 - **处理**（纯本地，无网络/DB）：
-  1. 读 salt（`--salt-file`；缺失则 exit 2，fail-closed，**不写默认 salt**）；
-  2. 构建稳定伪 ID 映射（§1.3），对 6 类标识逐一替换；
-  3. PII 剥除：枚举键删除（`billing_*`/`shipping_*` 地址块、`display_name`、`name/first_name/last_name` 键）+ JSON 键递归 + 正则兜底（邮箱/电话/卡号/CVV/`token`/`api_key`/`cookie`/`secret`）；命中正则的字段置 `REDACTED:<reason>` 并在报告列出命中计数；
-  4. 缺失处理：NULL/空保留；按 §1.4 枚举写 `missing_reason`；**0 值保留 0 并标 `value_is_zero=true`**（供"是否被填 0"校验区分）；
-  5. 对齐：以 A 组 `order_pk` 为主键，校验 B/E/G-2 行集 ⊆ A；C 组按 `product_id+variation_id` 索引；F/G 独立。
-- **输出**：`data/desensitized/{orders,orders_lines,tax,cost_snapshots,cost_current,price_history,payments,refunds,shipments,logistics_events,campaigns,order_marketing}.csv` + `_id_map_pseudo.json`（与脱敏数据同级保护）+ `desensitization_report.json`（命中统计、缺失清单、行数、sha256 文件指纹）。
+  1. 校验受限 id-map 目录（`--id-map-dir` + `--id-map-retention-days`；G3：目录必须已存在、非符号链接、不与 raw/out 嵌套或重叠、且**不在任何 Git 工作树内**；任一不满足 → exit 2，fail-closed）；
+  2. 读 salt（`--salt-file`；缺失则 exit 2，fail-closed，**不写默认 salt**）；
+  3. 构建稳定伪 ID 映射（§1.3），对 6 类标识逐一替换；
+  4. PII 剥除：枚举键删除（`billing_*`/`shipping_*` 地址块、`display_name`、`name/first_name/last_name` 键）+ JSON 键递归 + 正则兜底（邮箱/电话/卡号/CVV/`token`/`api_key`/`cookie`/`secret`）；命中正则的字段置 `REDACTED:<reason>` 并在报告列出命中计数；
+  5. 缺失处理：NULL/空保留；按 §1.4 枚举写 `missing_reason`；**0 值保留 0 并标 `value_is_zero=true`**（供"是否被填 0"校验区分）；
+  6. 对齐（G4）：以 A 组 `order_pk` 为主键，校验 `orders_lines/tax/payments/order_marketing/refunds` 五个文件 `order_pk` ⊆ A；C 组按 `product_id+variation_id` 索引；F/G 独立；关联/主键/workspace 校验见 §3.2 V2；
+  7. **仅当 V1–V7 全通过**才把 `pseudo_map`（剔除 `_salt`/`_workspace` 元键）写入受限目录 `_id_map_pseudo.json`（O_EXCL、0600/0700、fsync）。
+- **输出**：`data/desensitized/{orders,orders_lines,tax,cost_snapshots,cost_current,price_history,payments,refunds,shipments,logistics_events,campaigns,order_marketing}.csv` + `desensitization_report.json`（命中统计、缺失清单、行数、sha256 文件指纹、`id_map` 元数据：写入与否/条数/存储类别/保留期，**不含路径与原始 ID**）；映射工件仅在 `--id-map-dir/_id_map_pseudo.json`。
 
 ### 3.2 自校验（脚本内置，全部本地）
 
 | # | 校验 | 通过标准 |
 |---|---|---|
 | V1 | 行数一致 | 脱敏输出行数 == 原始输入行数（逐文件比对，报告输出） |
-| V2 | 关联对齐 | 每个脱敏副本的 `order_pk` 在 A 组集合中；`product_pk` 在 C/D 组；`refund.order_id ∈ A`；对齐率 100%（允许报告"孤立行"清单，不允许静默） |
+| V2 | 关联/主键/workspace 完整性 | **G4**：① 引用完整性——`orders_lines/tax/payments/order_marketing/refunds` 五文件的 `order_pk` 必须在 `orders.csv` A 组集合中（孤立行按行集记入 detail 并 FAIL，`refunds` 用 `refund_pk` 采样保留既有行为）；② 主键完整性——`orders/orders_lines/refunds/cost_snapshots/price_history/shipments/logistics_events/campaigns` 的代理主键列必须存在、非空、不重复；③ workspace 一致性——`orders` 与五个关联文件均须有 `workspace_id`，与 CLI `--workspace-id` 及父订单一致；缺失关联列/缺 `workspace_id` 列 → 记 `missing_required_association_fields`/`missing_workspace_columns` + `structural_limitations`（**明确标记，绝不静默跳过，绝不伪造 FK**）；schema 无 FK（shipments/logistics_events/campaigns→orders）或无可信关联字段（tax/payments/order_marketing 无代理主键）→ 如实记录为结构限制 |
 | V3 | 无 PII 残留 | 正则扫全量输出：邮箱 ≥1 次、电话模式、Luhn 卡号、`token/api_key/cookie/cvv/secret` 键值 → 命中即 **FAIL**（exit 1） |
 | V4 | 缺失未填 0 | 原始 NULL 字段在输出中必须为 NULL/空且带 `missing_reason`；原始 0 字段保留 0；反向：输出中出现 `missing_reason != null` 但值=0 的行 → FAIL |
 | V5 | 伪 ID 稳定 | 同一原始 ID 两次独立调用映射出同一伪 ID（脚本内自测，用固定测试 salt 演示，不写真实 salt） |
@@ -376,7 +385,8 @@ G 组"订单归因及分摊记录"= `orders.advertising_cost`（订单侧分摊�
 ### 3.3 安全
 
 - 脚本与测试数据全部可入仓（**测试数据为合成**，`tests/fixtures/v28_export_sample/`，与生产无关）；
-- salt 文件、`_id_map_pseudo.json`、原始导出 **gitignore 且不出目录**；`.gitleaks` 规则兜底扫描 `salt`/凭据模式（仓库已有 gitleaks 配置）。
+- salt 文件、原始导出 **gitignore 且不出目录**；**G3**：`_id_map_pseudo.json` **只写 Owner 受限目录**（`--id-map-dir`，仓库外），并额外在 `.gitignore` 加 `_id_map_pseudo.json` 兜底模式（即使误配到工作树内也**不可能被 Git 跟踪**）；`.gitleaks` 规则兜底扫描 `salt`/凭据模式（仓库已有 gitleaks 配置）。
+- **G4 结构限制**：`tax/payments/order_marketing` 无独立代理主键、`shipments/logistics_events/campaigns`→`orders` 无 FK、`order_items.cost_snapshot_id` schema 无——均按**结构限制**如实记录，不伪造关联键、不伪造 FK。
 
 ---
 
