@@ -149,6 +149,27 @@ bsk_interact click target=@eM(发送按钮) expect=[{field:exists,target:@eM}]
 bsk_session sync session=<id>
 ```
 
+#### 备选方案：直接 fill + 回车（2026-11-25 V2.8 EXPORT 汇报实战验证，更简单）
+
+> 剪贴板方案（上）已验证可靠；若 clipboard 偶发不可用，可改用**直接 fill + Enter**。本次会话实际用此方案成功发送 E-2/E-3 汇报（无需写文件、无需剪贴板）。
+
+```
+# Step A: sync 获取 context_id + 输入框 ref
+bsk_session sync policy=target        # 记录返回的 context_id（如 4e3e0106-...）
+# 输入框 = @eN textbox "询问 ChatGPT"（composer）
+
+# Step B: fill 填入汇报文本（显式传 contextId！不传会报 "requires a valid control context"）
+bsk_interact fill target=@eN value=<汇报文本> contextId=<context_id>
+
+# Step C: Enter 发送
+bsk_interact press key=Enter target=@eN contextId=<context_id>
+
+# Step D: sync 验证（输入框 [empty] + 我的消息出现在对话 + "回答中/评估"状态）
+bsk_session sync policy=target
+```
+
+> ⚠️ **关键（问题 #25）**：sync 后必须把返回的 `context_id` **显式传入** `bsk_interact`（`contextId=`），否则点击/填充/发送报 "requires a valid control context from cooperate sync"。ref 也会随页面 re-render 偏移，每次交互前重新 sync 获取新 ref。
+
 ### 2.3 读取 ChatGPT 回复（Owner 指令）
 
 ```
@@ -289,29 +310,45 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 
 ---
 
-## 5. 当前待办（ChatGPT 第十一轮 SSH 加固 S1-S6）
+## 5. 当前待办（2026-11-25 快照，随 Owner 指令滚动更新）
 
-**Owner 审批：APPROVED WITH CONDITIONS**（SSH 加固分阶段）
+### 5.1 V2.8 定价审计五线（Owner 终审状态）
 
-| 阶段 | 执行内容 | 状态 |
+| 工作线 | 当前决定 |
+|---|---|
+| 3A 财务基线 | 最终通过，关闭 |
+| 3B 库存语义 | 技术验收通过；0093 生产只读预检有限授权，**生产迁移未授权** |
+| 3C Lineage | V1.3 设计冻结；实施未授权 |
+| 3D 双引擎 | 文档整改通过；方案 A 不变 |
+| EXPORT G4 | 通过 |
+| EXPORT G3 Runtime | 跨平台技术验证通过（代码+CLI 门禁+Windows NTFS+Linux mode/getfacl 四层 Owner 接受）；**正式目录待置备** |
+| EXPORT G1/G2 | 阻塞 |
+
+**G3 Runtime = VERIFIED；G3 overall = BLOCKED；V2.8 整体未通过最终验收；生产权限未授权；0076 冻结。**
+
+### 5.2 剩余全部为 Owner/DBA 外部前置（DSH 不可自行推进）
+
+| 项 | 状态 | DSH 动作 |
 |---|---|---|
-| **S1** | 读取 SSH 配置、认证方式、登录日志、MaxStartups、当前管理员来源 IP | 批准（待执行）|
-| **S2** | 验证 SSH 密钥登录 + Hetzner Console 应急访问 | 批准 |
-| **S3** | 安装 Fail2ban，配置 SSH jail + 测试 | 批准 |
-| **S4** | 确认密钥登录正常后，禁用密码认证 | 批准 |
-| **S5** | 验证新连接/旧连接/Fail2ban 状态/服务日志 | 批准 |
-| **S6** | 调整 MaxStartups 等参数 | **暂不批准**（先提供证据+方案）|
+| G3 正式 `id_map_dir` | Owner/系统管理员置备 | 置备后于实际目标宿主重新验证正式目录 ACL（路径隔离/所有权/DACL 或 mode+ACL/执行账号授权/写后重读/未授权主体拒/不进 Git·交付包·云同步） |
+| G1 生产只读脱敏副本 | DBA 0093 只读预检（有限授权） | 等 DBA 结果 |
+| G2 Owner 安全 Salt | 未提供 | 未接收 |
+| 3B 生产迁移 / 3C 实施 | 均需单独书面批准 | 不自行执行 |
+| PR #28（SOP V2.0 合并 main）| 待评审 | 不自行合并（合入 main 需批准） |
 
-**禁止**：
-1. 没有第二条管理通道时禁用密码认证
-2. 直接关闭密码后再测密钥有效性
-3. 不允许把部分验证说成完整/生产验收
+### 5.3 禁止事项（红线，持续有效）
 
-**其他 D8-D 剩余任务**（等 Owner 后续指令或按 V1.2 继续）：
-- Complianz 隔离环境（CMP_STAGING = LOCAL_ISOLATED_TEST）
-- B2C GA4 Realtime + 事件质量验证
-- Webhook 隔离环境完整测试（正确签名 + 幂等）
-- LiteSpeed 缓存兼容性审计
+1. 不自行创建/选取正式 `id_map_dir`；不生成真实映射文件
+2. 不接收真实 Salt；不连接生产数据库；不导出生产数据；不执行真实脱敏
+3. 不执行历史财务重算；不修改 WooCommerce；不部署
+4. 不触碰 0076；不合并 main（除非批准）；不用 `git add .`
+5. 不把权限不足的 skip 记为通过；不删除失败测试或放宽断言
+
+### 5.4 历史（已完成，存档参考）
+
+- **D8-D SSH 加固 S1-S5**：已按 GitHub Actions 通道执行并验证（Owner APPROVED WITH CONDITIONS）；S6 MaxStartups 调整为"先提供证据+方案，暂不批准"。
+- **D8-D 其他**：Complianz 隔离环境 / B2C GA4 Realtime / Webhook 隔离测试 / LiteSpeed 缓存兼容性审计 —— 视 Owner 后续指令推进。
+- **V2.8 审计 3A-3D + EXPORT**：已收口/通过（见 §5.1），剩余外部前置见 §5.2。
 
 ---
 
