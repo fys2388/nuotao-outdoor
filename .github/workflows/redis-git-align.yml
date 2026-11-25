@@ -1,0 +1,47 @@
+name: Align Server Git to Main
+
+on:
+  workflow_dispatch:
+
+jobs:
+  align:
+    name: Fetch + reset --hard origin/main + verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Align server git
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -e
+            echo "=== 1. fetch origin (verify credentials) ==="
+            git -C /opt/nuotao-ai-os fetch origin 2>&1 | tail -5 || { echo "(fetch FAILED - aborting)"; exit 1; }
+            echo ""
+            echo "=== 2. working tree (only untracked backups expected) ==="
+            git -C /opt/nuotao-ai-os status --short 2>&1 | head -10
+            echo "--- tracked modifications (should be empty) ---"
+            MODS=$(git -C /opt/nuotao-ai-os status --short 2>&1 | grep -vE '^\?\?' | wc -l)
+            echo "tracked-mod-count: $MODS"
+            echo ""
+            echo "=== 3. reset --hard origin/main ==="
+            git -C /opt/nuotao-ai-os reset --hard origin/main 2>&1 | tail -3
+            echo ""
+            echo "=== 4. verify aligned ==="
+            echo "--- current HEAD vs origin/main ---"
+            git -C /opt/nuotao-ai-os log --oneline -2 2>&1 | head -2
+            echo "--- git status after reset (should be clean except untracked) ---"
+            git -C /opt/nuotao-ai-os status --short 2>&1 | head -5
+            echo "--- compose key lines (expect env-ized + worker healthcheck password) ---"
+            grep -nE 'REDIS_URL:|requirepass|127\.0\.0\.1|\${REDIS_PASSWORD}' /opt/nuotao-ai-os/docker-compose.yml 2>&1 | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g' | head -8
+            echo ""
+            echo "=== 5. runtime still healthy (reset does NOT touch containers) ==="
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            docker ps --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -E 'redis|postgres|NAMES'
+            echo -n "redis auth: "; docker exec nuotao-ai-os-redis-1 redis-cli -a "$(cat $(ls -t /root/redis-backup/redis_password_*.txt | head -1))" ping 2>&1 | tail -1
+            echo -n "redis health: "; docker inspect nuotao-ai-os-redis-1 --format '{{.State.Health.Status}}' 2>&1
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
