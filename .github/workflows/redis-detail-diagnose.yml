@@ -1,0 +1,55 @@
+name: Diagnose Redis Detail
+
+on:
+  workflow_dispatch:
+
+jobs:
+  redis-detail:
+    name: Redis detail diagnose (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect redis container & backend redis wiring
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== docker ps ==="
+            docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>&1
+            echo ""
+            echo "=== find redis container ==="
+            RID=$(docker ps -q --filter "ancestor=redis" | head -1)
+            if [ -z "$RID" ]; then
+              RID=$(docker ps --format '{{.ID}} {{.Image}}' | grep -i redis | head -1 | awk '{print $1}')
+            fi
+            if [ -z "$RID" ]; then
+              RID=$(docker ps --format '{{.ID}} {{.Names}}' | grep -iE 'redis|cache' | head -1 | awk '{print $1}')
+            fi
+            echo "RID=$RID"
+            echo ""
+            echo "=== redis container ports mapping ==="
+            docker port "$RID" 2>&1 || echo "(no port)"
+            echo ""
+            echo "=== redis container inspect (ports/network/env) ==="
+            docker inspect "$RID" --format '{{json .NetworkSettings.Ports}}' 2>&1 | head -20
+            echo ""
+            docker inspect "$RID" --format 'Name={{.Name}} Cmd={{.Config.Cmd}} Cmdline={{.Path}} {{range .Config.Cmd}}{{.}} {{end}}' 2>&1
+            echo ""
+            docker inspect "$RID" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>&1 | head -20
+            echo ""
+            echo "=== find docker-compose files on server ==="
+            find / -maxdepth 4 -name "docker-compose*.yml" -o -name "docker-compose*.yaml" 2>/dev/null | grep -vE 'node_modules|/proc/|/sys/' | head -20
+            echo ""
+            echo "=== backend dir listing ==="
+            ls -la /opt/nuotao/ 2>&1 | head -40
+            echo ""
+            echo "=== REDIS related env in backend .env ==="
+            grep -iE 'redis|cache|CELERY' /opt/nuotao/backend/.env 2>&1 | sed -E 's/(PASS[^=]*=).*/\1***REDACTED***/I; s/(PASSWORD=).*/\1***REDACTED***/I' | head -30 || echo "(no /opt/nuotao/backend/.env)"
+            echo ""
+            echo "=== REDIS related env in production .env ==="
+            grep -iE 'redis|cache|CELERY' /opt/nuotao/.env 2>&1 | sed -E 's/(PASS[^=]*=).*/\1***REDACTED***/I; s/(PASSWORD=).*/\1***REDACTED***/I' | head -30 || echo "(no /opt/nuotao/.env)"
+            echo ""
+            echo "=== redis container network ==="
+            docker inspect "$RID" --format '{{json .NetworkSettings.Networks}}' 2>&1 | head -40
