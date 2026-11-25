@@ -1,0 +1,41 @@
+name: Check Env Git Tracking
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Precisely check .env git tracking
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check .env tracking
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            echo "=== is .env tracked? (ls-files exact) ==="
+            TRACKED=$(git -C /opt/nuotao-ai-os ls-files | grep -x '.env')
+            if [ -n "$TRACKED" ]; then echo "TRACKED: yes ($TRACKED)"; else echo "TRACKED: no"; fi
+            echo ""
+            echo "=== .env in .gitignore? ==="
+            git -C /opt/nuotao-ai-os check-ignore .env 2>&1 || echo "(not ignored)"
+            echo ""
+            echo "=== git status for .env (incl ignored) ==="
+            git -C /opt/nuotao-ai-os status --short --ignored 2>&1 | grep -E '\.env' || echo "(no .env in status)"
+            echo ""
+            echo "=== skip-worktree / assume-unchanged flags ==="
+            git -C /opt/nuotao-ai-os ls-files -v .env 2>&1 || echo "(n/a)"
+            echo ""
+            echo "=== .env in git history? ==="
+            git -C /opt/nuotao-ai-os log --oneline -3 -- .env 2>&1 || echo "(no history)"
+            echo ""
+            echo "=== does .env actually exist & contain sensitive? ==="
+            ls -la /opt/nuotao-ai-os/.env 2>&1
+            grep -cE 'REDIS_PASSWORD|POSTGRES_PASSWORD|DATABASE_URL|SECRET|KEY' /opt/nuotao-ai-os/.env 2>&1 | xargs -I{} echo "sensitive-looking lines: {}"
+            echo ""
+            echo "=== main's .env (if tracked) check ==="
+            git -C /opt/nuotao-ai-os ls-tree origin/main --name-only .env 2>&1 || echo "(no .env in main)"
