@@ -1,0 +1,52 @@
+name: Fix Redis Healthcheck + Protect Compose
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Fix healthcheck auth & git-commit compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix healthcheck and commit compose
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -e
+            CFG=/opt/nuotao-ai-os/docker-compose.yml
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            echo "### 1. fix healthcheck to use password ###"
+            sed -i 's|test: \["CMD", "redis-cli", "ping"\]|test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]|' "$CFG"
+            echo "--- healthcheck line now ---"
+            grep -nE 'test: \[' "$CFG" | grep -iE 'redis|ping' | head -3
+
+            echo "### 2. validate compose & recreate redis ###"
+            cd /opt/nuotao-ai-os
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f "$CFG" config >/dev/null 2>&1 && echo "(config OK)" || { echo "(config ERROR)"; $DC -f "$CFG" config 2>&1 | grep -iE 'error|redis' | head; exit 1; }
+            $DC -f "$CFG" up -d redis 2>&1 | tail -5
+
+            echo "### 3. verify redis healthy ###"
+            sleep 10
+            docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'redis|NAMES'
+            docker inspect nuotao-ai-os-redis-1 --format 'Health={{.State.Health.Status}}' 2>&1
+            docker exec nuotao-ai-os-redis-1 redis-cli -a "$(cat $(ls -t /root/redis-backup/redis_password_*.txt | head -1))" ping 2>&1 | tail -1
+
+            echo "### 4. git-protect compose (local commit) ###"
+            git -C /opt/nuotao-ai-os add docker-compose.yml 2>&1
+            git -C /opt/nuotao-ai-os -c user.email="ops@nuotao.local" -c user.name="nuotao-ops" commit -m "fix(ops): env-ize redis password + bind 127.0.0.1 ports + healthcheck auth" 2>&1 | tail -3
+            echo "--- git status after commit ---"
+            git -C /opt/nuotao-ai-os status --short 2>&1 | head -5
+            git -C /opt/nuotao-ai-os log --oneline -2 2>&1 | head -2
+
+            echo "### 5. final state ###"
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
+            docker port nuotao-ai-os-redis-1 2>&1
+            docker port nuotao-ai-os-postgres-1 2>&1
