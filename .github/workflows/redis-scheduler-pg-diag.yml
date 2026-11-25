@@ -1,0 +1,41 @@
+name: Diagnose Scheduler PG Auth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    name: Inspect scheduler DATABASE_URL vs backend (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose scheduler pg auth
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== scheduler container env (db/redis) ==="
+            docker inspect nuotao-ai-os-scheduler-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>&1 | grep -iE 'DATABASE|POSTGRES|REDIS|TASK_QUEUE' | sed -E 's#(://[^:/]+:)[^@]*@#\1***REDACTED***@#g' | sed -E 's/(POSTGRES_PASSWORD=).*/\1***REDACTED***/I' | head -20
+            echo ""
+            echo "=== /opt/nuotao-ai-os/.env pg vars ==="
+            grep -iE 'POSTGRES|DATABASE_URL' /opt/nuotao-ai-os/.env 2>/dev/null | sed -E 's/(POSTGRES_PASSWORD=).*/\1***REDACTED***/I; s#(://[^:/]+:)[^@]*@#\1***REDACTED***@#g' | head -20 || echo "(no .env pg vars)"
+            echo ""
+            echo "=== backend .env pg vars ==="
+            grep -iE 'POSTGRES|DATABASE_URL' /opt/nuotao-ai-os/backend/.env 2>/dev/null | sed -E 's/(POSTGRES_PASSWORD=).*/\1***REDACTED***/I; s#(://[^:/]+:)[^@]*@#\1***REDACTED***@#g' | head -20 || echo "(no backend .env pg vars)"
+            echo ""
+            echo "=== backend process DATABASE_URL (known-good) ==="
+            BPID=$(pgrep -f uvicorn | head -1)
+            tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep -iE 'DATABASE_URL|POSTGRES_PASSWORD' | sed -E 's#(://[^:/]+:)[^@]*@#\1***REDACTED***@#g' | sed -E 's/(POSTGRES_PASSWORD=).*/\1***REDACTED***/I' || echo "(none)"
+            echo ""
+            echo "=== scheduler logs (latest) ==="
+            docker logs --tail 25 nuotao-ai-os-scheduler-1 2>&1 | tail -25
+            echo ""
+            echo "=== worker journal (last 5 min) ==="
+            journalctl -u nuotao-agent-worker --since "5 min ago" --no-pager 2>/dev/null | grep -iE 'redis|NOAUTH|WRONGPASS|AuthenticationError|Started|Stopped|error|running' | tail -20 || echo "(no worker journal)"
+            echo ""
+            echo "=== postgres can accept nuotao? (list db/roles) ==="
+            docker exec nuotao-ai-os-postgres-1 psql -U postgres -tAc "SELECT datname FROM pg_database WHERE datname='nuotao'" 2>&1 || echo "(psql failed)"
+            docker exec nuotao-ai-os-postgres-1 psql -U postgres -tAc "SELECT rolname FROM pg_roles WHERE rolname='nuotao'" 2>&1 || echo "(roles query failed)"
