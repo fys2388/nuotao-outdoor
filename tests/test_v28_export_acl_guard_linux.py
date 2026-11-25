@@ -46,10 +46,32 @@ def _make_dir(base: Path, name: str, mode: int) -> Path:
     return d
 
 
+def _dump_evidence(path: Path, label: str) -> None:
+    """Write stat + getfacl evidence for ``path`` to the evidence dir when
+    ``V28_G3_EVIDENCE_DIR`` is set (Owner directive V1.0 §三)."""
+    ev_dir = os.environ.get("V28_G3_EVIDENCE_DIR")
+    if not ev_dir:
+        return
+    ev = Path(ev_dir)
+    ev.mkdir(parents=True, exist_ok=True)
+    out = ev / f"{label}.txt"
+    parts = [
+        f"# path: {path}",
+        f"# stat: {os.stat(path).st_mode:o} uid={os.stat(path).st_uid}",
+    ]
+    gf = subprocess.run(["getfacl", "-p", str(path)], capture_output=True, text=True)
+    parts.append(f"# getfacl_exit: {gf.returncode}")
+    parts.append(gf.stdout.strip())
+    if gf.stderr.strip():
+        parts.append(f"# getfacl_stderr: {gf.stderr.strip()}")
+    out.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
 def test_1_protected_dir_allowed(tmp_path: Path) -> None:
     d = _make_dir(tmp_path, "protected", 0o700)
     verdict = verify_restricted_dir_acl(d, kind="dir", authorized_uid=_current_uid())
     assert verdict.allowed, verdict.reason
+    _dump_evidence(d, "1_protected_dir")
 
 
 def test_2_broad_mode_rejected(tmp_path: Path) -> None:
@@ -120,3 +142,5 @@ def test_6_file_reverified_allowed(tmp_path: Path) -> None:
     os.chmod(f, 0o600)
     verdict = verify_restricted_dir_acl(f, kind="file", authorized_uid=_current_uid())
     assert verdict.allowed, verdict.reason
+    _dump_evidence(d, "6_protected_dir")
+    _dump_evidence(f, "6_post_write_file")
