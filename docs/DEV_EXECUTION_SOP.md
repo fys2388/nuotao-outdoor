@@ -65,24 +65,29 @@ Owner 指令 → DSH 执行开发 → 验证（测试/证据）→ 产出报告 
 
 #### B. 证据分级（E0 最弱 → E5 最强，与冻结设计 V1.3 完全一致）
 
-> **E0-E5 仅用于定义了 EvidenceGrade 的事实证据域**（如 ACL 验证证据），不作为所有测试/CI/验收的通用分数。
+> **E0-E5 仅用于项目已有 EvidenceGrade 定义的商品、供应商、成本等事实证据域**；**ACL 验证、CI、数据库迁移测试使用对应安全验证状态与运行环境证据（VERIFIED / REJECTED / NOT RUN、系统平台、执行主体、权限结果、测试产物），不套用 E0-E5**。
 
 **聚合规则（两层，禁止对全部证据行做全局 MIN）**：
-1. 先按 `critical_component_set` **逐组件**筛选 `verified` 且在评估时间有效的证据；
-2. 未解决来源事实冲突 → **CONFLICT**；
-3. 组件没有有效证据 → **UNKNOWN**；
-4. 每个组件按确定性证据选择规则计算 **component_grade**；
-5. 再对关键组件的 component_grade 取 **MIN**；
-6. 任一关键组件没有有效已验证证据 → 整体 **UNKNOWN / INCOMPLETE**；
-7. 空或无法证明的 `critical_component_set` → **不得计算等级**；
-8. **UNKNOWN ≠ E0**（未验证 ≠ 最弱有效证据）；
+1. `critical_component_set` **在快照创建时冻结**（不得事后重新猜测历史快照关键组件）；
+2. 先按 `critical_component_set` **逐组件**筛选 `verified` 且在评估时间有效的证据；
+3. 未解决来源事实冲突 → **CONFLICT**；
+4. 组件没有有效证据 → **UNKNOWN / INCOMPLETE**；
+5. 每个组件按确定性证据选择规则计算 **component_grade**；
+6. 再对关键组件的 component_grade 取 **MIN**；
+7. 空或无法证明的 `critical_component_set` → 整体 **UNKNOWN / INCOMPLETE**；
+8. **UNKNOWN ≠ FAILED；UNKNOWN ≠ E0**；
 9. `grade_order` 使用**显式 CASE**（不依赖字符串序）。
 
 **红线领域（按 R1-R13 真实业务领域列示，不设未经 Owner 确认的 P0/P1/P2 分组）**：
 - 财务口径（R1/R2/R6/R7）：NetRevenue/GM/GMMargin/CP/CPMargin；SalesTax 不进收入；NetRevenue≤0 → CPMargin 不可计算。
 - 成本库存（R3/R4/R5/R8/R9/R12/R13）、引擎（R10/R11）：按 Owner 已确认口径列示，不作主观优先级分组。
 
-**fail-closed**：无法取得证据/工具不可用/解析失败/未知成本 → 一律按**失败/拒绝**处理，不猜测、不包装（如 getfacl 不可用 → 拒；未知成本 → 拒）。
+**fail-closed（区分语义）**：
+- 缺少有效关键组件证据 → 证据状态 **UNKNOWN / INCOMPLETE**（不得伪装成 FAILED 或 E0）；
+- 已验证证据之间存在未解决事实冲突 → **CONFLICT**；
+- 未知成本 → 利润/定价决策 fail-closed，**不产生可用利润率**；
+- 下游操作 gate：遇 **UNKNOWN / INCOMPLETE / CONFLICT** 按规则**拒绝继续**；
+- 证据台账**保留 UNKNOWN / INCOMPLETE 原状态**（不把缺失证据编码为 E0）。
 
 **ACL 强制矩阵（仅用于 G3 敏感映射文件写入）**：未验证/验证失败/Owner 无法确认/平台不支持 → **exit 2 + 零映射产物**；写入后**重读** ACL 复核；`acl_verified` 仅真实验证成功 true；禁止默认无验证写入路径。
 
@@ -249,13 +254,21 @@ jobs:
 
 **执行**：
 ```powershell
-git add .github/workflows/<task>.yml; git commit --no-verify -m "ci: <desc>"; git push origin main
-gh workflow run <task>.yml
-$rid = (gh run list --workflow=<task>.yml --limit 1 --json databaseId -q '.[0].databaseId')
+# 1) 推送：仅在 Owner 已明确批准指定远程分支 push 后执行；main push 必须有单独书面 Owner 批准
+git push origin <approved-remote> <approved-branch>
+
+# 2) 生产 workflow dispatch：仅当存在单独的生产 workflow 书面批准时才允许
+#    批准必须绑定：workflow、commit SHA、ref、环境、Job、全部输入参数、时间窗口、停止/回滚条件
+#    未得到特定审批，禁止 dispatch；不得无条件使用 workflow_dispatch 默认输入
+#    以下仅为命令格式示意；审批未绑定该 workflow/commit/ref/环境/输入时禁止执行
+gh workflow run <approved-workflow>.yml --ref <approved-ref> -f <approved-input>=<approved-value>
+
+$rid = (gh run list --workflow=<approved-workflow>.yml --limit 1 --json databaseId -q '.[0].databaseId')
 gh run watch $rid --exit-status
 $jobId = gh api repos/fys2388/nuotao-outdoor/actions/runs/$rid/jobs -q '.jobs[0].id'
 gh api "repos/.../actions/jobs/$jobId/logs" | Select-String "out:" | ...  # 提取 SSH 输出
 ```
+> ⚠️ **`--no-verify` 不得作为通用正常流程示例**（仅按 §6 #9 书面批准规则例外使用）；不提供默认 `push origin main` / 默认 `gh workflow run` 命令。
 
 **只读诊断模板**（已有）：`diagnose-ssh-fail2ban.yml`、`check-backend-emergency.yml`、`webhook-secret-diagnose.yml`
 
@@ -399,9 +412,9 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 
 | # | 问题现象 | 根因 | 解决方案 | 预防 |
 |---|---|---|---|---|
-| 1 | SSH 直连 95.217.218.178 "Connection closed"，TCP 22 可达 | 服务器被**多 IP 持续暴力破解**，sshd `MaxStartups 10:30:100` 被攻击占满，合法连接被挤掉 | 用 **GitHub Actions 通道**（runner IP ≠ 本地，不受 sshd 过载影响）执行所有 Hetzner 操作 | 永久：install fail2ban + 禁密码认证（S3/S4）|
+| 1 | SSH 直连 95.217.218.178 "Connection closed"，TCP 22 可达 | 服务器被**多 IP 持续暴力破解**，sshd `MaxStartups 10:30:100` 被攻击占满，合法连接被挤掉 | 用 **GitHub Actions 通道**（runner IP ≠ 本地，不受 sshd 过载影响）执行所有 Hetzner 操作 | **COMPLETED/VERIFIED**：S3/S4 已按 GitHub Actions 通道执行并验证（Owner APPROVED WITH CONDITIONS）|
 | 2 | 误判为 "fail2ban 封禁" | 未先检查就假设 | 先只读诊断（`diagnose-ssh-fail2ban.yml`）确认 fail2ban **未安装**，根因是 sshd 过载 | **Owner 红线**：不把"疑似"当"确认"，先诊断后结论 |
-| 3 | fail2ban 未安装（`command not found`）| 生产服务器裸奔，无暴力破解防护 | S3 安装 fail2ban + 配置 SSH jail（已批准，待执行）| 新服务器初始化必装 fail2ban |
+| 3 | fail2ban 未安装（`command not found`）| 生产服务器裸奔，无暴力破解防护 | **COMPLETED/VERIFIED**：S3-S5 已执行并验证（安装 fail2ban + 配置 SSH jail + 测试）；**S6 NOT AUTHORIZED**（暂不批准）| 新服务器初始化必装 fail2ban |
 | 4 | GitHub Actions `gh run view --log` 超时/无输出 | 日志下载慢或 Select-String 过滤无匹配 | 用 `gh api repos/.../actions/jobs/$jobId/logs` + `Select-String "out:"` 提取 SSH 输出 | 封装为标准取日志函数 |
 | 5 | pwsh 复杂 Python/SSH 命令引号转义失败 | 嵌套引号 + pwsh 转义冲突 | 写脚本文件 → scp 上传 → ssh 执行；或 GitHub Actions workflow 内联 | 复杂命令一律写文件，不内联 |
 | 6 | 本地代理 fake-ip 劫持 DNS（8.8.8.8 也返回 198.18.x）| Clash 类代理 TUN 模式劫持所有 DNS | 直连 IP（95.217.218.178）绕过 DNS；或 GitHub Actions 通道 | Hetzner 操作优先 GitHub Actions，不依赖本地网络 |
