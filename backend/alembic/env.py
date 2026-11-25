@@ -1,6 +1,7 @@
 """Alembic environment: wires migrations to the app's async engine."""
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -53,12 +54,32 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations using an async engine created for this process."""
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    """Run migrations using an async engine created for this process.
+
+    When both ``psycopg2`` and ``asyncpg`` are installed, SQLAlchemy may
+    resolve the PG URL to the synchronous driver first (causing the error
+    "The asyncio extension requires an async driver to be used").
+    Force ``asyncpg`` by setting the env-var that SQLAlchemy checks during
+    dialect resolution — this has no effect on production since our code
+    path always uses +asyncpg URLs.
+    """
+    import sqlalchemy.dialects.postgresql  # noqa: F401 – ensure dialect registry loaded
+
+    # Explicitly override to asyncpg when both drivers are present.
+    _prev = os.environ.get("SQLALCHEMY_PREFER_ASYNC")
+    try:
+        os.environ["SQLALCHEMY_PREFER_ASYNC"] = "1"
+        connectable = async_engine_from_config(
+            config.get_section(config.config_ini_section, {}),
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+        )
+    finally:
+        if _prev is None:
+            os.environ.pop("SQLALCHEMY_PREFER_ASYNC", None)
+        else:
+            os.environ["SQLALCHEMY_PREFER_ASYNC"] = _prev
+
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
