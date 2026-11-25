@@ -83,19 +83,25 @@ def test_2_broad_mode_rejected(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(shutil.which("setfacl") is None, reason="setfacl not installed")
 def test_3_named_acl_rejected(tmp_path: Path) -> None:
-    """A named ACL entry (even a benign one) is evidence of an extended ACL
-    that the POSIX mode alone cannot exclude -> rejected."""
+    """A named ACL entry is evidence of an extended ACL that the POSIX mode
+    alone cannot exclude -> the guard must reject. We reset the ACL mask to
+    ``---`` so the POSIX mode stays ``0700`` and the ACL-widening path (not
+    the mode check) is what fires."""
     d = _make_dir(tmp_path, "named", 0o700)
-    # Use the current user as a named entry; setfacl accepts it and the
-    # evaluator rejects ANY named entry, regardless of principal.
     res = subprocess.run(
-        ["setfacl", "-m", f"u:{_current_uid()}:rx", str(d)],
+        ["setfacl", "-m", f"u:{_current_uid()}:rx", "-m", "m:---", str(d)],
         capture_output=True,
         text=True,
     )
     if res.returncode != 0:
         pytest.skip(f"setfacl cannot add named entry: {res.stderr.strip()}")
     try:
+        # Premise: the mask reset keeps the POSIX mode at 0700, so the ACL
+        # widening check (not the mode check) is what must reject.
+        mode = os.stat(d).st_mode & 0o777
+        assert (
+            mode == 0o700
+        ), f"premise: mode should stay 0o700 after mask reset, got {oct(mode)}"
         verdict = verify_restricted_dir_acl(
             d, kind="dir", authorized_uid=_current_uid()
         )

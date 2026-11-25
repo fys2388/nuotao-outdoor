@@ -58,6 +58,17 @@ jobs:
         run: |
           python3 -m pytest tests/test_v28_export_acl_guard_linux.py -v
 
+      - name: Run owner-mismatch check with controlled root (test 4)
+        # Owner directive V1.0 §二: the owner-mismatch check needs chown, so it
+        # is executed under a controlled root. A permission-denied skip must
+        # never be recorded as a pass.
+        if: always()
+        env:
+          V28_G3_EVIDENCE_DIR: ${{ runner.temp }}/v28-g3-evidence
+        run: |
+          sudo env "PATH=$PATH" python3 -m pytest \
+            "tests/test_v28_export_acl_guard_linux.py::test_4_wrong_owner_rejected" -v
+
       - name: Upload ACL evidence (stat + getfacl)
         if: always()
         uses: actions/upload-artifact@v4
