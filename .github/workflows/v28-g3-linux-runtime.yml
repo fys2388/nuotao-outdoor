@@ -1,0 +1,67 @@
+name: V28 G3 Linux Runtime Verification
+
+# Owner G3 Linux Runtime Verification 最终验证指令 V1.0 (2026-11-25) — 方案 B:
+# use an isolated non-production Linux CI Runner (ubuntu-latest) for the six
+# real Linux ACL runtime checks. This workflow is TEST-ONLY: it never deploys,
+# never touches production, never reads real data, never uses a real Salt.
+# Triggered only on this audit branch (or manually), never on main/master.
+
+on:
+  push:
+    branches: [audit/pricing-v28-historical-export]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-acl:
+    name: Real Linux ACL runtime checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@v5
+        with:
+          ref: audit/pricing-v28-historical-export
+
+      - name: Install ACL tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y acl
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Environment evidence
+        run: |
+          echo "hostname=$(hostname)"
+          uname -a
+          echo "--- fs ---"
+          stat -f -c %T .
+          echo "--- python ---"
+          python3 --version
+          python3 -m pytest --version
+          echo "--- acl ---"
+          getfacl --version 2>&1 | head -1
+          setfacl --version 2>&1 | head -1
+          echo "--- id ---"
+          id -u; id -un; id -g; id -gn
+
+      - name: Run six real Linux ACL tests
+        env:
+          V28_G3_EVIDENCE_DIR: ${{ runner.temp }}/v28-g3-evidence
+        run: |
+          python3 -m pytest tests/test_v28_export_acl_guard_linux.py -v
+
+      - name: Upload ACL evidence (stat + getfacl)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v28-g3-linux-evidence
+          path: ${{ runner.temp }}/v28-g3-evidence/
+          if-no-files-found: warn
