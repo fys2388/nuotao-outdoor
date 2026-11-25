@@ -1,0 +1,35 @@
+name: UFW Allow Console Port
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ufw8081:
+    name: Allow 8081 console + verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow 8081 and verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            echo "=== allow 8081 (console) ==="
+            ufw allow 8081/tcp 2>&1
+            echo ""
+            echo "=== ufw status ==="
+            ufw status verbose 2>&1 | head -20
+            echo ""
+            echo "=== services & site ==="
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'console8081=%{http_code}\n' http://95.217.218.178:8081/ 2>&1
+            echo ""
+            echo "=== redis still auth-protected & localhost-bound ==="
+            docker exec nuotao-ai-os-redis-1 redis-cli ping 2>&1 | tail -1
+            docker port nuotao-ai-os-redis-1 2>&1
+            docker port nuotao-ai-os-postgres-1 2>&1
