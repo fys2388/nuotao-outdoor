@@ -1,0 +1,38 @@
+name: Diagnose Port Binding Regression
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    name: Check compose port lines & 8081 usage (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose port binding
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== compose port lines (6379/5432) ==="
+            CFG=/opt/nuotao-ai-os/docker-compose.yml
+            grep -nE '6379|5432|REDIS_PORT|POSTGRES_PORT' "$CFG" | head -20
+            echo ""
+            echo "=== container port mappings ==="
+            docker port nuotao-ai-os-redis-1 2>&1 || echo "(redis no port)"
+            docker port nuotao-ai-os-postgres-1 2>&1 || echo "(postgres no port)"
+            echo ""
+            echo "=== nginx 8081 usage ==="
+            grep -rnE '8081' /etc/nginx/ 2>/dev/null | head -15 || echo "(no nginx 8081 ref)"
+            echo ""
+            echo "=== nginx vhosts ==="
+            ls /etc/nginx/sites-enabled/ 2>/dev/null || ls /etc/nginx/conf.d/ 2>/dev/null || echo "(no vhost dir)"
+            echo ""
+            echo "=== nginx listening all ==="
+            ss -tlnp | grep nginx
+            echo ""
+            echo "=== ufw status ==="
+            ufw status verbose 2>&1 | head -15
