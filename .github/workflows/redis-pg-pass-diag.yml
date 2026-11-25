@@ -1,0 +1,66 @@
+name: Diagnose PG Password Source
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    name: Compare pg password sources (length only, read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare pg password sources
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== A. backend .env POSTGRES_PASSWORD? ==="
+            if grep -qE '^POSTGRES_PASSWORD=' /opt/nuotao-ai-os/backend/.env 2>/dev/null; then
+              L=$(grep -E '^POSTGRES_PASSWORD=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2- | wc -c)
+              echo "backend .env POSTGRES_PASSWORD: present, len=$((L-1))"
+            else
+              echo "backend .env POSTGRES_PASSWORD: ABSENT"
+            fi
+            echo ""
+            echo "=== B. backend .env DATABASE_URL? ==="
+            if grep -qE '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env 2>/dev/null; then
+              U=$(grep -E '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)
+              P=$(echo "$U" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+              echo "backend .env DATABASE_URL: present, pwlen=$(echo -n "$P" | wc -c), host=$(echo "$U" | sed -E 's#.*@([^/]+)/.*#\1#')"
+            else
+              echo "backend .env DATABASE_URL: ABSENT"
+            fi
+            echo ""
+            echo "=== C. backend process environ DATABASE_URL? ==="
+            BPID=$(pgrep -f uvicorn | head -1)
+            U=$(tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep -E '^DATABASE_URL=' | head -1 | cut -d= -f2-)
+            if [ -n "$U" ]; then
+              P=$(echo "$U" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+              echo "backend environ DATABASE_URL: present, pwlen=$(echo -n "$P" | wc -c), host=$(echo "$U" | sed -E 's#.*@([^/]+)/.*#\1#')"
+            else
+              echo "backend environ DATABASE_URL: ABSENT"
+            fi
+            echo ""
+            echo "=== D. /opt/nuotao-ai-os/.env POSTGRES_PASSWORD? ==="
+            if grep -qE '^POSTGRES_PASSWORD=' /opt/nuotao-ai-os/.env 2>/dev/null; then
+              L=$(grep -E '^POSTGRES_PASSWORD=' /opt/nuotao-ai-os/.env | head -1 | cut -d= -f2- | wc -c)
+              echo ".env POSTGRES_PASSWORD: present, len=$((L-1))"
+            else
+              echo ".env POSTGRES_PASSWORD: ABSENT"
+            fi
+            echo ""
+            echo "=== E. compose DATABASE_URL anchor line ==="
+            CFG=$(docker inspect $(docker ps -q --filter name=nuotao-ai-os-redis-1 | head -1) --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep compose | head -1)
+            grep -nE 'DATABASE_URL:' "$CFG" | head -3
+            echo ""
+            echo "=== F. scheduler container DATABASE_URL pwlen ==="
+            U=$(docker inspect nuotao-ai-os-scheduler-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^DATABASE_URL=' | head -1 | cut -d= -f2-)
+            P=$(echo "$U" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+            echo "scheduler DATABASE_URL: pwlen=$(echo -n "$P" | wc -c), host=$(echo "$U" | sed -E 's#.*@([^/]+)/.*#\1#')"
+            echo ""
+            echo "=== G. postgres users (from pg container, try nuotao super) ==="
+            docker exec nuotao-ai-os-postgres-1 sh -c 'psql -U nuotao -tAc "SELECT rolname FROM pg_roles" 2>&1' 2>&1 | head -8 || echo "(psql as nuotao failed)"
+            docker exec nuotao-ai-os-postgres-1 sh -c 'env | grep -i postgres | sed -E "s/(PASSWORD=).*/\1***REDACTED***/I"' 2>&1 | head -10
