@@ -1,0 +1,77 @@
+name: Fix Redis Public Exposure (Plan A v2)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-a2:
+    name: Bind redis/postgres ports to 127.0.0.1 (v2)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply Plan A fix v2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -e
+            echo "### 1. locate compose project ###"
+            RID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            WDIR=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}')
+            CFG_FILE=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep -E 'compose' | head -1)
+            echo "RID=$RID WDIR=$WDIR CFG_FILE=$CFG_FILE"
+            if [ -z "$WDIR" ] || [ -z "$CFG_FILE" ]; then echo "FATAL: cannot locate compose"; exit 1; fi
+
+            echo ""
+            echo "### 2. show env port vars (if any) ###"
+            grep -nE '^(POSTGRES_PORT|REDIS_PORT)=' "$WDIR/.env" 2>/dev/null || echo "(no POSTGRES_PORT/REDIS_PORT in .env)"
+
+            echo ""
+            echo "### 3. backup compose ###"
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            cp "$CFG_FILE" "$CFG_FILE.bak.$TS"
+            echo "backed up: $CFG_FILE.bak.$TS"
+
+            echo ""
+            echo "### 4. before: port lines ###"
+            grep -nE 'POSTGRES_PORT|REDIS_PORT|127.0.0.1:5432|127.0.0.1:6379' "$CFG_FILE"
+
+            echo ""
+            echo "### 5. replace port bindings -> 127.0.0.1 (line-based) ###"
+            sed -i '/POSTGRES_PORT/s/^\(\s*\)-\s*.*$/      - "127.0.0.1:5432:5432"/' "$CFG_FILE"
+            sed -i '/REDIS_PORT/s/^\(\s*\)-\s*.*$/      - "127.0.0.1:6379:6379"/' "$CFG_FILE"
+            echo "--- after: port lines ---"
+            grep -nE 'POSTGRES_PORT|REDIS_PORT|127.0.0.1:5432|127.0.0.1:6379' "$CFG_FILE"
+
+            echo ""
+            echo "### 6. validate compose config ###"
+            cd "$WDIR"
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            echo "using $DC"
+            $DC -f "$CFG_FILE" config >/dev/null 2>&1 && echo "(compose config OK)" || { echo "(compose config ERROR)"; $DC -f "$CFG_FILE" config 2>&1 | head -20; exit 1; }
+
+            echo ""
+            echo "### 7. recreate redis & postgres ###"
+            $DC -f "$CFG_FILE" up -d --force-recreate redis postgres 2>&1 || { echo "FATAL: up failed"; exit 1; }
+
+            echo ""
+            echo "### 8. verify listening ports ###"
+            sleep 10
+            echo "--- 6379 ---"
+            ss -tlnp | grep 6379 || echo "6379 not listening"
+            echo "--- 5432 ---"
+            ss -tlnp | grep 5432 || echo "5432 not listening"
+
+            echo ""
+            echo "### 9. verify redis reachable (internal) ###"
+            NRID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            echo "new redis: $NRID"
+            docker exec "$NRID" redis-cli ping 2>&1 || echo "redis ping failed"
+            docker exec "$NRID" redis-cli dbsize 2>&1 || echo "dbsize failed"
+
+            echo ""
+            echo "### 10. final docker ps ###"
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'redis|postgres|NAMES'
