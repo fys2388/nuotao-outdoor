@@ -42,6 +42,41 @@ Owner 指令 → DSH 执行开发 → 验证（测试/证据）→ 产出报告 
 | **汇报后必须停止** | 汇报发出即停止本轮工作，**等待 Owner 下一步指令**；禁止自行开始下一个任务或自行扩大范围 |
 | **不越过审批 gate** | Owner 明确要求"批准后再做"的（如设计评审后才写代码），必须停下等批准，不得先行 |
 
+### 0.2 Owner 终审驱动 + 证据分级（V2.8 EXPORT 审计模式，2026-11 实战提炼）
+
+> V2.8 定价审计（3A-3D + EXPORT 五线）证明：**高风险/合规类开发不能只靠"开发-汇报"闭环，必须走「Owner 终审 + 红线 + 证据分级 + 隔离验证」审计闭环**。这是 SOP V2.0 的核心增量。
+
+#### A. 角色与授权铁律（V2.8 红线 R1-R13 提炼）
+
+| 铁律 | 说明 |
+|---|---|
+| **Owner 是终审 authority** | ChatGPT（本项目「定价原则评审 (2)」）对验收/授权有唯一终审权；DSH 是**提议者/实现者**，不是决策者 |
+| **Git 授权 ≠ 生产授权** | 推分支/合代码不等同于允许连生产库、写 WC、部署、切生产引擎；生产动作必须单独书面批准 |
+| **禁止自行宣布通过** | DSH 不得自行宣布 V2.8（或任何 Owner 验收项）通过；只能"提交验收"并等 Owner 终审 |
+| **冻结项零改动** | Owner 冻结的项（如 0076）在解除前零改动，即使修复明显 bug 也先请示 |
+| **不跨 worktree 覆盖 / 禁 git add .** | 多分支并行（3A/3B/3C/3D/EXPORT）各自隔离；禁止 `git add .` 误纳无关文件；禁止跨 worktree 覆盖他人改动 |
+| **不合并 main（除非批准）** | 合入 main/生产分支必须 Owner 批准；审计分支保持独立直至收口 |
+
+#### B. 证据分级（E0 最弱 → E5 最强）
+
+- 每项验收结论附**证据等级**；多源证据聚合取 **MIN(grade)**（保守）；显式 `grade_order` CASE 不依赖字符串序。
+- **fail-closed**：无法取得证据/工具不可用/解析失败/未知成本 → 一律按**失败/拒绝**处理，不猜测、不包装（如 getfacl 不可用 → 拒；未知成本 → 拒）。
+- **红线维度**：P0 财务（R1/R2/R6/R7）、P1 成本库存（R3/R4/R5/R8/R9/R12/R13）、P2 引擎（R10/R11）；Owner 唯一财务口径（NetRevenue/GM/GMMargin/CP/CPMargin；SalesTax 不进收入；NetRevenue≤0 → CPMargin 不可计算）。
+- **Owner 强制矩阵**：验证成功→是；验证失败/未启用/平台不支持/无法取得 Owner/无法确认实际权限→否（exit 2）；写入后**重读** ACL 复核；`acl_verified` 仅真实验证成功 true；禁止默认无验证写入路径。
+
+#### C. 多环境隔离验证（跨平台）
+
+- 目标宿主可能是 Windows（NTFS DACL）+ Linux（POSIX mode/getfacl）；**代码验证 ≠ 运行环境验证**，两层都要真实验证。
+- 无本地 Linux 时用**隔离非生产 CI Runner**（如 `ubuntu-latest`），**禁止 WSL / Git Bash 模拟 Linux ACL / Windows chmod 冒充 Linux 权限证据**。
+- 运行时验证需真实工具（`icacls`/`getfacl`/`setfacl`/`chown`），合成数据 + 临时目录；**权限不足导致的 skip 不得记为通过**（受控 root 单独跑需 root 的项）。
+- 每次 push 前检查 workflow 触发分支，确认**不会触发任何部署/生产 workflow**（deploy 通常 main/master 或 workflow_dispatch only）。
+
+#### D. 提交链审计（Owner 要求基线同链）
+
+- Owner 可能要求确认"此前已验收提交位于新提交祖先链"，避免不同基线验收。
+- 只读证据：`git merge-base --is-ancestor <旧HEAD> <新HEAD>`（要求 exit 0）+ `git log --first-parent --oneline <旧HEAD>..<新HEAD>` + `git show -s --format="%H%n%P%n%s" <新HEAD>`。
+- 中间存在其他提交**如实列明**，**不重写历史**；`--first-parent` 确认线性无合并。
+
 ---
 
 ## 1. 环境与凭证清单（自动化前置）
@@ -303,6 +338,7 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 | 8 | Webhook 端点测试 404（非 401）| 用了错误路径 `/webhooks/wc`（不存在）| 先 `app.routes` 发现真实路由（`/webhooks/woocommerce` 等），再用正确路径测试 | 测试前先发现路由，不假设路径 |
 | 9 | pre-commit hook "No module named pre_commit" 失败 | 本地 venv 无 pre_commit | `git commit --no-verify`（CI 会跑真实检查）| 本地 pre-commit 环境需初始化，或统一 --no-verify |
 | 10 | 生产 WEBHOOK_SECRET 误判为空（is_empty=True）| 诊断脚本读错变量名（`WEBHOOK_SECRET`，实际是 `WOOCOMMERCE_WEBHOOK_SECRET`）| 深度诊断确认 `WOOCOMMERCE_WEBHOOK_SECRET=64字符强值`，`webhook_secret_is_insecure=False` | 诊断脚本变量名先 grep .env 确认，不硬编码假设 |
+| 29 | Linux 测试 test_3 Named ACL 断言失败（reason 是 "mode" 非 "widening"）| `setfacl -m u:<uid>:rx` 会扩大 ACL mask → POSIX mode 从 0o700 变 0o750，守卫经 **mode 检查**先拒（allowed=False 正确），但测试断言 reason 必须是 widening/acl 而失败 | test_3 用 `setfacl -m u:<uid>:rx -m m:---`（ACL mask 复位 `---`）使 mode 保持 0o700，真正触发 **ACL widening 路径**（断言 premise mode==0o700 + reason 含 widening/acl）| 验证 ACL 逻辑时确保 mode 不干扰（mask 复位）；先确认守卫求值顺序（mode→getfacl→widening）再写断言 |
 
 ### 6.3 ChatGPT 交互类（自动化核心）
 
@@ -325,6 +361,7 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 | 20 | bsk plan "unrecognized subcommand" | plan 参数格式错误 | 改分步 click + press（不用 plan）| 复杂多步用分步，plan 格式需查文档 |
 | 21 | GA4 sync 输出巨量（溢出上下文）| GA4 页面 DOM 复杂（几百节点）| 控制上下文预算；用 spill 文件 + grep 提取关键节；避免连续多次 sync | GA4 操作前评估上下文预算，必要时分会话 |
 | 22 | bsk evaluate "requires unused strict observation" | 上次 action 消耗了 observation | 重新 sync 获取新 observation_id | 每次 evaluate 前确保有 fresh observation |
+| 25 | bsk_interact click 报 "requires a valid control context from cooperate sync" | 未显式传 `contextId`（sync 返回的 `context_id`），默认上下文失效 | sync 获取 `context_id` 后**显式传 `contextId` 给 bsk_interact**（click/fill/press/send）| 每次 bsk 交互前 sync 拿新 `context_id`，显式传入；不依赖默认上下文 |
 
 ### 6.5 Git / CI 类
 
@@ -332,6 +369,9 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 |---|---|---|---|---|
 | 23 | git push 显示 exit 1 但实际成功 | stderr 输出被 pwsh 当错误 | 检查 `git log` / `gh` 确认 push 成功（忽略 stderr exit 1）| push 后验证 `git log origin/main` |
 | 24 | **CI Pre-check 持续 failure**（所有 push 都失败）| `test_pii_ci_integration.py:76` `db_url` fixture 用 `assert` —— 无 DB 环境（CI Pre-check 无 postgres）直接 fail，阻塞 Deploy gated | 改 `db_url` fixture：无 DB URL 时 `pytest.skip`（非 assert fail），有 DB 环境正常跑（commit 707ebfe）| 集成测试（需 DB）应 skip 无 DB 环境，而非 fail；CI Pre-check 与专门 DB workflow 分离 |
+| 26 | push 审计分支可能触发部署 workflow | 推送后未先检查 workflow 触发条件，误以为会部署 | push 前 `gh workflow list` + 读各 `.github/workflows/*.yml` 的 `on:`；确认 deploy/production 仅 `main/master` 或 `workflow_dispatch` only（审计分支不触发）| 每次 push 前核查 deploy workflow 触发分支；git 推送 ≠ 部署 |
+| 27 | 本宿主 Windows 无 Linux，无法真实验证 Linux ACL | WSL 未装（需管理员+重启）、Docker 未装、Git Bash 非 Linux 内核 | 采用**隔离非生产 CI Runner**（`ubuntu-latest`，方案 B）跑真实 Linux 运行时验证（getfacl/setfacl/chown）；禁 WSL/Git Bash 模拟 | 跨平台验证一律用隔离 CI Runner；禁本地模拟代替真实环境证据 |
+| 28 | Owner 要求提交链补证（旧 HEAD 与旧提交非直接父子）| 审计分支多个提交叠加，Owner 需确认验收基线同链 | `git merge-base --is-ancestor <旧HEAD> <新HEAD>`（exit 0 为同链）+ `git log --first-parent --oneline <旧HEAD>..<新HEAD>` 如实列中间提交；不重写历史 | 每次 Owner 验收记录 HEAD；跨提交验收前先跑 merge-base 确认同链 |
 
 ### 6.5.1 GitHub 推送运行监控（强制步骤）
 
@@ -365,11 +405,17 @@ gh run list --limit 10 2>&1 | Select-Object -First 12
 
 ## 7. 下一步（DSH 自治执行）
 
-1. **执行 SSH 加固 S1**（GitHub Actions 只读诊断：SSH 配置/日志/MaxStartups/管理员 IP）
-2. 按 S1 证据 → S2-S5 逐步加固（每步验证 + 汇报 ChatGPT）
-3. 并行推进 D8-D 剩余（Complianz 隔离 / B2C GA4 / Webhook 隔离测试）
-4. 每完成一项 → 汇报 ChatGPT → 获取下一指令（**闭环，不找人类用户**）
+**V2.8 EXPORT G3 跨平台 ACL 验证已闭合（代码+CLI 门禁+Windows NTFS+Linux mode/getfacl 四层 Owner 接受，G3 Runtime = VERIFIED）。**
+
+1. **V2.8 剩余全部为外部前置**（DSH 不可自行推进）：
+   - G3 正式 `id_map_dir`：Owner/系统管理员置备 → 置备后于实际目标宿主重新验证正式目录 ACL（路径隔离/所有权/DACL 或 mode+ACL/执行账号授权/写后重读/未授权主体拒/不进 Git·交付包·云同步）
+   - G1 生产只读脱敏副本：DBA 0093 只读预检（已有限授权，等 DBA 结果）
+   - G2 Owner 安全 Salt：未提供
+   - 3B 库存语义生产迁移 / 3C Lineage 实施：均需单独书面批准
+2. **每项外部前置完成 → 提交 Owner 终审 → 等下一指令**（闭环，不找人类用户）
+3. **SOP 本身持续迭代**：本文件已升至 V2.0（新增 §0.2 Owner 终审驱动 + 证据分级 + 隔离验证 + 提交链审计；§6 问题 #25-#29）；后续每轮实战经验按 §6.6 追加。
+4. **禁止事项不变**：不自行创建/选取正式 id_map_dir；不生成真实映射；不接收真实 Salt；不连生产库；不导出生产数据；不执行真实脱敏；不执行历史财务重算；不修改 WC；不部署；不触碰 0076；不合并 main（除非批准）；不用 `git add .`。
 
 ---
 
-*SOP 版本 V1.0，2026-11-19，基于 D8-C/D8-D 实战。后期每轮迭代更新。*
+*SOP 版本 V2.0，2026-11-25，基于 D8-C/D8-D 实战 + V2.8 EXPORT G3 审计实战（Owner 终审驱动/证据分级/跨平台隔离验证/提交链审计）。后期每轮迭代更新。*
