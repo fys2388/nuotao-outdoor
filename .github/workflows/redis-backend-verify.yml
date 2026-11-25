@@ -1,0 +1,43 @@
+name: Verify Backend Redis Auth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify backend actually connects redis with password
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check backend redis connectivity
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== backend service state ==="
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            echo ""
+            echo "=== backend process to 6379 connections ==="
+            BPID=$(pgrep -f 'uvicorn' | head -1)
+            echo "BPID=$BPID"
+            ss -tnp 2>/dev/null | grep 6379 | grep -E "pid=$BPID|python" | head -10 || echo "(no backend->6379 conn seen)"
+            echo ""
+            echo "=== backend environ redis vars (full) ==="
+            if [ -n "$BPID" ]; then
+              tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep -iE 'REDIS|TASK_QUEUE|CELERY' | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g' || echo "(cannot read environ)"
+            fi
+            echo ""
+            echo "=== backend journal redis/auth errors (last 10 min) ==="
+            journalctl -u nuotao-backend --since "10 min ago" --no-pager 2>/dev/null | grep -iE 'redis|NOAUTH|auth|WRONGPASS|connection|error|traceback' | tail -25 || echo "(no journal entries)"
+            echo ""
+            echo "=== worker journal redis errors ==="
+            journalctl -u nuotao-agent-worker --since "10 min ago" --no-pager 2>/dev/null | grep -iE 'redis|NOAUTH|WRONGPASS|connection|error' | tail -15 || echo "(none)"
+            echo ""
+            echo "=== trigger a redis-touching endpoint (health) ==="
+            curl -sk -o /dev/null -w 'health=%{http_code}\n' https://admin.nuotaooutdoor.com/api/health 2>&1 || echo "health endpoint failed"
+            echo ""
+            echo "=== scheduler container logs (redis stream) ==="
+            docker logs --tail 15 nuotao-ai-os-scheduler-1 2>&1 | tail -15
