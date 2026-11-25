@@ -1,0 +1,59 @@
+name: Diagnose Redis Exposure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  redis-diagnose:
+    name: Diagnose Redis exposure (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Redis exposure status
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== Redis process ==="
+            ps aux | grep -E 'redis-server' | grep -v grep || echo "(no redis-server process)"
+            echo ""
+            echo "=== Redis version ==="
+            redis-server --version 2>&1 || echo "(redis-server not in PATH)"
+            echo ""
+            echo "=== redis-cli ping ==="
+            redis-cli ping 2>&1 || echo "(redis-cli failed)"
+            echo ""
+            echo "=== Listening port 6379 ==="
+            ss -tlnp | grep 6379 || echo "(6379 not listening)"
+            echo ""
+            echo "=== CONFIG GET bind ==="
+            redis-cli CONFIG GET bind 2>&1
+            echo ""
+            echo "=== CONFIG GET requirepass ==="
+            redis-cli CONFIG GET requirepass 2>&1
+            echo ""
+            echo "=== CONFIG GET protected-mode ==="
+            redis-cli CONFIG GET protected-mode 2>&1
+            echo ""
+            echo "=== CONFIG GET port ==="
+            redis-cli CONFIG GET port 2>&1
+            echo ""
+            echo "=== redis.conf key lines ==="
+            grep -nE '^(bind|protected-mode|requirepass|port|unixsocket)' /etc/redis/redis.conf 2>/dev/null || echo "(no /etc/redis/redis.conf)"
+            echo ""
+            echo "=== systemd status ==="
+            systemctl status redis-server --no-pager -l 2>&1 | head -20 || systemctl status redis --no-pager -l 2>&1 | head -20
+            echo ""
+            echo "=== ufw status ==="
+            ufw status 2>&1 | head -20 || echo "(ufw not available)"
+            echo ""
+            echo "=== iptables 6379 ==="
+            iptables -L -n 2>/dev/null | grep -E '6379|REJECT|DROP' | head -20 || echo "(no 6379 iptables rules)"
+            echo ""
+            echo "=== connected redis clients ==="
+            redis-cli CLIENT LIST 2>&1 | head -30
+            echo ""
+            echo "=== redis config files ==="
+            ls -la /etc/redis/ 2>/dev/null || echo "(no /etc/redis dir)"
