@@ -1,0 +1,54 @@
+name: Diagnose All Redis Consumers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  all-consumers:
+    name: Enumerate every redis consumer (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enumerate redis consumers
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== A. backend .env (EnvironmentFile) redis refs ==="
+            grep -inE 'REDIS|TASK_QUEUE|CELERY|QUEUE' /opt/nuotao-ai-os/backend/.env 2>/dev/null | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I; s/(PASS[^=]*=).*/\1***REDACTED***/I' || echo "(no /opt/nuotao-ai-os/backend/.env or no matches)"
+            echo ""
+            echo "=== B. /opt/nuotao/.env redis refs ==="
+            grep -inE 'REDIS|TASK_QUEUE|CELERY|QUEUE' /opt/nuotao/.env 2>/dev/null | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I; s/(PASS[^=]*=).*/\1***REDACTED***/I' || echo "(no /opt/nuotao/.env)"
+            echo ""
+            echo "=== C. all systemd units with redis/worker ==="
+            systemctl list-units --type=service --all 2>/dev/null | grep -iE 'nuotao|worker|celery|redis|scheduler' | head -20
+            echo ""
+            echo "=== D. worker service? ==="
+            systemctl is-active nuotao-worker 2>&1 || echo "no nuotao-worker"
+            systemctl is-active nuotao-backend 2>&1 || echo "no nuotao-backend"
+            systemctl is-active nuotao-scheduler 2>&1 || echo "no nuotao-scheduler"
+            echo ""
+            echo "=== E. all containers (incl stopped) ==="
+            docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | head -30
+            echo ""
+            echo "=== F. host processes connecting to 6379 ==="
+            ss -tnp 2>/dev/null | grep 6379 | head -20 || echo "(none)"
+            echo ""
+            echo "=== G. every running container REDIS_URL ==="
+            for c in $(docker ps --format '{{.Names}}'); do
+              v=$(docker exec "$c" sh -c 'echo $REDIS_URL' 2>/dev/null)
+              if [ -n "$v" ]; then echo "$c -> $(echo "$v" | sed -E 's#redis://([^@]*@)#redis://***REDACTED***@#g')"; fi
+            done
+            echo ""
+            echo "=== H. every systemd nuotao service env (REDIS) ==="
+            for u in $(systemctl list-units --type=service --all 2>/dev/null | grep -oE 'nuotao[^ ]*\.service' | sort -u); do
+              echo "--- $u ---"
+              systemctl cat "$u" 2>/dev/null | grep -iE 'EnvironmentFile|Environment=' | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I' | head -10
+            done
+            echo ""
+            echo "=== I. compose x-backend-env anchor ==="
+            CFG=$(docker inspect $(docker ps -q --filter name=nuotao-ai-os-redis-1 | head -1) --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep compose | head -1)
+            sed -n '1,25p' "$CFG" | sed -E 's/(REDIS_URL:).*/\1***REDACTED***/I'
