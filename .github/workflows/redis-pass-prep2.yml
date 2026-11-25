@@ -1,0 +1,45 @@
+name: Diagnose Backend Redis Wiring
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backend-wiring:
+    name: Inspect backend systemd redis wiring (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect backend redis wiring
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== backend systemd unit ==="
+            systemctl cat nuotao-backend 2>&1 | head -60
+            echo ""
+            echo "=== backend unit redis refs ==="
+            systemctl cat nuotao-backend 2>&1 | grep -iE 'Environment|ExecStart|WorkingDir|EnvironmentFile|REDIS' | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I' | head -40
+            echo ""
+            echo "=== backend process env (REDIS) ==="
+            BPID=$(pgrep -f 'uvicorn|gunicorn|nuotao' | head -1)
+            echo "BPID=$BPID"
+            if [ -n "$BPID" ]; then
+              tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep -iE 'REDIS|TASK_QUEUE|CELERY|QUEUE' | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I' || echo "(cannot read environ)"
+            fi
+            echo ""
+            echo "=== backend .env redis refs ==="
+            find /opt/nuotao -maxdepth 3 -name ".env" 2>/dev/null | while read f; do
+              echo "--- $f ---"
+              grep -iE 'REDIS|TASK_QUEUE|CELERY|QUEUE' "$f" 2>/dev/null | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I; s/(PASS[^=]*=).*/\1***REDACTED***/I' | head -20
+            done
+            echo ""
+            echo "=== compose env anchor structure (lines 1-130) ==="
+            CFG=$(docker inspect $(docker ps -q --filter name=nuotao-ai-os-redis-1 | head -1) --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep compose | head -1)
+            sed -n '1,130p' "$CFG" | grep -nE '^x-|^services:|^[a-z]|REDIS_URL|TASK_QUEUE|&app|<<:|environment:|depends_on:|redis:|command:|image:|container_name:' | sed -E 's/(REDIS_URL:.*)/\1***REDACTED***/I' | head -60
+            echo ""
+            echo "=== scheduler container full cmd/env ==="
+            docker inspect nuotao-ai-os-scheduler-1 --format '{{json .Config.Cmd}}' 2>&1
+            docker inspect nuotao-ai-os-scheduler-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>&1 | grep -iE 'REDIS|TASK_QUEUE|CELERY' | sed -E 's/(REDIS_URL=).*/\1***REDACTED***/I'
