@@ -1,0 +1,93 @@
+name: Restore Redis Password (Env-based, Persistent)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  restore:
+    name: Re-apply redis password + 127.0.0.1 ports via env vars
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore redis password persistently
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -e
+            CFG=/opt/nuotao-ai-os/docker-compose.yml
+            ENV=/opt/nuotao-ai-os/.env
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            echo "### 1. reuse saved redis password ###"
+            PASS=$(cat $(ls -t /root/redis-backup/redis_password_*.txt 2>/dev/null | head -1) 2>/dev/null || openssl rand -hex 32)
+            if [ -z "$PASS" ]; then PASS=$(openssl rand -hex 32); printf '%s' "$PASS" > /root/redis-backup/redis_password_$TS.txt; chmod 600 /root/redis-backup/redis_password_$TS.txt; fi
+            echo "using password len=$(echo -n "$PASS" | wc -c) (not shown)"
+
+            echo "### 2. backup compose & .env ###"
+            cp "$CFG" "$CFG.bak.$TS"
+            cp "$ENV" "$ENV.bak.$TS" 2>/dev/null || touch "$ENV"
+
+            echo "### 3. env-ize compose: REDIS_URL + requirepass + healthcheck + 127.0.0.1 ports ###"
+            sed -i "s|REDIS_URL: redis://redis:6379/0|REDIS_URL: redis://:\\\${REDIS_PASSWORD}@redis:6379/0|" "$CFG"
+            sed -i 's|REDIS_URL: redis://:\${REDIS_PASSWORD}@redis:6379/0|REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0|' "$CFG"
+            # ensure redis command (insert after image redis line, idempotent)
+            if ! grep -q 'requirepass' "$CFG"; then
+              awk -v pw='${REDIS_PASSWORD}' '
+                /^[[:space:]]*image: redis:7-alpine/ && !done { print; print "    command: [\"redis-server\", \"--requirepass\", \"" pw "\"]"; done=1; next }
+                { print }
+              ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+            fi
+            # healthcheck use password (idempotent)
+            sed -i 's|\[\\\"CMD\\\", \\\"redis-cli\\\", \\\"ping\\\"\]|[\\\"CMD\\\", \\\"redis-cli\\\", \\\"-a\\\", \\\"${REDIS_PASSWORD}\\\", \\\"ping\\\"]|' "$CFG"
+            # 127.0.0.1 ports (idempotent)
+            sed -i 's|- "\(${POSTGRES_PORT:-5432}:5432\)"|- "127.0.0.1:\1"|' "$CFG"
+            sed -i 's|- "\(${REDIS_PORT:-6379}:6379\)"|- "127.0.0.1:\1"|' "$CFG"
+            echo "--- resulting compose lines (redacted) ---"
+            grep -nE 'REDIS_URL:|requirepass|redis-cli|POSTGRES_PORT|REDIS_PORT|DATABASE_URL:' "$CFG" | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g'
+
+            echo "### 4. set .env REDIS_PASSWORD & POSTGRES_PASSWORD ###"
+            sed -i '/^REDIS_PASSWORD=/d' "$ENV"
+            echo "REDIS_PASSWORD=$PASS" >> "$ENV"
+            if ! grep -qE '^POSTGRES_PASSWORD=' "$ENV"; then
+              PG=$(grep -E '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2- | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+              echo "POSTGRES_PASSWORD=$PG" >> "$ENV"
+            fi
+            grep -cE '^REDIS_PASSWORD=' "$ENV" | xargs -I{} echo "REDIS_PASSWORD lines: {}"
+            grep -cE '^POSTGRES_PASSWORD=' "$ENV" | xargs -I{} echo "POSTGRES_PASSWORD lines: {}"
+
+            echo "### 5. validate compose config ###"
+            cd /opt/nuotao-ai-os
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f "$CFG" config >/dev/null 2>&1 && echo "(compose config OK)" || { echo "(compose config ERROR)"; $DC -f "$CFG" config 2>&1 | grep -iE 'error|REDIS_PASSWORD|redis' | head; exit 1; }
+
+            echo "### 6. recreate redis/postgres/scheduler (config changed -> auto recreate) ###"
+            $DC -f "$CFG" up -d redis postgres scheduler 2>&1 | tail -12
+
+            echo "### 7. verify redis auth + ports + services ###"
+            sleep 12
+            echo "--- redis no-password ping (expect NOAUTH) ---"
+            docker exec nuotao-ai-os-redis-1 redis-cli ping 2>&1 | tail -1
+            echo "--- redis with-password ping (expect PONG) ---"
+            docker exec nuotao-ai-os-redis-1 redis-cli -a "$PASS" ping 2>&1 | tail -1
+            echo "--- port binding (expect 127.0.0.1) ---"
+            docker port nuotao-ai-os-redis-1 2>&1
+            docker port nuotao-ai-os-postgres-1 2>&1
+            echo "--- services ---"
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            echo "--- site ---"
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
+            echo "--- backend redis conn ---"
+            ss -tnp 2>/dev/null | grep 6379 | grep -E 'python|127\.0\.0\.1' | head -4
+            echo "--- scheduler pg auth ok? ---"
+            docker logs --tail 8 nuotao-ai-os-scheduler-1 2>&1 | grep -iE 'password|authentication|failed|feedback|approval|告警|error' | tail -8 || echo "(no errors)"
+            echo ""
+            echo "### 8. git deploy mechanism diag ###"
+            git -C /opt/nuotao-ai-os remote -v 2>&1 | head -3
+            git -C /opt/nuotao-ai-os status --short 2>&1 | head -10
+            git -C /opt/nuotao-ai-os log --oneline -2 -- docker-compose.yml 2>&1 | head -2
+            crontab -l 2>/dev/null | grep -iE 'git|pull|deploy|compose' | head -5 || echo "(no cron deploy)"
+            systemctl list-units --type=service --state=running 2>/dev/null | grep -iE 'deploy|nuotao|watchtower' | head -5 || echo "(no deploy service)"
