@@ -23,7 +23,10 @@ Create Date: 2026-11-25
 
 from __future__ import annotations
 
+import contextlib
+
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0095"
@@ -36,13 +39,9 @@ def _constraint_exists(table: str, name: str) -> bool:
     """Check whether a unique constraint or partial index already exists."""
     try:
         insp = sa.inspect(op.get_bind())
-        for item in insp.get_unique_constraints(table):
-            if item["name"] == name:
-                return True
-        for idx in insp.get_indexes(table):
-            if idx["name"] == name:
-                return True
-        return False
+        if any(item["name"] == name for item in insp.get_unique_constraints(table)):
+            return True
+        return any(idx["name"] == name for idx in insp.get_indexes(table))
     except Exception:
         return False
 
@@ -112,10 +111,8 @@ def downgrade() -> None:
         ("uq_pcs_workspace_id", "product_cost_snapshots"),
         ("uq_pm_workspace_id", "product_mappings"),
     ]:
-        try:
+        with contextlib.suppress(Exception):
             op.drop_constraint(cname, tbl, type_="unique")
-        except Exception:
-            pass
 
     # Reverse column drops (V1.3 §3.3 canonical field order reversed).
     for col in (

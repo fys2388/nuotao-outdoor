@@ -4,11 +4,12 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
-from app.core.config import get_settings
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+
+from alembic import context
+from app.core.config import get_settings
 
 config = context.config
 
@@ -63,7 +64,7 @@ async def run_async_migrations() -> None:
     dialect resolution — this has no effect on production since our code
     path always uses +asyncpg URLs.
     """
-    import sqlalchemy.dialects.postgresql  # noqa: F401 – ensure dialect registry loaded
+    import sqlalchemy.dialects.postgresql  # noqa: F401 - ensure dialect registry loaded
 
     # Explicitly override to asyncpg when both drivers are present.
     _prev = os.environ.get("SQLALCHEMY_PREFER_ASYNC")
