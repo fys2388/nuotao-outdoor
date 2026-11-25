@@ -1,0 +1,61 @@
+name: Fix Scheduler PG Auth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Restore scheduler DATABASE_URL password
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix scheduler pg password
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -e
+            echo "### 1. extract correct pg password from backend .env DATABASE_URL ###"
+            U=$(grep -E '^DATABASE_URL=' /opt/nuotao-ai-os/backend/.env | head -1 | cut -d= -f2-)
+            P=$(echo "$U" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+            if [ -z "$P" ]; then echo "FATAL: cannot extract password"; exit 1; fi
+            echo "password extracted, len=$(echo -n "$P" | wc -c) (not shown)"
+
+            echo "### 2. backup .env ###"
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            cp /opt/nuotao-ai-os/.env /opt/nuotao-ai-os/.env.bak.$TS 2>/dev/null || touch /opt/nuotao-ai-os/.env
+            echo "backed up: /opt/nuotao-ai-os/.env.bak.$TS"
+
+            echo "### 3. set POSTGRES_PASSWORD in .env ###"
+            sed -i '/^POSTGRES_PASSWORD=/d' /opt/nuotao-ai-os/.env
+            echo "POSTGRES_PASSWORD=$P" >> /opt/nuotao-ai-os/.env
+            grep -cE '^POSTGRES_PASSWORD=' /opt/nuotao-ai-os/.env | xargs -I{} echo "POSTGRES_PASSWORD lines: {}"
+
+            echo "### 4. recreate scheduler container ###"
+            WDIR=/opt/nuotao-ai-os
+            CFG=/opt/nuotao-ai-os/docker-compose.yml
+            cd "$WDIR"
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f "$CFG" up -d --force-recreate scheduler 2>&1 || { echo "FATAL: up failed"; exit 1; }
+
+            echo "### 5. verify scheduler pg auth ###"
+            sleep 12
+            echo "--- scheduler DATABASE_URL pwlen (expect 31) ---"
+            U2=$(docker inspect nuotao-ai-os-scheduler-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^DATABASE_URL=' | head -1 | cut -d= -f2-)
+            P2=$(echo "$U2" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+            echo "scheduler pwlen=$(echo -n "$P2" | wc -c)"
+            echo "--- scheduler recent logs (pg errors?) ---"
+            docker logs --tail 20 nuotao-ai-os-scheduler-1 2>&1 | grep -iE 'password|authentication|failed|error|scheduler|start|running|feedback|告警' | tail -15 || echo "(no matching scheduler logs)"
+            echo "--- scheduler container state ---"
+            docker ps --format 'table {{.Names}}\t{{.Status}}' | grep scheduler
+
+            echo "### 6. verify backend/worker/services & site ###"
+            sleep 5
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1 || echo "admin failed"
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1 || echo "b2b failed"
+            echo "--- worker redis errors last 5min? ---"
+            journalctl -u nuotao-agent-worker --since "5 min ago" --no-pager 2>/dev/null | grep -iE 'NOAUTH|WRONGPASS|AuthenticationError' | tail -5 || echo "(no worker redis auth errors)"
