@@ -1,0 +1,96 @@
+name: Fix Redis Password (Plan B)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pass:
+    name: Set redis requirepass + sync all consumers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply Plan B - redis password
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -e
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            echo "### 1. locate compose & backend env ###"
+            RID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            WDIR=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}')
+            CFG=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep compose | head -1)
+            BENV="/opt/nuotao-ai-os/backend/.env"
+            echo "WDIR=$WDIR CFG=$CFG BENV=$BENV"
+            [ -f "$BENV" ] || { echo "WARN: $BENV missing, will create"; touch "$BENV"; }
+
+            echo "### 2. generate strong password (hex64, not shown) ###"
+            PASS=$(openssl rand -hex 32)
+            mkdir -p /root/redis-backup
+            printf '%s' "$PASS" > "/root/redis-backup/redis_password_$TS.txt"
+            chmod 600 "/root/redis-backup/redis_password_$TS.txt"
+            echo "password saved: /root/redis-backup/redis_password_$TS.txt (len=${#PASS})"
+
+            echo "### 3. backup compose & backend env ###"
+            cp "$CFG" "$CFG.bak.$TS"
+            cp "$BENV" "$BENV.bak.$TS"
+            echo "backed up: $CFG.bak.$TS ; $BENV.bak.$TS"
+
+            echo "### 4. edit compose: redis command + healthcheck + REDIS_URL ###"
+            awk -v pass="$PASS" '
+              /^[[:space:]]*image: redis:7-alpine/ && !done { print; print "    command: [\"redis-server\", \"--requirepass\", \"" pass "\"]"; done=1; next }
+              { print }
+            ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+            sed -i "s|\[\\\"CMD\\\", \\\"redis-cli\\\", \\\"ping\\\"\]|[\\\"CMD\\\", \\\"redis-cli\\\", \\\"-a\\\", \\\"$PASS\\\", \\\"ping\\\"]|" "$CFG"
+            sed -i "s|REDIS_URL: redis://redis:6379/0|REDIS_URL: redis://:$PASS@redis:6379/0|" "$CFG"
+            echo "--- compose redis/redis-url lines ---"
+            grep -nE 'requirepass|redis-cli|REDIS_URL:' "$CFG" | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g'
+
+            echo "### 5. edit backend .env: add/update REDIS_URL ###"
+            if grep -q '^REDIS_URL=' "$BENV"; then
+              sed -i "s|^REDIS_URL=.*|REDIS_URL=redis://:$PASS@127.0.0.1:6379/0|" "$BENV"
+            else
+              echo "REDIS_URL=redis://:$PASS@127.0.0.1:6379/0" >> "$BENV"
+            fi
+            grep -nE '^REDIS_URL=' "$BENV" | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g'
+
+            echo "### 6. validate compose config ###"
+            cd "$WDIR"
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            $DC -f "$CFG" config >/dev/null 2>&1 && echo "(compose config OK)" || { echo "(compose config ERROR)"; $DC -f "$CFG" config 2>&1 | grep -iE 'error|requirepass|redis' | head -20; exit 1; }
+
+            echo "### 7. recreate redis & scheduler (redis now requires pass) ###"
+            $DC -f "$CFG" up -d --force-recreate redis scheduler 2>&1 || { echo "FATAL: up failed"; exit 1; }
+
+            echo "### 8. restart systemd consumers ###"
+            sleep 6
+            systemctl restart nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1 || echo "WARN: restart returned non-zero"
+
+            echo "### 9. verify redis auth ###"
+            sleep 6
+            NRID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            echo "--- with password (expect PONG) ---"
+            docker exec "$NRID" redis-cli -a "$PASS" ping 2>&1 | tail -2 || echo "auth ping failed"
+            echo "--- without password (expect NOAUTH/denied) ---"
+            docker exec "$NRID" redis-cli ping 2>&1 | tail -2 || echo "noauth ping failed"
+
+            echo "### 10. verify services & site ###"
+            sleep 8
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            echo "--- backend redis env (redacted) ---"
+            BPID=$(pgrep -f 'uvicorn.*nuotao' | head -1)
+            [ -z "$BPID" ] && BPID=$(pgrep -f uvicorn | head -1)
+            echo "BPID=$BPID"
+            if [ -n "$BPID" ]; then
+              tr '\0' '\n' < /proc/$BPID/environ 2>/dev/null | grep -E '^REDIS_URL=' | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#' || echo "(no REDIS_URL in backend env - check)"
+            fi
+            echo "--- site health ---"
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1 || echo "admin check failed"
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1 || echo "b2b check failed"
+            echo "--- redis listening ---"
+            ss -tlnp | grep 6379 || echo "6379 not listening"
+            echo "--- containers ---"
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'redis|scheduler|NAMES'
