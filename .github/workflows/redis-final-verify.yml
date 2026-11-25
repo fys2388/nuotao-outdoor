@@ -1,0 +1,52 @@
+name: Final Verify All Recommendations
+
+on:
+  workflow_dispatch:
+
+jobs:
+  final:
+    name: Final state verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Final verify
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            echo "=== 1. redis auth ==="
+            echo -n "no-pass ping: "; docker exec nuotao-ai-os-redis-1 redis-cli ping 2>&1 | tail -1
+            echo -n "with-pass ping: "; docker exec nuotao-ai-os-redis-1 redis-cli -a "$(cat $(ls -t /root/redis-backup/redis_password_*.txt | head -1))" ping 2>&1 | tail -1
+            echo -n "health: "; docker inspect nuotao-ai-os-redis-1 --format '{{.State.Health.Status}}' 2>&1
+            echo ""
+            echo "=== 2. ports bound to 127.0.0.1 ==="
+            docker port nuotao-ai-os-redis-1 2>&1
+            docker port nuotao-ai-os-postgres-1 2>&1
+            echo ""
+            echo "=== 3. services ==="
+            systemctl is-active nuotao-backend nuotao-agent-worker nuotao-agent-scheduler 2>&1
+            echo ""
+            echo "=== 4. site + console ==="
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
+            curl -sk -o /dev/null -w 'console8081=%{http_code}\n' http://95.217.218.178:8081/ 2>&1
+            echo ""
+            echo "=== 5. ufw ==="
+            ufw status verbose 2>&1 | head -12
+            echo ""
+            echo "=== 6. scheduler pg (no auth errors) ==="
+            docker logs --tail 6 nuotao-ai-os-scheduler-1 2>&1 | grep -iE 'password|authentication|failed|feedback|approval|告警' | tail -6 || echo "(no scheduler pg errors)"
+            echo ""
+            echo "=== 7. SECURITY: is .env git-tracked? ==="
+            git -C /opt/nuotao-ai-os check-ignore .env 2>&1 && echo "(.env is IGNORED - good)" || echo "(.env NOT ignored - check!)"
+            git -C /opt/nuotao-ai-os ls-files .env 2>&1 && echo "(.env tracked - RISK!)" || echo "(.env not tracked - good)"
+            echo ""
+            echo "=== 8. git state ==="
+            git -C /opt/nuotao-ai-os status --short 2>&1 | head -8
+            git -C /opt/nuotao-ai-os log --oneline -2 2>&1 | head -2
+            echo ""
+            echo "=== 9. compose key lines ==="
+            grep -nE 'REDIS_URL:|requirepass|127\.0\.0\.1|\${REDIS_PASSWORD}|POSTGRES_PASSWORD' /opt/nuotao-ai-os/docker-compose.yml 2>&1 | grep -vE 'DATABASE_URL' | sed -E 's#(redis://:[^@ ]*@)#redis://:***REDACTED***@#g' | head -8
