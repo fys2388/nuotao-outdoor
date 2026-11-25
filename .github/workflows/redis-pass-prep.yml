@@ -1,0 +1,50 @@
+name: Diagnose Redis Pass Plan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prep:
+    name: Inspect redis service def & all redis consumers (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect compose redis def and consumers
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            echo "=== compose file path ==="
+            RID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            WDIR=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}')
+            CFG=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' | tr ',' '\n' | grep compose | head -1)
+            echo "WDIR=$WDIR CFG=$CFG"
+            echo ""
+            echo "=== redis service block ==="
+            awk '/^[[:space:]]*redis:/{f=1} f{print} f&&/^[[:space:]]*[a-z0-9_-]+:/&&!/^[[:space:]]*redis:/{exit}' "$CFG"
+            echo ""
+            echo "=== all REDIS_URL / redis references in compose ==="
+            grep -nE 'REDIS_URL|redis://|redis:' "$CFG" | sed -E 's/(redis:\/\/[^@ ]*@)/redis:\/\/***REDACTED***@/g' | head -40
+            echo ""
+            echo "=== services with redis dependency (depends_on) ==="
+            grep -nE 'depends_on|redis' "$CFG" | head -40
+            echo ""
+            echo "=== .env redis vars ==="
+            grep -niE 'redis|cache|celery|queue' "$WDIR/.env" 2>/dev/null | sed -E 's/(PASS[^=]*=).*/\1***REDACTED***/I; s/(REDIS_URL=).*/\1***REDACTED***/I' | head -30 || echo "(no .env redis vars)"
+            echo ""
+            echo "=== containers env REDIS_URL (non-redis containers) ==="
+            for c in $(docker ps --format '{{.Names}}'); do
+              v=$(docker exec "$c" sh -c 'echo $REDIS_URL' 2>/dev/null)
+              if [ -n "$v" ]; then
+                echo "$c -> $(echo "$v" | sed -E 's#redis://([^@]*@)#redis://***REDACTED***@#g')"
+              fi
+            done
+            echo ""
+            echo "=== ufw status ==="
+            ufw status verbose 2>&1 | head -25 || echo "(ufw not available)"
+            echo ""
+            echo "=== backend/scheduler container images ==="
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | grep -E 'backend|scheduler|redis|postgres|NAMES'
