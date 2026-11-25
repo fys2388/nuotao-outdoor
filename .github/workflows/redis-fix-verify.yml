@@ -1,0 +1,41 @@
+name: Verify Redis Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify public ports closed + backend healthy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test public ports from clean runner
+        run: |
+          echo "=== public port test (95.217.218.178) ==="
+          for p in 6379 5432 22 443 80; do
+            if timeout 5 bash -c "echo > /dev/tcp/95.217.218.178/$p" 2>/dev/null; then
+              echo "$p OPEN"
+            else
+              echo "$p CLOSED/FILTERED"
+            fi
+          done
+      - name: Check backend health and internal connectivity
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "=== backend services ==="
+            systemctl is-active nuotao-backend 2>&1 || echo "no systemd nuotao-backend"
+            echo "=== key containers ==="
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'redis|postgres|backend|scheduler|NAMES'
+            echo "=== redis reachable internally ==="
+            docker exec $(docker ps -q --filter name=nuotao-ai-os-redis-1) redis-cli ping 2>&1 || echo "redis ping failed"
+            echo "=== postgres reachable internally ==="
+            docker exec $(docker ps -q --filter name=nuotao-ai-os-postgres-1) pg_isready -U nuotao 2>&1 || echo "pg_isready failed"
+            echo "=== site 443 health ==="
+            curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1 || echo "site check failed"
+            curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1 || echo "b2b check failed"
+            echo "=== local listening 6379/5432 ==="
+            ss -tlnp | grep -E '6379|5432' || echo "(none)"
