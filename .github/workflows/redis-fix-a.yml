@@ -1,0 +1,92 @@
+name: Fix Redis Public Exposure (Plan A)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-a:
+    name: Bind redis/postgres ports to 127.0.0.1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply Plan A fix
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -e
+            echo "### 1. locate compose project from redis container ###"
+            RID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            echo "RID=$RID"
+            WDIR=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}')
+            CFG=$(docker inspect "$RID" --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}')
+            echo "WDIR=$WDIR"
+            echo "CFG=$CFG"
+            if [ -z "$WDIR" ] || [ -z "$CFG" ]; then echo "FATAL: cannot locate compose project"; exit 1; fi
+            CFG_FILE=$(echo "$CFG" | tr ',' '\n' | grep -E 'prod|docker-compose' | head -1)
+            echo "CFG_FILE=$CFG_FILE"
+            if [ ! -f "$CFG_FILE" ]; then echo "FATAL: compose file not found: $CFG_FILE"; ls -la "$WDIR" | grep compose; exit 1; fi
+
+            echo ""
+            echo "### 2. inspect redis mount/persistence ###"
+            docker inspect "$RID" --format 'Mounts={{json .Mounts}}' | head -5
+            docker inspect "$RID" --format '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}}{{println}}{{end}}'
+            echo "--- redis config (requirepass?) ---"
+            docker exec "$RID" sh -c 'redis-cli CONFIG GET requirepass 2>&1 || echo "(no cli)"' || true
+            docker exec "$RID" sh -c 'ls -la /data 2>&1 | head' || true
+
+            echo ""
+            echo "### 3. backup redis data (BGSAVE + copy RDB) ###"
+            TS=$(date +%Y%m%dT%H%M%SZ)
+            mkdir -p /root/redis-backup
+            docker exec "$RID" redis-cli BGSAVE 2>&1 || true
+            sleep 3
+            docker cp "$RID":/data/dump.rdb /root/redis-backup/dump.rdb.$TS 2>/dev/null && echo "RDB backed up: /root/redis-backup/dump.rdb.$TS" || echo "no dump.rdb to backup"
+
+            echo ""
+            echo "### 4. backup compose file ###"
+            cp "$CFG_FILE" "$CFG_FILE.bak.$TS"
+            echo "backed up: $CFG_FILE.bak.$TS"
+
+            echo ""
+            echo "### 5. current port mapping lines ###"
+            grep -nE '6379:6379|5432:5432|"6379|"5432|6379|5432' "$CFG_FILE" | grep -iE 'port|6379|5432' | head -30
+
+            echo ""
+            echo "### 6. modify port bindings -> 127.0.0.1 ###"
+            sed -i 's/"6379:6379"/"127.0.0.1:6379:6379"/g' "$CFG_FILE"
+            sed -i 's/6379:6379/127.0.0.1:6379:6379/g' "$CFG_FILE"
+            sed -i 's/"5432:5432"/"127.0.0.1:5432:5432"/g' "$CFG_FILE"
+            sed -i 's/5432:5432/127.0.0.1:5432:5432/g' "$CFG_FILE"
+            echo "--- after modify (6379/5432 lines) ---"
+            grep -nE '6379|5432' "$CFG_FILE" | head -30
+
+            echo ""
+            echo "### 7. recreate containers ###"
+            cd "$WDIR"
+            if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+            echo "using $DC -f $CFG_FILE"
+            $DC -f "$CFG_FILE" up -d redis postgres 2>&1 || { echo "FATAL: compose up failed"; $DC -f "$CFG_FILE" config >/dev/null 2>&1 && echo "(config OK)" || echo "(config ERROR)"; exit 1; }
+
+            echo ""
+            echo "### 8. verify listening ports ###"
+            sleep 8
+            echo "--- 6379 ---"
+            ss -tlnp | grep 6379 || echo "6379 not listening"
+            echo "--- 5432 ---"
+            ss -tlnp | grep 5432 || echo "5432 not listening"
+
+            echo ""
+            echo "### 9. verify backend can reach redis (internal network) ###"
+            sleep 5
+            NRID=$(docker ps -q --filter "name=nuotao-ai-os-redis-1" | head -1)
+            echo "new redis container: $NRID"
+            docker exec "$NRID" redis-cli ping 2>&1 || echo "redis ping failed"
+            docker exec "$NRID" redis-cli CONFIG GET requirepass 2>&1 || echo "requirepass query failed"
+
+            echo ""
+            echo "### 10. final docker ps ###"
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'redis|postgres|NAMES'
