@@ -19,8 +19,12 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-- **DSH 是自治执行者**：从 ChatGPT 获取任务 → 执行 → 产出证据/报告 → 汇报 → 获取下一任务（**闭环循环，不找人类用户**）。
-- **人类用户只在 Owner（ChatGPT）无法决策时**才被通知（如需要账号密码、外部凭证）。
+- **DSH 是自治执行者**：从 ChatGPT 获取任务 → 执行 → 产出证据/报告 → 汇报 → 获取下一任务（**闭环循环**）。
+- **低风险、本地、可逆任务**：可在明确授权范围内自治执行。
+- **ChatGPT Owner 负责**：项目任务范围、评审和授权流程。
+- **人类项目 Owner / DBA / 系统管理员掌握**：实际生产资源、凭据和外部权限。
+- **需要人类主体执行的凭据、生产目录、生产导出和生产操作**：必须**停止并请求对应授权者**（禁止以"不找人类用户"表达外部审批机制）。
+- **部署不是自治开发的默认动作**：只有单独授权时才执行。
 - **每个任务必须有真实证据**（BUILT/DEPLOYED/VERIFIED/BLOCKED/PENDING 标记），禁止包装。
 
 ### 0.1 任务闭环铁律（每个任务必须遵守）
@@ -41,6 +45,7 @@ Owner 指令 → DSH 执行开发 → 验证（测试/证据）→ 产出报告 
 | **验证后必须汇报** | 验证通过即汇报 ChatGPT（剪贴板粘贴方案，见 §2.2），不等下一任务才一起报 |
 | **汇报后必须停止** | 汇报发出即停止本轮工作，**等待 Owner 下一步指令**；禁止自行开始下一个任务或自行扩大范围 |
 | **不越过审批 gate** | Owner 明确要求"批准后再做"的（如设计评审后才写代码），必须停下等批准，不得先行 |
+| **外部授权请求** | 需人类 Owner/DBA/系统管理员执行的（凭据/生产目录/生产导出/生产操作），必须**明确请求并停止等待**，不得以"自治"绕过 |
 
 ### 0.2 Owner 终审驱动 + 证据分级（V2.8 EXPORT 审计模式，2026-11 实战提炼）
 
@@ -56,26 +61,37 @@ Owner 指令 → DSH 执行开发 → 验证（测试/证据）→ 产出报告 
 | **冻结项零改动** | Owner 冻结的项（如 0076）在解除前零改动，即使修复明显 bug 也先请示 |
 | **不跨 worktree 覆盖 / 禁 git add .** | 多分支并行（3A/3B/3C/3D/EXPORT）各自隔离；禁止 `git add .` 误纳无关文件；禁止跨 worktree 覆盖他人改动 |
 | **不合并 main（除非批准）** | 合入 main/生产分支必须 Owner 批准；审计分支保持独立直至收口 |
+| **外部授权职责分离** | ChatGPT Owner 管任务范围/评审/授权；人类 Owner/DBA/系统管理员管实际生产资源/凭据/外部权限；需人类主体执行的动作必须请求并等待对应授权者 |
 
-#### B. 证据分级（E0 最弱 → E5 最强）
+#### B. 证据分级（E0 最弱 → E5 最强，与冻结设计 V1.3 完全一致）
 
-- 每项验收结论附**证据等级**（E0 最弱 → E5 最强）；显式 `grade_order` CASE 不依赖字符串序。
-- **两层聚合（V1.3 冻结规则，不得简化为直接对全部证据行取 MIN）**：
-  1. 先按**关键组件**分别筛选已验证证据、计算**组件等级**；
-  2. 再取**关键组件等级的 MIN**（保守）；
-  3. 关键组件缺失或证据冲突 → **UNKNOWN / INCOMPLETE / CONFLICT**；
-  4. **UNKNOWN ≠ E0**（未验证 ≠ 最弱有效证据）；
-  5. **未验证证据不算有效证据**。
-- **fail-closed**：无法取得证据/工具不可用/解析失败/未知成本 → 一律按**失败/拒绝**处理，不猜测、不包装（如 getfacl 不可用 → 拒；未知成本 → 拒）。
-- **红线维度**：P0 财务（R1/R2/R6/R7）、P1 成本库存（R3/R4/R5/R8/R9/R12/R13）、P2 引擎（R10/R11）；Owner 唯一财务口径（NetRevenue/GM/GMMargin/CP/CPMargin；SalesTax 不进收入；NetRevenue≤0 → CPMargin 不可计算）。
-- **Owner 强制矩阵**：验证成功→是；验证失败/未启用/平台不支持/无法取得 Owner/无法确认实际权限→否（exit 2）；写入后**重读** ACL 复核；`acl_verified` 仅真实验证成功 true；禁止默认无验证写入路径。
+> **E0-E5 仅用于定义了 EvidenceGrade 的事实证据域**（如 ACL 验证证据），不作为所有测试/CI/验收的通用分数。
+
+**聚合规则（两层，禁止对全部证据行做全局 MIN）**：
+1. 先按 `critical_component_set` **逐组件**筛选 `verified` 且在评估时间有效的证据；
+2. 未解决来源事实冲突 → **CONFLICT**；
+3. 组件没有有效证据 → **UNKNOWN**；
+4. 每个组件按确定性证据选择规则计算 **component_grade**；
+5. 再对关键组件的 component_grade 取 **MIN**；
+6. 任一关键组件没有有效已验证证据 → 整体 **UNKNOWN / INCOMPLETE**；
+7. 空或无法证明的 `critical_component_set` → **不得计算等级**；
+8. **UNKNOWN ≠ E0**（未验证 ≠ 最弱有效证据）；
+9. `grade_order` 使用**显式 CASE**（不依赖字符串序）。
+
+**红线领域（按 R1-R13 真实业务领域列示，不设未经 Owner 确认的 P0/P1/P2 分组）**：
+- 财务口径（R1/R2/R6/R7）：NetRevenue/GM/GMMargin/CP/CPMargin；SalesTax 不进收入；NetRevenue≤0 → CPMargin 不可计算。
+- 成本库存（R3/R4/R5/R8/R9/R12/R13）、引擎（R10/R11）：按 Owner 已确认口径列示，不作主观优先级分组。
+
+**fail-closed**：无法取得证据/工具不可用/解析失败/未知成本 → 一律按**失败/拒绝**处理，不猜测、不包装（如 getfacl 不可用 → 拒；未知成本 → 拒）。
+
+**ACL 强制矩阵（仅用于 G3 敏感映射文件写入）**：未验证/验证失败/Owner 无法确认/平台不支持 → **exit 2 + 零映射产物**；写入后**重读** ACL 复核；`acl_verified` 仅真实验证成功 true；禁止默认无验证写入路径。
 
 #### C. 多环境隔离验证（跨平台）
 
 - 目标宿主可能是 Windows（NTFS DACL）+ Linux（POSIX mode/getfacl）；**代码验证 ≠ 运行环境验证**，两层都要真实验证。
 - 无本地 Linux 时用**隔离非生产 CI Runner**（如 `ubuntu-latest`），**禁止 WSL / Git Bash 模拟 Linux ACL / Windows chmod 冒充 Linux 权限证据**。
 - 运行时验证需真实工具（`icacls`/`getfacl`/`setfacl`/`chown`），合成数据 + 临时目录；**权限不足导致的 skip 不得记为通过**（受控 root 单独跑需 root 的项）。
-- 每次 push 前检查 workflow 触发分支，确认**不会触发任何部署/生产 workflow**（deploy 通常 main/master 或 workflow_dispatch only）。
+- **workflow_dispatch ≠ 安全**；必须审查**所有**事件触发器、分支/tag/path 条件、Job-level `if`/`needs`、独立 Job、reusable workflow、secrets、environment、外部 action 及副作用；判断实际运行 ref、commit SHA 和目标环境；workflow_dispatch 可触发生产操作，必须单独授权；不能仅凭审计分支名称或 workflow_dispatch-only 判断安全；push 前确认所有可能被触发的下游 workflow。
 
 #### D. 提交链审计（Owner 要求基线同链）
 
@@ -90,7 +106,7 @@ Owner 指令 → DSH 执行开发 → 验证（测试/证据）→ 产出报告 
 | 资源 | 访问方式 | 自动化要点 |
 |---|---|---|
 | **ChatGPT nuotao 项目对话** | 浏览器（bsk session）| URL: `https://chatgpt.com/g/g-p-6a9fb34c5aec8191ad2617bf6deb335e-nuotao/c/6aff03fb-abbc-83e9-a228-51d3652ec45e` |
-| **GitHub repo** | gh CLI（fys2388/nuotao-outdoor）| `gh auth status` 确认；commit --no-verify 绕 pre-commit |
+| **GitHub repo** | gh CLI（fys2388/nuotao-outdoor）| `gh auth status` 确认；commit 走 pre-commit（详见 §6#9，`--no-verify` 仅限书面批准）|
 | **Hetzner 生产服务器** | **GitHub Actions 通道**（不用本地 SSH）| workflow: `appleboy/ssh-action` + `secrets.SERVER_HOST/SERVER_USER/SSH_PRIVATE_KEY` |
 | **Hetzner Cloud Console** | 浏览器（应急，需账号）| console.hetzner.cloud（SSH 被封时备用）|
 | **Hostinger WP（nuotaooutdoor.com）** | 浏览器 hpanel + wp-admin | Code Snippets 部署 GA4/CMP |
@@ -176,6 +192,13 @@ bsk_session sync policy=target
 
 > ⚠️ **关键（问题 #25）**：sync 后必须把返回的 `context_id` **显式传入** `bsk_interact`（`contextId=`），否则点击/填充/发送报 "requires a valid control context from cooperate sync"。ref 也会随页面 re-render 偏移，每次交互前重新 sync 获取新 ref。
 
+**发送前核对（按 Owner 评审）**：
+- 确认当前是**正确项目会话**（对话标题/上下文匹配）；
+- **每轮重新 sync**，使用**当前** `context_id` / ref（不跨会话混用、不缓存旧 ref）；
+- 发送前**核对完整汇报文本**（不截断、不遗漏关键项）；
+- 发送结果不确定时**先 sync 确认**（避免重复发送）；
+- **不发送**密码、Token、Salt、PII 或未脱敏生产日志。
+
 ### 2.3 读取 ChatGPT 回复（Owner 指令）
 
 ```
@@ -236,6 +259,12 @@ gh api "repos/.../actions/jobs/$jobId/logs" | Select-String "out:" | ...  # 提�
 
 **只读诊断模板**（已有）：`diagnose-ssh-fail2ban.yml`、`check-backend-emergency.yml`、`webhook-secret-diagnose.yml`
 
+**生产 workflow 授权规则（按 Owner 评审）**：
+- GitHub Actions 通道是**已授权操作**的执行方式，但 **workflow_dispatch 本身不是授权**；push main 不是默认动作。
+- 每次生产 workflow 必须有**独立书面批准**，批准应绑定：workflow 文件、commit SHA、ref、目标环境、允许 Job、输入参数、时间窗口、回滚/停止条件。
+- 每次执行前审查**所有 Job 和实际副作用**；不得无条件使用 workflow_dispatch 默认输入。
+- **SOP V2.0 本次仅修改文档，不修改 workflow 文件。**
+
 ### 3.2 GA4 / Google 后台操作
 
 **用浏览器自动化**（bsk session，Google 已登录）：
@@ -291,27 +320,24 @@ Set-Clipboard $text
 # （需封装 bsk session 管理 + ref 动态识别）
 ```
 
-### 4.2 任务循环脚本（`scripts/dev_loop.sh`）
+### 4.2 任务执行器（一次性，按 Owner 评审：禁止无限自动循环）
 
-```bash
-while true; do
-  instruction=$(read_chatgpt_latest_instruction)  # 从 ChatGPT 读最新 Owner 指令
-  [ -z "$instruction" ] && sleep 60 && continue
-  execute_task "$instruction"                       # 按任务类型分发（Hetzner/GA4/WP/代码）
-  report=$(generate_report "$instruction")          # 生成交付物报告
-  git_add_commit_push "$report"
-  send_chatgpt_report "$report"                     # 汇报 ChatGPT
-  sleep 30
-done
+> **不得自动轮询/后台继续**：没有明确新 Owner 指令，不得读取并执行下一项任务。
+
+```
+# 一条明确 Owner 指令 → 一次执行 → 验证 → 报告 → 按授权提交/推送 → 汇报 → 进程退出
+# 无新指令时进程退出（不 sleep 轮询、不后台常驻）
+execute_once "$owner_instruction"
 ```
 
-### 4.3 红线校验（`scripts/check_redline.sh`）
+### 4.3 红线校验（`scripts/check_redline.sh`，仅辅助检查）
 
-执行前自动检查任务是否越权：
+> **黑名单仅作辅助检查，不是授权控制**。高风险操作应采用**任务授权白名单 + 默认拒绝**机制。
+
 ```bash
-# 禁止操作黑名单
+# 辅助黑名单（仅提示越权风险，不替代授权）
 FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测试订单" "轮换生产Secret" "引入GTM")
-# 任务描述匹配黑名单 → 拒绝执行 + 汇报 ChatGPT 请求澄清
+# 命中黑名单 → 停止并请求 Owner 澄清（默认拒绝，非自动放行）
 ```
 
 ---
@@ -323,7 +349,7 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 | 工作线 | 当前决定 |
 |---|---|
 | 3A 财务基线 | 最终通过，关闭 |
-| 3B 库存语义 | 技术验收通过；0093 生产只读预检有限授权，**生产迁移未授权** |
+| 3B 库存语义 | 技术验收通过；0093 DBA 只读预检 P1-P5 有限授权，结果待返回，**生产迁移未授权** |
 | 3C Lineage | V1.3 设计冻结；实施未授权 |
 | 3D 双引擎 | 文档整改通过；方案 A 不变 |
 | EXPORT G4 | 通过 |
@@ -332,15 +358,16 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 
 **G3 Runtime = VERIFIED；G3 overall = BLOCKED；V2.8 整体未通过最终验收；生产权限未授权；0076 冻结。**
 
-### 5.2 剩余全部为 Owner/DBA 外部前置（DSH 不可自行推进）
+### 5.2 剩余外部前置与待批事项（DSH 不可自行推进）
 
 | 项 | 状态 | DSH 动作 |
 |---|---|---|
 | G3 正式 `id_map_dir` | Owner/系统管理员置备 | 置备后于实际目标宿主重新验证正式目录 ACL（路径隔离/所有权/DACL 或 mode+ACL/执行账号授权/写后重读/未授权主体拒/不进 Git·交付包·云同步） |
-| G1 生产只读脱敏副本 | DBA 0093 只读预检（有限授权） | 等 DBA 结果 |
-| G2 Owner 安全 Salt | 未提供 | 未接收 |
-| 3B 生产迁移 / 3C 实施 | 均需单独书面批准 | 不自行执行 |
-| PR #28（SOP V2.0 合并 main）| 待评审 | 不自行合并（合入 main 需批准） |
+| EXPORT G1 30 天生产脱敏副本 | **真实导出尚未授权**（生产 DBA）| 不导出；等 DBA + 单独批准 |
+| EXPORT G2 Owner 安全 Salt | 未提供（Owner/安全管理员）| 未接收 |
+| 3B 0093 DBA 只读预检 | 已有限授权，结果待返回 | 等 DBA 结果（与 EXPORT G1 分开记录）|
+| 3B 生产迁移 / 3C 实施（0094-0097）| 均需单独书面批准 | 不自行执行 |
+| PR 合并（一般规则）| 合入 main 需 Owner 批准 + 评审；PR 保持 OPEN 直至批准 | 不自行合并 |
 
 ### 5.3 禁止事项（红线，持续有效）
 
@@ -354,7 +381,13 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 
 - **D8-D SSH 加固 S1-S5**：已按 GitHub Actions 通道执行并验证（Owner APPROVED WITH CONDITIONS）；S6 MaxStartups 调整为"先提供证据+方案，暂不批准"。
 - **D8-D 其他**：Complianz 隔离环境 / B2C GA4 Realtime / Webhook 隔离测试 / LiteSpeed 缓存兼容性审计 —— 视 Owner 后续指令推进。
-- **V2.8 审计 3A-3D + EXPORT**：已收口/通过（见 §5.1），剩余外部前置见 §5.2。
+- **V2.8 五条工作线分别记录**（不写成"整体通过"）：
+  - 3A 财务基线：**正式关闭**（Owner 最终验收通过）
+  - 3B 库存语义：**技术验收通过**；0093 DBA 只读预检有限授权（结果待返回）；生产迁移未授权
+  - 3C Lineage：**V1.3 设计冻结**；0094-0097 实施未授权
+  - 3D 双引擎：**实验文档整改通过**；旧引擎维持生产路径；方案 A 不变
+  - EXPORT：G4 **通过**；G3 Runtime **技术验证通过**（正式目录待置备）；G1/G2 **阻塞/未授权**
+  - **V2.8 整体未通过最终验收；生产权限未授权；0076 冻结。**
 
 ---
 
@@ -379,7 +412,7 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 |---|---|---|---|---|
 | 7 | wc-clickback 端点返回 500（非 401）| `wc_clickback.py` line134 `get_trace_id(request)` —— `get_trace_id()` 无参，传 request 抛 TypeError | 改 `get_trace_id()`（commit 0e5f2d7）| **原有 bug 非本次引入**；端点测试覆盖无签名/错误签名路径可早发现 |
 | 8 | Webhook 端点测试 404（非 401）| 用了错误路径 `/webhooks/wc`（不存在）| 先 `app.routes` 发现真实路由（`/webhooks/woocommerce` 等），再用正确路径测试 | 测试前先发现路由，不假设路径 |
-| 9 | pre-commit hook "No module named pre_commit" 失败 | 本地 venv 无 pre_commit | `git commit --no-verify`（CI 会跑真实检查）| 本地 pre-commit 环境需初始化，或统一 --no-verify |
+| 9 | pre-commit hook "No module named pre_commit" 失败 | 本地 venv 无 pre_commit | **优先修复环境/hook 配置**；不可运行的检查标 **NOT RUN**；仅书面 Owner 批准时一次性限定范围 `--no-verify`，并列出跳过 hooks/替代检查/剩余风险 | 初始化本地 pre-commit 环境；CI 通过≠未执行 hooks 自动记为通过；不将绕过门禁作为默认 SOP |
 | 10 | 生产 WEBHOOK_SECRET 误判为空（is_empty=True）| 诊断脚本读错变量名（`WEBHOOK_SECRET`，实际是 `WOOCOMMERCE_WEBHOOK_SECRET`）| 深度诊断确认 `WOOCOMMERCE_WEBHOOK_SECRET=64字符强值`，`webhook_secret_is_insecure=False` | 诊断脚本变量名先 grep .env 确认，不硬编码假设 |
 | 29 | Linux 测试 test_3 Named ACL 断言失败（reason 是 "mode" 非 "widening"）| `setfacl -m u:<uid>:rx` 会扩大 ACL mask → POSIX mode 从 0o700 变 0o750，守卫经 **mode 检查**先拒（allowed=False 正确），但测试断言 reason 必须是 widening/acl 而失败 | test_3 用 `setfacl -m u:<uid>:rx -m m:---`（ACL mask 复位 `---`）使 mode 保持 0o700，真正触发 **ACL widening 路径**（断言 premise mode==0o700 + reason 含 widening/acl）| 验证 ACL 逻辑时确保 mode 不干扰（mask 复位）；先确认守卫求值顺序（mode→getfacl→widening）再写断言 |
 
@@ -412,7 +445,7 @@ FORBIDDEN=("关闭防火墙" "关闭fail2ban" "注入B2B生产" "创建生产测
 |---|---|---|---|---|
 | 23 | git push 显示 exit 1 但实际成功 | stderr 输出被 pwsh 当错误 | 检查 `git log` / `gh` 确认 push 成功（忽略 stderr exit 1）| push 后验证 `git log origin/main` |
 | 24 | **CI Pre-check 持续 failure**（所有 push 都失败）| `test_pii_ci_integration.py:76` `db_url` fixture 用 `assert` —— 无 DB 环境（CI Pre-check 无 postgres）直接 fail，阻塞 Deploy gated | 改 `db_url` fixture：无 DB URL 时 `pytest.skip`（非 assert fail），有 DB 环境正常跑（commit 707ebfe）| 集成测试（需 DB）应 skip 无 DB 环境，而非 fail；CI Pre-check 与专门 DB workflow 分离 |
-| 26 | push 审计分支可能触发部署 workflow | 推送后未先检查 workflow 触发条件，误以为会部署 | push 前 `gh workflow list` + 读各 `.github/workflows/*.yml` 的 `on:`；确认 deploy/production 仅 `main/master` 或 `workflow_dispatch` only（审计分支不触发）| 每次 push 前核查 deploy workflow 触发分支；git 推送 ≠ 部署 |
+| 26 | push 审计分支可能触发部署 workflow | 未全面审查 workflow 触发条件，仅凭分支名/workflow_dispatch-only 误判安全 | push 前审查**所有**事件触发器、分支/tag/path 条件、Job-level if/needs、独立 Job、reusable workflow、secrets/environment/外部 action；判断实际 ref/commit SHA/目标环境；workflow_dispatch 可触发生产操作，必须单独授权 | push 前确认所有可能被触发的下游 workflow；git 推送 ≠ 部署；不把 workflow_dispatch-only 当安全条件 |
 | 27 | 本宿主 Windows 无 Linux，无法真实验证 Linux ACL | WSL 未装（需管理员+重启）、Docker 未装、Git Bash 非 Linux 内核 | 采用**隔离非生产 CI Runner**（`ubuntu-latest`，方案 B）跑真实 Linux 运行时验证（getfacl/setfacl/chown）；禁 WSL/Git Bash 模拟 | 跨平台验证一律用隔离 CI Runner；禁本地模拟代替真实环境证据 |
 | 28 | Owner 要求提交链补证（旧 HEAD 与旧提交非直接父子）| 审计分支多个提交叠加，Owner 需确认验收基线同链 | `git merge-base --is-ancestor <旧HEAD> <新HEAD>`（exit 0 为同链）+ `git log --first-parent --oneline <旧HEAD>..<新HEAD>` 如实列中间提交；不重写历史 | 每次 Owner 验收记录 HEAD；跨提交验收前先跑 merge-base 确认同链 |
 
@@ -428,9 +461,9 @@ gh run list --limit 10 2>&1 | Select-Object -First 12
 ```
 
 **监控要点**：
-- **CI Pre-check**：语法 + imports + 单测 + smoke —— 失败会阻塞 Deploy gated
-- **Deploy to Production (staging-gated)**：CI 失败时被 cancelled（正确 gating）
-- **专门 workflow**（PII CI / SSH Harden 等）：workflow_dispatch 或 push 触发
+- **CI Pre-check**：语法 + imports + 单测 + smoke（检查其实际 Job 与依赖；**不假设 CI fail 就一定阻断部署 workflow 的所有独立 Job**）
+- **Deploy to Production (staging-gated)**：检查独立 Job 和生产副作用；push 后核实实际 run/ref/commit/job；不自动重推 main 或重跑生产 workflow
+- **专门 workflow**（PII CI / SSH Harden 等）：workflow_dispatch 或 push 触发（workflow_dispatch 触发需单独授权，不等同安全）
 - **失败必查根因**（不忽略），修复后重新 push 验证
 
 ### 6.6 问题记录规范（后期新问题追加此处）
@@ -450,15 +483,16 @@ gh run list --limit 10 2>&1 | Select-Object -First 12
 
 **V2.8 EXPORT G3 跨平台 ACL 验证已闭合（代码+CLI 门禁+Windows NTFS+Linux mode/getfacl 四层 Owner 接受，G3 Runtime = VERIFIED）。**
 
-1. **V2.8 剩余全部为外部前置**（DSH 不可自行推进）：
+1. **外部准备（Owner/DBA/系统管理员，DSH 不可自行推进）**：
    - G3 正式 `id_map_dir`：Owner/系统管理员置备 → 置备后于实际目标宿主重新验证正式目录 ACL（路径隔离/所有权/DACL 或 mode+ACL/执行账号授权/写后重读/未授权主体拒/不进 Git·交付包·云同步）
-   - G1 生产只读脱敏副本：DBA 0093 只读预检（已有限授权，等 DBA 结果）
-   - G2 Owner 安全 Salt：未提供
-   - 3B 库存语义生产迁移 / 3C Lineage 实施：均需单独书面批准
-2. **每项外部前置完成 → 提交 Owner 终审 → 等下一指令**（闭环，不找人类用户）
-3. **SOP 本身持续迭代**：本文件已升至 V2.0（新增 §0.2 Owner 终审驱动 + 证据分级 + 隔离验证 + 提交链审计；§6 问题 #25-#29）；后续每轮实战经验按 §6.6 追加。
-4. **禁止事项不变**：不自行创建/选取正式 id_map_dir；不生成真实映射；不接收真实 Salt；不连生产库；不导出生产数据；不执行真实脱敏；不执行历史财务重算；不修改 WC；不部署；不触碰 0076；不合并 main（除非批准）；不用 `git add .`。
+   - EXPORT G1 生产只读脱敏副本：生产 DBA（真实导出未授权）
+   - EXPORT G2 安全 Salt：Owner/安全管理员（未提供）
+2. **等待 Owner 单独批准的执行事项**：3B 库存语义生产迁移 / 3C Lineage 实施（0094-0097）/ 真实数据导出·脱敏·历史财务重算（均未授权）。
+3. **DSH 已完成且关闭的工作线**：3A 财务基线（关闭）/ 3D 双引擎（方案 A 不变）/ EXPORT G4（通过）/ EXPORT G3 Runtime 技术验证（VERIFIED，正式目录待置备）。
+4. **需人类主体履行的审批或资源操作**：明确请求对应授权者并**停止等待**（不以"闭环，不找人类用户"表达外部审批）。
+5. **SOP 持续迭代**：本文件已升至 V2.0（新增 §0.2 Owner 终审驱动 + 证据分级 + 隔离验证 + 提交链审计；§6 问题 #25-#29）；后续每轮实战经验按 §6.6 追加。
+6. **禁止事项不变**：不自行创建/选取正式 id_map_dir；不生成真实映射；不接收真实 Salt；不连生产库；不导出生产数据；不执行真实脱敏；不执行历史财务重算；不修改 WC；不部署；不触碰 0076；不合并 main（除非批准）；不用 `git add .`。
 
 ---
 
-*SOP 版本 V2.0，2026-11-25，基于 D8-C/D8-D 实战 + V2.8 EXPORT G3 审计实战（Owner 终审驱动/证据分级/跨平台隔离验证/提交链审计）。后期每轮迭代更新。*
+*SOP 版本 V2.0（2026-11-25），基于 D8-C/D8-D 实战 + V2.8 EXPORT G3 审计实战（Owner 终审驱动/证据分级/跨平台隔离验证/提交链审计）。已按 Owner 评审修改指令 V1.0 修订（外部授权职责分离、E0-E5 与 V1.3 一致、workflow_dispatch≠安全、--no-verify 仅书面批准、禁无限任务循环、G1/3B 分开、CI gate 修正）。后期每轮迭代更新。*
