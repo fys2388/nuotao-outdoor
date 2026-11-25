@@ -1,11 +1,10 @@
 """Alembic environment: wires migrations to the app's async engine."""
 
 import asyncio
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
@@ -17,6 +16,39 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
+
+# Drivers acceptable to the async migration engine, normalized to asyncpg.
+_ASYNC_PG_DRIVER = "postgresql+asyncpg"
+
+
+def _normalize_async_pg_url(url: str) -> str:
+    """Normalize a database URL for the asyncpg-based migration engine.
+
+    Uses ``sqlalchemy.engine.make_url`` (never string concatenation) so all
+    URL components (credentials, host, port, database, query params) are
+    preserved exactly. Only the driver is adjusted:
+
+    - ``postgresql`` (no driver) -> ``postgresql+asyncpg``
+    - ``postgresql+asyncpg``     -> unchanged
+    - anything else (sqlite, psycopg2, psycopg, unknown) -> fail-closed error
+
+    This affects only the Alembic migration engine; the FastAPI application
+    (``app/core/database.py``) builds its own engine and is not touched.
+    """
+    parsed = make_url(url)
+    drivername = parsed.drivername
+    if drivername == "postgresql":
+        # Replace only the driver; credentials/host/db/query are kept.
+        normalized = parsed.set(drivername=_ASYNC_PG_DRIVER)
+        return str(normalized)
+    if drivername == _ASYNC_PG_DRIVER:
+        return str(parsed)
+    raise ValueError(
+        f"Alembic async migrations require a PostgreSQL URL using asyncpg. "
+        f"Got driver '{drivername}'. Set DATABASE_URL to a "
+        f"'postgresql://... ' or 'postgresql+asyncpg://...' URL. "
+        f"Refusing to fall back to a synchronous or non-PostgreSQL driver."
+    )
 
 
 def run_migrations_offline() -> None:
@@ -57,29 +89,25 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """Run migrations using an async engine created for this process.
 
-    When both ``psycopg2`` and ``asyncpg`` are installed, SQLAlchemy may
-    resolve the PG URL to the synchronous driver first (causing the error
-    "The asyncio extension requires an async driver to be used").
-    Force ``asyncpg`` by setting the env-var that SQLAlchemy checks during
-    dialect resolution — this has no effect on production since our code
-    path always uses +asyncpg URLs.
+    The database URL is normalized to ``postgresql+asyncpg`` so that the
+    async engine resolves the asyncpg driver deterministically, regardless
+    of which synchronous PostgreSQL drivers (psycopg2/psycopg) are also
+    installed in the venv. Unsupported drivers fail closed (see
+    ``_normalize_async_pg_url``).
     """
     import sqlalchemy.dialects.postgresql  # noqa: F401 - ensure dialect registry loaded
 
-    # Explicitly override to asyncpg when both drivers are present.
-    _prev = os.environ.get("SQLALCHEMY_PREFER_ASYNC")
-    try:
-        os.environ["SQLALCHEMY_PREFER_ASYNC"] = "1"
-        connectable = async_engine_from_config(
-            config.get_section(config.config_ini_section, {}),
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
-    finally:
-        if _prev is None:
-            os.environ.pop("SQLALCHEMY_PREFER_ASYNC", None)
-        else:
-            os.environ["SQLALCHEMY_PREFER_ASYNC"] = _prev
+    url = _normalize_async_pg_url(config.get_main_option("sqlalchemy.url"))
+    # Build the engine from the normalized URL directly. async_engine_from_config
+    # accepts a plain options dict, so pass the section with the normalized
+    # sqlalchemy.url — this avoids any ini/section caching ambiguity.
+    section = config.get_section(config.config_ini_section, {})
+    section["sqlalchemy.url"] = url
+    connectable = async_engine_from_config(
+        section,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
