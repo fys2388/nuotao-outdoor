@@ -1,0 +1,35 @@
+name: Public Reachability Verify
+
+on:
+  workflow_dispatch:
+
+jobs:
+  public:
+    name: From runner, check public ports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Public port check
+        run: |
+          HOST=95.217.218.178
+          echo "=== should be OPEN: 22 80 443 8081 ==="
+          for port in 22 80 443 8081; do
+            if timeout 5 bash -c "echo > /dev/tcp/$HOST/$port" 2>/dev/null; then
+              echo "$port OPEN"
+            else
+              echo "$port closed (unexpected)"
+            fi
+          done
+          echo ""
+          echo "=== should be CLOSED: 6379 5432 ==="
+          for port in 6379 5432; do
+            if timeout 5 bash -c "echo > /dev/tcp/$HOST/$port" 2>/dev/null; then
+              echo "$port OPEN (UNEXPECTED - risk!)"
+            else
+              echo "$port CLOSED (good - protected)"
+            fi
+          done
+          echo ""
+          echo "=== HTTP endpoints from public ==="
+          curl -sk -o /dev/null -w 'admin=%{http_code}\n' https://admin.nuotaooutdoor.com/ 2>&1
+          curl -sk -o /dev/null -w 'b2b=%{http_code}\n' https://b2b.nuotaooutdoor.com/ 2>&1
+          curl -sk -o /dev/null -w 'console=%{http_code}\n' http://$HOST:8081/ 2>&1
