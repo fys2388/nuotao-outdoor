@@ -273,15 +273,16 @@ def parse_getfacl_output(text: str | None) -> LinuxAcl:
 def _linux_widening(snap: AclSnapshot) -> list[str]:
     """Named / mask / other ACL entries that could widen access.
 
-    When ``getfacl`` is unavailable (``linux_acl is None``) we return ``[]``:
-    the POSIX mode group/other bits are the ACL mask, so mode ``0700``/``0600``
-    (enforced separately) caps every non-owner subject regardless of any
-    nominally-listed ACL entry. When it is present, any named user/group entry
-    or a non-empty ``mask``/``other`` is reported as widening.
+    ``snap.linux_acl`` must be non-``None`` here: the caller
+    (``_evaluate_linux``) rejects a ``None`` ACL (getfacl unavailable or
+    unparseable) before widening is considered (Owner G3 final security gate
+    directive V1.0, rule 5). When the ACL is present, any named user/group
+    entry or a non-empty ``mask``/``other`` is reported as widening; the POSIX
+    mode group/other bits are enforced separately (``0700``/``0600``).
     """
     acl = snap.linux_acl
     if acl is None:
-        return []
+        return ["getfacl-unavailable"]
     hits: list[str] = []
     if acl.other and acl.other != "---":
         hits.append(f"other::{acl.other}")
@@ -403,6 +404,17 @@ def _evaluate_linux(
             "linux",
             snap,
             f"mode {oct(snap.mode_octal)} is not the required {oct(expected)}",
+        )
+    # Owner G3 final security gate directive V1.0 (rule 5): if ``getfacl`` was
+    # unavailable or its output could not be parsed, the presence of an
+    # extended ACL cannot be confirmed -> fail closed. The POSIX mode alone is
+    # not sufficient evidence that no named ACL/mask widens access.
+    if snap.linux_acl is None:
+        return _verdict(
+            False,
+            "linux",
+            snap,
+            "getfacl unavailable or ACL parse failed (fail-closed)",
         )
     widening = _linux_widening(snap)
     if widening:

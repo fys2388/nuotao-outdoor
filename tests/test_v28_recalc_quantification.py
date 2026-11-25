@@ -8,6 +8,7 @@ the production numbers are produced at plan §5 step ⑤ after Owner approval.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,10 +26,31 @@ import scripts.v28_recalc_quantify as rq  # noqa: E402
 from scripts.v28_export_desensitize import read_csv  # noqa: E402
 
 
+def _provision_secure_dir(base: Path) -> Path:
+    """Create a directory with a REAL restricted ACL (Owner G3 final security
+    gate directive V1.0): Windows removes inheritance + grants only the
+    current user; Linux uses chmod 0700."""
+    d = base / "restricted"
+    d.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or os.environ.get("USER", "")
+        if user:
+            subprocess.run(
+                ["icacls", str(d), "/inheritance:r", "/grant:r", f"{user}:(OI)(CI)F"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+    else:
+        os.chmod(d, 0o700)
+    return d
+
+
 def _prepare_des() -> None:
     SALT.write_text("v28-test-only-salt-do-not-use-in-prod", encoding="utf-8")
     OUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="v28-recalc-id-map-") as tmp:
+        id_map = _provision_secure_dir(Path(tmp))
         result = subprocess.run(
             [
                 sys.executable,
@@ -42,9 +64,10 @@ def _prepare_des() -> None:
                 "--workspace-id",
                 "ws-test-1",
                 "--id-map-dir",
-                tmp,
+                str(id_map),
                 "--id-map-retention-days",
                 "7",
+                "--verify-id-map-acl",
             ],
             capture_output=True,
             text=True,

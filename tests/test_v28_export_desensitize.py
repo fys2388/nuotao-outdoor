@@ -39,12 +39,35 @@ def _ensure_salt() -> None:
     SALT.write_text("v28-test-only-salt-do-not-use-in-prod", encoding="utf-8")
 
 
+def _provision_secure_dir(base: Path) -> Path:
+    """Create a directory whose REAL ACL is restricted (Owner G3 final security
+    gate directive V1.0). Windows: icacls removes inheritance and grants only
+    the current user; Linux: chmod 0700 (owner-only). The production guard
+    reads this real ACL and must allow it (the tests never fake a restricted
+    ACL, and never expose a no-verify production path)."""
+    d = base / "restricted"
+    d.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or os.environ.get("USER", "")
+        if user:
+            subprocess.run(
+                ["icacls", str(d), "/inheritance:r", "/grant:r", f"{user}:(OI)(CI)F"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+    else:
+        os.chmod(d, 0o700)
+    return d
+
+
 def _script_cmd(
     out_dir: Path,
     *,
     id_map_dir: Path | None = None,
     retention_days: int = 7,
     salt_file: Path = SALT,
+    verify_acl: bool = True,
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -61,6 +84,8 @@ def _script_cmd(
     if id_map_dir is not None:
         cmd.extend(["--id-map-dir", str(id_map_dir)])
         cmd.extend(["--id-map-retention-days", str(retention_days)])
+        if verify_acl:
+            cmd.append("--verify-id-map-acl")
     return cmd
 
 
@@ -74,7 +99,7 @@ def _run_script(
     if id_map_dir is None:
         with tempfile.TemporaryDirectory(prefix="v28-secure-id-map-") as tmp:
             return _run_script(
-                id_map_dir=Path(tmp),
+                id_map_dir=_provision_secure_dir(Path(tmp)),
                 out_dir=out_dir,
                 retention_days=retention_days,
             )
@@ -99,7 +124,7 @@ def _read(name: str) -> list[dict[str, str]]:
 
 def test_salt_missing_fails_closed(tmp_path: Path):
     with tempfile.TemporaryDirectory(prefix="v28-secure-id-map-") as tmp:
-        id_map = Path(tmp)
+        id_map = _provision_secure_dir(Path(tmp))
         result = subprocess.run(
             _script_cmd(
                 tmp_path / "out",
@@ -565,8 +590,7 @@ def test_workspace_manifest_complete_and_ok():
 def test_id_map_written_to_restricted_dir(tmp_path: Path):
     """G3: mapping lands in the restricted dir with 0600, retention metadata,
     no salt, and never inside the ordinary delivery package."""
-    secure = tmp_path / "restricted"
-    secure.mkdir()
+    secure = _provision_secure_dir(tmp_path)
     out = tmp_path / "out"
     report = _run_script(id_map_dir=secure, out_dir=out)
 
@@ -585,6 +609,13 @@ def test_id_map_written_to_restricted_dir(tmp_path: Path):
     assert mapping["security"]["salt_included"] is False
     assert mapping["security"]["retention_days"] == 7
     assert mapping["security"]["destruction_owner_decision_required"] is True
+    # Owner G3 final security gate directive V1.0: the mapping was only
+    # produced after a REAL ACL verification of the restricted dir (and the
+    # written file is re-verified after writing).
+    assert mapping["security"]["acl_verified"] is True
+    assert report["id_map"]["acl_verified"] is True
+    assert report["id_map"]["acl_dir"] is not None
+    assert report["id_map"]["acl_file"] is not None
     # No salt (neither as a key nor as a value) anywhere in the payload.
     assert "v28-test-only-salt" not in json.dumps(mapping).lower()
     assert "_salt" not in mapping
@@ -603,8 +634,7 @@ def test_id_map_written_to_restricted_dir(tmp_path: Path):
 def test_id_map_not_in_git_and_rejected_inside_worktree(tmp_path: Path):
     """G3: mapping is outside the Git worktree and the file is ignore-listed;
     an id-map dir inside the worktree is refused fail-closed."""
-    secure = tmp_path / "restricted"
-    secure.mkdir()
+    secure = _provision_secure_dir(tmp_path)
     out = tmp_path / "out"
     _run_script(id_map_dir=secure, out_dir=out)
 
@@ -665,8 +695,7 @@ def test_secure_path_overlapping_out_fails_closed(tmp_path: Path):
 def test_logs_and_errors_do_not_leak_original_ids(tmp_path: Path):
     """G3/G4: stdout, stderr and the report never contain original IDs."""
     _ensure_salt()
-    secure = tmp_path / "restricted"
-    secure.mkdir()
+    secure = _provision_secure_dir(tmp_path)
     out = tmp_path / "out"
     ok = subprocess.run(
         _script_cmd(out, id_map_dir=secure),
@@ -696,12 +725,10 @@ def test_logs_and_errors_do_not_leak_original_ids(tmp_path: Path):
 
 def test_id_map_deterministic_across_runs(tmp_path: Path):
     """G3: two independent runs produce byte-identical CSVs and mapping."""
-    secure1 = tmp_path / "r1" / "restricted"
-    secure2 = tmp_path / "r2" / "restricted"
+    secure1 = _provision_secure_dir(tmp_path / "r1")
+    secure2 = _provision_secure_dir(tmp_path / "r2")
     out1 = tmp_path / "r1" / "out"
     out2 = tmp_path / "r2" / "out"
-    secure1.mkdir(parents=True)
-    secure2.mkdir(parents=True)
     _run_script(id_map_dir=secure1, out_dir=out1)
     _run_script(id_map_dir=secure2, out_dir=out2)
 
@@ -713,3 +740,24 @@ def test_id_map_deterministic_across_runs(tmp_path: Path):
     assert (out1 / "desensitization_report.json").read_bytes() == (
         out2 / "desensitization_report.json"
     ).read_bytes()
+
+
+def test_id_map_write_without_acl_verification_fails(tmp_path: Path):
+    """Owner G3 final security gate directive V1.0: without
+    ``--verify-id-map-acl`` the run REFUSES to write the mapping (fail-closed,
+    exit 2). No default no-verify write path exists; the mapping file is never
+    produced when ACL verification is not enabled."""
+    secure = _provision_secure_dir(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    _ensure_salt()
+    result = subprocess.run(
+        _script_cmd(out, id_map_dir=secure, verify_acl=False),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2, f"expected fail-closed, got {result.returncode}"
+    assert not (
+        secure / "_id_map_pseudo.json"
+    ).exists(), "id-map must NOT be written when ACL verification is not enabled"
+    assert "ACL verification is REQUIRED" in result.stderr

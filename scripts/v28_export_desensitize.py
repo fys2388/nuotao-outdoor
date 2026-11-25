@@ -17,10 +17,13 @@ Purely local, offline, no DB connection, no network. Implements §3 of
 * self-verification (plan §3.2, items V1–V7) run automatically after
   desensitizing.
 
-The script **refuses to run without a salt file and without a valid
-restricted id-map directory** (fail-closed, exit code 2). The salt itself is
-never committed, never defaulted, and is read only from ``--salt-file``
-(Owner delivery, controlled channel).
+The script **refuses to run without a salt file, without a valid restricted
+id-map directory, and without ``--verify-id-map-acl``** (fail-closed, exit
+code 2). The real ACL of the restricted directory is verified before the
+mapping is written and the written file's ACL is re-verified after writing;
+there is no default no-verify write path (Owner G3 final security gate
+directive V1.0). The salt itself is never committed, never defaulted, and is
+read only from ``--salt-file`` (Owner delivery, controlled channel).
 
 Usage (after Owner approval, on raw exports in ``data/raw_export/``)::
 
@@ -30,7 +33,8 @@ Usage (after Owner approval, on raw exports in ``data/raw_export/``)::
         --salt-file <owner-delivered salt file> \
         --workspace-id <workspace uuid> \
         --id-map-dir <owner-restricted-storage> \
-        --id-map-retention-days 30
+        --id-map-retention-days 30 \
+        --verify-id-map-acl
 """
 
 from __future__ import annotations
@@ -966,20 +970,28 @@ def run(
     except RestrictedIdMapError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    # G3: real ACL verification (fail-closed) before the restricted directory
-    # is trusted. The guard never modifies permissions; it reads the actual
-    # NTFS DACL (Windows) / mode+ACL (Linux) and refuses when the real
-    # protection cannot be confirmed (Owner rule 7).
-    dir_acl = None
-    if verify_id_map_acl:
-        dir_acl = verify_restricted_dir_acl(secure_dir, kind="dir")
-        if not dir_acl.allowed:
-            print(
-                "id-map directory ACL verification failed (fail-closed): "
-                f"{dir_acl.reason}",
-                file=sys.stderr,
-            )
-            return 2
+    # G3 (Owner G3 final security gate directive V1.0): ACL verification is a
+    # MANDATORY gate for writing the reidentifiable mapping. There is no
+    # default-off / no-verify write path: the run must verify the actual ACL
+    # (fail-closed, exit 2) or refuse to produce the mapping. The guard never
+    # modifies permissions; it reads the actual NTFS DACL (Windows) /
+    # mode+ACL (Linux) and refuses when the real protection cannot be
+    # confirmed (Owner rule 7).
+    if not verify_id_map_acl:
+        print(
+            "ACL verification is REQUIRED before writing the restricted id-map "
+            "(--verify-id-map-acl must be provided; fail-closed)",
+            file=sys.stderr,
+        )
+        return 2
+    dir_acl = verify_restricted_dir_acl(secure_dir, kind="dir")
+    if not dir_acl.allowed:
+        print(
+            "id-map directory ACL verification failed (fail-closed): "
+            f"{dir_acl.reason}",
+            file=sys.stderr,
+        )
+        return 2
     if id_map_retention_days is None or id_map_retention_days <= 0:
         print("id-map retention must be a positive number of days", file=sys.stderr)
         return 2
@@ -1093,12 +1105,13 @@ def run(
             print(str(exc), file=sys.stderr)
             return 2
 
-    # G3: after the write, verify the file's own real ACL (evidence). The
-    # directory gate above is the authoritative fail-closed check; a file that
-    # somehow fails after creation is reported and fails the run.
+    # G3 (Owner G3 final security gate directive V1.0): after the write,
+    # re-verify the file's own real ACL (fail-closed). The directory gate above
+    # is authoritative; a written file whose actual ACL cannot be confirmed is
+    # removed and the run fails (no untrusted mapping may persist).
     file_acl = None
     acl_failure = False
-    if verify_id_map_acl and id_map_written:
+    if id_map_written:
         file_acl = verify_restricted_dir_acl(secure_dir / ID_MAP_FILENAME, kind="file")
         if not file_acl.allowed:
             acl_failure = True
@@ -1107,6 +1120,10 @@ def run(
                 f"{file_acl.reason}",
                 file=sys.stderr,
             )
+            try:
+                (secure_dir / ID_MAP_FILENAME).unlink()
+            except OSError:
+                pass
 
     report_path = out_dir / "desensitization_report.json"
     report_path.write_text(
@@ -1122,7 +1139,12 @@ def run(
                     "delivered_with_package": False,
                     "git_tracked": False,
                     "retention_days": id_map_retention_days,
-                    "acl_verified": bool(dir_acl is not None and dir_acl.allowed),
+                    "acl_verified": bool(
+                        dir_acl is not None
+                        and dir_acl.allowed
+                        and file_acl is not None
+                        and file_acl.allowed
+                    ),
                     "acl_dir": dir_acl.to_json() if dir_acl is not None else None,
                     "acl_file": file_acl.to_json() if file_acl is not None else None,
                 },
@@ -1178,9 +1200,12 @@ def main(argv: list[str] | None = None) -> int:
         "--verify-id-map-acl",
         action="store_true",
         help=(
-            "Verify the REAL ACL of the restricted id-map directory before "
-            "writing (fail-closed, exit 2) and of the written file after "
-            "writing. Reads only; never modifies permissions."
+            "REQUIRED for the id-map write: verify the REAL ACL of the "
+            "restricted id-map directory before writing (fail-closed, exit 2) "
+            "and of the written file after writing. If omitted the run refuses "
+            "to produce the mapping (no default no-verify path; Owner G3 final "
+            "security gate directive V1.0). Reads only; never modifies "
+            "permissions."
         ),
     )
     args = parser.parse_args(argv)

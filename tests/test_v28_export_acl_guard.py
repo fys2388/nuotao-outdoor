@@ -71,14 +71,21 @@ def _linux_snap(
     *,
     acl_text: str | None = None,
 ) -> AclSnapshot:
+    # Mirrors production ``_read_linux_acl``: no/empty getfacl output => None
+    # (getfacl unavailable or parse failed), which the evaluator rejects.
     return AclSnapshot(
         platform="linux",
         mode_octal=mode,
         uid=uid,
         gid=uid,
-        linux_acl=parse_getfacl_output(acl_text),
+        linux_acl=parse_getfacl_output(acl_text) if acl_text else None,
         raw=acl_text,
     )
+
+
+def _linux_clean_acl(owner: str = "rwx") -> str:
+    """A plain POSIX base ACL (owner rwx/rw-, no group/world access)."""
+    return f"user::{owner}\ngroup::---\nother::---\n"
 
 
 # ---------------------------------------------------------------------------
@@ -254,16 +261,30 @@ def test_parse_windows_acl_json_malformed_fails_closed() -> None:
 
 def test_linux_owner_only_0700_allowed() -> None:
     verdict = evaluate_acl(
-        _linux_snap(0o700, AUTH_UID), authorized_uid=AUTH_UID, kind="dir"
+        _linux_snap(0o700, AUTH_UID, acl_text=_linux_clean_acl("rwx")),
+        authorized_uid=AUTH_UID,
+        kind="dir",
     )
     assert verdict.allowed
 
 
 def test_linux_file_0600_allowed() -> None:
     verdict = evaluate_acl(
-        _linux_snap(0o600, AUTH_UID), authorized_uid=AUTH_UID, kind="file"
+        _linux_snap(0o600, AUTH_UID, acl_text=_linux_clean_acl("rw-")),
+        authorized_uid=AUTH_UID,
+        kind="file",
     )
     assert verdict.allowed
+
+
+def test_linux_getfacl_unavailable_rejected() -> None:
+    """Owner G3 final security gate directive V1.0 rule 5: a missing/unparseable
+    getfacl result means an extended ACL cannot be excluded -> fail closed."""
+    verdict = evaluate_acl(
+        _linux_snap(0o700, AUTH_UID), authorized_uid=AUTH_UID, kind="dir"
+    )
+    assert not verdict.allowed
+    assert "getfacl" in verdict.reason.lower()
 
 
 def test_linux_0755_rejected() -> None:
